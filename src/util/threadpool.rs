@@ -25,6 +25,7 @@ use std::sync::mpsc::{Sender, Receiver, channel};
 use super::collections::HashMap;
 
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
+const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 
 pub struct Task<T> {
     // The task's id in the pool. Each task has a unique id,
@@ -197,6 +198,36 @@ impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupFirstQ
             self.statistics.remove(gid);
         }
     }
+}
+
+// First in first out queue.
+pub struct FifoQueue<T> {
+    queue: VecDeque<Task<T>>,
+}
+
+impl<T: Hash + Ord + Send + Clone + Debug> FifoQueue<T> {
+    pub fn new() -> FifoQueue<T> {
+        FifoQueue { queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY) }
+    }
+}
+
+impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for FifoQueue<T> {
+    fn push(&mut self, task: Task<T>) {
+        self.queue.push_back(task);
+    }
+
+    fn pop(&mut self) -> Option<Task<T>> {
+        let task = self.queue.pop_front();
+
+        if self.queue.is_empty() && self.queue.capacity() > QUEUE_MAX_CAPACITY {
+            self.queue = VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY);
+        }
+
+        task
+    }
+
+    fn on_task_started(&mut self, _: &T) {}
+    fn on_task_finished(&mut self, _: &T) {}
 }
 
 // `BigGroupThrottledQueue` tries to throttle group's concurrency to
@@ -537,7 +568,8 @@ impl<Q, T> Worker<Q, T>
 
 #[cfg(test)]
 mod test {
-    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SmallGroupFirstQueue};
+    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SmallGroupFirstQueue,
+                FifoQueue};
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Mutex};
@@ -771,5 +803,19 @@ mod test {
         let task = queue.pop().unwrap();
         queue.on_task_started(&task.gid);
         assert_eq!(task.gid, group1);
+    }
+
+    #[test]
+    fn test_fifo_queue() {
+        let mut queue = FifoQueue::new();
+        for id in 0..10 {
+            let mut task = Task::new(0, move || {});
+            task.id = id;
+            queue.push(task);
+        }
+        for id in 0..10 {
+            let task = queue.pop().unwrap();
+            assert_eq!(id, task.id);
+        }
     }
 }
