@@ -25,11 +25,12 @@ use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
+use kvproto::kvrpcpb::CommandPri;
 
 use util::{escape, duration_to_ms, duration_to_sec, Either};
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
-use util::threadpool::{ThreadPool, SmallGroupFirstQueue};
+use util::threadpool::{ThreadPool, FifoQueue};
 use util::codec::number::NumberDecoder;
 use server::OnResponse;
 use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode, Statistics};
@@ -73,25 +74,23 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<SmallGroupFirstQueue<u64>, u64>,
+    pool: ThreadPool<FifoQueue<u64>, u64>,
+    low_priority_pool: ThreadPool<FifoQueue<u64>, u64>,
     max_running_task_count: usize,
 }
 
 impl Host {
-    pub fn new(engine: Box<Engine>,
-               scheduler: Scheduler<Task>,
-               concurrency: usize,
-               txn_concurrency_on_busy: usize,
-               small_txn_tasks_limit: usize)
-               -> Host {
-        let queue = SmallGroupFirstQueue::new(txn_concurrency_on_busy, small_txn_tasks_limit);
+    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, concurrency: usize) -> Host {
         Host {
             engine: engine,
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
-            pool: ThreadPool::new(thd_name!("endpoint-pool"), concurrency, queue),
+            pool: ThreadPool::new(thd_name!("endpoint-pool"), concurrency, FifoQueue::new()),
+            low_priority_pool: ThreadPool::new(thd_name!("endpoint-low-pool"),
+                                               concurrency,
+                                               FifoQueue::new()),
         }
     }
 }
@@ -216,6 +215,10 @@ impl RequestTask {
                   self.req.get_ranges().get(0));
         }
     }
+
+    pub fn priority(&self) -> CommandPri {
+        self.req.get_context().get_priority()
+    }
 }
 
 impl Display for RequestTask {
@@ -260,7 +263,8 @@ impl BatchRunnable<Task> for Host {
                         }
                     };
 
-                    if self.pool.get_task_count() >= self.max_running_task_count {
+                    if self.pool.get_task_count() >= self.max_running_task_count ||
+                       self.low_priority_pool.get_task_count() >= self.max_running_task_count {
                         notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
                         continue;
                     }
@@ -270,10 +274,18 @@ impl BatchRunnable<Task> for Host {
                         COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
                         let end_point = TiDbEndPoint::new(snap.clone());
                         let txn_id = req.start_ts.unwrap_or_default();
-                        self.pool.execute(txn_id, move || {
-                            end_point.handle_request(req);
-                            COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
-                        });
+
+                        if req.priority() == CommandPri::Low {
+                            self.low_priority_pool.execute(txn_id, move || {
+                                end_point.handle_request(req);
+                                COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
+                            });
+                        } else {
+                            self.pool.execute(txn_id, move || {
+                                end_point.handle_request(req);
+                                COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
+                            });
+                        }
                     }
                 }
             }
@@ -1330,7 +1342,7 @@ mod tests {
     fn test_req_outdated() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let end_point = Host::new(engine, worker.scheduler(), 1, 1, 1);
+        let end_point = Host::new(engine, worker.scheduler(), 1);
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(),
@@ -1348,7 +1360,7 @@ mod tests {
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut end_point = Host::new(engine, worker.scheduler(), 1, 1, 1);
+        let mut end_point = Host::new(engine, worker.scheduler(), 1);
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
