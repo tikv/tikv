@@ -35,7 +35,7 @@ impl Evaluator {
                     Ok(Datum::I64(-i))
                 }
             }
-            Datum::U64(_) => Ok(d),
+            Datum::U64(_) | Datum::Null => Ok(d),
             _ => invalid_type_error(&d, TYPE_INT),
         }
     }
@@ -123,7 +123,11 @@ mod test {
                     (build_expr_with_sig(vec![Datum::U64(1)],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::AbsInt),
-                     Datum::U64(1))]);
+                     Datum::U64(1)),
+                    (build_expr_with_sig(vec![Datum::Null],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsInt),
+                     Datum::Null)]);
 
     test_eval!(test_abs_real,
                vec![(build_expr_with_sig(vec![Datum::F64(-1.0_f64)],
