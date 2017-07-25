@@ -76,6 +76,7 @@ pub struct Host {
     last_req_id: u64,
     pool: ThreadPool<FifoQueue<u64>, u64>,
     low_priority_pool: ThreadPool<FifoQueue<u64>, u64>,
+    high_priority_pool: ThreadPool<FifoQueue<u64>, u64>,
     max_running_task_count: usize,
 }
 
@@ -91,7 +92,16 @@ impl Host {
             low_priority_pool: ThreadPool::new(thd_name!("endpoint-low-pool"),
                                                concurrency,
                                                FifoQueue::new()),
+            high_priority_pool: ThreadPool::new(thd_name!("endpoint-high-pool"),
+                                                concurrency,
+                                                FifoQueue::new()),
         }
+    }
+
+    fn running_task_count(&self) -> usize {
+        self.pool.get_task_count() +
+        self.low_priority_pool.get_task_count() +
+        self.high_priority_pool.get_task_count()
     }
 }
 
@@ -263,8 +273,7 @@ impl BatchRunnable<Task> for Host {
                         }
                     };
 
-                    if self.pool.get_task_count() >= self.max_running_task_count ||
-                       self.low_priority_pool.get_task_count() >= self.max_running_task_count {
+                    if self.running_task_count() >= self.max_running_task_count {
                         notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
                         continue;
                     }
@@ -275,8 +284,14 @@ impl BatchRunnable<Task> for Host {
                         let end_point = TiDbEndPoint::new(snap.clone());
                         let txn_id = req.start_ts.unwrap_or_default();
 
-                        if req.priority() == CommandPri::Low {
+                        let pri = req.priority();
+                        if pri == CommandPri::Low {
                             self.low_priority_pool.execute(txn_id, move || {
+                                end_point.handle_request(req);
+                                COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
+                            });
+                        } else if pri == CommandPri::High {
+                            self.high_priority_pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
                                 COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
                             });
