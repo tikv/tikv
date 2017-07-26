@@ -65,7 +65,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
-use tikv::util::properties::UserPropertiesCollectorFactory;
+use tikv::util::properties::{UserPropertiesCollectorFactory, MVCC_PROPERTIES};
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config,
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -604,7 +604,7 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFa
     // Create prefix bloom filter for memtable.
     cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
     // Collects user defined properties.
-    let f = Box::new(UserPropertiesCollectorFactory::default());
+    let f = Box::new(UserPropertiesCollectorFactory::new(MVCC_PROPERTIES));
     cf_opts.add_table_properties_collector_factory("tikv.user-properties-collector", f);
     cf_opts
 }

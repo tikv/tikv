@@ -15,7 +15,7 @@ use std::u64;
 use std::sync::Arc;
 use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator};
 use kvproto::metapb::Region;
-use util::properties::{UserProperties, GetPropertiesOptions};
+use util::properties::{GetPropertiesOptions, UserProperties, MvccProperties};
 
 use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
 use raftstore::store::{keys, util, PeerStorage};
@@ -128,16 +128,16 @@ impl RegionSnapshot {
         let max_ts = opts.max_ts.unwrap_or(u64::MAX);
 
         // Aggregates properties from multiple tables.
-        let mut res = UserProperties::new();
+        let mut res = MvccProperties::new();
         for (_, v) in &*collection {
             let props = v.user_collected_properties();
-            let other = try!(UserProperties::decode(props));
+            let other = try!(MvccProperties::decode(props));
             if other.min_ts > max_ts {
                 continue;
             }
             res.add(&other);
         }
-        Ok(res)
+        Ok(UserProperties { mvcc: Some(res) })
     }
 
     pub fn get_start_key(&self) -> &[u8] {

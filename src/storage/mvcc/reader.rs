@@ -19,7 +19,7 @@ use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
 use kvproto::kvrpcpb::IsolationLevel;
-use util::properties::GetPropertiesOptions;
+use util::properties::{GetPropertiesOptions, MVCC_PROPERTIES};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -488,10 +488,11 @@ impl<'a> MvccReader<'a> {
         }
 
         let mut opts = GetPropertiesOptions::default();
+        opts.flags = MVCC_PROPERTIES;
         opts.max_ts = Some(safe_point);
         let props = match self.snapshot.get_properties_cf(CF_WRITE, &opts) {
-            Ok(v) => v,
-            Err(_) => return true,
+            Ok(ref mut v) if v.mvcc.is_some() => v.mvcc.take().unwrap(),
+            _ => return true,
         };
 
         // No data older than safe_point to GC.
@@ -533,7 +534,7 @@ mod tests {
     use raftstore::errors::Result;
     use raftstore::store::keys;
     use util::rocksdb::{self as rocksdb_util, CFOptions};
-    use util::properties::{UserProperties, UserPropertiesCollectorFactory};
+    use util::properties::{UserPropertiesCollectorFactory, MvccProperties, MVCC_PROPERTIES};
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -631,7 +632,7 @@ mod tests {
         let db_opts = rocksdb::DBOptions::new();
         let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
         if with_properties {
-            let f = Box::new(UserPropertiesCollectorFactory::default());
+            let f = Box::new(UserPropertiesCollectorFactory::new(MVCC_PROPERTIES));
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
         let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
@@ -653,11 +654,12 @@ mod tests {
         region
     }
 
-    fn get_properties(db: Arc<DB>, region: Region, safe_point: u64) -> Result<UserProperties> {
+    fn get_properties(db: Arc<DB>, region: Region, safe_point: u64) -> Result<MvccProperties> {
         let mut opts = GetPropertiesOptions::default();
+        opts.flags = MVCC_PROPERTIES;
         opts.max_ts = Some(safe_point);
         let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
-        snap.get_properties_cf(CF_WRITE, &opts)
+        snap.get_properties_cf(CF_WRITE, &opts).map(|v| v.mvcc.unwrap())
     }
 
     fn check_need_gc(db: Arc<DB>, region: Region, safe_point: u64, need_gc: bool) {
