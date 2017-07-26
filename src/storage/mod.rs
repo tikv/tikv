@@ -34,7 +34,7 @@ pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cur
                        Error as EngineError, ScanMode, Statistics, CFStatistics};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg};
-pub use self::types::{Key, Value, KvPair, make_key};
+pub use self::types::{Key, Value, KvPair, MvccInfo, make_key};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
@@ -79,6 +79,8 @@ pub enum StorageCb {
     Booleans(Callback<Vec<Result<()>>>),
     SingleValue(Callback<Option<Value>>),
     KvPairs(Callback<Vec<Result<KvPair>>>),
+    MvccInfoByKey(Callback<MvccInfo>),
+    MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
 }
 
@@ -134,6 +136,7 @@ pub enum Command {
     Gc {
         ctx: Context,
         safe_point: u64,
+        ratio_threshold: f64,
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
@@ -144,6 +147,8 @@ pub enum Command {
         limit: usize,
     },
     Pause { ctx: Context, duration: u64 },
+    MvccByKey { ctx: Context, key: Key },
+    MvccByStartTs { ctx: Context, start_ts: u64 },
 }
 
 impl Display for Command {
@@ -222,6 +227,12 @@ impl Display for Command {
             Command::Pause { ref ctx, duration } => {
                 write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
             }
+            Command::MvccByKey { ref ctx, ref key } => {
+                write!(f, "kv::command::mvccbykey {:?} | {:?}", key, ctx)
+            }
+            Command::MvccByStartTs { ref ctx, ref start_ts } => {
+                write!(f, "kv::command::mvccbystartts {:?} | {:?}", start_ts, ctx)
+            }
         }
     }
 }
@@ -243,7 +254,9 @@ impl Command {
             Command::ScanLock { .. } |
             Command::RawGet { .. } |
             Command::RawScan { .. } |
-            Command::Pause { .. } => true,
+            Command::Pause { .. } |
+            Command::MvccByKey { .. } |
+            Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref keys, .. } |
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
@@ -281,6 +294,8 @@ impl Command {
             Command::RawGet { .. } => "raw_get",
             Command::RawScan { .. } => "raw_scan",
             Command::Pause { .. } => "pause",
+            Command::MvccByKey { .. } => "key_mvcc",
+            Command::MvccByStartTs { .. } => "start_ts_mvcc",
         }
     }
 
@@ -292,13 +307,15 @@ impl Command {
             Command::Prewrite { start_ts, .. } |
             Command::Cleanup { start_ts, .. } |
             Command::Rollback { start_ts, .. } |
-            Command::ResolveLock { start_ts, .. } => start_ts,
+            Command::ResolveLock { start_ts, .. } |
+            Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
             Command::RawGet { .. } |
             Command::RawScan { .. } |
-            Command::Pause { .. } => 0,
+            Command::Pause { .. } |
+            Command::MvccByKey { .. } => 0,
         }
     }
 
@@ -316,7 +333,9 @@ impl Command {
             Command::Gc { ref ctx, .. } |
             Command::RawGet { ref ctx, .. } |
             Command::RawScan { ref ctx, .. } |
-            Command::Pause { ref ctx, .. } => ctx,
+            Command::Pause { ref ctx, .. } |
+            Command::MvccByKey { ref ctx, .. } |
+            Command::MvccByStartTs { ref ctx, .. } => ctx,
         }
     }
 
@@ -334,14 +353,16 @@ impl Command {
             Command::Gc { ref mut ctx, .. } |
             Command::RawGet { ref mut ctx, .. } |
             Command::RawScan { ref mut ctx, .. } |
-            Command::Pause { ref mut ctx, .. } => ctx,
+            Command::Pause { ref mut ctx, .. } |
+            Command::MvccByKey { ref mut ctx, .. } |
+            Command::MvccByStartTs { ref mut ctx, .. } => ctx,
         }
     }
 }
 
 use util::transport::SyncSendCh;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Options {
     pub lock_ttl: u64,
     pub skip_constraint_check: bool,
@@ -367,6 +388,9 @@ pub struct Storage {
     engine: Box<Engine>,
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
+
+    // Storage configurations.
+    gc_ratio_threshold: f64,
 }
 
 impl Storage {
@@ -382,6 +406,7 @@ impl Storage {
                 handle: None,
                 receiver: Some(rx),
             })),
+            gc_ratio_threshold: config.gc_ratio_threshold,
         })
     }
 
@@ -624,6 +649,7 @@ impl Storage {
         let cmd = Command::Gc {
             ctx: ctx,
             safe_point: safe_point,
+            ratio_threshold: self.gc_ratio_threshold,
             scan_key: None,
             keys: vec![],
         };
@@ -693,6 +719,36 @@ impl Storage {
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
         Ok(())
     }
+
+    pub fn async_mvcc_by_key(&self,
+                             ctx: Context,
+                             key: Key,
+                             callback: Callback<MvccInfo>)
+                             -> Result<()> {
+        let cmd = Command::MvccByKey {
+            ctx: ctx,
+            key: key,
+        };
+        let tag = cmd.tag();
+        try!(self.send(cmd, StorageCb::MvccInfoByKey(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        Ok(())
+    }
+
+    pub fn async_mvcc_by_start_ts(&self,
+                                  ctx: Context,
+                                  start_ts: u64,
+                                  callback: Callback<Option<(Key, MvccInfo)>>)
+                                  -> Result<()> {
+        let cmd = Command::MvccByStartTs {
+            ctx: ctx,
+            start_ts: start_ts,
+        };
+        let tag = cmd.tag();
+        try!(self.send(cmd, StorageCb::MvccInfoByStartTs(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        Ok(())
+    }
 }
 
 impl Clone for Storage {
@@ -701,6 +757,7 @@ impl Clone for Storage {
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
+            gc_ratio_threshold: self.gc_ratio_threshold,
         }
     }
 }
@@ -714,6 +771,11 @@ quick_error! {
             description(err.description())
         }
         Txn(err: txn::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Mvcc(err: mvcc::Error) {
             from()
             cause(err)
             description(err.description())

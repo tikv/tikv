@@ -31,11 +31,11 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::thread;
+use std::u64;
 
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
@@ -43,8 +43,9 @@ use kvproto::kvrpcpb::{Context, LockInfo, CommandPri};
 
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode, Statistics};
-use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
-use storage::{Key, Value, KvPair, CMD_TAG_GC};
+use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE, Write,
+                    Lock as MvccLock, WriteType};
+use storage::{Key, Value, KvPair, MvccInfo, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
 use raftstore::store::engine::IterOption;
 use util::transport::{SyncSendCh, Error as TransportError};
@@ -67,6 +68,8 @@ pub enum ProcessResult {
     Res,
     MultiRes { results: Vec<StorageResult<()>> },
     MultiKvpairs { pairs: Vec<StorageResult<KvPair>> },
+    MvccKey { mvcc: MvccInfo },
+    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
     Value { value: Option<Value> },
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
@@ -144,6 +147,20 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
         StorageCb::KvPairs(cb) => {
             match pr {
                 ProcessResult::MultiKvpairs { pairs } => cb(Ok(pairs)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
+        }
+        StorageCb::MvccInfoByKey(cb) => {
+            match pr {
+                ProcessResult::MvccKey { mvcc } => cb(Ok(mvcc)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
+        }
+        StorageCb::MvccInfoByStartTs(cb) => {
+            match pr {
+                ProcessResult::MvccStartTs { mvcc } => cb(Ok(mvcc)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
@@ -252,6 +269,42 @@ pub struct Scheduler {
     running_write_count: usize,
 }
 
+// Make clippy happy.
+type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, bool, Value)>);
+
+fn find_mvcc_infos_by_key(reader: &mut MvccReader,
+                          key: &Key,
+                          mut ts: u64)
+                          -> Result<MultipleReturnValue> {
+    let mut writes = vec![];
+    let mut values = vec![];
+    let lock = try!(reader.load_lock(key));
+    loop {
+        let opt = try!(reader.seek_write(key, ts));
+        let short_value: Option<Value>;
+        match opt {
+            Some((commit_ts, mut write)) => {
+                ts = commit_ts - 1;
+                let write_type = write.write_type;
+                short_value = write.short_value.take();
+                writes.push((commit_ts, write));
+                if write_type != WriteType::Put {
+                    continue;
+                }
+            }
+            None => break,
+        };
+        let write = &writes[writes.len() - 1].1;
+        if let Some(v) = short_value {
+            values.push((write.start_ts, true, v));
+        }
+    }
+    for (ts, v) in try!(reader.scan_values_in_default(key)) {
+        values.push((ts, false, v));
+    }
+    Ok((lock, writes, values))
+}
+
 impl Scheduler {
     /// Creates a scheduler.
     pub fn new(engine: Box<Engine>,
@@ -341,6 +394,58 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
+        Command::MvccByKey { ref ctx, ref key } => {
+            let mut reader = MvccReader::new(snapshot.as_ref(),
+                                             &mut statistics,
+                                             Some(ScanMode::Forward),
+                                             true,
+                                             None,
+                                             ctx.get_isolation_level());
+            match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
+                Ok((lock, writes, values)) => {
+                    ProcessResult::MvccKey {
+                        mvcc: MvccInfo {
+                            lock: lock,
+                            writes: writes,
+                            values: values,
+                        },
+                    }
+                }
+                Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
+        Command::MvccByStartTs { ref ctx, start_ts } => {
+            let mut reader = MvccReader::new(snapshot.as_ref(),
+                                             &mut statistics,
+                                             Some(ScanMode::Forward),
+                                             true,
+                                             None,
+                                             ctx.get_isolation_level());
+            match reader.seek_ts(start_ts)
+                .map_err(StorageError::from) {
+                Err(e) => ProcessResult::Failed { err: e.into() },
+                Ok(opt) => {
+                    match opt {
+                        Some(key) => {
+                            match find_mvcc_infos_by_key(&mut reader, &key, u64::MAX) {
+                                Ok((lock, writes, values)) => {
+                                    ProcessResult::MvccStartTs {
+                                        mvcc: Some((key,
+                                                    MvccInfo {
+                                            lock: lock,
+                                            writes: writes,
+                                            values: values,
+                                        })),
+                                    }
+                                }
+                                Err(e) => ProcessResult::Failed { err: e.into() },
+                            }
+                        }
+                        None => ProcessResult::MvccStartTs { mvcc: None },
+                    }
+                }
+            }
+        }
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock { ref ctx, max_ts, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref(),
@@ -405,7 +510,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             }
         }
         // Collects garbage.
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
+        Command::Gc { ref ctx, safe_point, ratio_threshold, ref mut scan_key, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref(),
                                              &mut statistics,
                                              Some(ScanMode::Forward),
@@ -413,27 +518,39 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              None,
                                              ctx.get_isolation_level());
             // scan_key is used as start_key here,and Range start gc with scan_key=none.
-            let is_range_start_key = scan_key.is_none();
-            let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
-                .map_err(Error::from)
-                .and_then(|(keys, next_start)| {
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
-                        .observe(keys.len() as f64);
-                    if keys.is_empty() {
-                        // empty range
-                        if is_range_start_key {
-                            KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+            let is_range_start_gc = scan_key.is_none();
+            // This is an optimization to skip gc before scanning all data.
+            let need_gc = if is_range_start_gc {
+                reader.need_gc(safe_point, ratio_threshold)
+            } else {
+                true
+            };
+            let res = if !need_gc {
+                KV_COMMAND_GC_SKIPPED_COUNTER.inc();
+                Ok(None)
+            } else {
+                reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
+                    .map_err(Error::from)
+                    .and_then(|(keys, next_start)| {
+                        KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                            .observe(keys.len() as f64);
+                        if keys.is_empty() {
+                            // empty range
+                            if is_range_start_gc {
+                                KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+                            }
+                            Ok(None)
+                        } else {
+                            Ok(Some(Command::Gc {
+                                ctx: ctx.clone(),
+                                safe_point: safe_point,
+                                ratio_threshold: ratio_threshold,
+                                scan_key: next_start,
+                                keys: keys,
+                            }))
                         }
-                        Ok(None)
-                    } else {
-                        Ok(Some(Command::Gc {
-                            ctx: ctx.clone(),
-                            safe_point: safe_point,
-                            scan_key: next_start,
-                            keys: keys,
-                        }))
-                    }
-                });
+                    })
+            };
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
@@ -612,7 +729,7 @@ fn process_write_impl(cid: u64,
                 (pr, txn.modifies())
             }
         }
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
+        Command::Gc { ref ctx, safe_point, ratio_threshold, ref mut scan_key, ref keys } => {
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(snapshot,
                                        &mut statistics,
@@ -633,6 +750,7 @@ fn process_write_impl(cid: u64,
                     cmd: Command::Gc {
                         ctx: ctx.clone(),
                         safe_point: safe_point,
+                        ratio_threshold: ratio_threshold,
                         scan_key: scan_key.take(),
                         keys: vec![],
                     },
@@ -1011,8 +1129,17 @@ mod tests {
                                  Command::Gc {
                                      ctx: Context::new(),
                                      safe_point: 5,
+                                     ratio_threshold: 0.0,
                                      scan_key: None,
                                      keys: vec![make_key(b"k")],
+                                 },
+                                 Command::MvccByKey {
+                                     ctx: Context::new(),
+                                     key: make_key(b"k"),
+                                 },
+                                 Command::MvccByStartTs {
+                                     ctx: Context::new(),
+                                     start_ts: 25,
                                  }];
         let write_cmds = vec![Command::Prewrite {
                                   ctx: Context::new(),

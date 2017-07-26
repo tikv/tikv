@@ -43,7 +43,7 @@ pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[TickerType::BlockCacheM
                                                          TickerType::CompactReadBytes,
                                                          TickerType::CompactWriteBytes];
 pub const ENGINE_HIST_TYPES: &'static [HistType] =
-    &[HistType::DbGetMicros, HistType::DbWriteMicros, HistType::DbSeekMicros];
+    &[HistType::GetMicros, HistType::WriteMicros, HistType::SeekMicros];
 
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
     match t {
@@ -116,7 +116,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
 
 pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData) {
     match t {
-        HistType::DbGetMicros => {
+        HistType::GetMicros => {
             STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_median"]).set(value.median);
             STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_percentile95"])
                 .set(value.percentile95);
@@ -126,7 +126,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData) {
             STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_standard_deviation"])
                 .set(value.standard_deviation);
         }
-        HistType::DbWriteMicros => {
+        HistType::WriteMicros => {
             STORE_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_median"]).set(value.median);
             STORE_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_percentile95"])
                 .set(value.percentile95);
@@ -136,7 +136,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData) {
             STORE_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_standard_deviation"])
                 .set(value.standard_deviation);
         }
-        HistType::DbSeekMicros => {
+        HistType::SeekMicros => {
             STORE_ENGINE_SEEK_MICROS_VEC.with_label_values(&["seek_median"]).set(value.median);
             STORE_ENGINE_SEEK_MICROS_VEC.with_label_values(&["seek_percentile95"])
                 .set(value.percentile95);

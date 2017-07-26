@@ -18,6 +18,7 @@ mod write;
 mod metrics;
 
 use std::io;
+use std::error;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::reader::MvccReader;
 pub use self::lock::{Lock, LockType};
@@ -59,6 +60,12 @@ quick_error! {
         TxnLockNotFound {description("txn lock not found")}
         WriteConflict {description("write conflict")}
         KeyVersion {description("bad format key(version)")}
+        Other(err: Box<error::Error + Sync + Send>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
+            display("{:?}", err)
+        }
     }
 }
 
@@ -81,7 +88,7 @@ impl Error {
             Error::WriteConflict => Some(Error::WriteConflict),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed { commit_ts: commit_ts }),
-            Error::Io(_) => None,
+            Error::Io(_) | Error::Other(_) => None,
         }
     }
 }

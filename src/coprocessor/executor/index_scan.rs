@@ -24,7 +24,7 @@ use super::super::endpoint::prefix_next;
 use super::super::Result;
 use super::super::metrics::*;
 
-pub struct IndexScanExec<'a> {
+pub struct IndexScanExecutor<'a> {
     desc: bool,
     col_ids: Vec<i64>,
     cursor: usize,
@@ -33,15 +33,14 @@ pub struct IndexScanExec<'a> {
     pk_col: Option<ColumnInfo>,
 }
 
-impl<'a> IndexScanExec<'a> {
-    #[allow(dead_code)] //TODO:remove it
-    pub fn new(meta: &mut IndexScan,
+impl<'a> IndexScanExecutor<'a> {
+    pub fn new(mut meta: IndexScan,
                key_ranges: Vec<KeyRange>,
                snapshot: &'a Snapshot,
                statistics: &'a mut Statistics,
                start_ts: u64,
                isolation_level: IsolationLevel)
-               -> IndexScanExec<'a> {
+               -> IndexScanExecutor<'a> {
         let mut pk_col = None;
         let desc = meta.get_desc();
         let mut cols = meta.mut_columns();
@@ -52,8 +51,9 @@ impl<'a> IndexScanExec<'a> {
             .map(|c| c.get_column_id())
             .collect();
         let scanner = Scanner::new(desc, false, snapshot, statistics, start_ts, isolation_level);
+
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
-        IndexScanExec {
+        IndexScanExecutor {
             desc: desc,
             col_ids: col_ids,
             scanner: scanner,
@@ -98,14 +98,14 @@ impl<'a> IndexScanExec<'a> {
             } else {
                 datum::Datum::I64(handle)
             };
-            let mut bytes = datum::encode_value(&[handle_datum]).unwrap();
+            let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
             values.append(pk_col.get_column_id(), &mut bytes);
         }
         Ok(Some(Row::new(handle, values)))
     }
 }
 
-impl<'a> Executor for IndexScanExec<'a> {
+impl<'a> Executor for IndexScanExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         while self.cursor < self.key_ranges.len() {
             let data = box_try!(self.get_row_from_range());
@@ -240,12 +240,12 @@ mod test {
         r2.set_end(end_key.clone());
         wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let mut scanner = IndexScanExec::new(&mut wrapper.scan,
-                                             wrapper.ranges,
-                                             snapshot,
-                                             &mut statistics,
-                                             start_ts,
-                                             IsolationLevel::SI);
+        let mut scanner = IndexScanExecutor::new(wrapper.scan,
+                                                 wrapper.ranges,
+                                                 snapshot,
+                                                 &mut statistics,
+                                                 start_ts,
+                                                 IsolationLevel::SI);
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap();
@@ -264,15 +264,15 @@ mod test {
     #[test]
     fn test_reverse_scan() {
         let mut statistics = Statistics::default();
-        let mut wrapper = IndexTestWrapper::default();;
+        let mut wrapper = IndexTestWrapper::default();
         wrapper.scan.set_desc(true);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let mut scanner = IndexScanExec::new(&mut wrapper.scan,
-                                             wrapper.ranges,
-                                             snapshot,
-                                             &mut statistics,
-                                             start_ts,
-                                             IsolationLevel::SI);
+        let mut scanner = IndexScanExecutor::new(wrapper.scan,
+                                                 wrapper.ranges,
+                                                 snapshot,
+                                                 &mut statistics,
+                                                 start_ts,
+                                                 IsolationLevel::SI);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -294,12 +294,12 @@ mod test {
         let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::include_pk_cols();
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let mut scanner = IndexScanExec::new(&mut wrapper.scan,
-                                             wrapper.ranges,
-                                             snapshot,
-                                             &mut statistics,
-                                             start_ts,
-                                             IsolationLevel::SI);
+        let mut scanner = IndexScanExecutor::new(wrapper.scan,
+                                                 wrapper.ranges,
+                                                 snapshot,
+                                                 &mut statistics,
+                                                 start_ts,
+                                                 IsolationLevel::SI);
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();
@@ -307,7 +307,7 @@ mod test {
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
             let handle_datum = datum::Datum::I64(handle as i64);
-            let pk = datum::encode_value(&[handle_datum]).unwrap();
+            let pk = datum::encode_key(&[handle_datum]).unwrap();
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();

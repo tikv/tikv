@@ -17,14 +17,16 @@ use std::str;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, ScalarFuncSig};
-use tipb::select::SelectRequest;
 
+use util::is_even;
 use util::codec::number::NumberDecoder;
 use util::collections::{HashMap, HashMapEntry};
+
+use super::super::codec;
 use super::super::codec::datum::{Datum, DatumDecoder};
 use super::super::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression,
                                  ModifyType};
-use super::super::codec;
+use super::super::codec::mysql::json::{json_object, json_array};
 use super::{Result, Error};
 
 /// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
@@ -60,17 +62,14 @@ impl Default for EvalContext {
 const ONE_DAY: i64 = 3600 * 24;
 
 impl EvalContext {
-    pub fn new(sel: &SelectRequest) -> Result<EvalContext> {
-        let offset = sel.get_time_zone_offset();
-        if offset <= -ONE_DAY || offset >= ONE_DAY {
-            return Err(Error::Eval(format!("invalid tz offset {}", offset)));
+    pub fn new(tz_offset: i64, flags: u64) -> Result<EvalContext> {
+        if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
+            return Err(Error::Eval(format!("invalid tz offset {}", tz_offset)));
         }
-        let tz = match FixedOffset::east_opt(offset as i32) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", offset))),
+        let tz = match FixedOffset::east_opt(tz_offset as i32) {
+            None => return Err(Error::Eval(format!("invalid tz offset {}", tz_offset))),
             Some(tz) => tz,
         };
-
-        let flags = sel.get_flags();
 
         let e = EvalContext {
             tz: tz,
@@ -82,7 +81,9 @@ impl EvalContext {
     }
 }
 
-/// `Evaluator` evaluates `tipb::Expr`.
+// `Evaluator` evaluates `tipb::Expr`.
+// TODO(performance) Evaluator should not contains any data member
+// since Managing data is not his responsibility but calculation.
 #[derive(Default)]
 pub struct Evaluator {
     // column_id -> column_value
@@ -144,6 +145,8 @@ impl Evaluator {
             ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
             ExprType::JsonType => self.eval_json_type(ctx, expr),
             ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
+            ExprType::JsonObject => self.eval_json_object(ctx, expr),
+            ExprType::JsonArray => self.eval_json_array(ctx, expr),
             ExprType::ScalarFunc => self.eval_scalar_function(ctx, expr),
             _ => Ok(Datum::Null),
         }
@@ -430,7 +433,7 @@ impl Evaluator {
                         mt: ModifyType)
                         -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 2));
-        if is_even(children.len() as i64) {
+        if is_even(children.len()) {
             return Err(Error::Expr(format!("expect odd number operands, got {}", children.len())));
         }
 
@@ -440,7 +443,7 @@ impl Evaluator {
             if *item != Datum::Null {
                 false
             } else {
-                index == 1 || is_even(index)
+                index == 1 || is_even(index as usize)
             }
         });
         if should_be_null {
@@ -518,9 +521,26 @@ impl Evaluator {
         Ok(Datum::Json(first.merge(suffixes)))
     }
 
+    fn eval_json_object(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 0));
+        let obj = try!(json_object(children));
+        Ok(Datum::Json(obj))
+    }
+
+    fn eval_json_array(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 0));
+        let arr = try!(json_array(children));
+        Ok(Datum::Json(arr))
+    }
+
     fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         match expr.get_sig() {
             ScalarFuncSig::AbsInt => self.abs_int(ctx, expr),
+            ScalarFuncSig::AbsReal => self.abs_real(ctx, expr),
+            ScalarFuncSig::CeilInt => self.ceil_int(ctx, expr),
+            ScalarFuncSig::CeilReal => self.ceil_real(ctx, expr),
+            ScalarFuncSig::FloorInt => self.floor_int(ctx, expr),
+            ScalarFuncSig::FloorReal => self.floor_real(ctx, expr),
             _ => Err(Error::Expr(format!("unsupported scalar function: {:?}", expr.get_sig()))),
         }
     }
@@ -597,11 +617,6 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
         return Err(e.into());
     }
     Ok(pos.is_ok())
-}
-
-#[inline]
-fn is_even(n: i64) -> bool {
-    n & 1 == 0
 }
 
 #[cfg(test)]
@@ -1131,10 +1146,10 @@ pub mod test {
     fn test_context() {
         let mut req = SelectRequest::new();
         req.set_time_zone_offset(i32::MAX as i64 + 1);
-        let ctx = EvalContext::new(&req);
+        let ctx = EvalContext::new(req.get_time_zone_offset(), req.get_flags());
         assert!(ctx.is_err());
         req.set_time_zone_offset(3600);
-        EvalContext::new(&req).unwrap();
+        EvalContext::new(req.get_time_zone_offset(), req.get_flags()).unwrap();
     }
 
     #[test]
@@ -1223,8 +1238,10 @@ pub mod test {
                         Datum::Bytes(b"BOOLEAN".to_vec())),
             (build_byte_datums_expr(&[br#"null"#], ExprType::JsonType),
                         Datum::Bytes(b"NULL".to_vec())),
-            (build_byte_datums_expr(&[br#"3"#], ExprType::JsonType),
+            (build_byte_datums_expr(&[br#"-3"#], ExprType::JsonType),
                         Datum::Bytes(b"INTEGER".to_vec())),
+            (build_byte_datums_expr(&[br#"3"#], ExprType::JsonType),
+                        Datum::Bytes(b"UNSIGNED INTEGER".to_vec())),
             (build_byte_datums_expr(&[br#"3.14"#], ExprType::JsonType),
                         Datum::Bytes(b"DOUBLE".to_vec())),
             (build_byte_datums_expr(&[br#"{"name":"shirly","age":18}"#], ExprType::JsonType),
@@ -1258,5 +1275,24 @@ pub mod test {
           build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
           build_expr(vec![], ExprType::JsonMerge),
           build_expr(vec![Datum::Null], ExprType::JsonMerge),
-     ]);
+    ]);
+
+    test_eval!(test_eval_json_object,
+               vec![
+        (build_expr(vec![], ExprType::JsonObject), Datum::Json("{}".parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null], ExprType::JsonObject),
+            Datum::Json(r#"{"1":null}"#.parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::U64(2), Datum::Bytes(b"sdf".to_vec()),
+                Datum::Bytes(b"k1".to_vec()), Datum::Bytes(b"v1".to_vec())], ExprType::JsonObject),
+            Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_json_array,
+               vec![
+        (build_expr(vec![], ExprType::JsonArray), Datum::Json("[]".parse().unwrap())),
+        (build_expr(vec![Datum::Null], ExprType::JsonArray),
+            Datum::Json("[null]".parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::Bytes(b"sdf".to_vec())],
+            ExprType::JsonArray), Datum::Json(r#"[1,null,"sdf"]"#.parse().unwrap())),
+    ]);
 }
