@@ -30,6 +30,7 @@ dependencies = [
  "regex 0.1.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
  "serde 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "signal 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "sys-info 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -422,7 +423,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#240e5b6677367bc3db6b37294958175b59f3e8ca"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#06ad3fc123cd78c8a7203bb92b0f9e891bd61eaa"
 dependencies = [
  "gcc 0.3.51 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -719,7 +720,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#240e5b6677367bc3db6b37294958175b59f3e8ca"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#06ad3fc123cd78c8a7203bb92b0f9e891bd61eaa"
 dependencies = [
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
