@@ -387,6 +387,7 @@ impl PeerStorage {
                region);
         let raft_state = try!(init_raft_state(&raft_engine, region));
         let apply_state = try!(init_apply_state(&kv_engine, region));
+        assert!(raft_state.get_last_index() >= apply_state.get_applied_index());
         let last_term = try!(init_last_term(&raft_engine, region, &raft_state, &apply_state));
 
         Ok(PeerStorage {
@@ -1020,7 +1021,7 @@ pub fn clear_meta(raft_engine: &DB, wb: &WriteBatch, kv_engine: &DB, region_id: 
                              }));
 
     // remove apply state
-    let mut kv_wb = WriteBatch::new();
+    let kv_wb = WriteBatch::new();
     try!(kv_engine.scan(&raft_start,
                         &raft_end,
                         false,

@@ -51,7 +51,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster_kv").unwrap();
     let kv_engine = Arc::new(rocksdb::new_engine(tmp_path.path().to_str().unwrap(), KV_CFS)
-                             .unwrap());
+        .unwrap());
     let tmp_path_raft = tmp_path.path().join(Path::new("raft_db"));
     let raft_engine = Arc::new(rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), RAFT_CFS)
         .unwrap());

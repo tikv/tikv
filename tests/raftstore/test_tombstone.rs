@@ -64,13 +64,13 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut existing_kvs = vec![];
     for cf in raft_engine_2.cf_names() {
         raft_engine_2.scan_cf(cf,
-                              b"",
-                              &[0xFF],
-                              false,
-                              &mut |k, v| {
-                                  existing_kvs.push((k.to_vec(), v.to_vec()));
-                                  Ok(true)
-                              })
+                     b"",
+                     &[0xFF],
+                     false,
+                     &mut |k, v| {
+                         existing_kvs.push((k.to_vec(), v.to_vec()));
+                         Ok(true)
+                     })
             .unwrap();
     }
     // only tombstone key and store ident key exist.

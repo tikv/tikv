@@ -37,8 +37,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut before_states = HashMap::new();
 
     for (&id, &(ref kv_engine, ref _raft_engine)) in &cluster.engines {
-        let mut state: RaftApplyState =
-            get_msg_or_default(kv_engine, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = get_msg_or_default(kv_engine, &keys::apply_state_key(1));
         before_states.insert(id, state.take_truncated_state());
     }
 
@@ -64,8 +63,7 @@ fn check_compacted(engines: &HashMap<u64, (Arc<DB>, Arc<DB>)>,
     let mut compacted_idx = HashMap::new();
 
     for (&id, &(ref kv_engine, ref _raft_engine)) in engines {
-        let mut state: RaftApplyState =
-            get_msg_or_default(kv_engine, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = get_msg_or_default(kv_engine, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -109,8 +107,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for (&id, &(ref kv_engine, ref _raft_engine)) in &cluster.engines {
         must_get_equal(kv_engine, b"k1", b"v1");
-        let mut state: RaftApplyState =
-            get_msg_or_default(kv_engine, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = get_msg_or_default(kv_engine, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -129,8 +126,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // limit has not reached, should not gc.
     for (&id, &(ref kv_engine, ref _raft_engine)) in &cluster.engines {
-        let mut state: RaftApplyState =
-            get_msg_or_default(kv_engine, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = get_msg_or_default(kv_engine, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -165,8 +161,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for (&id, &(ref kv_engine, ref _raft_engine)) in &cluster.engines {
         must_get_equal(kv_engine, b"k1", b"v1");
-        let mut state: RaftApplyState =
-            get_msg_or_default(kv_engine, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = get_msg_or_default(kv_engine, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -225,8 +220,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
             continue;
         }
         must_get_equal(kv_engine, b"k1", b"v1");
-        let mut state: RaftApplyState =
-            get_msg_or_default(kv_engine, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = get_msg_or_default(kv_engine, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -250,8 +244,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         if id == 1 {
             continue;
         }
-        let mut state: RaftApplyState =
-            get_msg_or_default(kv_engine, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = get_msg_or_default(kv_engine, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -276,8 +269,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         if id == 1 {
             continue;
         }
-        let mut state: RaftApplyState =
-            get_msg_or_default(kv_engine, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = get_msg_or_default(kv_engine, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];

@@ -41,8 +41,8 @@ impl Default for AssertionStorage {
 
 impl AssertionStorage {
     pub fn new_kv_storage_with_store_count(count: usize,
-                                             key: &str)
-                                             -> (Cluster<ServerCluster>, AssertionStorage) {
+                                           key: &str)
+                                           -> (Cluster<ServerCluster>, AssertionStorage) {
         let (cluster, store, ctx) = new_kv_storage_with_store_count(count, key);
         let storage = AssertionStorage {
             ctx: ctx,
