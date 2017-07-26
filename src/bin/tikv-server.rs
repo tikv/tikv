@@ -427,11 +427,100 @@ fn get_rocksdb_db_option(config: &toml::Value) -> DBOptions {
     opts
 }
 
-fn get_concurrent_write_option(opts: &mut RocksdbOptions, config: &toml::Value) {
+fn get_raft_rocksdb_db_option(config: &toml::Value) -> DBOptions {
+    let mut opts = DBOptions::new();
+    let rmode = get_toml_int(config, "raft-rocksdb.wal-recovery-mode", Some(2));
+    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    opts.set_wal_recovery_mode(wal_recovery_mode);
+
+    let wal_dir = get_toml_string(config, "raft-rocksdb.wal-dir", Some("".to_owned()));
+    if !wal_dir.is_empty() {
+        opts.set_wal_dir(&wal_dir)
+    };
+
+    let wal_ttl_seconds = get_toml_int(config, "raft-rocksdb.wal-ttl-seconds", Some(0));
+    opts.set_wal_ttl_seconds(wal_ttl_seconds as u64);
+
+    let wal_size_limit = get_toml_int(config, "raft-rocksdb.wal-size-limit", Some(0));
+    // return size in MB
+    let wal_size_limit_mb = align_to_mb(wal_size_limit as u64) / MB;
+    opts.set_wal_size_limit_mb(wal_size_limit_mb as u64);
+
+    let max_total_wal_size = get_toml_int(config,
+                                          "raft-rocksdb.max-total-wal-size",
+                                          Some(4 * 1024 * 1024 * 1024));
+    opts.set_max_total_wal_size(max_total_wal_size as u64);
+
+    let max_background_jobs = get_toml_int(config, "raft-rocksdb.max-background-jobs", Some(6));
+    opts.set_max_background_jobs(max_background_jobs as i32);
+
+    let max_manifest_file_size = get_toml_int(config,
+                                              "raft-rocksdb.max-manifest-file-size",
+                                              Some(20 * 1024 * 1024));
+    opts.set_max_manifest_file_size(max_manifest_file_size as u64);
+
+    let create_if_missing = get_toml_boolean(config, "raft-rocksdb.create-if-missing", Some(true));
+    opts.create_if_missing(create_if_missing);
+
+    let max_open_files = get_toml_int(config, "raft-rocksdb.max-open-files", Some(40960));
+    opts.set_max_open_files(max_open_files as i32);
+
+    let enable_statistics = get_toml_boolean(config, "raft-rocksdb.enable-statistics", Some(true));
+    if enable_statistics {
+        opts.enable_statistics();
+        let stats_dump_period_sec =
+            get_toml_int(config, "raft-rocksdb.stats-dump-period-sec", Some(600));
+        opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
+    }
+
+    let compaction_readahead_size =
+        get_toml_int(config, "raft-rocksdb.compaction-readahead-size", Some(0));
+    opts.set_compaction_readahead_size(compaction_readahead_size as u64);
+
+    let max_file_size = get_toml_int(config, "raft-rocksdb.info-log-max-size", Some(0));
+    opts.set_max_log_file_size(max_file_size as u64);
+
+    // RocksDB needs seconds, but here we will get milliseconds.
+    let roll_time_secs = get_toml_int(config, "raft-rocksdb.info-log-roll-time", Some(0)) /
+                         SEC_TO_MS;
+    opts.set_log_file_time_to_roll(roll_time_secs as u64);
+
+    let info_log_dir = get_toml_string(config, "raft-rocksdb.info-log-dir", Some("".to_owned()));
+    if !info_log_dir.is_empty() {
+        opts.create_info_log(&info_log_dir).unwrap_or_else(|e| {
+            panic!("create RocksDB info log {} error {:?}", info_log_dir, e);
+        })
+    }
+
+    let rate_bytes_per_sec = get_toml_int(config, "raft-rocksdb.rate-bytes-per-sec", Some(0));
+    if rate_bytes_per_sec > 0 {
+        opts.set_ratelimiter(rate_bytes_per_sec as i64);
+    }
+
+    let max_sub_compactions = get_toml_int(config, "raft-rocksdb.max-sub-compactions", Some(1));
+    opts.set_max_subcompactions(max_sub_compactions as u32);
+
+    let writable_file_max_buffer_size = get_toml_int(config,
+                                                     "raft-rocksdb.writable-file-max-buffer-size",
+                                                     Some(1024 * 1024));
+    opts.set_writable_file_max_buffer_size(writable_file_max_buffer_size as i32);
+
+    let direct_io = get_toml_boolean(config,
+                                     "raft-rocksdb.use-direct-io-for-flush-and-compaction",
+                                     Some(false));
+    opts.set_use_direct_io_for_flush_and_compaction(direct_io);
+
+    let pipelined_write =
+        get_toml_boolean(config, "raft-rocksdb.enable-pipelined-write", Some(true));
+    opts.enable_pipelined_write(pipelined_write);
+
     let concurrent_write = get_toml_boolean(config,
-                                            "rocksdb.allow-concurrent-memtable-write",
+                                            "raft-rocksdb.allow-concurrent-memtable-write",
                                             Some(false));
     opts.allow_concurrent_memtable_write(concurrent_write);
+
+    opts
 }
 
 struct CfOptValues {
@@ -481,10 +570,11 @@ impl Default for CfOptValues {
 }
 
 fn get_rocksdb_cf_option(config: &toml::Value,
+                         db: &str,
                          cf: &str,
                          default_values: CfOptValues)
                          -> ColumnFamilyOptions {
-    let prefix = String::from("rocksdb.") + cf + ".";
+    let prefix = db.to_string() + "." + cf + ".";
     let mut block_base_opts = BlockBasedOptions::new();
     let block_size = get_toml_int(config,
                                   (prefix.clone() + "block-size").as_str(),
@@ -556,7 +646,8 @@ fn get_rocksdb_cf_option(config: &toml::Value,
         get_toml_int(config,
                      (prefix.clone() + "level0-file-num-compaction-trigger").as_str(),
                      Some(default_values.level_zero_file_num_compaction_trigger));
-    cf_opts.set_level_zero_file_num_compaction_trigger(level_zero_file_num_compaction_trigger as i32);
+    cf_opts.set_level_zero_file_num_compaction_trigger(
+        level_zero_file_num_compaction_trigger as i32);
 
     let level_zero_slowdown_writes_trigger =
         get_toml_int(config,
@@ -592,7 +683,7 @@ fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> Column
     default_values.use_bloom_filter = true;
     default_values.whole_key_filtering = true;
 
-    get_rocksdb_cf_option(config, "defaultcf", default_values)
+    get_rocksdb_cf_option(config, "rocksdb", "defaultcf", default_values)
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
@@ -602,7 +693,7 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFa
     default_values.use_bloom_filter = true;
     default_values.whole_key_filtering = false;
 
-    let mut cf_opts = get_rocksdb_cf_option(config, "writecf", default_values);
+    let mut cf_opts = get_rocksdb_cf_option(config, "rocksdb", "writecf", default_values);
     // Prefix extractor(trim the timestamp at tail) for write cf.
     cf_opts.set_prefix_extractor("FixedSuffixSliceTransform",
                               Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
@@ -612,19 +703,6 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFa
     // Collects user defined properties.
     let f = Box::new(UserPropertiesCollectorFactory::default());
     cf_opts.add_table_properties_collector_factory("tikv.user-properties-collector", f);
-    cf_opts
-}
-
-fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
-    let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
-    let block_cache_size = adjust_block_cache_size(cache_size, RAFTCF_MIN_MEM, RAFTCF_MAX_MEM);
-    let mut default_values = CfOptValues::default();
-    default_values.block_cache_size = block_cache_size as i64;
-
-    let mut cf_opts = get_rocksdb_cf_option(config, "raftcf", default_values);
-    cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
-            Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     cf_opts
 }
 
@@ -640,12 +718,35 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFam
     default_values.level_zero_file_num_compaction_trigger = 1;
     default_values.max_bytes_for_level_base = 128 * MB as i64;
 
-    let mut cf_opts = get_rocksdb_cf_option(config, "lockcf", default_values);
+    let mut cf_opts = get_rocksdb_cf_option(config, "rocksdb", "lockcf", default_values);
     // Currently if we want create bloom filter for memtable, we must set prefix extractor.
     cf_opts.set_prefix_extractor("NoopSliceTransform",
                               Box::new(rocksdb_util::NoopSliceTransform))
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+    cf_opts
+}
+
+fn get_raft_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
+    let mut default_values = CfOptValues::default();
+    default_values.block_cache_size =
+        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64) as i64;
+    default_values.use_bloom_filter = true;
+    default_values.whole_key_filtering = true;
+
+    get_rocksdb_cf_option(config, "raft-rocksdb", "defaultcf", default_values)
+}
+
+fn get_raft_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
+    let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
+    let block_cache_size = adjust_block_cache_size(cache_size, RAFTCF_MIN_MEM, RAFTCF_MAX_MEM);
+    let mut default_values = CfOptValues::default();
+    default_values.block_cache_size = block_cache_size as i64;
+
+    let mut cf_opts = get_rocksdb_cf_option(config, "raft-rocksdb", "raftcf", default_values);
+    cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
+            Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     cf_opts
 }
 
@@ -947,15 +1048,12 @@ fn run_raft_server(pd_client: RpcClient,
 
     // Create raft_cf engine.
     let raft_rocksdb_dir = get_raft_rocksdb_data_dir(&cfg.storage.path, config);
-    let raft_path = Path::new(&raft_rocksdb_dir);
-    let raft_db_path = raft_path.join(Path::new("raft_db"));
-    let mut raft_db_opts = get_rocksdb_db_option(config);
-    get_concurrent_write_option(&mut raft_db_opts, config);
-    let raft_cf_opts =
-        vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
-                                          get_rocksdb_default_cf_option(config, total_mem)),
+    let raft_db_path = Path::new(&raft_rocksdb_dir).join(Path::new("raft_db"));
+    let raft_db_opts = get_raft_rocksdb_db_option(config);
+    let raft_cf_opts = vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
+                                          get_raft_rocksdb_default_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_RAFT,
-                                          get_rocksdb_raftlog_cf_option(config, total_mem))];
+                                          get_raft_rocksdb_raftlog_cf_option(config, total_mem))];
     let raft_engine = Arc::new(rocksdb_util::new_engine_opt(raft_db_path.to_str().unwrap(),
                                                             raft_db_opts,
                                                             raft_cf_opts)
