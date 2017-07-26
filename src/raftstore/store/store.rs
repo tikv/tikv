@@ -156,19 +156,6 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     Ok(event_loop)
 }
 
-pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-    if start_key >= end_key {
-        return Ok(());
-    }
-
-    for cf in db.cf_names() {
-        let handle = try!(rocksdb::get_cf_handle(db, cf));
-        box_try!(db.delete_file_in_range_cf(handle, start_key, end_key));
-    }
-
-    Ok(())
-}
-
 impl<T, C> Store<T, C> {
     pub fn new(ch: StoreChannel,
                meta: metapb::Store,
@@ -311,11 +298,11 @@ impl<T, C> Store<T, C> {
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            try!(delete_file_in_range(&self.engine, &last_start_key, &start_key));
+            try!(util::delete_all_in_range(&self.engine, &last_start_key, &start_key));
             last_start_key = keys::enc_end_key(region);
         }
 
-        try!(delete_file_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
+        try!(util::delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
 
         info!("{} cleans up garbage data, takes {:?}",
               self.tag,

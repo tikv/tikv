@@ -19,22 +19,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use std::str;
 
-use rocksdb::{DB, Writable, WriteBatch};
+use rocksdb::DB;
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use threadpool::ThreadPool;
 
 use util::worker::Runnable;
-use util::{escape, rocksdb};
-use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption};
+use util::escape;
+use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
 use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyOptions, keys,
                        Peekable};
 use raftstore::store::snap::{Error, Result};
-use storage::{CF_RAFT, CF_WRITE};
+use storage::CF_RAFT;
 
 use super::metrics::*;
+use super::super::util;
 
 const GENERATE_POOL_SIZE: usize = 2;
 
@@ -120,34 +121,6 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn delete_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let wb = WriteBatch::new();
-        for cf in self.db.cf_names() {
-            let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
-            let mut it = box_try!(self.db.new_iterator_cf(cf, iter_opt));
-            it.seek(start_key.into());
-            if it.valid() {
-                let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
-                if cf == CF_WRITE {
-                    // We enable memtable prefix bloom for CF_WRITE, for delete_range operation
-                    // RocksDB will add start key to bloom, and the start key will go through
-                    // function prefix_extractor->Transform, in our case the prefix_extractor is
-                    // FixedSuffixSliceTransform, if the length of start key less than 8, we
-                    // will encounter index out of range error.
-                    box_try!(wb.delete_range_cf(handle, it.key(), end_key));
-                } else {
-                    box_try!(wb.delete_range_cf(handle, start_key, end_key));
-                }
-            }
-        }
-
-        if wb.count() > 0 {
-            box_try!(self.db.write(wb));
-        }
-
-        Ok(())
-    }
-
     fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         try!(check_abort(&abort));
@@ -162,7 +135,7 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         try!(check_abort(&abort));
-        box_try!(self.delete_range(&start_key, &end_key));
+        box_try!(util::delete_all_in_range(&self.db, &start_key, &end_key));
         try!(check_abort(&abort));
 
         let state_key = keys::apply_state_key(region_id);
@@ -230,7 +203,7 @@ impl SnapContext {
               region_id,
               escape(&start_key),
               escape(&end_key));
-        if let Err(e) = self.delete_range(&start_key, &end_key) {
+        if let Err(e) = util::delete_all_in_range(&self.db, &start_key, &end_key) {
             error!("failed to delete data in [{}, {}): {:?}",
                    escape(&start_key),
                    escape(&end_key),

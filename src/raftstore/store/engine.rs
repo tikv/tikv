@@ -388,15 +388,11 @@ pub trait Mutable: Writable {
 impl Mutable for DB {}
 impl Mutable for WriteBatch {}
 
-const MAX_DELETE_KEYS_COUNT: usize = 10000;
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use tempdir::TempDir;
-    use rocksdb::{Writable, WriteBatch, DBOptions, ColumnFamilyOptions, DBCompressionType};
-    use storage::CF_DEFAULT;
-    use util::rocksdb::CFOptions;
+    use rocksdb::Writable;
     use super::*;
     use kvproto::metapb::Region;
 
