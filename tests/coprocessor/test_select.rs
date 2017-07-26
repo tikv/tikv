@@ -10,6 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 use std::collections::{HashMap, BTreeMap};
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -354,7 +355,6 @@ impl<'a> Select<'a> {
         self
     }
 
-
     fn count(mut self) -> Select<'a> {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::Count);
@@ -425,11 +425,8 @@ impl<'a> Select<'a> {
             req.set_tp(REQ_TYPE_INDEX);
         }
         self.sel.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
-
         req.set_data(self.sel.write_to_bytes().unwrap());
-
         let mut range = KeyRange::new();
-
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(i64::MIN).unwrap();
         if self.idx < 0 {
@@ -437,7 +434,6 @@ impl<'a> Select<'a> {
         } else {
             range.set_start(table::encode_index_seek_key(self.table.id, self.idx, &buf));
         }
-
         buf.clear();
         buf.encode_i64(i64::MAX).unwrap();
         if self.idx < 0 {
@@ -629,7 +625,6 @@ impl DAGSelect {
         buf.clear();
         buf.encode_i64(i64::MAX).unwrap();
         range.set_end(table::encode_row_key(table.id, &buf));
-
 
         DAGSelect {
             execs: vec![exec],
@@ -831,10 +826,7 @@ fn test_select() {
         assert_eq!(id, row.handle);
         assert_eq!(row.data, &*expected_encoded);
     }
-
-
     // for dag selection
-
     let req = DAGSelect::from(&product.table).build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), data.len());
@@ -971,7 +963,6 @@ fn test_aggr_count() {
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.data, &*expected_encoded);
     }
-
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1621,7 +1612,6 @@ fn test_index_aggr_count() {
     let gk = Datum::Bytes(coprocessor::SINGLE_GROUP.to_vec());
     expected_encoded = datum::encode_value(&[Datum::U64(data.len() as u64), gk]).unwrap();
     assert_eq!(spliter.next().unwrap().data, &*expected_encoded);
-
 
     let exp = vec![
         (Datum::Null, 1),
