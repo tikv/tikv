@@ -120,7 +120,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn delete_all_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    fn delete_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
         let wb = WriteBatch::new();
         for cf in self.db.cf_names() {
             let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
@@ -162,7 +162,7 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         try!(check_abort(&abort));
-        box_try!(self.delete_all_in_range(&start_key, &end_key));
+        box_try!(self.delete_range(&start_key, &end_key));
         try!(check_abort(&abort));
 
         let state_key = keys::apply_state_key(region_id);
@@ -230,7 +230,7 @@ impl SnapContext {
               region_id,
               escape(&start_key),
               escape(&end_key));
-        if let Err(e) = self.delete_all_in_range(&start_key, &end_key) {
+        if let Err(e) = self.delete_range(&start_key, &end_key) {
             error!("failed to delete data in [{}, {}): {:?}",
                    escape(&start_key),
                    escape(&end_key),
