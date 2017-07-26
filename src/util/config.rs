@@ -275,6 +275,24 @@ pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, Confi
 
 pub struct ReadableSize(pub u64);
 
+impl ReadableSize {
+    pub fn kb(count: u64) -> ReadableSize {
+        ReadableSize(count * KB)
+    }
+
+    pub fn mb(count: u64) -> ReadableSize {
+        ReadableSize(count * MB)
+    }
+
+    pub fn gb(count: u64) -> ReadableSize {
+        ReadableSize(count * GB)
+    }
+
+    pub fn as_mb(&self) -> u64 {
+        self.0 / MB
+    }
+}
+
 impl Serialize for ReadableSize {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where S: Serializer
@@ -373,6 +391,16 @@ impl<'de> Deserialize<'de> for ReadableSize {
 }
 
 pub struct ReadableDuration(pub Duration);
+
+impl ReadableDuration {
+    pub fn as_secs(&self) -> u64 {
+        self.0.as_secs()
+    }
+
+    pub fn as_millis(&self) -> u64 {
+        util::duration_to_ms(self.0)
+    }
+}
 
 impl Serialize for ReadableDuration {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

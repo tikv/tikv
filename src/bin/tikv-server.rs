@@ -44,6 +44,7 @@ extern crate grpc;
 mod signal_handler;
 #[cfg(unix)]
 mod profiling;
+mod config;
 
 use std::process;
 use std::fs::{self, File};
