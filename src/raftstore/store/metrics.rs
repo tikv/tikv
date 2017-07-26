@@ -190,6 +190,6 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_batch_local_read",
             "Bucketed histogram of batch size of local read",
-            linear_buckets(0.0, 5.0, 10).unwrap()
+            linear_buckets(0.0, 2.0, 25).unwrap()
         ).unwrap();
 }
