@@ -317,21 +317,20 @@ impl BatchRunnable<Task> for Host {
 
         let req_ids1 = req_ids.clone();
         let sched = self.sched.clone();
-        let on_finish: engine::BatchCallback<Box<Snapshot>> =
-            box move |(_, results)| {
-                if let Ok(results) = results {
-                    let batch = req_ids1.into_iter().zip(results).filter_map(|(id, res)| {
-                        if let Some(res) = res {
-                            Some((id, res))
-                        } else {
-                            None
-                        }
-                    });
-                    sched.schedule(Task::SnapResBatch(batch.collect())).unwrap()
-                } else {
-                    unreachable!();
-                }
-            };
+        let on_finish: engine::BatchCallback<Box<Snapshot>> = box move |(_, results)| {
+            if let Ok(results) = results {
+                let batch = req_ids1.into_iter().zip(results).filter_map(|(id, res)| {
+                    if let Some(res) = res {
+                        Some((id, res))
+                    } else {
+                        None
+                    }
+                });
+                sched.schedule(Task::SnapResBatch(batch.collect())).unwrap()
+            } else {
+                unreachable!();
+            }
+        };
 
         if let Err(e) = self.engine.async_snapshots_batch(batch, on_finish) {
             for id in req_ids {

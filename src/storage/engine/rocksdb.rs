@@ -20,8 +20,8 @@ use raftstore::store::engine::{SyncSnapshot as RocksSnapshot, Peekable, Iterable
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
-use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, BatchCallback, TEMP_DIR,
-            ScanMode, Result, Error, CbContext};
+use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, BatchCallback,
+            TEMP_DIR, ScanMode, Result, Error, CbContext};
 use tempdir::TempDir;
 
 enum Task {
