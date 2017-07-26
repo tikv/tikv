@@ -1603,7 +1603,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
-        let t = SlowTimer::new();
         let disk_stats = match fs2::statvfs(self.engine.path()) {
             Err(e) => {
                 error!("{} get disk stat for rocksdb {} failed: {}",
@@ -1614,7 +1613,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             Ok(stats) => stats,
         };
-        slow_log!(t, "{} fetch disk usage", self.tag);
 
         let disk_cap = disk_stats.total_space();
         let capacity = if self.cfg.capacity == 0 || disk_cap < self.cfg.capacity {
@@ -1624,9 +1622,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         stats.set_capacity(capacity);
 
-        let t2 = SlowTimer::new();
         let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
-        slow_log!(t2, "{} flush engine properties ans get used size", self.tag);
         used_size += self.snap_mgr.get_total_snap_size();
 
         stats.set_used_size(used_size);
@@ -1660,14 +1656,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as f64);
 
-        let t3 = SlowTimer::new();
         let mut apply_snapshot_count = 0;
         for peer in self.region_peers.values_mut() {
             if peer.mut_store().check_applying_snap() {
                 apply_snapshot_count += 1;
             }
         }
-        slow_log!(t3, "{} check applying snap", self.tag);
 
         stats.set_applying_snap_count(apply_snapshot_count as u32);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["applying"])
@@ -1703,7 +1697,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn flush_engine_statistics(&mut self) {
-        let t = SlowTimer::new();
         for t in ENGINE_TICKER_TYPES {
             let v = self.engine.get_statistics_ticker_count(*t);
             flush_engine_ticker_metrics(*t, v);
@@ -1714,7 +1707,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 flush_engine_histogram_metrics(*t, v);
             }
         }
-        slow_log!(t, "{} flush engine statistics", self.tag);
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
