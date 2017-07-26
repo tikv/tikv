@@ -125,15 +125,8 @@ endpoints = ""
 # Time for the info log file to roll (in seconds).
 # info-log-roll-time = "0s"
 
-# Maximum number of concurrent background compaction jobs, submitted to
-# the default LOW priority thread pool.
-max-background-compactions = 6
-
-# Maximum number of concurrent background flush jobs
-max-background-flushes = 2
-
-# Suggested number of concurrent background compaction jobs.
-# base-background-compactions = 1
+# Maximum number of concurrent background jobs (compactions and flushes)
+# max-background-jobs = 6
 
 # This value represents the maximum number of threads that will concurrently perform a
 # compaction job by breaking it into multiple, smaller ones that are run simultaneously.
