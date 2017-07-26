@@ -12,4 +12,3 @@
 // limitations under the License.
 
 mod test_select;
-mod test_dag_select;
