@@ -29,9 +29,9 @@ use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
 use util::worker::Scheduler;
 use util::buf::PipeBuffer;
-use storage::{self, Storage, Key, Options, Mutation};
+use storage::{self, Storage, Key, Options, Mutation, Value};
 use storage::txn::Error as TxnError;
-use storage::mvcc::Error as MvccError;
+use storage::mvcc::{Error as MvccError, WriteType, Write as MvccWrite};
 use storage::engine::Error as EngineError;
 use super::transport::RaftStoreRouter;
 use coprocessor::{RequestTask, EndPointTask};
@@ -701,17 +701,90 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     }
 
     fn mvcc_get_by_key(&self,
-                       _: RpcContext,
-                       _: MvccGetByKeyRequest,
-                       _: UnarySink<MvccGetByKeyResponse>) {
-        unimplemented!();
+                       ctx: RpcContext,
+                       mut req: MvccGetByKeyRequest,
+                       sink: UnarySink<MvccGetByKeyResponse>) {
+        let label = "mvcc_get_by_key";
+        let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
+
+        let storage = self.storage.clone();
+
+        let key = Key::from_raw(req.get_key());
+        let (cb, future) = make_callback();
+        let res = storage.async_mvcc_by_key(req.take_context(), key.clone(), cb);
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future.map_err(Error::from)
+            .map(|v| {
+                let mut resp = MvccGetByKeyResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else {
+                    match v {
+                        Ok(mvcc) => {
+                            resp.set_info(extract_mvcc_info(key, mvcc));
+                        }
+                        Err(e) => resp.set_error(format!("{}", e)),
+                    };
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+
+        ctx.spawn(future);
     }
 
     fn mvcc_get_by_start_ts(&self,
-                            _: RpcContext,
-                            _: MvccGetByStartTsRequest,
-                            _: UnarySink<MvccGetByStartTsResponse>) {
-        unimplemented!();
+                            ctx: RpcContext,
+                            mut req: MvccGetByStartTsRequest,
+                            sink: UnarySink<MvccGetByStartTsResponse>) {
+        let label = "mvcc_get_by_start_ts";
+        let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
+
+        let storage = self.storage.clone();
+
+        let (cb, future) = make_callback();
+
+        let res = storage.async_mvcc_by_start_ts(req.take_context(), req.get_start_ts(), cb);
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future.map_err(Error::from)
+            .map(|v| {
+                let mut resp = MvccGetByStartTsResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else {
+                    match v {
+                        Ok(Some((k, vv))) => {
+                            resp.set_key(k.raw().unwrap());
+                            resp.set_info(extract_mvcc_info(k, vv));
+                        }
+                        Ok(None) => {
+                            resp.set_info(Default::default());
+                        }
+                        Err(e) => resp.set_error(format!("{}", e)),
+                    }
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+        ctx.spawn(future);
     }
 }
 
@@ -794,6 +867,53 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
             vec![pair]
         }
     }
+}
+
+fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
+    let mut mvcc_info = MvccInfo::new();
+    if let Some(lock) = mvcc.lock {
+        let mut lock_info = LockInfo::new();
+        lock_info.set_primary_lock(lock.primary);
+        lock_info.set_key(key.raw().unwrap());
+        lock_info.set_lock_ttl(lock.ttl);
+        lock_info.set_lock_version(lock.ts);
+        mvcc_info.set_lock(lock_info);
+    }
+    let vv = extract_2pc_values(mvcc.values);
+    let vw = extract_2pc_writes(mvcc.writes);
+    mvcc_info.set_writes(RepeatedField::from_vec(vw));
+    mvcc_info.set_values(RepeatedField::from_vec(vv));
+    mvcc_info
+}
+
+fn extract_2pc_values(res: Vec<(u64, bool, Value)>) -> Vec<ValueInfo> {
+    res.into_iter()
+        .map(|(start_ts, is_short, value)| {
+            let mut value_info = ValueInfo::new();
+            value_info.set_ts(start_ts);
+            value_info.set_value(value);
+            value_info.set_is_short_value(is_short);
+            value_info
+        })
+        .collect()
+}
+
+fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
+    res.into_iter()
+        .map(|(commit_ts, write)| {
+            let mut write_info = WriteInfo::new();
+            write_info.set_start_ts(write.start_ts);
+            let op = match write.write_type {
+                WriteType::Put => Op::Put,
+                WriteType::Delete => Op::Del,
+                WriteType::Lock => Op::Lock,
+                WriteType::Rollback => Op::Rollback,
+            };
+            write_info.set_field_type(op);
+            write_info.set_commit_ts(commit_ts);
+            write_info
+        })
+        .collect()
 }
 
 fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<KeyError> {

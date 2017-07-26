@@ -60,7 +60,7 @@ impl WriteType {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Write {
     pub write_type: WriteType,
     pub start_ts: u64,
