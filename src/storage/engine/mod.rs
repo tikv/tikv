@@ -46,6 +46,7 @@ const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 pub type BatchCallback<T> = Box<FnBox((CbContext, Result<Vec<Option<Result<T>>>>)) + Send>;
 
+#[derive(Clone)]
 pub struct CbContext {
     pub term: Option<u64>,
 }
