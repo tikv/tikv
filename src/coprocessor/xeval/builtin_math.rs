@@ -35,14 +35,19 @@ impl Evaluator {
                     Ok(Datum::I64(-i))
                 }
             }
-            Datum::U64(_) => Ok(d),
+            Datum::U64(_) | Datum::Null => Ok(d),
             _ => invalid_type_error(&d, TYPE_INT),
         }
     }
 
-    pub fn abs_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn abs_real(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let d = try!(self.eval(ctx, child));
+        match d {
+            Datum::F64(f) => Ok(Datum::F64(f.abs())),
+            Datum::Null => Ok(Datum::Null),
+            _ => invalid_type_error(&d, TYPE_FLOAT),
+        }
     }
 
     pub fn ceil_int(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -118,7 +123,29 @@ mod test {
                     (build_expr_with_sig(vec![Datum::U64(1)],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::AbsInt),
-                     Datum::U64(1))]);
+                     Datum::U64(1)),
+                    (build_expr_with_sig(vec![Datum::Null],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsInt),
+                     Datum::Null)]);
+
+    test_eval!(test_abs_real,
+               vec![(build_expr_with_sig(vec![Datum::F64(-1.0_f64)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsReal),
+                     Datum::F64(1.0_f64)),
+                    (build_expr_with_sig(vec![Datum::F64(1.0_f64)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsReal),
+                     Datum::F64(1.0_f64)),
+                    (build_expr_with_sig(vec![Datum::Null],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsReal),
+                     Datum::Null),
+                    (build_expr_with_sig(vec![Datum::F64(0.0_f64)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsReal),
+                     Datum::F64(0.0_f64))]);
 
     test_eval!(test_ceil_int,
                vec![(build_expr_with_sig(vec![Datum::F64(-1.23)],
