@@ -304,7 +304,7 @@ impl<T, C> Store<T, C> {
             return;
         }
 
-        peer_storage::clear_meta(&self.raft_engine, wb, region.get_id()).unwrap();
+        peer_storage::clear_meta(&self.raft_engine, wb, &self.kv_engine, region.get_id()).unwrap();
         peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
     }
 

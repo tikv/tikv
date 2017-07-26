@@ -19,7 +19,7 @@ use tikv::storage::txn;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use tikv::util::HandyRwLock;
-use super::util::new_raft_storage_with_store_count;
+use super::util::new_kv_storage_with_store_count;
 use tikv::storage::config::Config;
 use tikv::storage::engine;
 
@@ -40,10 +40,10 @@ impl Default for AssertionStorage {
 }
 
 impl AssertionStorage {
-    pub fn new_raft_storage_with_store_count(count: usize,
+    pub fn new_kv_storage_with_store_count(count: usize,
                                              key: &str)
                                              -> (Cluster<ServerCluster>, AssertionStorage) {
-        let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
+        let (cluster, store, ctx) = new_kv_storage_with_store_count(count, key);
         let storage = AssertionStorage {
             ctx: ctx,
             store: store,

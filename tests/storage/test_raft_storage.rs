@@ -18,16 +18,16 @@ use tikv::storage::{self, Storage, Mutation, make_key, Options, Engine};
 use tikv::storage::{txn, engine, mvcc};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
-use raftstore::server::new_server_cluster_with_cfs;
+use raftstore::server::new_server_cluster;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::util::*;
 use storage::util;
 use super::sync_storage::SyncStorage;
-use super::util::new_raft_storage_with_store_count;
+use super::util::new_kv_storage_with_store_count;
 
 fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
-    new_raft_storage_with_store_count(1, "")
+    new_kv_storage_with_store_count(1, "")
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn test_raft_storage_store_not_match() {
 
 #[test]
 fn test_engine_leader_change_twice() {
-    let mut cluster = new_server_cluster_with_cfs(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     cluster.run();
 
     let region = cluster.get_region(b"");
@@ -143,7 +143,7 @@ fn test_engine_leader_change_twice() {
 
 #[test]
 fn test_scheduler_leader_change_twice() {
-    let mut cluster = new_server_cluster_with_cfs(0, 2);
+    let mut cluster = new_server_cluster(0, 2);
     cluster.run();
     let region = cluster.get_region(b"");
     let peers = region.get_peers();

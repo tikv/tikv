@@ -94,6 +94,7 @@ impl<T: Simulator> Cluster<T> {
     // Create the default Store cluster.
     pub fn new(id: u64,
                count: usize,
+               cfs: &[&str],
                sim: Arc<RwLock<T>>,
                pd_client: Arc<TestPdClient>)
                -> Cluster<T> {
@@ -107,7 +108,7 @@ impl<T: Simulator> Cluster<T> {
             pd_client: pd_client,
         };
 
-        c.create_engines(count);
+        c.create_engines(count, cfs);
 
         c
     }
@@ -116,15 +117,18 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.cluster_id
     }
 
-    fn create_engines(&mut self, count: usize) {
+    fn create_engines(&mut self, count: usize, cfs: &[&str]) {
         for _ in 0..count {
             self.paths.push(TempDir::new("test_cluster").unwrap());
         }
 
+        let mut kv_cfs = vec![];
+        kv_cfs.extend_from_slice(KV_CFS);
+        kv_cfs.extend_from_slice(cfs);
         for item in &self.paths {
             let raft_path = item.path().join(Path::new("raft_db"));
             self.dbs
-                .push((Arc::new(rocksdb::new_engine(item.path().to_str().unwrap(), KV_CFS)
+                .push((Arc::new(rocksdb::new_engine(item.path().to_str().unwrap(), &kv_cfs)
                     .unwrap()),
                        Arc::new(rocksdb::new_engine(raft_path.to_str().unwrap(), RAFT_CFS)
                     .unwrap())));
@@ -390,7 +394,6 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        // TODO(lishuai):
         let region = prepare_bootstrap(&self.engines[&node_id].1,
                                        &self.engines[&node_id].0,
                                        1,

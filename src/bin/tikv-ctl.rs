@@ -35,7 +35,7 @@ use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable, IterOption};
-use tikv::storage::{CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT, CfName};
+use tikv::storage::{KV_CFS, RAFT_CFS, CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT, CfName};
 use tikv::storage::mvcc::{Lock, Write};
 use tikv::storage::types::Key;
 
@@ -138,10 +138,10 @@ fn main() {
     let matches = app.clone().get_matches();
 
     let db_path = matches.value_of("db").unwrap();
-    let kv_db = util::rocksdb::open(db_path, &[CF_LOCK, CF_WRITE, CF_DEFAULT]).unwrap();
-
+    let kv_db = util::rocksdb::open(db_path, KV_CFS).unwrap();
     let raft_db_path = db_path.to_owned() + "_raft";
-    let raft_db = util::rocksdb::open(&raft_db_path, &[CF_RAFT]).unwrap();
+    let raft_db = util::rocksdb::open(&raft_db_path, RAFT_CFS).unwrap();
+
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
         let key = String::from(matches.value_of("key").unwrap());

@@ -274,5 +274,5 @@ impl Simulator for NodeCluster {
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, &[], sim, pd_client)
 }

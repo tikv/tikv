@@ -5,13 +5,13 @@ use tikv::util::codec::bytes;
 use tikv::util::escape;
 use kvproto::kvrpcpb::Context;
 use raftstore::transport_simulate::IsolationFilterFactory;
-use raftstore::server::new_server_cluster_with_cfs;
+use raftstore::server::{new_server_cluster_with_cfs, new_server_cluster};
 use tikv::raftstore::store::engine::IterOption;
 
 #[test]
 fn test_raftkv() {
     let count = 1;
-    let mut cluster = new_server_cluster_with_cfs(0, count);
+    let mut cluster = new_server_cluster_with_cfs(0, count, &["cf"]);
     cluster.run();
 
     // make sure leader has been elected.
@@ -39,7 +39,7 @@ fn test_raftkv() {
 #[test]
 fn test_read_leader_in_lease() {
     let count = 3;
-    let mut cluster = new_server_cluster_with_cfs(0, count);
+    let mut cluster = new_server_cluster(0, count);
     cluster.run();
 
     let k1 = b"k1";

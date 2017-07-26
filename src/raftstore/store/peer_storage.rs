@@ -784,7 +784,7 @@ impl PeerStorage {
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
     pub fn clear_meta(&mut self, wb: &mut WriteBatch) -> Result<()> {
-        try!(clear_meta(&self.raft_engine, wb, self.get_region_id()));
+        try!(clear_meta(&self.raft_engine, wb, &self.kv_engine, self.get_region_id()));
         self.cache = EntryCache::default();
         Ok(())
     }
@@ -991,7 +991,7 @@ impl PeerStorage {
 }
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
-pub fn clear_meta(raft_engine: &DB, wb: &WriteBatch, region_id: u64) -> Result<()> {
+pub fn clear_meta(raft_engine: &DB, wb: &WriteBatch, kv_engine: &DB, region_id: u64) -> Result<()> {
     let t = Instant::now();
     let mut meta_count = 0;
     let mut raft_count = 0;
@@ -1018,6 +1018,18 @@ pub fn clear_meta(raft_engine: &DB, wb: &WriteBatch, region_id: u64) -> Result<(
                                  raft_count += 1;
                                  Ok(true)
                              }));
+
+    // remove apply state
+    let mut kv_wb = WriteBatch::new();
+    try!(kv_engine.scan(&raft_start,
+                        &raft_end,
+                        false,
+                        &mut |key, _| {
+                            try!(kv_wb.delete(key));
+                            Ok(true)
+                        }));
+    try!(kv_engine.write(kv_wb));
+
     info!("[region {}] clear peer {} meta keys and {} raft keys, takes {:?}",
           region_id,
           meta_count,

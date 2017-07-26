@@ -29,7 +29,7 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
 use tikv::util::transport::SendCh;
-use tikv::storage::Engine;
+use tikv::storage::{Engine, CfName};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
@@ -106,7 +106,6 @@ impl Simulator for ServerCluster {
         // Create storage.
         let mut store = create_raft_storage(sim_router.clone(), kv_engine.clone(), &cfg).unwrap();
         store.start(&cfg.storage).unwrap();
-        // TODO(lishuai): split raft and kv engine
         self.storages.insert(node_id, store.get_kv_engine());
 
         // Create pd client, snapshot manager, server.
@@ -216,11 +215,14 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    new_server_cluster_with_cfs(id, count)
+    new_server_cluster_with_cfs(id, count, &[])
 }
 
-pub fn new_server_cluster_with_cfs(id: u64, count: usize) -> Cluster<ServerCluster> {
+pub fn new_server_cluster_with_cfs(id: u64,
+                                   count: usize,
+                                   cfs: &[CfName])
+                                   -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, cfs, sim, pd_client)
 }
