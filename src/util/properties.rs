@@ -25,7 +25,19 @@ use util::codec::number::{NumberEncoder, NumberDecoder};
 
 #[derive(Clone, Debug, Default)]
 pub struct GetPropertiesOptions {
+    pub flags: PropertiesFlags,
     pub max_ts: Option<u64>,
+}
+
+bitflags! {
+    #[derive(Default)]
+    pub struct PropertiesFlags: u32 {
+        const MVCC_PROPERTIES = 0b00000001;
+    }
+}
+
+pub struct UserProperties {
+    pub mvcc: Option<MvccProperties>,
 }
 
 const PROP_MIN_TS: &'static str = "tikv.min_ts";
@@ -37,7 +49,7 @@ const PROP_MAX_ROW_VERSIONS: &'static str = "tikv.max_row_versions";
 const PROP_NUM_ERRORS: &'static str = "tikv.num_errors";
 
 #[derive(Clone, Debug, Default)]
-pub struct UserProperties {
+pub struct MvccProperties {
     pub min_ts: u64, // The minimal timestamp.
     pub max_ts: u64, // The maximal timestamp.
     pub num_rows: u64, // The number of rows.
@@ -47,9 +59,9 @@ pub struct UserProperties {
     pub num_errors: u64,
 }
 
-impl UserProperties {
-    pub fn new() -> UserProperties {
-        UserProperties {
+impl MvccProperties {
+    pub fn new() -> MvccProperties {
+        MvccProperties {
             min_ts: u64::MAX,
             max_ts: u64::MIN,
             num_rows: 0,
@@ -60,7 +72,7 @@ impl UserProperties {
         }
     }
 
-    pub fn add(&mut self, other: &UserProperties) {
+    pub fn add(&mut self, other: &MvccProperties) {
         self.min_ts = cmp::min(self.min_ts, other.min_ts);
         self.max_ts = cmp::max(self.max_ts, other.max_ts);
         self.num_rows += other.num_rows;
@@ -87,8 +99,8 @@ impl UserProperties {
             .collect()
     }
 
-    pub fn decode<T: DecodeU64>(props: &T) -> Result<UserProperties, codec::Error> {
-        let mut res = UserProperties::new();
+    pub fn decode<T: DecodeU64>(props: &T) -> Result<MvccProperties, codec::Error> {
+        let mut res = MvccProperties::new();
         res.min_ts = try!(props.decode_u64(PROP_MIN_TS));
         res.max_ts = try!(props.decode_u64(PROP_MAX_TS));
         res.num_rows = try!(props.decode_u64(PROP_NUM_ROWS));
@@ -122,23 +134,23 @@ impl DecodeU64 for UserCollectedProperties {
     }
 }
 
-pub struct UserPropertiesCollector {
-    props: UserProperties,
+pub struct MvccPropertiesCollector {
+    props: MvccProperties,
     last_row: Vec<u8>,
     row_versions: u64,
 }
 
-impl Default for UserPropertiesCollector {
-    fn default() -> UserPropertiesCollector {
-        UserPropertiesCollector {
-            props: UserProperties::new(),
+impl Default for MvccPropertiesCollector {
+    fn default() -> MvccPropertiesCollector {
+        MvccPropertiesCollector {
+            props: MvccProperties::new(),
             last_row: Vec::new(),
             row_versions: 0,
         }
     }
 }
 
-impl TablePropertiesCollector for UserPropertiesCollector {
+impl TablePropertiesCollector for MvccPropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         if !keys::validate_data_key(key) {
             self.props.num_errors += 1;
@@ -190,12 +202,54 @@ impl TablePropertiesCollector for UserPropertiesCollector {
     }
 }
 
-#[derive(Default)]
-pub struct UserPropertiesCollectorFactory {}
+struct UserPropertiesCollector {
+    collectors: Vec<Box<TablePropertiesCollector>>,
+}
+
+impl UserPropertiesCollector {
+    fn new(flags: PropertiesFlags) -> UserPropertiesCollector {
+        let mut c = UserPropertiesCollector { collectors: Vec::new() };
+        if flags.contains(MVCC_PROPERTIES) {
+            c.collectors.push(Box::new(MvccPropertiesCollector::default()));
+        }
+        c
+    }
+}
+
+impl TablePropertiesCollector for UserPropertiesCollector {
+    fn add(&mut self,
+           key: &[u8],
+           value: &[u8],
+           entry_type: DBEntryType,
+           seq: u64,
+           file_size: u64) {
+        for c in &mut self.collectors {
+            c.add(key, value, entry_type, seq, file_size);
+        }
+    }
+
+    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        let mut res = HashMap::new();
+        for c in &mut self.collectors {
+            res.extend(c.finish());
+        }
+        res
+    }
+}
+
+pub struct UserPropertiesCollectorFactory {
+    flags: PropertiesFlags,
+}
+
+impl UserPropertiesCollectorFactory {
+    pub fn new(flags: PropertiesFlags) -> UserPropertiesCollectorFactory {
+        UserPropertiesCollectorFactory { flags: flags }
+    }
+}
 
 impl TablePropertiesCollectorFactory for UserPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
-        Box::new(UserPropertiesCollector::default())
+        Box::new(UserPropertiesCollector::new(self.flags))
     }
 }
 
@@ -205,10 +259,10 @@ mod tests {
     use storage::Key;
     use storage::mvcc::{Write, WriteType};
     use raftstore::store::keys;
-    use super::{UserProperties, UserPropertiesCollector};
+    use super::{MvccProperties, MvccPropertiesCollector};
 
     #[test]
-    fn test_user_properties() {
+    fn test_mvcc_properties_collector() {
         let cases = [("ab", 2, WriteType::Put, DBEntryType::Put),
                      ("ab", 1, WriteType::Delete, DBEntryType::Put),
                      ("ab", 1, WriteType::Delete, DBEntryType::Delete),
@@ -218,7 +272,7 @@ mod tests {
                      ("ef", 6, WriteType::Put, DBEntryType::Put),
                      ("ef", 6, WriteType::Put, DBEntryType::Delete),
                      ("gh", 7, WriteType::Delete, DBEntryType::Put)];
-        let mut collector = UserPropertiesCollector::default();
+        let mut collector = MvccPropertiesCollector::default();
         for &(key, ts, write_type, entry_type) in &cases {
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
             let k = keys::data_key(k.encoded());
@@ -227,7 +281,7 @@ mod tests {
         }
         collector.add(b"error", b"error", DBEntryType::Put, 0, 0);
 
-        let props = UserProperties::decode(&collector.finish()).unwrap();
+        let props = MvccProperties::decode(&collector.finish()).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 7);
         assert_eq!(props.num_rows, 4);
