@@ -114,9 +114,7 @@ pub struct Store<T, C: 'static> {
     // the regions with pending snapshots between two mio ticks.
     pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
-
     region_worker: Worker<RegionTask>,
-
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
