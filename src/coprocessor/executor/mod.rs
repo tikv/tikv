@@ -34,13 +34,11 @@ pub mod topn;
 pub mod limit;
 pub mod aggregation;
 
-#[allow(dead_code)]
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,
     cols_len: usize,
 }
 
-#[allow(dead_code)]
 impl ExprColumnRefVisitor {
     pub fn new(cols_len: usize) -> ExprColumnRefVisitor {
         ExprColumnRefVisitor {
@@ -52,8 +50,8 @@ impl ExprColumnRefVisitor {
     pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
             let offset = box_try!(expr.get_val().decode_i64()) as usize;
-            if offset > self.cols_len {
-                return Err(Error::Other(box_err!("offset {} overflow,should be less than {}",
+            if offset >= self.cols_len {
+                return Err(Error::Other(box_err!("offset {} overflow, should be less than {}",
                                                  offset,
                                                  self.cols_len)));
             }

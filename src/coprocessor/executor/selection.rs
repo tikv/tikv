@@ -37,10 +37,7 @@ impl<'a> SelectionExecutor<'a> {
                -> Result<SelectionExecutor<'a>> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
-        for cond in &conditions {
-            try!(visitor.visit(cond));
-        }
-
+        try!(visitor.batch_visit(&conditions));
         COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
         Ok(SelectionExecutor {
             conditions: conditions,
