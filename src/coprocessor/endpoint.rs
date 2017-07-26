@@ -287,17 +287,17 @@ impl BatchRunnable<Task> for Host {
                         if pri == CommandPri::Low {
                             self.low_priority_pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
+                                COPR_PENDING_REQS.with_label_values(&[type_str]).dec();
                             });
                         } else if pri == CommandPri::High {
                             self.high_priority_pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
+                                COPR_PENDING_REQS.with_label_values(&[type_str]).dec();
                             });
                         } else {
                             self.pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
+                                COPR_PENDING_REQS.with_label_values(&[type_str]).dec();
                             });
                         }
                     }
