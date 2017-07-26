@@ -80,7 +80,7 @@ lazy_static! {
     pub static ref APPLY_PROPOSAL: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_proposal",
-            "Proposal count of every region in a mio tick",
+            "Proposal count of all region in a mio tick",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 }
