@@ -483,7 +483,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
-    fn kv_delete_range(&self, _: RpcContext, _: DeleteRangeRequest, _: UnarySink<DeleteRangeResponse>) {
+    fn kv_delete_range(&self,
+                       _: RpcContext,
+                       _: DeleteRangeRequest,
+                       _: UnarySink<DeleteRangeResponse>) {
         unimplemented!()
     }
 
