@@ -126,7 +126,7 @@ endpoints = ""
 # info-log-roll-time = "0s"
 
 # Maximum number of concurrent background jobs (compactions and flushes)
-# max-background-jobs = 6
+# max-background-jobs = 8
 
 # This value represents the maximum number of threads that will concurrently perform a
 # compaction job by breaking it into multiple, smaller ones that are run simultaneously.
