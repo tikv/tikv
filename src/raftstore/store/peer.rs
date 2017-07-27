@@ -1155,7 +1155,7 @@ impl Peer {
         self.raft_group.transfer_leader(peer.get_id());
     }
 
-    fn is_tranfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
+    fn is_transfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
         let peer_id = peer.get_id();
         let status = self.raft_group.status();
 
@@ -1278,7 +1278,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transfered = if self.is_tranfer_leader_allowed(peer) {
+        let transfered = if self.is_transfer_leader_allowed(peer) {
             self.transfer_leader(peer);
             true
         } else {
