@@ -21,7 +21,7 @@ use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
-use util::properties::{UserProperties, GetPropertiesOptions};
+use util::properties::{GetPropertiesOptions, UserPropertiesCollection};
 
 mod rocksdb;
 pub mod raftkv;
@@ -112,11 +112,14 @@ pub trait Snapshot: Send {
                    iter_opt: IterOption,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
-    fn get_properties(&self, opts: &GetPropertiesOptions) -> Result<UserProperties> {
+    fn get_properties(&self, opts: &GetPropertiesOptions) -> Result<UserPropertiesCollection> {
         self.get_properties_cf(CF_DEFAULT, opts)
     }
-    fn get_properties_cf(&self, _: CfName, _: &GetPropertiesOptions) -> Result<UserProperties> {
-        Err(Error::RocksDb("no user properties".to_owned()))
+    fn get_properties_cf(&self,
+                         _: CfName,
+                         _: &GetPropertiesOptions)
+                         -> Result<UserPropertiesCollection> {
+        Ok(UserPropertiesCollection::new())
     }
     fn clone(&self) -> Box<Snapshot>;
 }
