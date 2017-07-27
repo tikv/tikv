@@ -121,15 +121,15 @@ pub struct ChangePeer {
 }
 
 #[derive(Debug)]
-pub struct RangeDeleted {
+pub struct Range {
     pub cf: String,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
 }
 
-impl RangeDeleted {
-    fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> RangeDeleted {
-        RangeDeleted {
+impl Range {
+    fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Range {
+        Range {
             cf: cf,
             start_key: start_key,
             end_key: end_key,
@@ -155,7 +155,7 @@ pub enum ExecResult {
         snap: Snapshot,
     },
     VerifyHash { index: u64, hash: Vec<u8> },
-    RangesDeleted { ranges: Vec<RangeDeleted> },
+    DeleteRange { ranges: Vec<Range> },
 }
 
 struct ApplyContext<'a> {
@@ -538,7 +538,7 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
                 ExecResult::CompactLog { .. } |
-                ExecResult::RangesDeleted { .. } => {}
+                ExecResult::DeleteRange { .. } => {}
                 ExecResult::SplitRegion { ref left, ref right, right_derive } => {
                     if right_derive {
                         self.region = right.clone();
@@ -892,13 +892,13 @@ impl ApplyDelegate {
         let requests = ctx.req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
-        let mut ranges_deleted = vec![];
+        let mut ranges = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut ranges_deleted),
+                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut ranges),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -920,8 +920,8 @@ impl ApplyDelegate {
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(RepeatedField::from_vec(responses));
 
-        let exec_res = if !ranges_deleted.is_empty() {
-            Some(ExecResult::RangesDeleted { ranges: ranges_deleted })
+        let exec_res = if !ranges.is_empty() {
+            Some(ExecResult::DeleteRange { ranges: ranges })
         } else {
             None
         };
@@ -1003,7 +1003,7 @@ impl ApplyDelegate {
     fn handle_delete_range(&mut self,
                            ctx: &ExecContext,
                            req: &Request,
-                           ranges_deleted: &mut Vec<RangeDeleted>)
+                           ranges: &mut Vec<Range>)
                            -> Result<Response> {
         let start_key = req.get_delete_range().get_start_key();
         let end_key = req.get_delete_range().get_end_key();
@@ -1026,7 +1026,7 @@ impl ApplyDelegate {
                        escape(&end_key),
                        e)
             });
-        ranges_deleted.push(RangeDeleted::new(String::from(cf), start_key, end_key));
+        ranges.push(Range::new(String::from(cf), start_key, end_key));
 
         Ok(resp)
     }

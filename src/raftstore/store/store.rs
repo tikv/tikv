@@ -1247,7 +1247,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::VerifyHash { index, hash } => {
                     self.on_ready_verify_hash(region_id, index, hash)
                 }
-                ExecResult::RangesDeleted { .. } => {
+                ExecResult::DeleteRange { .. } => {
                     // TODO: reclaim disk space
                 }
             }
