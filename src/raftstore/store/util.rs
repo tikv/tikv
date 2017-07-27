@@ -135,6 +135,11 @@ mod tests {
     use super::*;
     use raftstore::store::peer_storage;
 
+    use rocksdb::{DB, WriteBatch, Writable, DBOptions, ColumnFamilyOptions, SeekKey};
+    use util::rocksdb::{get_cf_handle, CFOptions, new_engine_opt};
+    use storage::ALL_CFS;
+    use tempdir::TempDir;
+
     // Tests the util function `check_key_in_region`.
     #[test]
     fn test_check_key_in_region() {
@@ -212,5 +217,47 @@ mod tests {
             check_epoch.set_conf_ver(conf_version);
             assert_eq!(is_epoch_stale(&epoch, &check_epoch), is_stale);
         }
+    }
+
+    fn check_data(db: &DB, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
+        for cf in cfs {
+            let handle = get_cf_handle(db, cf).unwrap();
+            let mut iter = db.iter_cf(handle);
+            iter.seek(SeekKey::Start);
+            for &(k, v) in expected {
+                assert_eq!(k, iter.key());
+                assert_eq!(v, iter.value());
+                iter.next();
+            }
+            assert!(!iter.valid());
+        }
+    }
+
+    #[test]
+    fn test_delete_all_in_range() {
+        let path = TempDir::new("_raftstore_util_delete_all_in_range").expect("");
+        let path_str = path.path().to_str().unwrap();
+
+        let cfs_opts =
+            ALL_CFS.into_iter().map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new())).collect();
+        let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
+
+        let wb = WriteBatch::new();
+        let kvs: Vec<(&[u8], &[u8])> =
+            vec![(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3"), (b"k4", b"v4")];
+        let kvs_left: Vec<(&[u8], &[u8])> = vec![(b"k1", b"v1"), (b"k4", b"v4")];
+
+        for &(k, v) in kvs.as_slice() {
+            for cf in ALL_CFS {
+                let handle = get_cf_handle(&db, cf).unwrap();
+                wb.put_cf(handle, k, v).unwrap();
+            }
+        }
+        db.write(wb).unwrap();
+        check_data(&db, ALL_CFS, kvs.as_slice());
+
+        // Delete all in ["k2", "k4").
+        delete_all_in_range(&db, b"k2", b"k4").unwrap();
+        check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 }
