@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::u64;
 use std::sync::Arc;
 use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator};
 use kvproto::metapb::Region;
-use util::properties::{GetPropertiesOptions, UserProperties, MvccProperties};
+use util::properties::{GetPropertiesOptions, UserPropertiesCollection, UserProperties,
+                       MvccProperties, SizeIndexProperties, MVCC_PROPERTIES, SIZE_INDEX_PROPERTIES};
 
 use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
 use raftstore::store::{keys, util, PeerStorage};
@@ -112,7 +112,7 @@ impl RegionSnapshot {
     pub fn get_properties_cf(&self,
                              cf: &str,
                              opts: &GetPropertiesOptions)
-                             -> Result<UserProperties> {
+                             -> Result<UserPropertiesCollection> {
         let db = self.snap.get_db();
         let cf = try!(db.cf_handle(cf)
             .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
@@ -121,23 +121,22 @@ impl RegionSnapshot {
         let end = keys::enc_end_key(self.get_region());
         let range = Range::new(&start, &end);
         let collection = try!(db.get_properties_of_tables_in_range(cf, &[range]));
-        if collection.is_empty() {
-            return Err(Error::RocksDb("no user properties".to_owned()));
-        }
 
-        let max_ts = opts.max_ts.unwrap_or(u64::MAX);
-
-        // Aggregates properties from multiple tables.
-        let mut res = MvccProperties::new();
-        for (_, v) in &*collection {
-            let props = v.user_collected_properties();
-            let other = try!(MvccProperties::decode(props));
-            if other.min_ts > max_ts {
-                continue;
+        let mut res = UserPropertiesCollection::new();
+        for (k, v) in &*collection {
+            let mut props = UserProperties::default();
+            let v = v.user_collected_properties();
+            if opts.flags.contains(MVCC_PROPERTIES) {
+                let mvcc = try!(MvccProperties::decode(v));
+                props.mvcc = Some(mvcc);
             }
-            res.add(&other);
+            if opts.flags.contains(SIZE_INDEX_PROPERTIES) {
+                let size_index = try!(SizeIndexProperties::decode(v));
+                props.size_index = Some(size_index);
+            }
+            res.insert(k.to_owned(), props);
         }
-        Ok(UserProperties { mvcc: Some(res), ..Default::default() })
+        Ok(res)
     }
 
     pub fn get_start_key(&self) -> &[u8] {

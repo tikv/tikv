@@ -21,7 +21,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Re
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
-use util::properties::{UserProperties, GetPropertiesOptions};
+use util::properties::{GetPropertiesOptions, UserPropertiesCollection};
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Debug};
@@ -328,7 +328,7 @@ impl Snapshot for RegionSnapshot {
     fn get_properties_cf(&self,
                          cf: CfName,
                          opts: &GetPropertiesOptions)
-                         -> engine::Result<UserProperties> {
+                         -> engine::Result<UserPropertiesCollection> {
         RegionSnapshot::get_properties_cf(self, cf, opts).map_err(|e| e.into())
     }
 
