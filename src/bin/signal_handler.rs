@@ -112,7 +112,7 @@ mod imp {
 
     use rocksdb::DB;
 
-    pub fn handle_signal(engine: Arc<DB>, _: &str) {}
+    pub fn handle_signal(_: Arc<DB>, _: &str) {}
 }
 
 pub use self::imp::handle_signal;

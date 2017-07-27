@@ -21,6 +21,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Re
                           CmdType, DeleteRequest, PutRequest, DeleteRangeRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
+use util::properties::{UserProperties, GetPropertiesOptions};
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Debug};
@@ -330,6 +331,13 @@ impl Snapshot for RegionSnapshot {
                    mode: ScanMode)
                    -> engine::Result<Cursor<'b>> {
         Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, iter_opt)), mode))
+    }
+
+    fn get_properties_cf(&self,
+                         cf: CfName,
+                         opts: &GetPropertiesOptions)
+                         -> engine::Result<UserProperties> {
+        RegionSnapshot::get_properties_cf(self, cf, opts).map_err(|e| e.into())
     }
 
     fn clone(&self) -> Box<Snapshot> {

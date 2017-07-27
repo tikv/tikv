@@ -20,14 +20,14 @@ use super::{Row, Executor};
 use super::super::Result;
 use super::super::metrics::*;
 
-struct LimitExecutor<'a> {
+pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
     src: Box<Executor + 'a>,
 }
 
 impl<'a> LimitExecutor<'a> {
-    fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+    pub fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
         COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
         LimitExecutor {
             limit: limit.get_limit(),

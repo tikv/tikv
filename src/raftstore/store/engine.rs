@@ -449,8 +449,9 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
 mod tests {
     use std::sync::Arc;
     use tempdir::TempDir;
-    use rocksdb::{Writable, WriteBatch, Options, DBCompressionType};
-
+    use rocksdb::{Writable, WriteBatch, DBOptions, ColumnFamilyOptions, DBCompressionType};
+    use storage::CF_DEFAULT;
+    use util::rocksdb::CFOptions;
     use super::*;
     use kvproto::metapb::Region;
 
@@ -602,14 +603,16 @@ mod tests {
     #[test]
     fn test_delete_all_in_range() {
         let path = TempDir::new("var").unwrap();
-        let mut db_opt = Options::new();
-        db_opt.set_target_file_size_base(1024 * 1024);
-        db_opt.set_write_buffer_size(1024);
-        db_opt.compression(DBCompressionType::DBNo);
+        let db_opt = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_target_file_size_base(1024 * 1024);
+        cf_opts.set_write_buffer_size(1024);
+        cf_opts.compression(DBCompressionType::No);
 
-        let engine =
-            Arc::new(rocksdb::new_engine_opt(path.path().to_str().unwrap(), db_opt, vec![])
-                .unwrap());
+        let engine = Arc::new(rocksdb::new_engine_opt(path.path().to_str().unwrap(),
+                                                      db_opt,
+                                                      vec![CFOptions::new(CF_DEFAULT, cf_opts)])
+            .unwrap());
 
         let value = vec![0;1024];
         for i in 0..10 {

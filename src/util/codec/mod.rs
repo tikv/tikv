@@ -37,6 +37,7 @@ quick_error! {
         }
         KeyLength {description("bad format key(length)")}
         KeyPadding {description("bad format key(padding)")}
+        KeyNotFound {description("key not found")}
         InvalidDataType(reason: String) {
             description("invalid data type")
             display("{}", reason)
@@ -51,6 +52,21 @@ quick_error! {
             cause(err.as_ref())
             description(err.description())
             display("unknown error {:?}", err)
+        }
+    }
+}
+
+impl Error {
+    pub fn maybe_clone(&self) -> Option<Error> {
+        match *self {
+            Error::KeyLength => Some(Error::KeyLength),
+            Error::KeyPadding => Some(Error::KeyPadding),
+            Error::KeyNotFound => Some(Error::KeyNotFound),
+            Error::InvalidDataType(ref r) => Some(Error::InvalidDataType(r.clone())),
+            Error::Encoding(e) => Some(Error::Encoding(e)),
+            Error::Protobuf(_) |
+            Error::Io(_) |
+            Error::Other(_) => None,
         }
     }
 }

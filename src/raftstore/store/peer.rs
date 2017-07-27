@@ -32,10 +32,10 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progr
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::Config;
-use raftstore::store::worker::{apply, PdTask, Proposal};
+use raftstore::store::worker::{apply, PdTask, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 
-use util::worker::{FutureWorker, Scheduler, Worker};
+use util::worker::{FutureWorker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either};
 use util::collections::{HashSet, FlatMap, FlatMapValues as Values};
@@ -376,8 +376,8 @@ impl Peer {
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
-        let wb = WriteBatch::new();
-        try!(self.mut_store().clear_meta(&wb));
+        let mut wb = WriteBatch::new();
+        try!(self.mut_store().clear_meta(&mut wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
         try!(self.engine.write(wb));
 
@@ -642,14 +642,14 @@ impl Peer {
         self.get_store().applied_index_term == self.term()
     }
 
-    pub fn schedule_apply_proposals(&mut self, worker: &Worker<ApplyTask>) {
+    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
         if self.apply_proposals.is_empty() {
-            return;
+            return None;
         }
 
         let proposals = mem::replace(&mut self.apply_proposals, vec![]);
-        let t = ApplyTask::proposals(self.peer_id(), self.region_id, proposals);
-        worker.schedule(t).unwrap();
+        let region_proposal = RegionProposal::new(self.peer_id(), self.region_id, proposals);
+        Some(region_proposal)
     }
 
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
@@ -1517,14 +1517,19 @@ impl Peer {
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
         try!(check_epoch(self.region(), req));
-        let snap = Snapshot::new(self.engine.clone());
+        let mut snap = None;
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => try!(apply::do_get(&self.tag, self.region(), &snap, req)),
+                CmdType::Get => {
+                    if snap.is_none() {
+                        snap = Some(Snapshot::new(self.engine.clone()));
+                    }
+                    try!(apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req))
+                }
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
                 CmdType::Prewrite | CmdType::Put | CmdType::Delete | CmdType::DeleteRange |
                 CmdType::Invalid => unreachable!(),

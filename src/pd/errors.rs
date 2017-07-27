@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::error;
-use std::boxed::Box;
 use std::result;
 
 quick_error!{
