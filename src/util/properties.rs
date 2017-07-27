@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::u64;
 
 use storage::mvcc::{Write, WriteType};
@@ -32,21 +32,23 @@ pub struct GetPropertiesOptions {
 bitflags! {
     #[derive(Default)]
     pub struct PropertiesFlags: u32 {
-        const MVCC_PROPERTIES = 0b00000001;
+        const MVCC_PROPERTIES       = 0b00000001;
     }
 }
 
-pub struct UserProperties {
-    pub mvcc: Option<MvccProperties>,
-}
-
+const PROP_NUM_ERRORS: &'static str = "tikv.num_errors";
 const PROP_MIN_TS: &'static str = "tikv.min_ts";
 const PROP_MAX_TS: &'static str = "tikv.max_ts";
 const PROP_NUM_ROWS: &'static str = "tikv.num_rows";
 const PROP_NUM_PUTS: &'static str = "tikv.num_puts";
 const PROP_NUM_VERSIONS: &'static str = "tikv.num_versions";
 const PROP_MAX_ROW_VERSIONS: &'static str = "tikv.max_row_versions";
-const PROP_NUM_ERRORS: &'static str = "tikv.num_errors";
+
+#[derive(Default)]
+pub struct UserProperties {
+    pub num_errors: u64,
+    pub mvcc: Option<MvccProperties>,
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct MvccProperties {
@@ -56,7 +58,6 @@ pub struct MvccProperties {
     pub num_puts: u64, // The number of MVCC puts of all rows.
     pub num_versions: u64, // The number of MVCC versions of all rows.
     pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
-    pub num_errors: u64,
 }
 
 impl MvccProperties {
@@ -68,7 +69,6 @@ impl MvccProperties {
             num_puts: 0,
             num_versions: 0,
             max_row_versions: 0,
-            num_errors: 0,
         }
     }
 
@@ -79,7 +79,6 @@ impl MvccProperties {
         self.num_puts += other.num_puts;
         self.num_versions += other.num_versions;
         self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
-        self.num_errors += other.num_errors;
     }
 
     pub fn encode(&self) -> HashMap<Vec<u8>, Vec<u8>> {
@@ -88,8 +87,7 @@ impl MvccProperties {
                      (PROP_NUM_ROWS, self.num_rows),
                      (PROP_NUM_PUTS, self.num_puts),
                      (PROP_NUM_VERSIONS, self.num_versions),
-                     (PROP_MAX_ROW_VERSIONS, self.max_row_versions),
-                     (PROP_NUM_ERRORS, self.num_errors)];
+                     (PROP_MAX_ROW_VERSIONS, self.max_row_versions)];
         items.iter()
             .map(|&(k, v)| {
                 let mut buf = Vec::with_capacity(8);
@@ -107,7 +105,6 @@ impl MvccProperties {
         res.num_puts = try!(props.decode_u64(PROP_NUM_PUTS));
         res.num_versions = try!(props.decode_u64(PROP_NUM_VERSIONS));
         res.max_row_versions = try!(props.decode_u64(PROP_MAX_ROW_VERSIONS));
-        res.num_errors = try!(props.decode_u64(PROP_NUM_ERRORS));
         Ok(res)
     }
 }
@@ -134,106 +131,76 @@ impl DecodeU64 for UserCollectedProperties {
     }
 }
 
-pub struct MvccPropertiesCollector {
-    props: MvccProperties,
-    last_row: Vec<u8>,
+pub struct UserPropertiesCollector {
+    mvcc: MvccProperties,
+    last_key: Vec<u8>,
+    num_errors: u64,
     row_versions: u64,
 }
 
-impl Default for MvccPropertiesCollector {
-    fn default() -> MvccPropertiesCollector {
-        MvccPropertiesCollector {
-            props: MvccProperties::new(),
-            last_row: Vec::new(),
+impl UserPropertiesCollector {
+    fn new(flags: PropertiesFlags) -> UserPropertiesCollector {
+        UserPropertiesCollector {
+            mvcc: MvccProperties::new(),
+            last_key: Vec::new(),
+            num_errors: 0,
             row_versions: 0,
         }
     }
-}
 
-impl TablePropertiesCollector for MvccPropertiesCollector {
-    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        if !keys::validate_data_key(key) {
-            self.props.num_errors += 1;
-            return;
-        }
-
+    fn collect_mvcc_properties(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType) {
         let (k, ts) = match types::split_encoded_key_on_ts(key) {
             Ok((k, ts)) => (k, ts),
             Err(_) => {
-                self.props.num_errors += 1;
+                self.num_errors += 1;
                 return;
             }
         };
 
-        self.props.min_ts = cmp::min(self.props.min_ts, ts);
-        self.props.max_ts = cmp::max(self.props.max_ts, ts);
+        self.mvcc.min_ts = cmp::min(self.mvcc.min_ts, ts);
+        self.mvcc.max_ts = cmp::max(self.mvcc.max_ts, ts);
         match entry_type {
-            DBEntryType::Put => self.props.num_versions += 1,
+            DBEntryType::Put => self.mvcc.num_versions += 1,
             _ => return,
         }
 
-        if k != self.last_row.as_slice() {
-            self.props.num_rows += 1;
+        if !self.last_key.as_slice().starts_with(k) {
+            self.mvcc.num_rows += 1;
             self.row_versions = 1;
-            self.last_row.clear();
-            self.last_row.extend_from_slice(k);
         } else {
             self.row_versions += 1;
         }
-        if self.row_versions > self.props.max_row_versions {
-            self.props.max_row_versions = self.row_versions;
+        if self.row_versions > self.mvcc.max_row_versions {
+            self.mvcc.max_row_versions = self.row_versions;
         }
 
         let v = match Write::parse(value) {
             Ok(v) => v,
             Err(_) => {
-                self.props.num_errors += 1;
+                self.num_errors += 1;
                 return;
             }
         };
 
         if v.write_type == WriteType::Put {
-            self.props.num_puts += 1;
+            self.mvcc.num_puts += 1;
         }
-    }
-
-    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        self.props.encode()
-    }
-}
-
-struct UserPropertiesCollector {
-    collectors: Vec<Box<TablePropertiesCollector>>,
-}
-
-impl UserPropertiesCollector {
-    fn new(flags: PropertiesFlags) -> UserPropertiesCollector {
-        let mut c = UserPropertiesCollector { collectors: Vec::new() };
-        if flags.contains(MVCC_PROPERTIES) {
-            c.collectors.push(Box::new(MvccPropertiesCollector::default()));
-        }
-        c
     }
 }
 
 impl TablePropertiesCollector for UserPropertiesCollector {
-    fn add(&mut self,
-           key: &[u8],
-           value: &[u8],
-           entry_type: DBEntryType,
-           seq: u64,
-           file_size: u64) {
-        for c in &mut self.collectors {
-            c.add(key, value, entry_type, seq, file_size);
+    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        if !keys::validate_data_key(key) {
+            self.num_errors += 1;
+            return;
         }
+        self.collect_mvcc_properties(key, value, entry_type);
+        self.last_key.clear();
+        self.last_key.extend_from_slice(key);
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        let mut res = HashMap::new();
-        for c in &mut self.collectors {
-            res.extend(c.finish());
-        }
-        res
+        self.mvcc.encode()
     }
 }
 
@@ -259,7 +226,7 @@ mod tests {
     use storage::Key;
     use storage::mvcc::{Write, WriteType};
     use raftstore::store::keys;
-    use super::{MvccProperties, MvccPropertiesCollector};
+    use super::{UserPropertiesCollector, MvccProperties, MVCC_PROPERTIES};
 
     #[test]
     fn test_mvcc_properties_collector() {
@@ -272,14 +239,13 @@ mod tests {
                      ("ef", 6, WriteType::Put, DBEntryType::Put),
                      ("ef", 6, WriteType::Put, DBEntryType::Delete),
                      ("gh", 7, WriteType::Delete, DBEntryType::Put)];
-        let mut collector = MvccPropertiesCollector::default();
+        let mut collector = UserPropertiesCollector::new(MVCC_PROPERTIES);
         for &(key, ts, write_type, entry_type) in &cases {
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
             let k = keys::data_key(k.encoded());
             let v = Write::new(write_type, ts, None).to_bytes();
             collector.add(&k, &v, entry_type, 0, 0);
         }
-        collector.add(b"error", b"error", DBEntryType::Put, 0, 0);
 
         let props = MvccProperties::decode(&collector.finish()).unwrap();
         assert_eq!(props.min_ts, 1);
@@ -288,6 +254,5 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 7);
         assert_eq!(props.max_row_versions, 3);
-        assert_eq!(props.num_errors, 1);
     }
 }

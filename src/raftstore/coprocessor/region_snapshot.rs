@@ -137,7 +137,7 @@ impl RegionSnapshot {
             }
             res.add(&other);
         }
-        Ok(UserProperties { mvcc: Some(res) })
+        Ok(UserProperties { mvcc: Some(res), ..Default::default() })
     }
 
     pub fn get_start_key(&self) -> &[u8] {
