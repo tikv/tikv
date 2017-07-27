@@ -549,7 +549,8 @@ fn get_rocksdb_cf_option(config: &toml::Value,
         get_toml_int(config,
                      (prefix.clone() + "level0-file-num-compaction-trigger").as_str(),
                      Some(default_values.level_zero_file_num_compaction_trigger));
-    cf_opts.set_level_zero_file_num_compaction_trigger(level_zero_file_num_compaction_trigger as i32);
+    cf_opts.set_level_zero_file_num_compaction_trigger(
+        level_zero_file_num_compaction_trigger as i32);
 
     let level_zero_slowdown_writes_trigger =
         get_toml_int(config,
