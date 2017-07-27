@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::u64;
 
 use storage::mvcc::{Write, WriteType};
@@ -29,7 +29,12 @@ const PROP_NUM_ROWS: &'static str = "tikv.num_rows";
 const PROP_NUM_PUTS: &'static str = "tikv.num_puts";
 const PROP_NUM_VERSIONS: &'static str = "tikv.num_versions";
 const PROP_MAX_ROW_VERSIONS: &'static str = "tikv.max_row_versions";
-const PROP_NUM_ERRORS: &'static str = "tikv.num_errors";
+
+#[derive(Default)]
+pub struct UserProperties {
+    pub num_errors: u64,
+    pub mvcc: Option<MvccProperties>,
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct MvccProperties {
@@ -39,7 +44,6 @@ pub struct MvccProperties {
     pub num_puts: u64, // The number of MVCC puts of all rows.
     pub num_versions: u64, // The number of MVCC versions of all rows.
     pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
-    pub num_errors: u64,
 }
 
 impl MvccProperties {
@@ -51,7 +55,6 @@ impl MvccProperties {
             num_puts: 0,
             num_versions: 0,
             max_row_versions: 0,
-            num_errors: 0,
         }
     }
 
@@ -62,7 +65,6 @@ impl MvccProperties {
         self.num_puts += other.num_puts;
         self.num_versions += other.num_versions;
         self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
-        self.num_errors += other.num_errors;
     }
 
     pub fn encode(&self) -> UserProperties {
@@ -85,7 +87,6 @@ impl MvccProperties {
         res.num_puts = try!(props.decode_u64(PROP_NUM_PUTS));
         res.num_versions = try!(props.decode_u64(PROP_NUM_VERSIONS));
         res.max_row_versions = try!(props.decode_u64(PROP_MAX_ROW_VERSIONS));
-        res.num_errors = try!(props.decode_u64(PROP_NUM_ERRORS));
         Ok(res)
     }
 }
@@ -104,46 +105,39 @@ impl MvccPropertiesCollector {
             row_versions: 0,
         }
     }
-}
 
-impl TablePropertiesCollector for MvccPropertiesCollector {
-    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        if !keys::validate_data_key(key) {
-            self.props.num_errors += 1;
-            return;
-        }
-
+    fn collect_mvcc_properties(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType) {
         let (k, ts) = match types::split_encoded_key_on_ts(key) {
             Ok((k, ts)) => (k, ts),
             Err(_) => {
-                self.props.num_errors += 1;
+                self.num_errors += 1;
                 return;
             }
         };
 
-        self.props.min_ts = cmp::min(self.props.min_ts, ts);
-        self.props.max_ts = cmp::max(self.props.max_ts, ts);
+        self.mvcc.min_ts = cmp::min(self.mvcc.min_ts, ts);
+        self.mvcc.max_ts = cmp::max(self.mvcc.max_ts, ts);
         match entry_type {
-            DBEntryType::Put => self.props.num_versions += 1,
+            DBEntryType::Put => self.mvcc.num_versions += 1,
             _ => return,
         }
 
-        if k != self.last_row.as_slice() {
-            self.props.num_rows += 1;
+        if !self.last_key.as_slice().starts_with(k) {
+            self.mvcc.num_rows += 1;
             self.row_versions = 1;
             self.last_row.clear();
             self.last_row.extend(k);
         } else {
             self.row_versions += 1;
         }
-        if self.row_versions > self.props.max_row_versions {
-            self.props.max_row_versions = self.row_versions;
+        if self.row_versions > self.mvcc.max_row_versions {
+            self.mvcc.max_row_versions = self.row_versions;
         }
 
         let v = match Write::parse(value) {
             Ok(v) => v,
             Err(_) => {
-                self.props.num_errors += 1;
+                self.num_errors += 1;
                 return;
             }
         };
