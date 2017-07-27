@@ -205,6 +205,8 @@ impl PdClient for RpcClient {
         req.set_pending_peers(RepeatedField::from_vec(region_stat.pending_peers));
         req.set_bytes_written(region_stat.written_bytes);
         req.set_keys_written(region_stat.written_keys);
+        req.set_bytes_read(region_stat.read_bytes);
+        req.set_bytes_written(region_stat.read_keys);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
             let mut inner = client.wl();

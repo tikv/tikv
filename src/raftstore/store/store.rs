@@ -15,8 +15,9 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap as StdHashMap};
 use std::collections::Bound::{Included, Excluded, Unbounded};
+use std::mem;
 use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
@@ -32,6 +33,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
+use coprocessor::metrics::*;
 use util::{SlowTimer, duration_to_sec, escape};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
@@ -1573,14 +1575,34 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let read_bytes: StdHashMap<_, _>;
+        let read_keys: StdHashMap<_, _>;
+        {
+            let mut map = COPR_READ_BYTES.lock().unwrap();
+            read_bytes = mem::replace(&mut *map, StdHashMap::new());
+        }
+
+        {
+            let mut map = COPR_READ_KEYS.lock().unwrap();
+            read_keys = mem::replace(&mut *map, StdHashMap::new());
+        }
+
         for peer in self.region_peers.values_mut() {
             peer.check_peers();
         }
 
-        let mut leader_count = 0;
-        for peer in self.region_peers.values() {
+        let mut leader_count: u64 = 0;
+        for mut peer in self.region_peers.values_mut() {
             if peer.is_leader() {
                 leader_count += 1;
+                match read_bytes.get(&peer.region_id) {
+                    Some(x) => peer.peer_stat.read_bytes = *x,
+                    None => peer.peer_stat.read_bytes = 0,
+                }
+                match read_keys.get(&peer.region_id) {
+                    Some(x) => peer.peer_stat.read_keys = *x,
+                    None => peer.peer_stat.read_keys = 0,
+                }
                 peer.heartbeat_pd(&self.pd_worker);
             }
         }

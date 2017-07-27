@@ -33,19 +33,25 @@ pub struct RegionStat {
     pub pending_peers: Vec<metapb::Peer>,
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub read_bytes: u64,
+    pub read_keys: u64,
 }
 
 impl RegionStat {
     pub fn new(down_peers: Vec<pdpb::PeerStats>,
                pending_peers: Vec<metapb::Peer>,
                written_bytes: u64,
-               written_keys: u64)
+               written_keys: u64,
+               read_bytes: u64,
+               read_keys: u64)
                -> RegionStat {
         RegionStat {
             down_peers: down_peers,
             pending_peers: pending_peers,
             written_bytes: written_bytes,
             written_keys: written_keys,
+            read_bytes: read_bytes,
+            read_keys: read_keys,
         }
     }
 }

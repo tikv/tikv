@@ -202,6 +202,18 @@ impl RequestTask {
             }
         }
 
+        {
+            let mut m = COPR_READ_BYTES.lock().unwrap();
+            *m.entry(self.req.get_context().get_region_id()).or_insert(0) += self.statistics
+                .total_read_bytes();
+        }
+
+        {
+            let mut m = COPR_READ_KEYS.lock().unwrap();
+            *m.entry(self.req.get_context().get_region_id()).or_insert(0) +=
+                self.statistics.total_processed() as u64;
+        }
+
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!("[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
                    ranges: {} ({:?})]",

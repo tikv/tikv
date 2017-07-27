@@ -48,6 +48,8 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
+        read_bytes: u64,
+        read_keys: u64,
     },
     StoreHeartbeat { stats: pdpb::StoreStats },
     ReportSplit {
@@ -303,14 +305,18 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                               down_peers,
                               pending_peers,
                               written_bytes,
-                              written_keys } => {
+                              written_keys,
+                              read_bytes,
+                              read_keys } => {
                 self.handle_heartbeat(handle,
                                       region,
                                       peer,
                                       RegionStat::new(down_peers,
                                                       pending_peers,
                                                       written_bytes,
-                                                      written_keys))
+                                                      written_keys,
+                                                      read_bytes,
+                                                      read_keys))
             }
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(handle, stats),
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),

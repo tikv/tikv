@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use prometheus::{HistogramVec, CounterVec, GaugeVec, exponential_buckets};
 
 lazy_static! {
@@ -85,4 +88,10 @@ lazy_static! {
             "Total number of rocksdb query of get or scan count",
             &["type"]
         ).unwrap();
+
+    // region id => read bytes of this region
+    pub static ref COPR_READ_BYTES: Mutex<HashMap<u64, u64>> =  Mutex::new(HashMap::new());
+
+    // region id => read keys of this region
+    pub static ref COPR_READ_KEYS: Mutex<HashMap<u64, u64>> = Mutex::new(HashMap::new());
 }
