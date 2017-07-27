@@ -19,15 +19,18 @@ const DEFAULT_SCHED_CONCURRENCY: usize = 102400;
 const DEFAULT_SCHED_WORKER_POOL_SIZE: usize = 4;
 const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 1000;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
+    #[serde(skip)]
     pub path: String,
     pub gc_ratio_threshold: f64,
-    pub sched_notify_capacity: usize,
-    pub sched_msg_per_tick: usize,
-    pub sched_concurrency: usize,
-    pub sched_worker_pool_size: usize,
-    pub sched_too_busy_threshold: usize,
+    pub scheduler_notify_capacity: usize,
+    pub scheduler_message_per_tick: usize,
+    pub scheduler_concurrency: usize,
+    pub scheduler_worker_pool_size: usize,
+    pub scheduler_too_busy_threshold: usize,
 }
 
 impl Default for Config {
@@ -35,17 +38,11 @@ impl Default for Config {
         Config {
             path: DEFAULT_STORE_PATH.to_owned(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
-            sched_notify_capacity: DEFAULT_SCHED_CAPACITY,
-            sched_msg_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
-            sched_concurrency: DEFAULT_SCHED_CONCURRENCY,
-            sched_worker_pool_size: DEFAULT_SCHED_WORKER_POOL_SIZE,
-            sched_too_busy_threshold: DEFAULT_SCHED_TOO_BUSY_THRESHOLD,
+            scheduler_notify_capacity: DEFAULT_SCHED_CAPACITY,
+            scheduler_message_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
+            scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
+            scheduler_worker_pool_size: DEFAULT_SCHED_WORKER_POOL_SIZE,
+            scheduler_too_busy_threshold: DEFAULT_SCHED_TOO_BUSY_THRESHOLD,
         }
-    }
-}
-
-impl Config {
-    pub fn new() -> Config {
-        Config::default()
     }
 }

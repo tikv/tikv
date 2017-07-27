@@ -44,7 +44,6 @@ extern crate grpc;
 mod signal_handler;
 #[cfg(unix)]
 mod profiling;
-mod config;
 
 use std::process;
 use std::fs::{self, File};
@@ -798,21 +797,21 @@ fn build_cfg(matches: &ArgMatches,
     cfg_f64(&mut cfg.storage.gc_ratio_threshold,
             config,
             "storage.gc-ratio-threshold");
-    cfg_usize(&mut cfg.storage.sched_notify_capacity,
+    cfg_usize(&mut cfg.storage.schededuler_notify_capacity,
               config,
               "storage.scheduler-notify-capacity");
-    cfg_usize(&mut cfg.storage.sched_msg_per_tick,
+    cfg_usize(&mut cfg.storage.schededuler_message_per_tick,
               config,
               "storage.scheduler-messages-per-tick");
-    cfg_usize(&mut cfg.storage.sched_concurrency,
+    cfg_usize(&mut cfg.storage.schededuler_concurrency,
               config,
               "storage.scheduler-concurrency");
-    if !cfg_usize(&mut cfg.storage.sched_worker_pool_size,
+    if !cfg_usize(&mut cfg.storage.schededuler_worker_pool_size,
                   config,
                   "storage.scheduler-worker-pool-size") {
         cfg.storage.sched_worker_pool_size = adjust_sched_workers_by_cpu_num(total_cpu_num);
     }
-    cfg_usize(&mut cfg.storage.sched_too_busy_threshold,
+    cfg_usize(&mut cfg.storage.scheduler_too_busy_threshold,
               config,
               "storage.scheduler-too-busy-threshold");
 

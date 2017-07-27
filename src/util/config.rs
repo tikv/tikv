@@ -16,6 +16,7 @@ use std::str::{self, FromStr};
 use std::ascii::AsciiExt;
 use std::time::Duration;
 use std::net::{SocketAddrV4, SocketAddrV6};
+use std::ops::{Mul, Div};
 
 use url;
 use regex::Regex;
@@ -92,6 +93,63 @@ pub enum CompressionType {
     Zstd,
     ZstdNotFinal,
     Disable,
+}
+
+pub mod order_map_serde {
+    use std::fmt;
+    use std::hash::Hash;
+    use std::marker::PhantomData;
+
+    use serde::{Serialize, Serializer, Deserialize, Deserializer};
+    use serde::de::{MapAccess, Visitor};
+    use serde::ser::SerializeMap;
+
+    use util::collections::HashMap;
+
+    pub fn serialize<S, K, V>(m: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+        where S: Serializer,
+              K: Serialize + Hash + Eq,
+              V: Serialize,
+    {
+        let mut s = try!(serializer.serialize_map(Some(m.len())));
+        for (k, v) in m {
+            try!(s.serialize_entry(k, v));
+        }
+        s.end()
+    }
+
+    pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
+        where D: Deserializer<'de>,
+              K: Deserialize<'de> + Eq + Hash,
+              V: Deserialize<'de>,
+    {
+        struct MapVisitor<K, V> {
+            phantom: PhantomData<HashMap<K, V>>,
+        }
+
+        impl<'de, K, V> Visitor<'de> for MapVisitor<K, V>
+            where K: Deserialize<'de> + Eq + Hash,
+                  V: Deserialize<'de>,
+        {
+            type Value = HashMap<K, V>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a map")
+            }
+
+            fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+                where M: MapAccess<'de>
+            {
+                let mut map = HashMap::with_capacity(access.size_hint().unwrap_or(0));
+                while let Some((key, value)) = access.next_entry()? {
+                    map.insert(key, value);
+                }
+                Ok(map)
+            }
+        }
+
+        deserializer.deserialize_map(MapVisitor { phantom: PhantomData })
+    }
 }
 
 macro_rules! numeric_enum_mod {
@@ -209,9 +267,9 @@ fn split_property(property: &str) -> Result<(f64, &str), ConfigError> {
 
 const UNIT: u64 = 1;
 const DATA_MAGNITUDE: u64 = 1024;
-const KB: u64 = UNIT * DATA_MAGNITUDE;
-const MB: u64 = KB * DATA_MAGNITUDE;
-const GB: u64 = MB * DATA_MAGNITUDE;
+pub const KB: u64 = UNIT * DATA_MAGNITUDE;
+pub const MB: u64 = KB * DATA_MAGNITUDE;
+pub const GB: u64 = MB * DATA_MAGNITUDE;
 
 // Make sure it will not overflow.
 const TB: u64 = (GB as u64) * (DATA_MAGNITUDE as u64);
@@ -273,6 +331,7 @@ pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, Confi
     Ok(map)
 }
 
+#[derive(Clone, Debug)]
 pub struct ReadableSize(pub u64);
 
 impl ReadableSize {
@@ -290,6 +349,30 @@ impl ReadableSize {
 
     pub fn as_mb(&self) -> u64 {
         self.0 / MB
+    }
+}
+
+impl Div<u64> for ReadableSize {
+    type Output = ReadableSize;
+
+    fn div(self, rhs: u64) -> ReadableSize {
+        ReadableSize(self.0 / rhs)
+    }
+}
+
+impl Div<ReadableSize> for ReadableSize {
+    type Output = u64;
+
+    fn div(self, rhs: ReadableSize) -> u64 {
+        self.0 / rhs.0
+    }
+}
+
+impl Mul<u64> for ReadableSize {
+    type Output = ReadableSize;
+
+    fn mul(self, rhs: u64) -> ReadableSize {
+        ReadableSize(self.0 * rhs)
     }
 }
 
@@ -390,9 +473,26 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ReadableDuration(pub Duration);
 
 impl ReadableDuration {
+    pub fn secs(secs: u64) -> ReadableDuration {
+        ReadableDuration(Duration::new(secs, 0))
+    }
+
+    pub fn millis(millis: u64) -> ReadableDuration {
+        ReadableDuration(Duration::new(millis / 1000, (millis % 1000) as u32))
+    }
+
+    pub fn minutes(minutes: u64) -> ReadableDuration {
+        ReadableDuration::secs(minutes * 60)
+    }
+
+    pub fn hours(hours: u64) -> ReadableDuration {
+        ReadableDuration::minutes(hours * 60)
+    }
+
     pub fn as_secs(&self) -> u64 {
         self.0.as_secs()
     }
@@ -652,6 +752,8 @@ mod test {
     use toml;
     use rocksdb::DBRecoveryMode;
 
+    use util::collections::HashMap;
+
     #[test]
     fn test_parse_readable_size() {
         #[derive(Serialize, Deserialize)]
@@ -711,6 +813,29 @@ mod test {
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
+        }
+    }
+
+    #[test]
+    fn test_parse_hash_map() {
+        #[derive(Serailize, Deserialize)]
+        struct MapHolder {
+            #[serde(with = "super::order_map_serde")]
+            m: HashMap<String, String>,
+        }
+
+        let legal_cases = vec![
+            (map![], "{}"),
+            (map!["k1" => "v1"], r#"{"k1" = "v1"}"#),
+        ];
+
+        for (src, exp) in legal_cases {
+            let m = MapHolder { m: src };
+            let res_str = toml::to_string(&m).unwrap();
+            let exp_str = format!("m = {}\n", exp);
+            assert_eq!(res_str, exp_str);
+            let exp_m: MapHolder = toml::from_str(&exp_str).unwrap();
+            assert_eq!(m.m, exp_m.m);
         }
     }
 

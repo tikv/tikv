@@ -395,7 +395,7 @@ pub struct Storage {
 
 impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
-        let (tx, rx) = mpsc::sync_channel(config.sched_notify_capacity);
+        let (tx, rx) = mpsc::sync_channel(config.scheduler_notify_capacity);
         let sendch = SyncSendCh::new(tx, "kv-storage");
 
         info!("storage {:?} started.", engine);
@@ -424,9 +424,9 @@ impl Storage {
         let engine = self.engine.clone();
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
         let rx = handle.receiver.take().unwrap();
-        let sched_concurrency = config.sched_concurrency;
-        let sched_worker_pool_size = config.sched_worker_pool_size;
-        let sched_too_busy_threshold = config.sched_too_busy_threshold;
+        let sched_concurrency = config.scheduler_concurrency;
+        let sched_worker_pool_size = config.scheduler_worker_pool_size;
+        let sched_too_busy_threshold = config.scheduler_too_busy_threshold;
         let ch = self.sendch.clone();
         let h = try!(builder.spawn(move || {
             let mut sched = Scheduler::new(engine,
@@ -1099,7 +1099,7 @@ mod tests {
     #[test]
     fn test_sched_too_busy() {
         let mut config = Config::new();
-        config.sched_too_busy_threshold = 1;
+        config.scheduler_too_busy_threshold = 1;
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1214,7 +1214,7 @@ mod tests {
     #[test]
     fn test_high_priority_no_block() {
         let mut config = Config::new();
-        config.sched_worker_pool_size = 1;
+        config.scheduler_worker_pool_size = 1;
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();

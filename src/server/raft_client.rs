@@ -46,7 +46,7 @@ impl Conn {
         let alive = Arc::new(AtomicBool::new(true));
         let alive1 = alive.clone();
         let channel = ChannelBuilder::new(env)
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size)
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
             .connect(&format!("{}", addr));

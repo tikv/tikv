@@ -21,7 +21,7 @@ use kvproto::tikvpb_grpc::*;
 use util::worker::Worker;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
-use raftstore::store::config::REGION_SPLIT_SIZE;
+use config::TiKvConfig;
 
 use super::{Result, Config};
 use coprocessor::{EndPointHost, EndPointTask};
@@ -33,7 +33,6 @@ use super::raft_client::RaftClient;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: usize = 4 * REGION_SPLIT_SIZE as usize;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
@@ -53,15 +52,15 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
-    pub fn new(cfg: &Config,
+    pub fn new(cfg: &TiKvConfig,
                storage: Storage,
                raft_router: T,
                snapshot_status_sender: Sender<SnapshotStatusMsg>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
-        let env = Arc::new(Environment::new(cfg.grpc_concurrency));
-        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.clone())));
+        let env = Arc::new(Environment::new(cfg.server.grpc_concurrency));
+        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.server.clone())));
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
 
@@ -69,13 +68,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                              end_point_worker.scheduler(),
                              raft_router.clone(),
                              snap_worker.scheduler());
-        let addr = try!(SocketAddr::from_str(&cfg.addr));
+        let addr = try!(SocketAddr::from_str(&cfg.server.addr));
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size)
-            .max_concurrent_stream(cfg.grpc_concurrent_stream)
+            .stream_initial_window_size(cfg.server.grpc_stream_initial_window_size.0 as usize)
+            .max_concurrent_stream(cfg.server.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
+            .max_send_message_len(cfg.raftstore.region_split_size.0 as usize * 4)
             .build_args();
         let grpc_server = try!(ServerBuilder::new(env.clone())
             .register_service(create_tikv(h))

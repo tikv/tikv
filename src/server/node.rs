@@ -28,14 +28,14 @@ use util::transport::SendCh;
 use raftstore::store::{self, Msg, SnapshotStatusMsg, StoreChannel, Store, Config as StoreConfig,
                        keys, Peekable, Transport, SnapManager};
 use super::Result;
-use super::config::Config;
+use config::TiKvConfig;
 use storage::{Storage, RaftKv};
 use super::transport::RaftStoreRouter;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
+pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &TiKvConfig) -> Result<Storage>
     where S: RaftStoreRouter + 'static
 {
     let engine = box RaftKv::new(db, router);
@@ -75,21 +75,21 @@ impl<C> Node<C>
     where C: PdClient
 {
     pub fn new<T>(event_loop: &mut EventLoop<Store<T, C>>,
-                  cfg: &Config,
+                  cfg: &TiKvConfig,
                   pd_client: Arc<C>)
                   -> Node<C>
         where T: Transport + 'static
     {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
-        if cfg.advertise_addr.is_empty() {
-            store.set_address(cfg.addr.clone());
+        if cfg.server.advertise_addr.is_empty() {
+            store.set_address(cfg.server.addr.clone());
         } else {
-            store.set_address(cfg.advertise_addr.clone())
+            store.set_address(cfg.server.advertise_addr.clone())
         }
 
         let mut labels = Vec::new();
-        for (k, v) in &cfg.labels {
+        for (k, v) in &cfg.server.labels {
             let mut label = metapb::StoreLabel::new();
             label.set_key(k.to_owned());
             label.set_value(v.to_owned());
@@ -99,9 +99,9 @@ impl<C> Node<C>
 
         let ch = SendCh::new(event_loop.channel(), "raftstore");
         Node {
-            cluster_id: cfg.cluster_id,
+            cluster_id: cfg.server.cluster_id,
             store: store,
-            store_cfg: cfg.raft_store.clone(),
+            store_cfg: cfg.raftstore.clone(),
             store_handle: None,
             pd_client: pd_client,
             ch: ch,

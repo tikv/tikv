@@ -70,14 +70,16 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate toml;
+extern crate sys_info;
 
 #[macro_use]
 pub mod util;
+pub mod config;
 pub mod raft;
 pub mod storage;
-
-pub use storage::Storage;
 pub mod raftstore;
 pub mod pd;
 pub mod server;
 pub mod coprocessor;
+
+pub use storage::Storage;
