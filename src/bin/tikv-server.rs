@@ -587,7 +587,10 @@ fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> Column
     default_values.whole_key_filtering = true;
     default_values.compaction_pri = 3;
 
-    get_rocksdb_cf_option(config, "defaultcf", default_values)
+    let mut cf_opts = get_rocksdb_cf_option(config, "defaultcf", default_values);
+    let f = Box::new(UserPropertiesCollectorFactory::new(SIZE_INDEX_PROPERTIES));
+    cf_opts.add_table_properties_collector_factory("tikv.user-properties-collector", f);
+    cf_opts
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {

@@ -14,6 +14,7 @@
 use std::cmp;
 use std::collections::{HashMap, BTreeMap};
 use std::u64;
+use std::io::Read;
 
 use storage::mvcc::{Write, WriteType};
 use storage::types;
@@ -29,11 +30,15 @@ const PROP_NUM_ROWS: &'static str = "tikv.num_rows";
 const PROP_NUM_PUTS: &'static str = "tikv.num_puts";
 const PROP_NUM_VERSIONS: &'static str = "tikv.num_versions";
 const PROP_MAX_ROW_VERSIONS: &'static str = "tikv.max_row_versions";
+const PROP_SIZE_INDEX: &'static str = "tikv.size_index";
+
+const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct UserProperties {
     pub num_errors: u64,
     pub mvcc: Option<MvccProperties>,
+    pub size_index: Option<SizeIndexProperties>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -95,6 +100,7 @@ pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
     row_versions: u64,
+    size_handle: IndexHandle,
 }
 
 impl MvccPropertiesCollector {
@@ -103,10 +109,16 @@ impl MvccPropertiesCollector {
             props: MvccProperties::new(),
             last_row: Vec::new(),
             row_versions: 0,
+            size_handle: IndexHandle::default(),
         }
     }
 
-    fn collect_mvcc_properties(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType) {
+    fn mvcc_add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType) {
+        if !keys::validate_data_key(key) {
+            self.num_errors += 1;
+            return;
+        }
+
         let (k, ts) = match types::split_encoded_key_on_ts(key) {
             Ok((k, ts)) => (k, ts),
             Err(_) => {
@@ -215,7 +227,7 @@ mod tests {
     use raftstore::store::keys;
 
     #[test]
-    fn test_mvcc_properties_collector() {
+    fn test_mvcc_properties() {
         let cases = [("ab", 2, WriteType::Put, DBEntryType::Put),
                      ("ab", 1, WriteType::Delete, DBEntryType::Put),
                      ("ab", 1, WriteType::Delete, DBEntryType::Delete),
@@ -241,5 +253,44 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 7);
         assert_eq!(props.max_row_versions, 3);
+    }
+
+    #[test]
+    fn test_size_index_properties() {
+        // handle "a": size = 0, offset = 0
+        let cases = [("a", PROP_SIZE_INDEX_DISTANCE / 8),
+                     ("b", PROP_SIZE_INDEX_DISTANCE / 4),
+                     ("c", PROP_SIZE_INDEX_DISTANCE / 2),
+                     ("d", PROP_SIZE_INDEX_DISTANCE / 8),
+                     // handle "d": size = DISTANCE + 4, offset = DISTANCE + 4
+                     ("e", PROP_SIZE_INDEX_DISTANCE / 4),
+                     ("f", PROP_SIZE_INDEX_DISTANCE / 2),
+                     ("g", PROP_SIZE_INDEX_DISTANCE / 8),
+                     ("h", PROP_SIZE_INDEX_DISTANCE / 4),
+                     // handle "h": size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 8
+                     ("i", PROP_SIZE_INDEX_DISTANCE / 2),
+                     ("j", PROP_SIZE_INDEX_DISTANCE)];
+        // handle "j": size = DISTANCE / 8 * 12 + 2, offset = DISTANCE / 8 * 29 + 10
+
+        let mut collector = UserPropertiesCollector::new(SIZE_INDEX_PROPERTIES);
+        for &(k, vlen) in &cases {
+            let v = vec![0; vlen as usize];
+            collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+        }
+
+        let props = SizeIndexProperties::decode(&collector.finish()).unwrap();
+        assert_eq!(props.handles.len(), 4);
+        let a = &props.handles[b"a".as_ref()];
+        assert_eq!(a.size, 0);
+        assert_eq!(a.offset, 0);
+        let d = &props.handles[b"d".as_ref()];
+        assert_eq!(d.size, PROP_SIZE_INDEX_DISTANCE + 4);
+        assert_eq!(d.offset, PROP_SIZE_INDEX_DISTANCE + 4);
+        let h = &props.handles[b"h".as_ref()];
+        assert_eq!(h.size, PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4);
+        assert_eq!(h.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 8);
+        let j = &props.handles[b"j".as_ref()];
+        assert_eq!(j.size, PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
+        assert_eq!(j.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 10);
     }
 }
