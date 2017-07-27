@@ -483,6 +483,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
+    fn kv_delete_range(&self, _: RpcContext, _: DeleteRangeRequest, _: UnarySink<DeleteRangeResponse>) {
+        unimplemented!()
+    }
+
     fn raw_get(&self, ctx: RpcContext, mut req: RawGetRequest, sink: UnarySink<RawGetResponse>) {
         let label = "raw_get";
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
