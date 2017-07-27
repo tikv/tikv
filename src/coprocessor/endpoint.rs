@@ -26,7 +26,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
 
-use util::{escape, duration_to_ms, duration_to_sec, Either};
+use util::{escape, duration_to_ms, duration_to_sec, Either, ReadStatisticMap};
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::threadpool::{ThreadPool, SmallGroupFirstQueue};
@@ -75,11 +75,13 @@ pub struct Host {
     last_req_id: u64,
     pool: ThreadPool<SmallGroupFirstQueue<u64>, u64>,
     max_running_task_count: usize,
+    read_statistic: ReadStatisticMap,
 }
 
 impl Host {
     pub fn new(engine: Box<Engine>,
                scheduler: Scheduler<Task>,
+               read_statistic: ReadStatisticMap,
                concurrency: usize,
                txn_concurrency_on_busy: usize,
                small_txn_tasks_limit: usize)
@@ -92,6 +94,7 @@ impl Host {
             last_req_id: 0,
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
             pool: ThreadPool::new(thd_name!("endpoint-pool"), concurrency, queue),
+            read_statistic: read_statistic,
         }
     }
 }
@@ -181,7 +184,7 @@ impl RequestTask {
         self.wait_time = Some(wait_time);
     }
 
-    fn stop_record_handling(&mut self) {
+    fn stop_record_handling(&mut self, r: &ReadStatisticMap) {
         self.stop_record_waiting();
 
         let handle_time = duration_to_sec(self.timer.elapsed());
@@ -203,14 +206,14 @@ impl RequestTask {
         }
 
         {
-            let mut m = COPR_READ_BYTES.lock().unwrap();
-            *m.entry(self.req.get_context().get_region_id()).or_insert(0) += self.statistics
+            let mut m = r.lock().unwrap();
+            m.entry(self.req.get_context().get_region_id()).or_insert((0, 0)).0 += self.statistics
                 .total_read_bytes();
         }
 
         {
-            let mut m = COPR_READ_KEYS.lock().unwrap();
-            *m.entry(self.req.get_context().get_region_id()).or_insert(0) +=
+            let mut m = r.lock().unwrap();
+            m.entry(self.req.get_context().get_region_id()).or_insert((0, 0)).1 +=
                 self.statistics.total_processed() as u64;
         }
 
@@ -250,7 +253,7 @@ impl BatchRunnable<Task> for Host {
             match task {
                 Task::Request(req) => {
                     if let Err(e) = req.check_outdated() {
-                        on_error(e, req);
+                        on_error(e, req, &self.read_statistic);
                         continue;
                     }
                     let key = {
@@ -267,13 +270,15 @@ impl BatchRunnable<Task> for Host {
                     let snap = match snap_res {
                         Ok(s) => s,
                         Err(e) => {
-                            notify_batch_failed(e, reqs);
+                            notify_batch_failed(e, reqs, &self.read_statistic);
                             continue;
                         }
                     };
 
                     if self.pool.get_task_count() >= self.max_running_task_count {
-                        notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
+                        notify_batch_failed(Error::Full(self.max_running_task_count),
+                                            reqs,
+                                            &self.read_statistic);
                         continue;
                     }
 
@@ -281,9 +286,10 @@ impl BatchRunnable<Task> for Host {
                         let type_str = get_req_type_str(req.req.get_tp());
                         COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
                         let end_point = TiDbEndPoint::new(snap.clone());
+                        let r = self.read_statistic.clone();
                         let txn_id = req.start_ts.unwrap_or_default();
                         self.pool.execute(txn_id, move || {
-                            end_point.handle_request(req);
+                            end_point.handle_request(req, r);
                             COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
                         });
                     }
@@ -299,7 +305,7 @@ impl BatchRunnable<Task> for Host {
                                                            sched.schedule(Task::SnapRes(id, res))
                                                                .unwrap()
                                                        }) {
-                notify_batch_failed(e, reqs);
+                notify_batch_failed(e, reqs, &self.read_statistic);
                 continue;
             }
             self.reqs.insert(id, reqs);
@@ -352,16 +358,18 @@ fn err_resp(e: Error) -> Response {
     resp
 }
 
-fn on_error(e: Error, req: RequestTask) {
+fn on_error(e: Error, req: RequestTask, r: &ReadStatisticMap) {
     let resp = err_resp(e);
-    respond(resp, req)
+    respond(resp, req, r)
 }
 
-fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
+fn notify_batch_failed<E: Into<Error> + Debug>(e: E,
+                                               reqs: Vec<RequestTask>,
+                                               r: &ReadStatisticMap) {
     debug!("failed to handle batch request: {:?}", e);
     let resp = err_resp(e.into());
     for t in reqs {
-        respond(resp.clone(), t)
+        respond(resp.clone(), t, &r)
     }
 }
 
@@ -373,8 +381,8 @@ fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
     Ok(())
 }
 
-fn respond(resp: Response, mut t: RequestTask) {
-    t.stop_record_handling();
+fn respond(resp: Response, mut t: RequestTask, r: &ReadStatisticMap) {
+    t.stop_record_handling(r);
     (t.on_resp)(resp)
 }
 
@@ -389,10 +397,10 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask) {
+    fn handle_request(&self, mut t: RequestTask, read_statistic: ReadStatisticMap) {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
-            on_error(e, t);
+            on_error(e, t, &read_statistic);
             return;
         }
         let resp = match t.cop_req.take().unwrap() {
@@ -401,8 +409,8 @@ impl TiDbEndPoint {
             Err(err) => Err(err),
         };
         match resp {
-            Ok(r) => respond(r, t),
-            Err(e) => on_error(e, t),
+            Ok(r) => respond(r, t, &read_statistic),
+            Err(e) => on_error(e, t, &read_statistic),
         }
     }
 
@@ -1329,6 +1337,7 @@ mod tests {
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
+    use std::collections::HashMap as StdHashMap;
 
     #[test]
     fn test_get_req_type_str() {
@@ -1342,7 +1351,8 @@ mod tests {
     fn test_req_outdated() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let end_point = Host::new(engine, worker.scheduler(), 1, 1, 1);
+        let m = Arc::new(Mutex::new(StdHashMap::new()));
+        let end_point = Host::new(engine, worker.scheduler(), m, 1, 1, 1);
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(),
@@ -1360,7 +1370,8 @@ mod tests {
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut end_point = Host::new(engine, worker.scheduler(), 1, 1, 1);
+        let m = Arc::new(Mutex::new(StdHashMap::new()));
+        let mut end_point = Host::new(engine, worker.scheduler(), m, 1, 1, 1);
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();

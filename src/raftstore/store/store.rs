@@ -33,8 +33,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use coprocessor::metrics::*;
-use util::{SlowTimer, duration_to_sec, escape};
+use util::{SlowTimer, duration_to_sec, escape, ReadStatisticMap};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -143,6 +142,7 @@ pub struct Store<T, C: 'static> {
     pending_votes: RingQueue<RaftMessage>,
 
     store_stat: StoreStat,
+    read_statistic: ReadStatisticMap,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -178,7 +178,8 @@ impl<T, C> Store<T, C> {
                engine: Arc<DB>,
                trans: T,
                pd_client: Arc<C>,
-               mgr: SnapManager)
+               mgr: SnapManager,
+               r: ReadStatisticMap)
                -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
@@ -220,6 +221,7 @@ impl<T, C> Store<T, C> {
             start_time: time::get_time(),
             is_busy: false,
             store_stat: StoreStat::default(),
+            read_statistic: r,
         };
         try!(s.init());
         Ok(s)
@@ -1575,16 +1577,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let read_bytes: StdHashMap<_, _>;
-        let read_keys: StdHashMap<_, _>;
+        let read_statistic: StdHashMap<u64, (u64, u64)>;
         {
-            let mut map = COPR_READ_BYTES.lock().unwrap();
-            read_bytes = mem::replace(&mut *map, StdHashMap::new());
-        }
-
-        {
-            let mut map = COPR_READ_KEYS.lock().unwrap();
-            read_keys = mem::replace(&mut *map, StdHashMap::new());
+            let mut map = self.read_statistic.lock().unwrap();
+            read_statistic = mem::replace(&mut *map, StdHashMap::new());
         }
 
         for peer in self.region_peers.values_mut() {
@@ -1595,13 +1591,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for mut peer in self.region_peers.values_mut() {
             if peer.is_leader() {
                 leader_count += 1;
-                match read_bytes.get(&peer.region_id) {
-                    Some(x) => peer.peer_stat.read_bytes = *x,
-                    None => peer.peer_stat.read_bytes = 0,
-                }
-                match read_keys.get(&peer.region_id) {
-                    Some(x) => peer.peer_stat.read_keys = *x,
-                    None => peer.peer_stat.read_keys = 0,
+                match read_statistic.get(&peer.region_id) {
+                    Some(&(bytes, keys)) => {
+                        peer.peer_stat.read_bytes = bytes;
+                        peer.peer_stat.read_keys = keys;
+                    }
+                    None => {
+                        peer.peer_stat.read_bytes = 0;
+                        peer.peer_stat.read_keys = 0;
+                    }
                 }
                 peer.heartbeat_pd(&self.pd_worker);
             }

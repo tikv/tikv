@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{Arc, RwLock, mpsc, Mutex};
 use std::time::Duration;
 use std::boxed::FnBox;
 
@@ -108,12 +108,14 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str,
                                         Some(store_sendch),
                                         cfg.raft_store.use_sst_file_snapshot);
+        let r = Arc::new(Mutex::new(HashMap::new()));
         let mut server = Server::new(&cfg,
                                      store.clone(),
                                      sim_router.clone(),
                                      snap_status_sender,
                                      resolver,
-                                     snap_mgr.clone())
+                                     snap_mgr.clone(),
+                                     r.clone())
             .unwrap();
         let addr = server.listening_addr();
         cfg.addr = format!("{}", addr);
@@ -126,7 +128,8 @@ impl Simulator for ServerCluster {
                    engine,
                    simulate_trans.clone(),
                    snap_mgr.clone(),
-                   snap_status_receiver)
+                   snap_status_receiver,
+                   r)
             .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
