@@ -96,7 +96,7 @@ impl<'a> MvccReader<'a> {
         };
 
         self.statistics.data.processed += 1;
-        self.statistics.data.read_bytes += res.len() as u64;
+        self.statistics.data.read_bytes += key.raw().unwrap().len() as u64 + res.len() as u64;
 
         Ok(res)
     }
@@ -110,19 +110,13 @@ impl<'a> MvccReader<'a> {
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
             match try!(cursor.get(key, &mut self.statistics.lock)) {
-                Some(v) => {
-                    self.statistics.lock.read_bytes += v.len() as u64;
-                    Some(try!(Lock::parse(v)))
-                }
+                Some(v) => Some(try!(Lock::parse(v))),
                 None => None,
             }
         } else {
             self.statistics.lock.get += 1;
             match try!(self.snapshot.get_cf(CF_LOCK, key)) {
-                Some(v) => {
-                    self.statistics.lock.read_bytes += v.len() as u64;
-                    Some(try!(Lock::parse(&v)))
-                }
+                Some(v) => Some(try!(Lock::parse(&v))),
                 None => None,
             }
         };
@@ -186,7 +180,7 @@ impl<'a> MvccReader<'a> {
         }
         let write = try!(Write::parse(cursor.value()));
         self.statistics.write.processed += 1;
-        self.statistics.write.read_bytes += cursor.value().len() as u64;
+        self.statistics.write.read_bytes += cursor.key().len() as u64 + cursor.value().len() as u64;
         Ok(Some((commit_ts, write)))
     }
 
@@ -420,7 +414,6 @@ impl<'a> MvccReader<'a> {
         let mut locks = vec![];
         while cursor.valid() {
             let key = Key::from_encoded(cursor.key().to_vec());
-            self.statistics.lock.read_bytes += cursor.value().len() as u64;
             let lock = try!(Lock::parse(cursor.value()));
             if filter(&lock) {
                 locks.push((key.clone(), lock));
@@ -457,7 +450,6 @@ impl<'a> MvccReader<'a> {
                 self.statistics.write.processed += keys.len();
                 return Ok((keys, start));
             }
-            self.statistics.write.read_bytes += cursor.key().len() as u64;
             let key = try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts());
             start = Some(key.append_ts(0));
             keys.push(key);

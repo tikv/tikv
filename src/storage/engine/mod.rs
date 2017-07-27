@@ -206,7 +206,7 @@ impl Statistics {
     }
 
     pub fn total_read_bytes(&self) -> u64 {
-        self.lock.read_bytes + self.write.read_bytes + self.data.read_bytes
+        self.write.read_bytes + self.data.read_bytes
     }
 
     pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {
