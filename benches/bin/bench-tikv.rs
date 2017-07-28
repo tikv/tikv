@@ -36,7 +36,7 @@ extern crate kvproto;
 extern crate time;
 extern crate futures;
 extern crate tokio_core;
-extern crate grpc;
+extern crate grpcio as grpc;
 
 #[allow(dead_code)]
 #[path="../../tests/util.rs"]
