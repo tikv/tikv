@@ -44,6 +44,7 @@ impl Json {
                     return;
                 }
                 array[index].remove_path(sub_path_legs);
+                return;
             }
         }
 
@@ -70,7 +71,7 @@ mod test {
 
     #[test]
     fn test_json_remove() {
-        let mut test_cases = vec![
+        let test_cases = vec![
             (r#"{"a": [3, 4]}"#, "$.a[0]", r#"{"a": [4]}"#, true),
             (r#"{"a": [3, 4]}"#, "$.a", r#"{}"#, true),
             (r#"{"a": [3, 4], "b":1, "c":{"a":1}}"#,
@@ -87,7 +88,7 @@ mod test {
             (r#"null"#, "$**[3]", r#"null"#, false),
         ];
 
-        for (i, (json, path, expected, success)) in test_cases.drain(..).enumerate() {
+        for (i, (json, path, expected, success)) in test_cases.into_iter().enumerate() {
             let j: Result<Json> = json.parse();
             assert!(j.is_ok(), "#{} expect json parse ok but got {:?}", i, j);
             let p = parse_json_path_expr(path);
