@@ -661,10 +661,6 @@ fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
     }
 }
 
-fn adjust_sched_workers_by_cpu_num(total_cpu_num: usize) -> usize {
-    if total_cpu_num >= 16 { 8 } else { 4 }
-}
-
 // TODO: merge this function with Config::new
 // Currently, to add a new option, we will define three default value
 // in config.rs, this file and config-template.toml respectively. It may be more
@@ -798,21 +794,19 @@ fn build_cfg(matches: &ArgMatches,
     cfg_f64(&mut cfg.storage.gc_ratio_threshold,
             config,
             "storage.gc-ratio-threshold");
-    cfg_usize(&mut cfg.storage.sched_notify_capacity,
+    cfg_usize(&mut cfg.storage.scheduler_notify_capacity,
               config,
               "storage.scheduler-notify-capacity");
-    cfg_usize(&mut cfg.storage.sched_msg_per_tick,
+    cfg_usize(&mut cfg.storage.scheduler_message_per_tick,
               config,
               "storage.scheduler-messages-per-tick");
-    cfg_usize(&mut cfg.storage.sched_concurrency,
+    cfg_usize(&mut cfg.storage.scheduler_concurrency,
               config,
               "storage.scheduler-concurrency");
-    if !cfg_usize(&mut cfg.storage.sched_worker_pool_size,
-                  config,
-                  "storage.scheduler-worker-pool-size") {
-        cfg.storage.sched_worker_pool_size = adjust_sched_workers_by_cpu_num(total_cpu_num);
-    }
-    cfg_usize(&mut cfg.storage.sched_too_busy_threshold,
+    cfg_usize(&mut cfg.storage.scheduler_worker_pool_size,
+              config,
+              "storage.scheduler-worker-pool-size");
+    cfg_usize(&mut cfg.storage.scheduler_too_busy_threshold,
               config,
               "storage.scheduler-too-busy-threshold");
 
@@ -878,7 +872,7 @@ fn run_raft_server(pd_client: RpcClient,
                    total_mem: u64) {
     info!("tikv server config: {:?}", cfg);
 
-    let store_path = Path::new(&cfg.storage.path);
+    let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
     let db_path = store_path.join(Path::new("db"));
     let snap_path = store_path.join(Path::new("snap"));
@@ -1104,7 +1098,7 @@ fn main() {
     let mut cfg = build_cfg(&matches, &config, cluster_id, addr, total_cpu_num as usize);
     cfg.labels = get_store_labels(&matches, &config);
     let (store_path, backup_path) = get_data_and_backup_dirs(&matches, &config);
-    cfg.storage.path = store_path;
+    cfg.storage.data_dir = store_path;
 
     if cluster_id == DEFAULT_CLUSTER_ID {
         panic!("in raftkv, cluster_id must greater than 0");
