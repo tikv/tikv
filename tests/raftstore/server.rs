@@ -22,6 +22,7 @@ use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
+use tikv::config::TiKvConfig;
 use tikv::server::{Server, ServerTransport};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, RaftClient};
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -66,14 +67,14 @@ impl ServerCluster {
             store_chs: HashMap::new(),
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
-            raft_client: RaftClient::new(Arc::new(Environment::new(1)), Config::new()),
+            raft_client: RaftClient::new(Arc::new(Environment::new(1)), Config::default()),
         }
     }
 }
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, mut cfg: Config, engine: Arc<DB>) -> u64 {
+    fn run_node(&mut self, node_id: u64, mut cfg: TiKvConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         assert!(node_id == 0 || !self.servers.contains_key(&node_id));
 
@@ -88,7 +89,7 @@ impl Simulator for ServerCluster {
         // Now we cache the store address, so here we should re-use last
         // listening address for the same store.
         if let Some(addr) = self.addrs.get(&node_id) {
-            cfg.addr = format!("{}", addr)
+            cfg.server.addr = format!("{}", addr)
         }
 
         // Initialize raftstore channels.
@@ -99,7 +100,7 @@ impl Simulator for ServerCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
         // Create storage.
-        let mut store = create_raft_storage(sim_router.clone(), engine.clone(), &cfg).unwrap();
+        let mut store = create_raft_storage(sim_router.clone(), engine.clone(), &cfg.storage).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
@@ -108,7 +109,8 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str,
                                         Some(store_sendch),
                                         cfg.raft_store.use_sst_file_snapshot);
-        let mut server = Server::new(&cfg,
+        let mut server = Server::new(&cfg.server,
+                                     cfg.raft_store.region_split_size.0 as usize,
                                      store.clone(),
                                      sim_router.clone(),
                                      snap_status_sender,
@@ -116,12 +118,12 @@ impl Simulator for ServerCluster {
                                      snap_mgr.clone())
             .unwrap();
         let addr = server.listening_addr();
-        cfg.addr = format!("{}", addr);
+        cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
 
         // Create node.
-        let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
+        let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, self.pd_client.clone());
         node.start(event_loop,
                    engine,
                    simulate_trans.clone(),
@@ -136,7 +138,7 @@ impl Simulator for ServerCluster {
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
 
-        server.start(&cfg).unwrap();
+        server.start(&cfg.server).unwrap();
 
         self.nodes.insert(node_id, node);
         self.servers.insert(node_id, server);

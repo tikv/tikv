@@ -13,6 +13,7 @@
 
 
 use tikv::storage::CF_LOCK;
+use tikv::util::config::*;
 use rocksdb::DBStatisticsTickerType;
 
 use super::util::*;
@@ -44,9 +45,9 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
 fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     let interval = 500;
     // Set lock_cf_compact_interval.
-    cluster.cfg.raft_store.lock_cf_compact_interval = interval;
+    cluster.cfg.raft_store.lock_cf_compact_interval = ReadableDuration::millis(interval);
     // Set lock_cf_compact_bytes_threshold.
-    cluster.cfg.raft_store.lock_cf_compact_bytes_threshold = 100;
+    cluster.cfg.raft_store.lock_cf_compact_bytes_threshold = ReadableSize(100);
     cluster.run();
 
     // Write 40 bytes, not reach lock_cf_compact_bytes_threshold, so there is no compaction.

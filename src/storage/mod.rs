@@ -29,7 +29,7 @@ pub mod config;
 pub mod types;
 mod metrics;
 
-pub use self::config::Config;
+pub use self::config::{Config, DEFAULT_DATA_DIR};
 pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cursor,
                        Error as EngineError, ScanMode, Statistics, CFStatistics};
 pub use self::engine::raftkv::RaftKv;
@@ -411,7 +411,7 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let engine = try!(engine::new_local_engine(&config.path, ALL_CFS));
+        let engine = try!(engine::new_local_engine(&config.data_dir, ALL_CFS));
         Storage::from_engine(engine, config)
     }
 
@@ -892,7 +892,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -934,9 +934,9 @@ mod tests {
 
     #[test]
     fn test_put_with_err() {
-        let config = Config::new();
+        let config = Config::default();
         // New engine lack of some column families.
-        let engine = engine::new_local_engine(&config.path, &["default"]).unwrap();
+        let engine = engine::new_local_engine(&config.data_dir, &["default"]).unwrap();
         let mut storage = Storage::from_engine(engine, &config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -957,7 +957,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1039,7 +1039,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1098,7 +1098,7 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
-        let mut config = Config::new();
+        let mut config = Config::default();
         config.scheduler_too_busy_threshold = 1;
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
@@ -1138,7 +1138,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1167,7 +1167,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1213,7 +1213,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_no_block() {
-        let mut config = Config::new();
+        let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();

@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::u64;
-use std::time::Duration;
 
 use time::Duration as TimeDuration;
 
@@ -92,12 +91,12 @@ pub struct Config {
     pub snap_apply_batch_size: ReadableSize,
 
     // Interval (ms) to check region whether the data is consistent.
-    pub consistency_check_tick_interval: ReadableDuration,
+    pub consistency_check_interval: ReadableDuration,
 
     pub report_region_flow_interval: ReadableDuration,
 
     // The lease provided by a successfully proposed and applied entry.
-    raft_store_max_leader_lease: ReadableDuration,
+    pub raft_store_max_leader_lease: ReadableDuration,
 
     pub use_sst_file_snapshot: bool,
 
@@ -144,7 +143,7 @@ impl Default for Config {
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.
             // We should turn on this only in our tests.
-            consistency_check_tick_interval: ReadableDuration::secs(0),
+            consistency_check_interval: ReadableDuration::secs(0),
             report_region_flow_interval: ReadableDuration::minutes(1),
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             use_sst_file_snapshot: true,
@@ -160,12 +159,17 @@ impl Config {
     }
 
     pub fn raft_store_max_leader_lease(&self) -> TimeDuration {
-        TimeDuration::seconds(self.raft_store_max_leader_lease.as_secs() as i64)
+        TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
     }
 
     pub fn validate(&self) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             return Err(box_err!("heartbeat tick must greater than 0"));
+        }
+
+        if self.raft_election_timeout_ticks != 10 {
+            warn!("Election timeout ticks needs to be same across all the cluster, \
+                   otherwise it may lead to inconsistency.");
         }
 
         if self.raft_election_timeout_ticks <= self.raft_heartbeat_ticks {
@@ -203,7 +207,8 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::Duration as TimeDuration;
+
+    use util::config::*;
 
     #[test]
     fn test_config_validate() {
@@ -226,18 +231,18 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.raft_log_gc_size_limit = 0;
+        cfg.raft_log_gc_size_limit = ReadableSize(0);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.region_max_size = 10;
-        cfg.region_split_size = 20;
+        cfg.region_max_size = ReadableSize(10);
+        cfg.region_split_size = ReadableSize(20);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.raft_base_tick_interval = 1000;
+        cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
-        cfg.raft_store_max_leader_lease = TimeDuration::seconds(20);
+        cfg.raft_store_max_leader_lease = ReadableDuration::secs(20);
         assert!(cfg.validate().is_err());
     }
 }

@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::error::Error;
+use std::path::Path;
 use std::usize;
 
 use log::LogLevelFilter;
@@ -21,10 +22,10 @@ use sys_info;
 use server::Config as ServerConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
-use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
-use util::config::{self, CompressionType, ReadableDuration, ReadableSize, KB, MB, GB};
+use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, DEFAULT_DATA_DIR};
+use util::config::{self, ReadableDuration, ReadableSize, KB, MB, GB, compression_type_level_serde};
 use util::properties::UserPropertiesCollectorFactory;
-use util::rocksdb as rocksdb_util;
+use util::rocksdb::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform, CFOptions};
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -32,14 +33,15 @@ const RAFTCF_MIN_MEM: usize = 256 * MB as usize;
 const RAFTCF_MAX_MEM: usize = 2 * GB as usize;
 
 fn memory_for_cf(cf: &str) -> usize {
-    let total_mem_in_kb = sys_info::mem_info().unwrap().total * KB;
+    let total_mem = sys_info::mem_info().unwrap().total * KB;
     let (radio, min, max) = match cf {
         CF_DEFAULT => (0.25, 0, usize::MAX),
         CF_LOCK => (0.02, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM),
         CF_WRITE => (0.15, 0, usize::MAX),
         CF_RAFT => (0.02, RAFTCF_MIN_MEM, RAFTCF_MAX_MEM),
+        _ => unreachable!()
     };
-    let mut size = (total_mem_in_kb as f64 * radio) as usize;
+    let mut size = (total_mem as f64 * radio) as usize;
     if size < min {
         size = min;
     } else if size > max {
@@ -51,7 +53,7 @@ fn memory_for_cf(cf: &str) -> usize {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-struct CfConfig {
+pub struct CfConfig {
     #[serde(skip)]
     pub cf: String,
     pub block_size: ReadableSize,
@@ -59,18 +61,18 @@ struct CfConfig {
     pub cache_index_and_filter_blocks: bool,
     pub use_bloom_filter: bool,
     pub whole_key_filtering: bool,
-    pub bloom_bits_per_key: i32,
-    pub block_based_filter: bool,
-    #[serde(with = "CompressionType")]
-    pub compression_per_level: Vec<DBCompressionType>,
+    pub bloom_filter_bits_per_key: i32,
+    pub block_based_bloom_filter: bool,
+    #[serde(with = "compression_type_level_serde")]
+    pub compression_per_level: [DBCompressionType; 7],
     pub write_buffer_size: ReadableSize,
     pub max_write_buffer_number: i32,
     pub min_write_buffer_number_to_merge: i32,
     pub max_bytes_for_level_base: ReadableSize,
     pub target_file_size_base: ReadableSize,
-    pub level_zero_file_num_compaction_trigger: i32,
-    pub level_zero_slowdown_writes_trigger: i32,
-    pub level_zero_stop_writes_trigger: i32,
+    pub level0_file_num_compaction_trigger: i32,
+    pub level0_slowdown_writes_trigger: i32,
+    pub level0_stop_writes_trigger: i32,
     pub max_compaction_bytes: ReadableSize,
     #[serde(with = "config::compaction_pri_serde")]
     pub compaction_pri: CompactionPriority,
@@ -85,9 +87,9 @@ impl Default for CfConfig {
             cache_index_and_filter_blocks: true,
             use_bloom_filter: false,
             whole_key_filtering: true,
-            bloom_bits_per_key: 10,
-            block_based_filter: false,
-            compression_per_level: vec![
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
                 DBCompressionType::Lz4,
@@ -101,9 +103,9 @@ impl Default for CfConfig {
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(32),
-            level_zero_file_num_compaction_trigger: 4,
-            level_zero_slowdown_writes_trigger: 20,
-            level_zero_stop_writes_trigger: 36,
+            level0_file_num_compaction_trigger: 4,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
         }
@@ -142,8 +144,8 @@ impl CfConfig {
         cfg.block_size = ReadableSize::kb(16);
         cfg.use_bloom_filter = true;
         cfg.whole_key_filtering = true;
-        cfg.compression_per_level = vec![DBCompressionType::No; 7];
-        cfg.level_zero_file_num_compaction_trigger = 1;
+        cfg.compression_per_level = [DBCompressionType::No; 7];
+        cfg.level0_file_num_compaction_trigger = 1;
         cfg.max_bytes_for_level_base = ReadableSize::mb(128);
         cfg
     }
@@ -154,7 +156,7 @@ impl CfConfig {
         block_base_opts.set_lru_cache(self.block_cache_size.0 as usize);
         block_base_opts.set_cache_index_and_filter_blocks(self.cache_index_and_filter_blocks);
         if self.use_bloom_filter {
-            block_base_opts.set_bloom_filter(self.bloom_bits_per_key, self.block_based_filter);
+            block_base_opts.set_bloom_filter(self.bloom_filter_bits_per_key, self.block_based_bloom_filter);
             block_base_opts.set_whole_key_filtering(self.whole_key_filtering);
         }
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -165,29 +167,34 @@ impl CfConfig {
         cf_opts.set_min_write_buffer_number_to_merge(self.min_write_buffer_number_to_merge);
         cf_opts.set_max_bytes_for_level_base(self.max_bytes_for_level_base.0);
         cf_opts.set_target_file_size_base(self.target_file_size_base.0);
-        cf_opts.set_level_zero_file_num_compaction_trigger(self.level_zero_file_num_compaction_trigger);
-        cf_opts.set_level_zero_slowdown_writes_trigger(self.level_zero_slowdown_writes_trigger);
-        cf_opts.set_level_zero_stop_writes_trigger(self.level_zero_stop_writes_trigger);
+        cf_opts.set_level_zero_file_num_compaction_trigger(self.level0_file_num_compaction_trigger);
+        cf_opts.set_level_zero_slowdown_writes_trigger(self.level0_slowdown_writes_trigger);
+        cf_opts.set_level_zero_stop_writes_trigger(self.level0_stop_writes_trigger);
         cf_opts.set_max_compaction_bytes(self.max_compaction_bytes.0);
         cf_opts.compaction_priority(self.compaction_pri);
 
         match self.cf.as_str() {
             CF_DEFAULT => {},
             CF_WRITE => {
-                cf_opts.set_prefix_extractor("FixedSuffixSliceTransform", Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8))).unwrap();
+                // Prefix extractor(trim the timestamp at tail) for write cf.
+                let e = Box::new(FixedSuffixSliceTransform::new(8));
+                cf_opts.set_prefix_extractor("FixedSuffixSliceTransform", e).unwrap();
+                // Create prefix bloom filter for memtable.
                 cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+                // Collects user defined properties.
                 let f = Box::new(UserPropertiesCollectorFactory::default());
                 cf_opts.add_table_properties_collector_factory("tikv.user-properties-collector", f);
             }
             CF_RAFT => {
-                cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
-            Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())));
+                let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
+                cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f).unwrap();
             }
             CF_LOCK => {
-                cf_opts.set_prefix_extractor("NoopSliceTransform",
-                              Box::new(rocksdb_util::NoopSliceTransform));
+                let f = Box::new(NoopSliceTransform);
+                cf_opts.set_prefix_extractor("NoopSliceTransform", f).unwrap();
                 cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
             }
+            _ => unreachable!()
         }
 
         cf_opts
@@ -259,7 +266,7 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-    fn build_opt(&self) -> DBOptions {
+    pub fn build_opt(&self) -> DBOptions {
         let mut opts = DBOptions::new();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -270,7 +277,7 @@ impl DbConfig {
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_background_jobs(self.max_background_jobs);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
-        opts.create_if_missing(true);
+        opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
         if self.enable_statistics {
             opts.enable_statistics();
@@ -293,6 +300,22 @@ impl DbConfig {
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts
     }
+
+    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+        vec![
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+        ]
+    }
+
+    fn validate(&mut self) -> Result<(), Box<Error>> {
+        if !self.backup_dir.is_empty() {
+            self.backup_dir = try!(config::canonicalize_path(&self.backup_dir));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -307,7 +330,7 @@ impl PdConfig {
         if self.endpoints.is_empty() {
             return Err(format!("please specify pd.endpoints.").into());
         }
-        for mut addr in &self.endpoints {
+        for addr in &self.endpoints {
             try!(config::check_addr(addr));
         }
         Ok(())
@@ -351,23 +374,24 @@ pub enum LogLevel {
 pub struct TiKvConfig {
     #[serde(with = "LogLevel")]
     pub log_level: LogLevelFilter,
-    pub data_dir: String,
+    pub log_file: String,
+    #[serde(rename = "raftstore")]
     pub server: ServerConfig,
-    pub metric: MetricConfig,
-    pub raftstore: RaftstoreConfig,
-    pub pd: PdConfig,
-    pub rocksdb: DbConfig,
     pub storage: StorageConfig,
+    pub pd: PdConfig,
+    pub metric: MetricConfig,
+    pub raft_store: RaftstoreConfig,
+    pub rocksdb: DbConfig,
 }
 
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
             log_level: LogLevelFilter::Info,
-            data_dir: "".to_owned(),
+            log_file: "tikv.log".to_owned(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
-            raftstore: RaftstoreConfig::default(),
+            raft_store: RaftstoreConfig::default(),
             pd: PdConfig::default(),
             rocksdb: DbConfig::default(),
             storage: StorageConfig::default(),
@@ -376,9 +400,14 @@ impl Default for TiKvConfig {
 }
 
 impl TiKvConfig {
-    pub fn validate(&self) -> Result<(), Box<Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+        try!(self.storage.validate());
+        if self.rocksdb.backup_dir.is_empty() && self.storage.data_dir != DEFAULT_DATA_DIR {
+            self.rocksdb.backup_dir = format!("{}", Path::new(&self.storage.data_dir).join("backup").display());
+        }
+        try!(self.rocksdb.validate());
         try!(self.server.validate());
-        try!(self.raftstore.validate());
+        try!(self.raft_store.validate());
         try!(self.pd.validate());
         Ok(())
     }

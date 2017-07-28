@@ -12,6 +12,9 @@
 // limitations under the License.
 
 use std::time::Duration;
+
+use tikv::util::config::*;
+
 use super::cluster::{Cluster, Simulator};
 use super::util::*;
 use super::node::new_node_cluster;
@@ -80,7 +83,7 @@ fn test_wrong_store_id<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_put_large_entry<T: Simulator>(cluster: &mut Cluster<T>) {
     let max_size: usize = 1024;
-    cluster.cfg.raft_store.raft_entry_max_size = max_size as u64;
+    cluster.cfg.raft_store.raft_entry_max_size = ReadableSize(max_size as u64);
 
     cluster.run();
 

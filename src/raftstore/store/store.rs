@@ -1872,7 +1872,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_consistency_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::ConsistencyCheck,
-                                       self.cfg.consistency_check_tick_interval.as_millis()) {
+                                       self.cfg.consistency_check_interval.as_millis()) {
             error!("{} register consistency check tick err: {:?}", self.tag, e);
         };
     }

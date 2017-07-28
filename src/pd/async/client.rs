@@ -35,15 +35,7 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new(endpoints: &str) -> Result<RpcClient> {
-        let endpoints: Vec<_> = endpoints.split(',')
-            .map(|s| if !s.starts_with("http://") {
-                format!("http://{}", s)
-            } else {
-                s.to_owned()
-            })
-            .collect();
-
+    pub fn new(endpoints: &[String]) -> Result<RpcClient> {
         let env = Arc::new(EnvBuilder::new().cq_count(CQ_COUNT).name_prefix(CLIENT_PREFIX).build());
         let (client, members) = try!(validate_endpoints(env.clone(), &endpoints));
 

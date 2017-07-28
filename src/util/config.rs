@@ -11,7 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
 use std::fmt::{self, Write};
+use std::fs;
+use std::path::Path;
 use std::str::{self, FromStr};
 use std::ascii::AsciiExt;
 use std::time::Duration;
@@ -76,6 +79,81 @@ pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, Conf
         2 => Ok(DBRecoveryMode::PointInTime),
         3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
         _ => Err(ConfigError::Value(format!("invalid recovery mode: {:?}", mode))),
+    }
+}
+
+pub mod compression_type_level_serde {
+    use std::fmt;
+
+    use serde::{Serializer, Deserializer};
+    use serde::de::{SeqAccess, Visitor, Error, Unexpected};
+    use serde::ser::SerializeSeq;
+
+    use rocksdb::DBCompressionType;
+
+    pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        let mut s = try!(serializer.serialize_seq(Some(ts.len())));
+        for t in ts {
+            let name = match *t {
+                DBCompressionType::No => "no",
+                DBCompressionType::Snappy => "snappy",
+                DBCompressionType::Zlib => "zlib",
+                DBCompressionType::Bz2 => "bzip2",
+                DBCompressionType::Lz4 => "lz4",
+                DBCompressionType::Lz4hc => "lz4hc",
+                DBCompressionType::Zstd => "zstd",
+                DBCompressionType::ZstdNotFinal => "zstd-not-final",
+                DBCompressionType::Disable => "disable",
+            };
+            try!(s.serialize_element(name));
+        }
+        s.end()
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[DBCompressionType; 7], D::Error>
+        where D: Deserializer<'de>
+    {
+        struct SeqVisitor;
+        impl<'de> Visitor<'de> for SeqVisitor {
+            type Value = [DBCompressionType; 7];
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                write!(formatter, "a compression type vector")
+            }
+
+            fn visit_seq<S>(self, mut seq: S) -> Result<[DBCompressionType; 7], S::Error>
+                where S: SeqAccess<'de>
+            {
+                let mut seqs = [DBCompressionType::No; 7];
+                let mut i = 0;
+                while let Some(value) = try!(seq.next_element::<String>()) {
+                    if i == 7 {
+                        return Err(S::Error::invalid_value(Unexpected::Str(&value), &"only 7 compression types"));
+                    }
+                    seqs[i] = match &*value.trim().to_lowercase() {
+                        "no" => DBCompressionType::No,
+                        "snappy" => DBCompressionType::Snappy,
+                        "zlib" => DBCompressionType::Zlib,
+                        "bzip2" => DBCompressionType::Bz2,
+                        "lz4" => DBCompressionType::Lz4,
+                        "lz4hc" => DBCompressionType::Lz4hc,
+                        "zstd" => DBCompressionType::Zstd,
+                        "zstd-not-final" => DBCompressionType::ZstdNotFinal ,
+                        "disable" => DBCompressionType::Disable ,
+                        _ => return Err(S::Error::invalid_value(Unexpected::Str(&value), &"invalid compression type")),
+                    };
+                    i += 1;
+                }
+                if i < 7 {
+                    return Err(S::Error::invalid_length(i, &"7 compression types"));
+                }
+                Ok(seqs)
+            }
+        }
+
+        deserializer.deserialize_seq(SeqVisitor)
     }
 }
 
@@ -331,7 +409,7 @@ pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, Confi
     Ok(map)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub struct ReadableSize(pub u64);
 
 impl ReadableSize {
@@ -482,7 +560,7 @@ impl ReadableDuration {
     }
 
     pub fn millis(millis: u64) -> ReadableDuration {
-        ReadableDuration(Duration::new(millis / 1000, (millis % 1000) as u32))
+        ReadableDuration(Duration::new(millis / 1000, (millis % 1000) as u32 * 1_000_000))
     }
 
     pub fn minutes(minutes: u64) -> ReadableDuration {
@@ -593,6 +671,17 @@ impl<'de> Deserialize<'de> for ReadableDuration {
 
         deserializer.deserialize_str(DurVisitor)
     }
+}
+
+pub fn canonicalize_path(path: &str) -> Result<String, Box<Error>> {
+    let p = Path::new(path);
+    if p.exists() && p.is_file() {
+        return Err(format!("{} is not a directory!", path).into());
+    }
+    if !p.exists() {
+        try!(fs::create_dir_all(p));
+    }
+    Ok(format!("{}", try!(p.canonicalize()).display()))
 }
 
 #[cfg(unix)]
@@ -820,25 +909,28 @@ mod test {
 
     #[test]
     fn test_parse_hash_map() {
-        #[derive(Serailize, Deserialize)]
+        #[derive(Serialize, Deserialize)]
         struct MapHolder {
             #[serde(with = "super::order_map_serde")]
             m: HashMap<String, String>,
         }
 
         let legal_cases = vec![
-            (map![], "{}"),
-            (map!["k1" => "v1"], r#"{"k1" = "v1"}"#),
+            (map![], ""),
+            (map!["k1".to_owned() => "v1".to_owned()], "k1 = \"v1\"\n"),
         ];
 
         for (src, exp) in legal_cases {
             let m = MapHolder { m: src };
             let res_str = toml::to_string(&m).unwrap();
-            let exp_str = format!("m = {}\n", exp);
+            let exp_str = format!("[m]\n{}", exp);
             assert_eq!(res_str, exp_str);
             let exp_m: MapHolder = toml::from_str(&exp_str).unwrap();
             assert_eq!(m.m, exp_m.m);
         }
+        // inline table should be supported.
+        let m: MapHolder = toml::from_str(r#"m = {"k1" = "v1"}"#).unwrap();
+        assert_eq!(m.m.get("k1").unwrap(), "v1");
     }
 
     #[test]
