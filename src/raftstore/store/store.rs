@@ -294,15 +294,18 @@ impl<T, C> Store<T, C> {
 
     fn clear_stale_meta(&mut self, wb: &mut WriteBatch, region: &metapb::Region) {
         let raft_key = keys::raft_state_key(region.get_id());
-        let raft_state: RaftLocalState = match self.engine.get_msg_cf(CF_RAFT, &raft_key).unwrap() {
-            // it has been cleaned up.
-            None => return,
-            Some(value) => value,
-        };
+        let raft_state: RaftLocalState =
+            match self.engine.get_msg_cf(CF_RAFT, &raft_key).unwrap() {
+                // it has been cleaned up.
+                None => return,
+                Some(value) => value,
+            };
         let apply_key = keys::apply_state_key(region.get_id());
-        let apply_state: RaftApplyState = self.engine.get_msg_cf(CF_RAFT, &apply_key).unwrap().unwrap();
+        let apply_state: RaftApplyState =
+            self.engine.get_msg_cf(CF_RAFT, &apply_key).unwrap().unwrap();
 
-        peer_storage::clear_meta(&self.engine, wb, region.get_id(), &apply_state, &raft_state).unwrap();
+        peer_storage::clear_meta(&self.engine, wb, region.get_id(), &apply_state, &raft_state)
+            .unwrap();
         peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
     }
 

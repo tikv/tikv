@@ -788,7 +788,11 @@ impl PeerStorage {
     /// Delete all meta belong to the region. Results are stored in `wb`.
     pub fn clear_meta(&mut self, wb: &mut WriteBatch) -> Result<()> {
         let region_id = self.get_region_id();
-        try!(clear_meta(&self.engine, wb, region_id, &self.apply_state, &self.raft_state));
+        try!(clear_meta(&self.engine,
+                        wb,
+                        region_id,
+                        &self.apply_state,
+                        &self.raft_state));
         self.cache = EntryCache::default();
         Ok(())
     }
@@ -994,19 +998,24 @@ impl PeerStorage {
 }
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
-pub fn clear_meta(engine: &DB, wb: &WriteBatch, region_id: u64, apply_state: &RaftApplyState, raft_state: &RaftLocalState) -> Result<()> {
+pub fn clear_meta(engine: &DB,
+                  wb: &WriteBatch,
+                  region_id: u64,
+                  apply_state: &RaftApplyState,
+                  raft_state: &RaftLocalState)
+                  -> Result<()> {
     let t = Instant::now();
     try!(wb.delete(&keys::region_state_key(region_id)));
 
-    let first_index = first_index(&apply_state);
-    let last_index = last_index(&raft_state);
+    let first_index = first_index(apply_state);
+    let last_index = last_index(raft_state);
     let handle = try!(rocksdb::get_cf_handle(engine, CF_RAFT));
     for id in first_index..last_index + 1 {
         try!(wb.delete_cf(handle, &keys::raft_log_key(region_id, id)));
     }
     try!(wb.delete_cf(handle, &keys::raft_state_key(region_id)));
     try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
-    
+ 
     info!("[region {}] clear peer {} meta keys and {} raft keys, takes {:?}",
           region_id,
           1,
@@ -1256,24 +1265,26 @@ mod test {
         let mut count = 0;
         let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
                                       keys::region_meta_prefix(region_id + 1));
-        store.engine.scan(&meta_start,
-                          &meta_end,
-                          false,
-                          &mut |_, _| {
-                              count += 1;
-                              Ok(true)
-                          }).unwrap();
+        store.engine
+            .scan(&meta_start,
+                  &meta_end,
+                  false,
+                  &mut |_, _| {
+                      count += 1;
+                      Ok(true)
+                  }).unwrap();
 
         let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
                                       keys::region_raft_prefix(region_id + 1));
-        store.engine.scan_cf(CF_RAFT,
-                             &raft_start,
-                             &raft_end,
-                             false,
-                             &mut |_, _| {
-                                 count += 1;
-                                 Ok(true)
-                             }).unwrap();
+        store.engine
+            .scan_cf(CF_RAFT,
+                     &raft_start,
+                     &raft_end,
+                     false,
+                     &mut |_, _| {
+                         count += 1;
+                         Ok(true)
+                     }).unwrap();
         count
     }
 
