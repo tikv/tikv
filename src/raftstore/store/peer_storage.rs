@@ -1272,7 +1272,8 @@ mod test {
                   &mut |_, _| {
                       count += 1;
                       Ok(true)
-                  }).unwrap();
+                  })
+            .unwrap();
 
         let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
                                       keys::region_raft_prefix(region_id + 1));
