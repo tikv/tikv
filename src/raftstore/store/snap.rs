@@ -868,12 +868,18 @@ impl Snapshot for Snap {
                 let mut file = box_try!(File::open(&cf_file.path));
                 try!(apply_plain_cf_file(&mut file, &options, cf_handle));
             } else {
-                let ingest_opt = IngestExternalFileOptions::new();
-                // TODO: move SST file instead of copy
-                // after changing logic in raft, ask for resending snapshot if applying fail.
-                // ingest_opt.move_files(true);
-                let path = cf_file.path.as_path().to_str().unwrap();
-                box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
+                let path = &cf_file.path;
+                let file_name = path.file_name().unwrap();
+                let hard_link_path = Path::new(options.db.path()).join(file_name);
+                box_try!(fs::hard_link(&path, &hard_link_path));
+
+                let mut ingest_opt = IngestExternalFileOptions::new();
+                ingest_opt.move_files(true);
+                box_try!(options.db.ingest_external_file_cf(cf_handle,
+                                                            &ingest_opt,
+                                                            &[hard_link_path.as_path()
+                                                                  .to_str()
+                                                                  .unwrap()]));
             }
         }
         Ok(())
