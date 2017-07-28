@@ -209,7 +209,7 @@ pub struct Raft<T: Storage> {
     heartbeat_elapsed: usize,
 
     pub check_quorum: bool,
-    pre_vote: bool,
+    pub pre_vote: bool,
     skip_bcast_commit: bool,
 
     heartbeat_timeout: usize,
@@ -402,10 +402,21 @@ impl<T: Storage> Raft<T> {
     fn send(&mut self, mut m: Message) {
         m.set_from(self.id);
         if m.get_msg_type() == MessageType::MsgRequestVote ||
-           m.get_msg_type() == MessageType::MsgRequestPreVote {
+           m.get_msg_type() == MessageType::MsgRequestVoteResponse ||
+           m.get_msg_type() == MessageType::MsgRequestPreVote ||
+           m.get_msg_type() == MessageType::MsgRequestPreVoteResponse {
             if m.get_term() == 0 {
-                // Pre-vote RPCs are sent at a term other than our actual term, so the code
-                // that sends these messages is responsible for setting the term.
+                // All {pre-,}campaign messages need to have the term set when sending.
+                // - MsgVote: m.Term is the term the node is campaigning for,
+                //   non-zero as we increment the term when campaigning.
+                // - MsgVoteResp: m.Term is the new r.Term if the MsgVote was
+                //   granted, non-zero for the same reason MsgVote is
+                // - MsgPreVote: m.Term is the term the node will campaign,
+                //   non-zero as we use m.Term to indicate the next term we'll be
+                //   campaigning for
+                // - MsgPreVoteResp: m.Term is the term received in the original
+                //   MsgPreVote if the pre-vote was granted, non-zero for the
+                //   same reasons MsgPreVote is
                 panic!("{} term should be set when sending {:?}",
                        self.tag,
                        m.get_msg_type());
@@ -932,8 +943,18 @@ impl<T: Storage> Raft<T> {
                     self.vote == m.get_from()) &&
                    self.raft_log.is_up_to_date(m.get_index(), m.get_log_term()) {
                     self.log_vote_approve(&m);
+                    // When responding to Msg{Pre,}Vote messages we include the term
+                    // from the message, not the local term. To see why consider the
+                    // case where a single node was previously partitioned away and
+                    // it's local term is now of date. If we include the local term
+                    // (recall that for pre-votes we don't update the local term), the
+                    // (pre-)campaigning node on the other end will proceed to ignore
+                    // the message (it ignores all out of date messages).
+                    // The term in the original message and current local term are the
+                    // same in the case of regular votes, but different for pre-votes.
                     let mut to_send =
                         new_message(m.get_from(), vote_resp_msg_type(m.get_msg_type()), None);
+                    to_send.set_term(m.get_term());
                     to_send.set_reject(false);
                     self.send(to_send);
                     if m.get_msg_type() == MessageType::MsgRequestVote {
@@ -945,6 +966,7 @@ impl<T: Storage> Raft<T> {
                     self.log_vote_reject(&m);
                     let mut to_send =
                         new_message(m.get_from(), vote_resp_msg_type(m.get_msg_type()), None);
+                    to_send.set_term(self.term);
                     to_send.set_reject(true);
                     self.send(to_send);
                 }

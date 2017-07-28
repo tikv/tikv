@@ -311,6 +311,7 @@ impl Peer {
             applied: applied_index,
             check_quorum: true,
             tag: tag.clone(),
+            // pre_vote: true,
             skip_bcast_commit: true,
             ..Default::default()
         };
