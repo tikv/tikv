@@ -88,7 +88,7 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
-            pool: ThreadPool::new(thd_name!("endpoint-pool"), concurrency, FifoQueue::new()),
+            pool: ThreadPool::new(thd_name!("endpoint-normal-pool"), concurrency, FifoQueue::new()),
             low_priority_pool: ThreadPool::new(thd_name!("endpoint-low-pool"),
                                                concurrency,
                                                FifoQueue::new()),
