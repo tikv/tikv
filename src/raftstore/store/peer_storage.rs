@@ -110,6 +110,11 @@ pub fn first_index(state: &RaftApplyState) -> u64 {
     state.get_truncated_state().get_index() + 1
 }
 
+#[inline]
+pub fn last_index(state: &RaftLocalState) -> u64 {
+    state.get_last_index()
+}
+
 #[derive(Default)]
 struct EntryCache {
     cache: VecDeque<Entry>,
@@ -565,7 +570,7 @@ impl PeerStorage {
 
     #[inline]
     pub fn last_index(&self) -> u64 {
-        self.raft_state.get_last_index()
+        last_index(&self.raft_state)
     }
 
     #[inline]
@@ -782,7 +787,8 @@ impl PeerStorage {
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
     pub fn clear_meta(&mut self, wb: &mut WriteBatch) -> Result<()> {
-        try!(clear_meta(&self.engine, wb, self.get_region_id()));
+        let region_id = self.get_region_id();
+        try!(clear_meta(&self.engine, wb, region_id, &self.apply_state, &self.raft_state));
         self.cache = EntryCache::default();
         Ok(())
     }
@@ -988,37 +994,23 @@ impl PeerStorage {
 }
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
-pub fn clear_meta(engine: &DB, wb: &WriteBatch, region_id: u64) -> Result<()> {
+pub fn clear_meta(engine: &DB, wb: &WriteBatch, region_id: u64, apply_state: &RaftApplyState, raft_state: &RaftLocalState) -> Result<()> {
     let t = Instant::now();
-    let mut meta_count = 0;
-    let mut raft_count = 0;
-    let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
-                                  keys::region_meta_prefix(region_id + 1));
-    try!(engine.scan(&meta_start,
-                     &meta_end,
-                     false,
-                     &mut |key, _| {
-                         try!(wb.delete(key));
-                         meta_count += 1;
-                         Ok(true)
-                     }));
+    try!(wb.delete(&keys::region_state_key(region_id)));
 
+    let first_index = first_index(&apply_state);
+    let last_index = last_index(&raft_state);
     let handle = try!(rocksdb::get_cf_handle(engine, CF_RAFT));
-    let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
-                                  keys::region_raft_prefix(region_id + 1));
-    try!(engine.scan_cf(CF_RAFT,
-                        &raft_start,
-                        &raft_end,
-                        false,
-                        &mut |key, _| {
-                            try!(wb.delete_cf(handle, key));
-                            raft_count += 1;
-                            Ok(true)
-                        }));
+    for id in first_index..last_index + 1 {
+        try!(wb.delete_cf(handle, &keys::raft_log_key(region_id, id)));
+    }
+    try!(wb.delete_cf(handle, &keys::raft_state_key(region_id)));
+    try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
+    
     info!("[region {}] clear peer {} meta keys and {} raft keys, takes {:?}",
           region_id,
-          meta_count,
-          raft_count,
+          1,
+          2 + last_index + 1 - first_index,
           t.elapsed());
     Ok(())
 }
@@ -1257,6 +1249,49 @@ mod test {
                 panic!("#{}: expect res {:?}, got {:?}", i, wterm, t);
             }
         }
+    }
+
+    fn get_meta_key_count(store: &PeerStorage) -> usize {
+        let region_id = store.get_region_id();
+        let mut count = 0;
+        let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
+                                      keys::region_meta_prefix(region_id + 1));
+        store.engine.scan(&meta_start,
+                          &meta_end,
+                          false,
+                          &mut |_, _| {
+                              count += 1;
+                              Ok(true)
+                          }).unwrap();
+
+        let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
+                                      keys::region_raft_prefix(region_id + 1));
+        store.engine.scan_cf(CF_RAFT,
+                             &raft_start,
+                             &raft_end,
+                             false,
+                             &mut |_, _| {
+                                 count += 1;
+                                 Ok(true)
+                             }).unwrap();
+        count
+    }
+
+    #[test]
+    fn test_storage_clear_meta() {
+        let td = TempDir::new("tikv-store").unwrap();
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut store = new_storage_from_ents(sched, &td, &[new_entry(3, 3), new_entry(4, 4)]);
+        append_ents(&mut store, &[new_entry(5, 5), new_entry(6, 6)]);
+
+        assert_eq!(6, get_meta_key_count(&store));
+
+        let mut wb = WriteBatch::new();
+        store.clear_meta(&mut wb).unwrap();
+        store.engine.write(wb).unwrap();
+
+        assert_eq!(0, get_meta_key_count(&store));
     }
 
     #[test]

@@ -29,7 +29,7 @@ use fs2;
 use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
-                             PeerState};
+                             PeerState, RaftApplyState, RaftLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{SlowTimer, duration_to_sec, escape};
@@ -294,13 +294,15 @@ impl<T, C> Store<T, C> {
 
     fn clear_stale_meta(&mut self, wb: &mut WriteBatch, region: &metapb::Region) {
         let raft_key = keys::raft_state_key(region.get_id());
-        let handle = rocksdb::get_cf_handle(&self.engine, CF_RAFT).unwrap();
-        if self.engine.get_cf(handle, &raft_key).unwrap().is_none() {
+        let raft_state: RaftLocalState = match self.engine.get_msg_cf(CF_RAFT, &raft_key).unwrap() {
             // it has been cleaned up.
-            return;
-        }
+            None => return,
+            Some(value) => value,
+        };
+        let apply_key = keys::apply_state_key(region.get_id());
+        let apply_state: RaftApplyState = self.engine.get_msg_cf(CF_RAFT, &apply_key).unwrap().unwrap();
 
-        peer_storage::clear_meta(&self.engine, wb, region.get_id()).unwrap();
+        peer_storage::clear_meta(&self.engine, wb, region.get_id(), &apply_state, &raft_state).unwrap();
         peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
     }
 
