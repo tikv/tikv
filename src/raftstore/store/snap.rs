@@ -875,7 +875,11 @@ impl Snapshot for Snap {
 
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
-                box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[hard_link_path.as_path().to_str().unwrap()]));
+                box_try!(options.db.ingest_external_file_cf(cf_handle,
+                                                            &ingest_opt,
+                                                            &[hard_link_path.as_path()
+                                                                  .to_str()
+                                                                  .unwrap()]));
             }
         }
         Ok(())
