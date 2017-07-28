@@ -33,7 +33,7 @@ use super::executor::limit::LimitExecutor;
 
 pub struct DAGContext<'s> {
     pub deadline: Instant,
-    pub columns: Vec<ColumnInfo>,
+    pub columns: Rc<Vec<ColumnInfo>>,
     pub has_aggr: bool,
     pub chunks: Vec<Chunk>,
     req: DAGRequest,
@@ -52,7 +52,7 @@ impl<'s> DAGContext<'s> {
         DAGContext {
             req: req,
             deadline: deadline,
-            columns: vec![],
+            columns: Rc::new(vec![]),
             ranges: ranges,
             snap: snap,
             has_aggr: false,
@@ -68,10 +68,10 @@ impl<'s> DAGContext<'s> {
         // check whether first exec is *scan and get the column info
         match first.get_tp() {
             ExecType::TypeTableScan => {
-                self.columns = first.get_tbl_scan().get_columns().to_vec();
+                self.columns = Rc::new(first.get_tbl_scan().get_columns().to_vec());
             }
             ExecType::TypeIndexScan => {
-                self.columns = first.get_idx_scan().get_columns().to_vec();
+                self.columns = Rc::new(first.get_idx_scan().get_columns().to_vec());
             }
             _ => {
                 return Err(box_err!("first exec type should be *Scan, but get {:?}",
@@ -123,19 +123,19 @@ impl<'s> DAGContext<'s> {
                 ExecType::TypeSelection => {
                     Box::new(try!(SelectionExecutor::new(exec.take_selection(),
                                                          self.eval_ctx.clone(),
-                                                         &self.columns,
+                                                         self.columns.clone(),
                                                          src)))
                 }
                 ExecType::TypeAggregation => {
                     Box::new(try!(AggregationExecutor::new(exec.take_aggregation(),
                                                            self.eval_ctx.clone(),
-                                                           &self.columns,
+                                                           self.columns.clone(),
                                                            src)))
                 }
                 ExecType::TypeTopN => {
                     Box::new(try!(TopNExecutor::new(exec.take_topN(),
                                                     self.eval_ctx.clone(),
-                                                    &self.columns,
+                                                    self.columns.clone(),
                                                     src)))
                 }
                 ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
