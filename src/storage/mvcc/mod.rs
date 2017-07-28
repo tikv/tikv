@@ -57,8 +57,15 @@ quick_error! {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }
-        TxnLockNotFound {description("txn lock not found")}
-        WriteConflict {description("write conflict")}
+        TxnLockNotFound {start_ts: u64, commit_ts: u64, key: Vec<u8> } {
+            description("txn lock not found")
+            display("txn lock not found {}-{} key:{:?}", start_ts, commit_ts, key)
+        }
+        WriteConflict { start_ts: u64, conflict_ts: u64, key: Vec<u8>, primary: Vec<u8> } {
+            description("write conflict")
+            display("write conflict {} with {}, key:{:?}, primary:{:?}",
+             start_ts, conflict_ts, key, primary)
+        }
         KeyVersion {description("bad format key(version)")}
         Other(err: Box<error::Error + Sync + Send>) {
             from()
@@ -84,8 +91,21 @@ impl Error {
             }
             Error::BadFormatLock => Some(Error::BadFormatLock),
             Error::BadFormatWrite => Some(Error::BadFormatWrite),
-            Error::TxnLockNotFound => Some(Error::TxnLockNotFound),
-            Error::WriteConflict => Some(Error::WriteConflict),
+            Error::TxnLockNotFound { start_ts, commit_ts, ref key } => {
+                Some(Error::TxnLockNotFound {
+                    start_ts: start_ts,
+                    commit_ts: commit_ts,
+                    key: key.to_owned(),
+                })
+            }
+            Error::WriteConflict { start_ts, conflict_ts, ref key, ref primary } => {
+                Some(Error::WriteConflict {
+                    start_ts: start_ts,
+                    conflict_ts: conflict_ts,
+                    key: key.to_owned(),
+                    primary: primary.to_owned(),
+                })
+            }
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed { commit_ts: commit_ts }),
             Error::Io(_) | Error::Other(_) => None,
