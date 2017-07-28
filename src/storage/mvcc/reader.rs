@@ -19,7 +19,7 @@ use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
 use kvproto::kvrpcpb::IsolationLevel;
-use util::properties::{GetPropertiesOptions, MvccProperties, MVCC_PROPERTIES};
+use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -514,9 +514,7 @@ impl<'a> MvccReader<'a> {
     }
 
     fn get_mvcc_properties(&self, safe_point: u64) -> Option<MvccProperties> {
-        let mut opts = GetPropertiesOptions::default();
-        opts.flags = MVCC_PROPERTIES;
-        let collection = match self.snapshot.get_properties_cf(CF_WRITE, &opts) {
+        let collection = match self.snapshot.get_properties_cf(CF_WRITE) {
             Ok(v) => v,
             Err(_) => return None,
         };
@@ -525,16 +523,16 @@ impl<'a> MvccReader<'a> {
         }
         // Aggregate MVCC properties.
         let mut props = MvccProperties::new();
-        for v in collection.values() {
-            if let Some(ref mvcc) = v.mvcc {
-                // Filter out properties after safe_point.
-                if mvcc.min_ts > safe_point {
-                    continue;
-                }
-                props.add(mvcc);
-            } else {
-                return None;
+        for (_, v) in &*collection {
+            let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
+                Ok(v) => v,
+                Err(_) => return None,
+            };
+            // Filter out properties after safe_point.
+            if mvcc.min_ts > safe_point {
+                continue;
             }
+            props.add(&mvcc);
         }
         Some(props)
     }
@@ -555,7 +553,7 @@ mod tests {
     use raftstore::coprocessor::RegionSnapshot;
     use raftstore::store::keys;
     use util::rocksdb::{self as rocksdb_util, CFOptions};
-    use util::properties::{UserPropertiesCollectorFactory, MvccProperties, MVCC_PROPERTIES};
+    use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -653,7 +651,7 @@ mod tests {
         let db_opts = rocksdb::DBOptions::new();
         let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
         if with_properties {
-            let f = Box::new(UserPropertiesCollectorFactory::new(MVCC_PROPERTIES));
+            let f = Box::new(MvccPropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
         let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),

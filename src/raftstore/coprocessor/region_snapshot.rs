@@ -12,10 +12,8 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator};
+use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator, TablePropertiesCollection};
 use kvproto::metapb::Region;
-use util::properties::{GetPropertiesOptions, UserPropertiesCollection, UserProperties,
-                       MvccProperties, SizeIndexProperties, MVCC_PROPERTIES, SIZE_INDEX_PROPERTIES};
 
 use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
 use raftstore::store::{keys, util, PeerStorage};
@@ -109,34 +107,14 @@ impl RegionSnapshot {
         Ok(())
     }
 
-    pub fn get_properties_cf(&self,
-                             cf: &str,
-                             opts: &GetPropertiesOptions)
-                             -> Result<UserPropertiesCollection> {
+    pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
         let db = self.snap.get_db();
         let cf = try!(db.cf_handle(cf)
             .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
-
         let start = keys::enc_start_key(self.get_region());
         let end = keys::enc_end_key(self.get_region());
         let range = Range::new(&start, &end);
-        let collection = try!(db.get_properties_of_tables_in_range(cf, &[range]));
-
-        let mut res = UserPropertiesCollection::new();
-        for (k, v) in &*collection {
-            let mut props = UserProperties::default();
-            let v = v.user_collected_properties();
-            if opts.flags.contains(MVCC_PROPERTIES) {
-                let mvcc = try!(MvccProperties::decode(v));
-                props.mvcc = Some(mvcc);
-            }
-            if opts.flags.contains(SIZE_INDEX_PROPERTIES) {
-                let size_index = try!(SizeIndexProperties::decode(v));
-                props.size_index = Some(size_index);
-            }
-            res.insert(k.to_owned(), props);
-        }
-        Ok(res)
+        db.get_properties_of_tables_in_range(cf, &[range]).map_err(|e| e.into())
     }
 
     pub fn get_start_key(&self) -> &[u8] {

@@ -70,8 +70,6 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate toml;
-#[macro_use]
-extern crate bitflags;
 
 #[macro_use]
 pub mod util;
