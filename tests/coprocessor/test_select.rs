@@ -197,13 +197,6 @@ impl Table {
             c_info.set_pk_handle(col.id == self.handle_id);
             idx_info.mut_columns().push(c_info);
         }
-        if let Some(col) = self.cols.get(&self.handle_id) {
-            let mut c_info = ColumnInfo::new();
-            c_info.set_tp(col.col_type);
-            c_info.set_column_id(col.id);
-            c_info.set_pk_handle(true);
-            idx_info.mut_columns().push(c_info);
-        }
         idx_info
     }
 }
@@ -649,7 +642,6 @@ impl DAGSelect {
         let columns_info = index_info.take_columns();
         scan.set_columns(columns_info.clone());
         exec.set_idx_scan(scan);
-
 
         let mut range = KeyRange::new();
 
