@@ -12,8 +12,9 @@
 // limitations under the License.
 
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::u64;
+use std::io::Read;
 
 use storage::mvcc::{Write, WriteType};
 use storage::types;
