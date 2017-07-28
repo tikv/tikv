@@ -39,7 +39,7 @@ extern crate futures;
 extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;
-extern crate grpc;
+extern crate grpcio as grpc;
 
 mod signal_handler;
 #[cfg(unix)]
