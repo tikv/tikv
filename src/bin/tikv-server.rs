@@ -363,15 +363,8 @@ fn get_rocksdb_db_option(config: &toml::Value) -> DBOptions {
                                           Some(4 * 1024 * 1024 * 1024));
     opts.set_max_total_wal_size(max_total_wal_size as u64);
 
-    let max_background_compactions =
-        get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
-    opts.set_max_background_compactions(max_background_compactions as i32);
-
-    let max_background_flushes = get_toml_int(config, "rocksdb.max-background-flushes", Some(2));
-    opts.set_max_background_flushes(max_background_flushes as i32);
-
-    let base_bg_compactions = get_toml_int(config, "rocksdb.base-background-compactions", Some(1));
-    opts.set_base_background_compactions(base_bg_compactions as i32);
+    let max_background_jobs = get_toml_int(config, "rocksdb.max-background-jobs", Some(6));
+    opts.set_max_background_jobs(max_background_jobs as i32);
 
     let max_manifest_file_size = get_toml_int(config,
                                               "rocksdb.max-manifest-file-size",
@@ -552,11 +545,12 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                                              Some(default_values.target_file_size_base));
     cf_opts.set_target_file_size_base(target_file_size_base as u64);
 
-    let level_zero_file_num =
+    let level_zero_file_num_compaction_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-file-num-compaction-trigger").as_str(),
                      Some(default_values.level_zero_file_num_compaction_trigger));
-    cf_opts.set_level_zero_file_num_compaction_trigger(level_zero_file_num as i32);
+    cf_opts.set_level_zero_file_num_compaction_trigger(
+        level_zero_file_num_compaction_trigger as i32);
 
     let level_zero_slowdown_writes_trigger =
         get_toml_int(config,
