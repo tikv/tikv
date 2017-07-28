@@ -19,15 +19,16 @@ use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
 
-use super::{Executor, Row, ExprColumnRefVisitor};
+use super::{Executor, Row, ExprColumnRefVisitor, inflate_with_col_for_dag};
 use super::super::Result;
 use super::super::xeval::{Evaluator, EvalContext};
-use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
+use super::super::endpoint::{SortRow, TopNHeap};
 use super::super::metrics::*;
 
 pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
-    columns: Vec<ColumnInfo>,
+    cols: Rc<Vec<ColumnInfo>>,
+    related_cols_offset: Vec<usize>, // offset of related columns
     heap: Option<TopNHeap>,
     iter: Option<IntoIter<SortRow>>,
     ctx: Rc<EvalContext>,
@@ -37,24 +38,22 @@ pub struct TopNExecutor<'a> {
 impl<'a> TopNExecutor<'a> {
     pub fn new(mut meta: TopN,
                ctx: Rc<EvalContext>,
-               columns_info: &[ColumnInfo],
+               columns_info: Rc<Vec<ColumnInfo>>,
                src: Box<Executor + 'a>)
                -> Result<TopNExecutor<'a>> {
         let order_by = meta.take_order_by().into_vec();
 
-        let mut visitor = ExprColumnRefVisitor::new();
+        let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
         for by_item in &order_by {
             try!(visitor.visit(by_item.get_expr()));
         }
-        let columns = columns_info.iter()
-            .filter(|col| visitor.col_ids.get(&col.get_column_id()).is_some())
-            .cloned()
-            .collect();
+
         COPR_EXECUTOR_COUNT.with_label_values(&["topn"]).inc();
         Ok(TopNExecutor {
             order_by: Rc::new(order_by),
             heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),
-            columns: columns,
+            cols: columns_info,
+            related_cols_offset: visitor.column_offsets(),
             iter: None,
             ctx: ctx,
             src: src,
@@ -64,7 +63,12 @@ impl<'a> TopNExecutor<'a> {
     fn fetch_all(&mut self) -> Result<()> {
         while let Some(row) = try!(self.src.next()) {
             let mut eval = Evaluator::default();
-            try!(inflate_with_col(&mut eval, &self.ctx, &row.data, &self.columns, row.handle));
+            try!(inflate_with_col_for_dag(&mut eval,
+                                          &self.ctx,
+                                          &row.data,
+                                          self.cols.clone(),
+                                          &self.related_cols_offset,
+                                          row.handle));
             let mut ob_values = Vec::with_capacity(self.order_by.len());
             for by_item in self.order_by.as_ref().iter() {
                 let v = box_try!(eval.eval(&self.ctx, by_item.get_expr()));
@@ -102,27 +106,27 @@ impl<'a> Executor for TopNExecutor<'a> {
 
 #[cfg(test)]
 pub mod test {
-    use super::*;
-    use super::super::table_scan::TableScanExecutor;
-    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use std::rc::Rc;
     use util::collections::HashMap;
     use util::codec::number::NumberEncoder;
     use coprocessor::codec::Datum;
     use coprocessor::codec::table::{self, RowColsDict};
     use coprocessor::codec::mysql::types;
     use storage::Statistics;
-
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
-
     use protobuf::RepeatedField;
     use kvproto::kvrpcpb::IsolationLevel;
 
-    fn new_order_by(col_id: i64, desc: bool) -> ByItem {
+    use super::*;
+    use super::super::table_scan::TableScanExecutor;
+    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+
+    fn new_order_by(offset: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ColumnRef);
-        expr.mut_val().encode_i64(col_id).unwrap();
+        expr.mut_val().encode_i64(offset).unwrap();
         item.set_expr(expr);
         item.set_desc(desc);
         item
@@ -270,8 +274,8 @@ pub mod test {
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
-        ob_vec.push(new_order_by(2, false));
-        ob_vec.push(new_order_by(3, true));
+        ob_vec.push(new_order_by(1, false));
+        ob_vec.push(new_order_by(2, true));
         let mut topn = TopN::default();
         topn.set_order_by(RepeatedField::from_vec(ob_vec));
         let limit = 4;
@@ -279,7 +283,7 @@ pub mod test {
         // init topn executor
         let mut topn_ect = TopNExecutor::new(topn,
                                              Rc::new(EvalContext::default()),
-                                             &cis,
+                                             Rc::new(cis),
                                              Box::new(ts_ect))
             .unwrap();
         let mut topn_rows = Vec::with_capacity(limit as usize);
