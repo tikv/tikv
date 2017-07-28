@@ -564,6 +564,13 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
             }
         }
+        Command::RawMGet { ref mut keys, .. } => {
+            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag]).observe(keys.len() as f64);
+            match process_raw_mget(snapshot, keys) {
+                Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
+                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+            }
+        }
         Command::RawScan { ref start_key, limit, .. } => {
             match process_rawscan(snapshot, start_key, limit, &mut statistics) {
                 Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
@@ -596,6 +603,18 @@ fn process_rawscan(snapshot: Box<Snapshot>,
     while cursor.valid() && pairs.len() < limit {
         pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
         cursor.next(&mut stats.data);
+    }
+    Ok(pairs)
+}
+
+fn process_raw_mget(snapshot: Box<Snapshot>,
+                    keys: &mut Vec<Key>)
+                    -> Result<Vec<StorageResult<KvPair>>> {
+    let mut pairs = vec![];
+    for key in keys.drain(..) {
+        if let Some(val) = try!(snapshot.get(&key)) {
+            pairs.push(Ok((key.into_encoded(), val)));
+        }
     }
     Ok(pairs)
 }

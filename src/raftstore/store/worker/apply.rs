@@ -885,7 +885,7 @@ impl ApplyDelegate {
                     warn!("{} skip readonly command: {:?}", self.tag, req);
                     continue;
                 }
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Prewrite | CmdType::DeleteRange | CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
             });
