@@ -129,6 +129,7 @@ pub enum Task {
     Request(RequestTask),
     SnapRes(u64, engine::Result<Box<Snapshot>>),
     SnapResBatch(Vec<(u64, engine::Result<Box<Snapshot>>)>),
+    BacklogRequests(Vec<u64>),
 }
 
 impl Display for Task {
@@ -140,6 +141,7 @@ impl Display for Task {
                 let ids: Vec<u64> = batch.iter().map(|&(id, _)| id).collect();
                 write!(f, "snapres batch {:?}", ids)
             }
+            Task::BacklogRequests(ref backlog) => write!(f, "backlog RequestTasks: {:?}", backlog),
         }
     }
 }
@@ -267,7 +269,6 @@ impl BatchRunnable<Task> for Host {
     // TODO: limit pending reqs
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
-        let mut total_reqs = 0;
         let mut grouped_reqs = map![];
         for task in tasks.drain(..) {
             match task {
@@ -284,7 +285,6 @@ impl BatchRunnable<Task> for Host {
                     };
                     let mut group = grouped_reqs.entry(key).or_insert_with(Vec::new);
                     group.push(req);
-                    total_reqs += 1;
                 }
                 Task::SnapRes(q_id, snap_res) => {
                     self.handle_snapshot_result(q_id, snap_res);
@@ -294,9 +294,26 @@ impl BatchRunnable<Task> for Host {
                         self.handle_snapshot_result(q_id, snap_res);
                     }
                 }
+                Task::BacklogRequests(batch) => {
+                    for id in batch {
+                        let reqs = self.reqs.remove(&id).unwrap();
+                        let sched = self.sched.clone();
+                        if let Err(e) =
+                               self.engine.async_snapshot(reqs[0].req.get_context(),
+                                                          box move |(_, res)| {
+                                                              sched.schedule(Task::SnapRes(id, res))
+                                                                  .unwrap()
+                                                          }) {
+                            notify_batch_failed(e, reqs);
+                        } else {
+                            self.reqs.insert(id, reqs);
+                        }
+                    }
+                }
             }
         }
-        if total_reqs <= 0 {
+
+        if grouped_reqs.is_empty() {
             return;
         }
 
@@ -305,32 +322,39 @@ impl BatchRunnable<Task> for Host {
         for (_, reqs) in grouped_reqs {
             self.last_req_id += 1;
             let id = self.last_req_id;
-            let sched = self.sched.clone();
-            let cb: engine::Callback<Box<Snapshot>> = box move |(_, res)| {
-                sched.schedule(Task::SnapRes(id, res)).unwrap();
-            };
-            let ctx = reqs[0].req.get_context().clone();
-            self.reqs.insert(id, reqs);
             req_ids.push(id);
-            batch.push((ctx, cb));
+
+            let ctx = reqs[0].req.get_context().clone();
+            batch.push(ctx);
+
+            self.reqs.insert(id, reqs);
         }
 
         let req_ids1 = req_ids.clone();
         let sched = self.sched.clone();
-        let on_finish: engine::BatchCallback<Box<Snapshot>> = box move |(_, results)| {
-            if let Ok(results) = results {
-                let batch = req_ids1.into_iter().zip(results).filter_map(|(id, res)| {
-                    if let Some(res) = res {
-                        Some((id, res))
-                    } else {
-                        None
+        let on_finish: engine::BatchCallback<Box<Snapshot>> =
+            box move |results: engine::Result<Vec<_>>| {
+                let results = results.expect("can not be an Err(_)");
+                let mut ready = Vec::with_capacity(results.len());
+                let mut backlog = Vec::new();
+                for (id, res) in req_ids1.into_iter().zip(results) {
+                    match res {
+                        Some((_, res)) => {
+                            ready.push((id, res));
+                        }
+                        None => {
+                            backlog.push(id);
+                        }
                     }
-                });
-                sched.schedule(Task::SnapResBatch(batch.collect())).unwrap()
-            } else {
-                unreachable!();
-            }
-        };
+                }
+
+                if !ready.is_empty() {
+                    sched.schedule(Task::SnapResBatch(ready)).unwrap();
+                }
+                if !backlog.is_empty() {
+                    sched.schedule(Task::BacklogRequests(backlog)).unwrap();
+                }
+            };
 
         if let Err(e) = self.engine.async_snapshots_batch(batch, on_finish) {
             for id in req_ids {

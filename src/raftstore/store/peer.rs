@@ -992,67 +992,37 @@ impl Peer {
         }
     }
 
-    /// Batch propose requests.
-    pub fn batch_propose(&mut self,
-                         batch: Vec<(usize, Callback, RaftCmdRequest, RaftCmdResponse)>,
-                         metrics: &mut RaftProposeMetrics,
-                         pending_raft_groups: &mut HashSet<u64>)
-                         -> Vec<(usize, RaftCmdResponse)> {
+    /// Batch propose read-only requests.
+    pub fn batch_propose_read(&mut self,
+                              batch: Vec<(usize, RaftCmdRequest, RaftCmdResponse)>,
+                              metrics: &mut RaftProposeMetrics)
+                              -> Vec<(usize, RaftCmdResponse)> {
+        let mut err_resps = Vec::new();
         let mut reqs = Vec::with_capacity(batch.len());
-        for (idx, cb, req, mut err_resp) in batch {
+        for (idx, req, mut err_resp) in batch {
             if self.pending_remove {
                 continue;
             }
 
             metrics.all += 1;
 
-            let mut is_conf_change = false;
-
-            let res = match self.get_handle_policy(&req) {
+            match self.get_handle_policy(&req) {
                 Ok(RequestPolicy::ReadLocal) => {
                     reqs.push((idx, req));
-                    // The corresponding callback is dropped here,
-                    // the response will be collected and sent in a batch.
-                    continue;
                 }
-                Ok(RequestPolicy::ReadIndex) => {
-                    if self.read_index(req, cb, metrics) {
-                        self.mark_to_be_checked(pending_raft_groups);
-                    }
-                    continue;
-                }
-                Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
-                Ok(RequestPolicy::ProposeTransferLeader) => {
-                    if self.propose_transfer_leader(req, cb, metrics) {
-                        self.mark_to_be_checked(pending_raft_groups);
-                    }
-                    continue;
-                }
-                Ok(RequestPolicy::ProposeConfChange) => {
-                    is_conf_change = true;
-                    self.propose_conf_change(req, metrics)
-                }
-                Err(e) => Err(e),
-            };
-
-            match res {
+                // require to send again, and send it to the `propose` above.
+                Ok(RequestPolicy::ReadIndex) => (),
+                Ok(_) => unreachable!(),
                 Err(e) => {
                     cmd_resp::bind_error(&mut err_resp, e);
-                    cb(err_resp);
-                }
-                Ok(idx) => {
-                    let meta = ProposalMeta {
-                        index: idx,
-                        term: self.term(),
-                        renew_lease_time: None,
-                    };
-                    self.post_propose(meta, is_conf_change, cb);
-                    self.mark_to_be_checked(pending_raft_groups);
+                    err_resps.push((idx, err_resp));
                 }
             }
         }
 
-        self.batch_read_local(reqs, metrics)
+        let mut resps = self.batch_read_local(reqs, metrics);
+        resps.extend(err_resps);
+        resps
     }
 
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
@@ -1640,7 +1610,6 @@ impl Peer {
     fn batch_exec_read(&mut self,
                        batch: Vec<(usize, RaftCmdRequest)>)
                        -> Vec<(usize, Result<RaftCmdResponse>)> {
-        let mut snap = None;
         let mut ret = Vec::with_capacity(batch.len());
 
         'bat: for (idx, cmd) in batch {
@@ -1654,18 +1623,6 @@ impl Peer {
             for req in requests {
                 let cmd_type = req.get_cmd_type();
                 let mut resp = match cmd_type {
-                    CmdType::Get => {
-                        if snap.is_none() {
-                            snap = Some(Snapshot::new(self.engine.clone()));
-                        }
-                        match apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req) {
-                            Ok(resp) => resp,
-                            Err(e) => {
-                                ret.push((idx, Err(e)));
-                                continue 'bat;
-                            }
-                        }
-                    }
                     CmdType::Snap => {
                         match apply::do_snap(self.region().to_owned()) {
                             Ok(resp) => resp,
@@ -1675,7 +1632,7 @@ impl Peer {
                             }
                         }
                     }
-                    CmdType::Prewrite => unreachable!(),
+                    CmdType::Prewrite | CmdType::Get => unreachable!(),
                     CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
                 };
 

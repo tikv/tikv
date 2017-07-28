@@ -49,7 +49,7 @@ pub trait RaftStoreRouter: Send + Clone {
 
     // Send a batch of RaftCmdRequest to local store.
     fn send_commands_batch(&self,
-                           batch: Vec<(RaftCmdRequest, Callback)>,
+                           batch: Vec<RaftCmdRequest>,
                            on_finish: BatchCallback)
                            -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmds_batch(batch, on_finish))
@@ -94,7 +94,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn send_commands_batch(&self,
-                           batch: Vec<(RaftCmdRequest, Callback)>,
+                           batch: Vec<RaftCmdRequest>,
                            on_finish: BatchCallback)
                            -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmds_batch(batch, on_finish))

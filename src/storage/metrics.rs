@@ -110,6 +110,6 @@ lazy_static! {
         register_histogram!(
             "tikv_storage_batch_commands_total",
             "Bucketed histogram of total number of a batch of commands",
-            linear_buckets(0.0, 5.0, 8).unwrap()
+            linear_buckets(0.0, 2.0, 20).unwrap()
         ).unwrap();
 }

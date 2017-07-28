@@ -44,7 +44,8 @@ const STAT_SEEK: &'static str = "seek";
 const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
-pub type BatchCallback<T> = Box<FnBox((CbContext, Result<Vec<Option<Result<T>>>>)) + Send>;
+pub type Batch<T> = Result<Vec<Option<(CbContext, Result<T>)>>>;
+pub type BatchCallback<T> = Box<FnBox(Batch<T>) + Send>;
 
 #[derive(Clone)]
 pub struct CbContext {
@@ -68,7 +69,7 @@ pub trait Engine: Send + Debug {
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
     // batch and on_finish should be called in the same thread and in order.
     fn async_snapshots_batch(&self,
-                             batch: Vec<(Context, Callback<Box<Snapshot>>)>,
+                             batch: Vec<Context>,
                              on_finish: BatchCallback<Box<Snapshot>>)
                              -> Result<()>;
 

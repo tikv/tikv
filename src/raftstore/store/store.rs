@@ -1291,17 +1291,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn batch_propose_raft_commands(&mut self,
-                                   batch: Vec<(RaftCmdRequest, Callback)>,
+                                   batch: Vec<RaftCmdRequest>,
                                    on_finish: BatchCallback) {
-        let size = batch.len();
-        let mut batches: HashMap<u64, Vec<(usize, Callback, RaftCmdRequest, RaftCmdResponse)>> =
+        let batch_size = batch.len();
+        let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; batch_size];
+        let mut grouped: HashMap<u64, Vec<(usize, RaftCmdRequest, RaftCmdResponse)>> =
             HashMap::default();
-        for (idx, (msg, cb)) in batch.into_iter().enumerate() {
+        for (idx, msg) in batch.into_iter().enumerate() {
             let mut resp = RaftCmdResponse::new();
 
             if let Err(e) = self.validate_store_id(&msg) {
                 bind_error(&mut resp, e);
-                cb.call_box((resp,));
+                ret[idx] = Some(resp);
                 continue;
             }
 
@@ -1311,13 +1312,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     Err(e) => bind_error(&mut resp, e),
                     Ok(status_resp) => resp = status_resp,
                 };
-                cb.call_box((resp,));
+                ret[idx] = Some(resp);
                 continue;
             }
 
             if let Err(e) = self.validate_region(&msg) {
                 bind_error(&mut resp, e);
-                cb.call_box((resp,));
+                ret[idx] = Some(resp);
                 continue;
             }
 
@@ -1325,8 +1326,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let peer = self.region_peers.get(&region_id).unwrap();
             let term = peer.term();
             bind_term(&mut resp, term);
-            let mut group = batches.entry(region_id).or_insert_with(Vec::new);
-            group.push((idx, cb, msg, resp));
+            let mut group = grouped.entry(region_id).or_insert_with(Vec::new);
+            group.push((idx, msg, resp));
         }
 
         // Note:
@@ -1334,21 +1335,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // later. It doesn't matter whether the peer is a leader or not.
         // If it's not a leader, the proposing command log entry can't be committed.
 
-        let mut call_on_finish = false;
-        let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
-        for (region_id, batch) in batches {
+        for (region_id, batch) in grouped {
             let mut peer = self.region_peers.get_mut(&region_id).unwrap();
-            let resps = peer.batch_propose(batch,
-                                           &mut self.raft_metrics.propose,
-                                           &mut self.pending_raft_groups);
+            let resps = peer.batch_propose_read(batch, &mut self.raft_metrics.propose);
             for (idx, resp) in resps {
                 ret[idx] = Some(resp);
-                call_on_finish = true;
             }
         }
-        if call_on_finish {
-            on_finish.call_box((ret,));
-        }
+        on_finish.call_box((ret,));
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.

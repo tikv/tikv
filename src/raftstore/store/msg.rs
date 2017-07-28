@@ -59,7 +59,7 @@ pub enum Msg {
 
     RaftCmdsBatch {
         send_time: Instant,
-        batch: Vec<(RaftCmdRequest, Callback)>,
+        batch: Vec<RaftCmdRequest>,
         on_finish: BatchCallback,
     },
 
@@ -118,9 +118,7 @@ impl Msg {
         }
     }
 
-    pub fn new_raft_cmds_batch(batch: Vec<(RaftCmdRequest, Callback)>,
-                               on_finish: BatchCallback)
-                               -> Msg {
+    pub fn new_raft_cmds_batch(batch: Vec<RaftCmdRequest>, on_finish: BatchCallback) -> Msg {
         Msg::RaftCmdsBatch {
             send_time: Instant::now(),
             batch: batch,
