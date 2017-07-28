@@ -1019,7 +1019,7 @@ impl Peer {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap => is_read = true,
                 CmdType::Delete | CmdType::Put => is_write = true,
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Prewrite | CmdType::Invalid | CmdType::DeleteRange => {
                     return Err(box_err!("invalid cmd type {:?}, message maybe currupted",
                                         r.get_cmd_type()));
                 }
@@ -1155,7 +1155,7 @@ impl Peer {
         self.raft_group.transfer_leader(peer.get_id());
     }
 
-    fn is_tranfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
+    fn is_transfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
         let peer_id = peer.get_id();
         let status = self.raft_group.status();
 
@@ -1278,7 +1278,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transfered = if self.is_tranfer_leader_allowed(peer) {
+        let transfered = if self.is_transfer_leader_allowed(peer) {
             self.transfer_leader(peer);
             true
         } else {
@@ -1532,7 +1532,7 @@ impl Peer {
                 }
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
                 CmdType::Prewrite => unreachable!(),
-                CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
+                CmdType::Put | CmdType::Delete | CmdType::Invalid | CmdType::DeleteRange => unreachable!(),
             };
 
             resp.set_cmd_type(cmd_type);

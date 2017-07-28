@@ -567,7 +567,8 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                         u
                     };
                     if unit >= last_unit {
-                        return Err(E::invalid_value(Unexpected::Str(dur_str), &"h, m, s, ms should occur in giving order."));
+                        return Err(E::invalid_value(Unexpected::Str(dur_str),
+                                                    &"h, m, s, ms should occur in giving order."));
                     }
                     // do we need to check 12h360m?
                     let number_str = unsafe { str::from_utf8_unchecked(first) };
@@ -581,7 +582,8 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                     return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg));
                 }
                 if dur.is_sign_negative() {
-                    return Err(E::invalid_value(Unexpected::Str(dur_str), &"duration should be positive."));
+                    return Err(E::invalid_value(Unexpected::Str(dur_str),
+                                                &"duration should be positive."));
                 }
                 let secs = dur as u64 / SECOND as u64;
                 let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
@@ -975,7 +977,7 @@ mod test {
             (DBCompressionType::Disable, "disable"),
         ];
         for (tp, exp) in case {
-            let holder = CompressionTypeHolder { tp };
+            let holder = CompressionTypeHolder { tp: tp };
             let res = toml::to_string(&holder).unwrap();
             let exp_str = format!("tp = {:?}\n", exp);
             assert_eq!(res, exp_str);
