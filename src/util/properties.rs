@@ -30,16 +30,10 @@ const PROP_NUM_ROWS: &'static str = "tikv.num_rows";
 const PROP_NUM_PUTS: &'static str = "tikv.num_puts";
 const PROP_NUM_VERSIONS: &'static str = "tikv.num_versions";
 const PROP_MAX_ROW_VERSIONS: &'static str = "tikv.max_row_versions";
+const PROP_NUM_ERRORS: &'static str = "tikv.num_errors";
+const PROP_TOTAL_SIZE: &'static str = "tikv.total_size";
 const PROP_SIZE_INDEX: &'static str = "tikv.size_index";
-
 const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
-
-#[derive(Default)]
-pub struct UserProperties {
-    pub num_errors: u64,
-    pub mvcc: Option<MvccProperties>,
-    pub size_index: Option<SizeIndexProperties>,
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct MvccProperties {
@@ -49,6 +43,7 @@ pub struct MvccProperties {
     pub num_puts: u64, // The number of MVCC puts of all rows.
     pub num_versions: u64, // The number of MVCC versions of all rows.
     pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
+    pub num_errors: u64,
 }
 
 impl MvccProperties {
@@ -60,6 +55,7 @@ impl MvccProperties {
             num_puts: 0,
             num_versions: 0,
             max_row_versions: 0,
+            num_errors: 0,
         }
     }
 
@@ -70,6 +66,7 @@ impl MvccProperties {
         self.num_puts += other.num_puts;
         self.num_versions += other.num_versions;
         self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
+        self.num_errors += other.num_errors;
     }
 
     pub fn encode(&self) -> UserProperties {
@@ -92,6 +89,7 @@ impl MvccProperties {
         res.num_puts = try!(props.decode_u64(PROP_NUM_PUTS));
         res.num_versions = try!(props.decode_u64(PROP_NUM_VERSIONS));
         res.max_row_versions = try!(props.decode_u64(PROP_MAX_ROW_VERSIONS));
+        res.num_errors = try!(props.decode_u64(PROP_NUM_ERRORS));
         Ok(res)
     }
 }
@@ -100,7 +98,6 @@ pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
     row_versions: u64,
-    size_handle: IndexHandle,
 }
 
 impl MvccPropertiesCollector {
@@ -109,47 +106,48 @@ impl MvccPropertiesCollector {
             props: MvccProperties::new(),
             last_row: Vec::new(),
             row_versions: 0,
-            size_handle: IndexHandle::default(),
         }
     }
+}
 
-    fn mvcc_add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType) {
+impl TablePropertiesCollector for MvccPropertiesCollector {
+    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         if !keys::validate_data_key(key) {
-            self.num_errors += 1;
+            self.props.num_errors += 1;
             return;
         }
 
         let (k, ts) = match types::split_encoded_key_on_ts(key) {
             Ok((k, ts)) => (k, ts),
             Err(_) => {
-                self.num_errors += 1;
+                self.props.num_errors += 1;
                 return;
             }
         };
 
-        self.mvcc.min_ts = cmp::min(self.mvcc.min_ts, ts);
-        self.mvcc.max_ts = cmp::max(self.mvcc.max_ts, ts);
+        self.props.min_ts = cmp::min(self.props.min_ts, ts);
+        self.props.max_ts = cmp::max(self.props.max_ts, ts);
         match entry_type {
-            DBEntryType::Put => self.mvcc.num_versions += 1,
+            DBEntryType::Put => self.props.num_versions += 1,
             _ => return,
         }
 
-        if !self.last_key.as_slice().starts_with(k) {
-            self.mvcc.num_rows += 1;
+        if k != self.last_row.as_slice() {
+            self.props.num_rows += 1;
             self.row_versions = 1;
             self.last_row.clear();
             self.last_row.extend(k);
         } else {
             self.row_versions += 1;
         }
-        if self.row_versions > self.mvcc.max_row_versions {
-            self.mvcc.max_row_versions = self.row_versions;
+        if self.row_versions > self.props.max_row_versions {
+            self.props.max_row_versions = self.row_versions;
         }
 
         let v = match Write::parse(value) {
             Ok(v) => v,
             Err(_) => {
-                self.num_errors += 1;
+                self.props.num_errors += 1;
                 return;
             }
         };
@@ -173,6 +171,86 @@ impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct IndexHandle {
+    pub size: u64, // The size of the stored block
+    pub offset: u64, // The offset of the block in the file
+}
+
+#[derive(Default)]
+pub struct SizeProperties {
+    pub total_size: u64,
+    pub index_handles: BTreeMap<Vec<u8>, IndexHandle>,
+}
+
+impl SizeProperties {
+    pub fn encode(&self) -> UserProperties {
+        let mut props = UserProperties::new();
+        props.encode_u64(PROP_TOTAL_SIZE, self.total_size);
+        props.encode_handles(PROP_SIZE_INDEX, &self.index_handles);
+        props
+    }
+
+    pub fn decode<T: DecodeProperties>(props: &T) -> Result<SizeProperties> {
+        let mut res = SizeProperties::default();
+        res.total_size = try!(props.decode_u64(PROP_TOTAL_SIZE));
+        res.index_handles = try!(props.decode_handles(PROP_SIZE_INDEX));
+        Ok(res)
+    }
+}
+
+pub struct SizePropertiesCollector {
+    props: SizeProperties,
+    last_key: Vec<u8>,
+    index_handle: IndexHandle,
+}
+
+impl SizePropertiesCollector {
+    fn new() -> SizePropertiesCollector {
+        SizePropertiesCollector {
+            props: SizeProperties::default(),
+            last_key: Vec::new(),
+            index_handle: IndexHandle::default(),
+        }
+    }
+}
+
+impl TablePropertiesCollector for SizePropertiesCollector {
+    fn add(&mut self, key: &[u8], value: &[u8], _: DBEntryType, _: u64, _: u64) {
+        // Insert a zero size handle at start.
+        if self.last_key.is_empty() {
+            self.props.index_handles.insert(key.to_owned(), self.index_handle.clone());
+        }
+        self.last_key.clear();
+        self.last_key.extend_from_slice(key);
+
+        let size = key.len() + value.len();
+        self.index_handle.size += size as u64;
+        self.index_handle.offset += size as u64;
+        if self.index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
+            self.props.index_handles.insert(key.to_owned(), self.index_handle.clone());
+            self.index_handle.size = 0;
+        }
+    }
+
+    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        self.props.total_size = self.index_handle.offset;
+        if self.index_handle.size > 0 {
+            self.props.index_handles.insert(self.last_key.clone(), self.index_handle.clone());
+        }
+        self.props.encode().0
+    }
+}
+
+#[derive(Default)]
+pub struct SizePropertiesCollectorFactory {}
+
+impl TablePropertiesCollectorFactory for SizePropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+        Box::new(SizePropertiesCollector::new())
+    }
+}
+
 pub struct UserProperties(HashMap<Vec<u8>, Vec<u8>>);
 
 impl UserProperties {
@@ -189,6 +267,18 @@ impl UserProperties {
         buf.encode_u64(value).unwrap();
         self.encode(name, buf);
     }
+
+    // Format: | klen | k | v.size | v.offset |
+    pub fn encode_handles(&mut self, name: &str, handles: &BTreeMap<Vec<u8>, IndexHandle>) {
+        let mut buf = Vec::with_capacity(1024);
+        for (k, v) in handles {
+            buf.encode_u64(k.len() as u64).unwrap();
+            buf.extend(k);
+            buf.encode_u64(v.size).unwrap();
+            buf.encode_u64(v.offset).unwrap();
+        }
+        self.encode(name, buf);
+    }
 }
 
 pub trait DecodeProperties {
@@ -197,6 +287,21 @@ pub trait DecodeProperties {
     fn decode_u64(&self, k: &str) -> Result<u64> {
         let mut buf = try!(self.decode(k));
         buf.decode_u64()
+    }
+
+    fn decode_handles(&self, k: &str) -> Result<BTreeMap<Vec<u8>, IndexHandle>> {
+        let mut res = BTreeMap::new();
+        let mut buf = try!(self.decode(k));
+        while !buf.is_empty() {
+            let klen = try!(buf.decode_u64());
+            let mut k = vec![0; klen as usize];
+            try!(buf.read_exact(k.as_mut_slice()));
+            let mut v = IndexHandle::default();
+            v.size = try!(buf.decode_u64());
+            v.offset = try!(buf.decode_u64());
+            res.insert(k, v);
+        }
+        Ok(res)
     }
 }
 
@@ -227,7 +332,7 @@ mod tests {
     use raftstore::store::keys;
 
     #[test]
-    fn test_mvcc_properties() {
+    fn test_mvcc_properties_collector() {
         let cases = [("ab", 2, WriteType::Put, DBEntryType::Put),
                      ("ab", 1, WriteType::Delete, DBEntryType::Put),
                      ("ab", 1, WriteType::Delete, DBEntryType::Delete),
@@ -256,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn test_size_index_properties() {
+    fn test_size_properties_collector() {
         // handle "a": size = 0, offset = 0
         let cases = [("a", PROP_SIZE_INDEX_DISTANCE / 8),
                      ("b", PROP_SIZE_INDEX_DISTANCE / 4),
@@ -272,24 +377,27 @@ mod tests {
                      ("j", PROP_SIZE_INDEX_DISTANCE)];
         // handle "j": size = DISTANCE / 8 * 12 + 2, offset = DISTANCE / 8 * 29 + 10
 
-        let mut collector = UserPropertiesCollector::new(SIZE_INDEX_PROPERTIES);
+        let mut collector = SizePropertiesCollector::new();
         for &(k, vlen) in &cases {
             let v = vec![0; vlen as usize];
             collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
         }
+        let result = UserProperties(collector.finish());
 
-        let props = SizeIndexProperties::decode(&collector.finish()).unwrap();
-        assert_eq!(props.handles.len(), 4);
-        let a = &props.handles[b"a".as_ref()];
+        let props = SizeProperties::decode(&result).unwrap();
+        assert_eq!(props.total_size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 10);
+        let handles = &props.index_handles;
+        assert_eq!(handles.len(), 4);
+        let a = &handles[b"a".as_ref()];
         assert_eq!(a.size, 0);
         assert_eq!(a.offset, 0);
-        let d = &props.handles[b"d".as_ref()];
+        let d = &handles[b"d".as_ref()];
         assert_eq!(d.size, PROP_SIZE_INDEX_DISTANCE + 4);
         assert_eq!(d.offset, PROP_SIZE_INDEX_DISTANCE + 4);
-        let h = &props.handles[b"h".as_ref()];
+        let h = &handles[b"h".as_ref()];
         assert_eq!(h.size, PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4);
         assert_eq!(h.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 8);
-        let j = &props.handles[b"j".as_ref()];
+        let j = &handles[b"j".as_ref()];
         assert_eq!(j.size, PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
         assert_eq!(j.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 10);
     }
