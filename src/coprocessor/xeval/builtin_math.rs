@@ -265,6 +265,14 @@ mod test {
             ),
             (
                 build_expr_with_sig(
+                    vec![Datum::F64(0.1)],
+                    ExprType::ScalarFunc,
+                    ScalarFuncSig::FloorInt,
+                ),
+                Datum::I64(0)
+            ),
+            (
+                build_expr_with_sig(
                     vec![Datum::Null],
                     ExprType::ScalarFunc,
                     ScalarFuncSig::FloorInt,
