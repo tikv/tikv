@@ -718,6 +718,7 @@ impl<T: Storage> Raft<T> {
         // Becoming a pre-candidate changes our state.
         // but doesn't change anything else. In particular it does not increase
         // self.term or change self.vote.
+        self.leader_id = INVALID_ID;
         self.state = StateRole::PreCandidate;
         info!("{} became pre-candidate at term {}", self.tag, self.term);
     }
