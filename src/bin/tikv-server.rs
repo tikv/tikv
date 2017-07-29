@@ -69,7 +69,7 @@ use tikv::util::properties::UserPropertiesCollectorFactory;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config,
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::PdStoreAddrResolver;
+use tikv::server::resolve;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
@@ -916,7 +916,7 @@ fn run_raft_server(pd_client: RpcClient,
 
     // Create pd client, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
-    let resolver = PdStoreAddrResolver::new(pd_client.clone())
+    let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
                                     Some(store_sendch),
@@ -953,6 +953,9 @@ fn run_raft_server(pd_client: RpcClient,
     // Stop.
     server.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    if let Some(Err(e)) = worker.stop().map(|h| h.join()) {
+        info!("ignore failure when stopping resolver: {:?}", e);
+    }
 }
 
 fn main() {
