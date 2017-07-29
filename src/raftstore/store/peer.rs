@@ -1020,7 +1020,7 @@ impl Peer {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap => is_read = true,
                 CmdType::Delete | CmdType::Put => is_write = true,
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Prewrite | CmdType::Invalid | CmdType::DeleteRange => {
                     return Err(box_err!("invalid cmd type {:?}, message maybe currupted",
                                         r.get_cmd_type()));
                 }
@@ -1533,7 +1533,7 @@ impl Peer {
                 }
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
                 CmdType::Prewrite => unreachable!(),
-                CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
+                CmdType::Put | CmdType::Delete | CmdType::Invalid | CmdType::DeleteRange => unreachable!(),
             };
 
             resp.set_cmd_type(cmd_type);
