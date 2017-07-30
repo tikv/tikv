@@ -217,20 +217,16 @@ impl SizePropertiesCollector {
 
 impl TablePropertiesCollector for SizePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], _: DBEntryType, _: u64, _: u64) {
-        // Insert a zero size handle at start.
-        if self.last_key.is_empty() {
-            self.props.index_handles.insert(key.to_owned(), self.index_handle.clone());
-        }
-        self.last_key.clear();
-        self.last_key.extend_from_slice(key);
-
         let size = key.len() + value.len();
         self.index_handle.size += size as u64;
         self.index_handle.offset += size as u64;
-        if self.index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
+        // Add the start key for convenience.
+        if self.last_key.is_empty() || self.index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
             self.props.index_handles.insert(key.to_owned(), self.index_handle.clone());
             self.index_handle.size = 0;
         }
+        self.last_key.clear();
+        self.last_key.extend_from_slice(key);
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
@@ -362,20 +358,21 @@ mod tests {
 
     #[test]
     fn test_size_properties_collector() {
-        // handle "a": size = 0, offset = 0
-        let cases = [("a", PROP_SIZE_INDEX_DISTANCE / 8),
-                     ("b", PROP_SIZE_INDEX_DISTANCE / 4),
-                     ("c", PROP_SIZE_INDEX_DISTANCE / 2),
-                     ("d", PROP_SIZE_INDEX_DISTANCE / 8),
-                     // handle "d": size = DISTANCE + 4, offset = DISTANCE + 4
-                     ("e", PROP_SIZE_INDEX_DISTANCE / 4),
-                     ("f", PROP_SIZE_INDEX_DISTANCE / 2),
-                     ("g", PROP_SIZE_INDEX_DISTANCE / 8),
-                     ("h", PROP_SIZE_INDEX_DISTANCE / 4),
-                     // handle "h": size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 8
-                     ("i", PROP_SIZE_INDEX_DISTANCE / 2),
-                     ("j", PROP_SIZE_INDEX_DISTANCE)];
-        // handle "j": size = DISTANCE / 8 * 12 + 2, offset = DISTANCE / 8 * 29 + 10
+        let cases = [("a", 0),
+                     // handle "a": size = 1, offset = 1,
+                     ("b", PROP_SIZE_INDEX_DISTANCE / 8),
+                     ("c", PROP_SIZE_INDEX_DISTANCE / 4),
+                     ("d", PROP_SIZE_INDEX_DISTANCE / 2),
+                     ("e", PROP_SIZE_INDEX_DISTANCE / 8),
+                     // handle "e": size = DISTANCE + 4, offset = DISTANCE + 5
+                     ("f", PROP_SIZE_INDEX_DISTANCE / 4),
+                     ("g", PROP_SIZE_INDEX_DISTANCE / 2),
+                     ("h", PROP_SIZE_INDEX_DISTANCE / 8),
+                     ("i", PROP_SIZE_INDEX_DISTANCE / 4),
+                     // handle "i": size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9
+                     ("j", PROP_SIZE_INDEX_DISTANCE / 2),
+                     ("k", PROP_SIZE_INDEX_DISTANCE)];
+        // handle "k": size = DISTANCE / 8 * 12 + 2, offset = DISTANCE / 8 * 29 + 11
 
         let mut collector = SizePropertiesCollector::new();
         for &(k, vlen) in &cases {
@@ -385,20 +382,20 @@ mod tests {
         let result = UserProperties(collector.finish());
 
         let props = SizeProperties::decode(&result).unwrap();
-        assert_eq!(props.total_size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 10);
+        assert_eq!(props.total_size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
         let handles = &props.index_handles;
         assert_eq!(handles.len(), 4);
         let a = &handles[b"a".as_ref()];
-        assert_eq!(a.size, 0);
-        assert_eq!(a.offset, 0);
-        let d = &handles[b"d".as_ref()];
-        assert_eq!(d.size, PROP_SIZE_INDEX_DISTANCE + 4);
-        assert_eq!(d.offset, PROP_SIZE_INDEX_DISTANCE + 4);
-        let h = &handles[b"h".as_ref()];
-        assert_eq!(h.size, PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4);
-        assert_eq!(h.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 8);
-        let j = &handles[b"j".as_ref()];
-        assert_eq!(j.size, PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
-        assert_eq!(j.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 10);
+        assert_eq!(a.size, 1);
+        assert_eq!(a.offset, 1);
+        let e = &handles[b"e".as_ref()];
+        assert_eq!(e.size, PROP_SIZE_INDEX_DISTANCE + 4);
+        assert_eq!(e.offset, PROP_SIZE_INDEX_DISTANCE + 5);
+        let i = &handles[b"i".as_ref()];
+        assert_eq!(i.size, PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4);
+        assert_eq!(i.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
+        let k = &handles[b"k".as_ref()];
+        assert_eq!(k.size, PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
+        assert_eq!(k.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
     }
 }
