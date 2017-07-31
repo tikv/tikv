@@ -69,7 +69,7 @@ use tikv::util::properties::UserPropertiesCollectorFactory;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config,
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::PdStoreAddrResolver;
+use tikv::server::resolve;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
@@ -691,18 +691,6 @@ fn build_cfg(matches: &ArgMatches,
         cfg.end_point_concurrency = adjust_end_points_by_cpu_num(total_cpu_num);
     }
 
-    if !cfg_usize(&mut cfg.end_point_txn_concurrency_on_busy,
-                  config,
-                  "server.end-point-txn-concurrency-on-busy") {
-        cfg.auto_adjust_end_point_txn_concurrency();
-        info!("server.end-point-txn-concurrency-on-busy keep default value with value = {}",
-              cfg.end_point_txn_concurrency_on_busy);
-    }
-
-    cfg_usize(&mut cfg.end_point_small_txn_tasks_limit,
-              config,
-              "server.end-point-small-txn-tasks-limit");
-
     cfg_usize(&mut cfg.messages_per_tick,
               config,
               "server.messages-per-tick");
@@ -910,7 +898,7 @@ fn run_raft_server(pd_client: RpcClient,
 
     // Create pd client, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
-    let resolver = PdStoreAddrResolver::new(pd_client.clone())
+    let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
                                     Some(store_sendch),
@@ -947,6 +935,9 @@ fn run_raft_server(pd_client: RpcClient,
     // Stop.
     server.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    if let Some(Err(e)) = worker.stop().map(|h| h.join()) {
+        info!("ignore failure when stopping resolver: {:?}", e);
+    }
 }
 
 fn main() {
