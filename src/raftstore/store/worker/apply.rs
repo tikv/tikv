@@ -29,7 +29,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
-use storage::{CF_LOCK, CF_RAFT};
+use storage::{CF_LOCK, CF_RAFT, CF_DEFAULT};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Store, cmd_resp, keys, util};
@@ -907,7 +907,6 @@ impl ApplyDelegate {
                     warn!("{} skip readonly command: {:?}", self.tag, req);
                     continue;
                 }
-                CmdType::DeleteRange => unimplemented!(),
                 CmdType::Prewrite | CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
@@ -921,10 +920,10 @@ impl ApplyDelegate {
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(RepeatedField::from_vec(responses));
 
-        let exec_res = if !ranges.is_empty() {
-            Some(ExecResult::DeleteRange { ranges: ranges })
-        } else {
+        let exec_res = if ranges.is_empty() {
             None
+        } else {
+            Some(ExecResult::DeleteRange { ranges: ranges })
         };
 
         Ok((resp, exec_res))
@@ -1008,6 +1007,11 @@ impl ApplyDelegate {
                            -> Result<Response> {
         let start_key = req.get_delete_range().get_start_key();
         let end_key = req.get_delete_range().get_end_key();
+        if start_key >= end_key {
+            return Err(box_err!("invalid delete range parameters, start_key: {:?}, end_key: {:?}",
+                                start_key,
+                                end_key));
+        }
         try!(check_data_key(start_key, &self.region));
         if end_key > self.region.get_end_key() {
             return Err(Error::KeyNotInRegion(end_key.to_vec(), self.region.clone()));
@@ -1018,6 +1022,7 @@ impl ApplyDelegate {
         let start_key = keys::data_key(start_key);
         let end_key = keys::data_key(end_key);
         let cf = req.get_delete_range().get_cf();
+        let cf = if cf.is_empty() { CF_DEFAULT } else { cf };
         rocksdb::get_cf_handle(&self.engine, cf)
             .and_then(|handle| ctx.wb.delete_range_cf(handle, &start_key, &end_key))
             .unwrap_or_else(|e| {
@@ -1027,7 +1032,7 @@ impl ApplyDelegate {
                        escape(&end_key),
                        e)
             });
-        ranges.push(Range::new(String::from(cf), start_key, end_key));
+        ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
     }

@@ -260,9 +260,6 @@ pub const CMD_TAG_GC: &'static str = "gc";
 
 impl Command {
     pub fn readonly(&self) -> bool {
-        // DeleteRange only called by DDL bg thread after table is dropped and
-        // must guarantee that there is no other read or write these keys, so
-        // we can treat DeleteRange as readonly Command.
         match *self {
             Command::Get { .. } |
             Command::BatchGet { .. } |
@@ -270,6 +267,9 @@ impl Command {
             Command::ScanLock { .. } |
             Command::RawGet { .. } |
             Command::RawScan { .. } |
+            // DeleteRange only called by DDL bg thread after table is dropped and
+            // must guarantee that there is no other read or write these keys, so
+            // we can treat DeleteRange as readonly Command.
             Command::DeleteRange { .. } |
             Command::Pause { .. } |
             Command::MvccByKey { .. } |
@@ -604,7 +604,7 @@ impl Storage {
                               end_key: Key,
                               callback: Callback<()>)
                               -> Result<()> {
-        let mut modifies = vec![];
+        let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
             modifies.push(Modify::DeleteRange(cf, start_key.clone(), end_key.clone()));
         }
@@ -1305,7 +1305,8 @@ mod tests {
         // Write x and y.
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec())),
-                                 Mutation::Put((make_key(b"y"), b"100".to_vec()))],
+                                 Mutation::Put((make_key(b"y"), b"100".to_vec())),
+                                 Mutation::Put((make_key(b"z"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
                             Options::default(),
@@ -1313,7 +1314,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage.async_commit(Context::new(),
-                          vec![make_key(b"x"), make_key(b"y")],
+                          vec![make_key(b"x"), make_key(b"y"), make_key(b"z")],
                           100,
                           101,
                           expect_ok(tx.clone(), 1))
@@ -1331,24 +1332,36 @@ mod tests {
                        expect_get_val(tx.clone(), b"100".to_vec(), 3))
             .unwrap();
         rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"z"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 4))
+            .unwrap();
+        rx.recv().unwrap();
 
-        // Delete range [x, y)
+        // Delete range [x, z)
         storage.async_delete_range(Context::new(),
                                 make_key(b"x"),
-                                make_key(b"y"),
-                                expect_ok(tx.clone(), 4))
+                                make_key(b"z"),
+                                expect_ok(tx.clone(), 5))
             .unwrap();
         rx.recv().unwrap();
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        101,
-                       expect_get_none(tx.clone(), 5))
+                       expect_get_none(tx.clone(), 6))
             .unwrap();
         rx.recv().unwrap();
         storage.async_get(Context::new(),
                        make_key(b"y"),
                        101,
-                       expect_get_val(tx.clone(), b"100".to_vec(), 6))
+                       expect_get_none(tx.clone(), 7))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"z"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 8))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
