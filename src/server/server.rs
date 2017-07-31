@@ -163,6 +163,7 @@ mod tests {
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::transport::Transport;
 
+    #[derive(Clone)]
     struct MockResolver {
         addr: Arc<Mutex<Option<SocketAddr>>>,
     }
