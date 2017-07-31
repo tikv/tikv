@@ -24,6 +24,7 @@ mod json_merge;
 mod json_modify;
 mod json_type;
 mod json_unquote;
+mod json_remove;
 
 use std::collections::BTreeMap;
 pub use self::binary::{JsonEncoder, JsonDecoder};
