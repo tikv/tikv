@@ -1244,7 +1244,7 @@ impl Scheduler {
     }
 }
 
-const CMD_BATCH_SIZE: usize = 64;
+const CMD_BATCH_SIZE: usize = 256;
 
 /// Generates the lock for a command.
 ///
