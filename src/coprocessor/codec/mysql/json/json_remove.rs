@@ -31,7 +31,7 @@ impl Json {
     }
 
     fn remove_path(&mut self, path_legs: &[PathLeg]) {
-        let (current_leg, sub_path_legs) = (&path_legs[0], &path_legs[1..]);
+        let (current_leg, sub_path_legs) = path_legs.split_first().unwrap();
 
         if let PathLeg::Index(index) = *current_leg {
             if let Json::Array(ref mut array) = *self {
@@ -50,15 +50,13 @@ impl Json {
 
         if let PathLeg::Key(ref key) = *current_leg {
             if let Json::Object(ref mut obj) = *self {
-                if !obj.contains_key(key) {
-                    return;
-                }
                 if sub_path_legs.is_empty() {
                     obj.remove(key);
                     return;
                 }
-                let sub_obj = obj.get_mut(key).unwrap();
-                sub_obj.remove_path(sub_path_legs);
+                if let Some(sub_obj) = obj.get_mut(key) {
+                    sub_obj.remove_path(sub_path_legs);
+                }
             }
         }
     }
@@ -79,7 +77,7 @@ mod test {
             // Nothing changed because the path without last leg doesn't exist.
             (r#"{"a": [3, 4]}"#, "$.b[1]", r#"{"a": [3, 4]}"#, true),
             // Nothing changed because the path without last leg doesn't exist.
-            (r#"{"a": [3, 4]}"#, "$.a[0].b",r#"{"a": [3, 4]}"#, true),
+            (r#"{"a": [3, 4]}"#, "$.a[0].b", r#"{"a": [3, 4]}"#, true),
 
             // Bad path expression.
             (r#"null"#, "$.*", r#"null"#, false),
