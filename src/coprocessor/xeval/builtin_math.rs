@@ -63,9 +63,9 @@ impl Evaluator {
         }
     }
 
-    pub fn ceil_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        let child = try!(self.get_one_child(_expr));
-        let d = try!(self.eval(_ctx, child));
+    pub fn ceil_real(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let d = try!(self.eval(ctx, child));
         match d {
             Datum::F64(f) => Ok(Datum::F64(f.ceil())),
             Datum::Null => Ok(Datum::Null),
