@@ -13,6 +13,7 @@
 
 use std::cmp;
 use std::collections::{HashMap, BTreeMap};
+use std::collections::Bound::{Included, Unbounded};
 use std::u64;
 use std::io::Read;
 
@@ -196,6 +197,25 @@ impl SizeProperties {
         res.total_size = try!(props.decode_u64(PROP_TOTAL_SIZE));
         res.index_handles = try!(props.decode_handles(PROP_SIZE_INDEX));
         Ok(res)
+    }
+
+    pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
+        let mut range = self.index_handles.range::<[u8], _>((Included(start), Unbounded));
+        let start_offset = match range.next() {
+            Some((_, v)) => v.offset,
+            None => return 0,
+        };
+        let mut range = self.index_handles.range::<[u8], _>((Included(end), Unbounded));
+        let end_offset = match range.next() {
+            Some((_, v)) => v.offset,
+            None => {
+                // Last handle must exists if we have start offset.
+                let (_, v) = self.index_handles.iter().last().unwrap();
+                v.offset
+            }
+        };
+        assert!(end_offset >= start_offset);
+        end_offset - start_offset
     }
 }
 
@@ -397,5 +417,18 @@ mod tests {
         let k = &handles[b"k".as_ref()];
         assert_eq!(k.size, PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
         assert_eq!(k.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
+
+        let cases = [(" ", "z", k.offset - a.offset),
+                     (" ", " ", 0),
+                     ("z", "z", 0),
+                     ("a", "k", k.offset - a.offset),
+                     ("a", "i", i.offset - a.offset),
+                     ("e", "h", i.offset - e.offset),
+                     ("g", "h", 0),
+                     ("g", "g", 0)];
+        for &(start, end, size) in &cases {
+            assert_eq!(props.get_approximate_size_in_range(start.as_bytes(), end.as_bytes()),
+                       size);
+        }
     }
 }
