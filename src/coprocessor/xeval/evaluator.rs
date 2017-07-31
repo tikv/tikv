@@ -147,6 +147,7 @@ impl Evaluator {
             ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
             ExprType::JsonObject => self.eval_json_object(ctx, expr),
             ExprType::JsonArray => self.eval_json_array(ctx, expr),
+            ExprType::JsonRemove => self.eval_json_remove(ctx, expr),
             ExprType::ScalarFunc => self.eval_scalar_function(ctx, expr),
             _ => Ok(Datum::Null),
         }
@@ -464,6 +465,19 @@ impl Evaluator {
         }
 
         try!(json.modify(&keys, values, mt));
+        Ok(Datum::Json(json))
+    }
+
+    fn eval_json_remove(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2));
+        if children.iter().any(|item| *item == Datum::Null) {
+            return Ok(Datum::Null);
+        }
+        let mut children = children.into_iter();
+        let mut json = try!(children.next().unwrap().cast_as_json());
+        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.to_json_path_expr())
+            .collect());
+        try!(json.remove(&path_extrs));
         Ok(Datum::Json(json))
     }
 
@@ -1276,6 +1290,15 @@ pub mod test {
           build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
           build_expr(vec![], ExprType::JsonMerge),
           build_expr(vec![Datum::Null], ExprType::JsonMerge),
+          build_expr(vec![Datum::Null], ExprType::JsonRemove),
+          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$"],
+                                 ExprType::JsonRemove),
+          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$.*"],
+                                 ExprType::JsonRemove),
+          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$[*]"],
+                                 ExprType::JsonRemove),
+          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$**.a"],
+                                 ExprType::JsonRemove),
     ]);
 
     test_eval!(test_eval_json_object,
@@ -1295,5 +1318,31 @@ pub mod test {
             Datum::Json("[null]".parse().unwrap())),
         (build_expr(vec![Datum::U64(1), Datum::Null, Datum::Bytes(b"sdf".to_vec())],
             ExprType::JsonArray), Datum::Json(r#"[1,null,"sdf"]"#.parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_json_remove,
+               vec![
+        (build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonRemove),
+                    Datum::Null),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[2].aa"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, 2, {}]}"#.parse().unwrap())),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[1]"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, {"aa": "xx"}]}"#.parse().unwrap())),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[2].aa", b"$.a[1]"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, {}]}"#.parse().unwrap())),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[1]", b"$.a[1].aa"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, {}]}"#.parse().unwrap())),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[3]", b"$.b"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, 2, {"aa": "xx"}]}"#.parse().unwrap())),
     ]);
 }
