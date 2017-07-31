@@ -1290,9 +1290,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // we will call the callback with timeout error.
     }
 
-    fn batch_propose_raft_commands(&mut self,
-                                   batch: Vec<RaftCmdRequest>,
-                                   on_finish: BatchCallback) {
+    fn batch_propose_raft_commands_for_snapshot(&mut self,
+                                                batch: Vec<RaftCmdRequest>,
+                                                on_finished: BatchCallback) {
         let batch_size = batch.len();
         let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; batch_size];
         let mut grouped: HashMap<u64, Vec<(usize, RaftCmdRequest, RaftCmdResponse)>> =
@@ -1306,15 +1306,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
 
-            if msg.has_status_request() {
-                // For status commands, we handle it here directly.
-                match self.execute_status_command(msg) {
-                    Err(e) => bind_error(&mut resp, e),
-                    Ok(status_resp) => resp = status_resp,
-                };
-                ret[idx] = Some(resp);
-                continue;
-            }
+            // Skip handling status requests, since it does not contain any status requests.
 
             if let Err(e) = self.validate_region(&msg) {
                 bind_error(&mut resp, e);
@@ -1342,7 +1334,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ret[idx] = Some(resp);
             }
         }
-        on_finish.call_box((ret,));
+        on_finished.call_box((ret,));
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
@@ -2104,12 +2096,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
                 self.propose_raft_command(request, callback)
             }
-            Msg::RaftCmdsBatch { send_time, batch, on_finish } => {
+            // For now, it is only called by batch snapshot.
+            Msg::BatchRaftCmds { send_time, batch, on_finished } => {
                 self.raft_metrics
                     .propose
                     .request_wait_time
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
-                self.batch_propose_raft_commands(batch, on_finish);
+                self.batch_propose_raft_commands_for_snapshot(batch, on_finished);
             }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);

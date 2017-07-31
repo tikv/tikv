@@ -27,7 +27,7 @@ use tempdir::TempDir;
 enum Task {
     Write(Vec<Modify>, Callback<()>),
     Snapshot(Callback<Box<Snapshot>>),
-    SnapshotBath(Vec<()>, BatchCallback<Box<Snapshot>>),
+    SnapshotBath(usize, BatchCallback<Box<Snapshot>>),
 }
 
 impl Display for Task {
@@ -49,13 +49,14 @@ impl Runnable<Task> for Runner {
             Task::Snapshot(cb) => {
                 cb((CbContext::new(), Ok(box RocksSnapshot::new(self.0.clone()))))
             }
-            Task::SnapshotBath(batch, on_finish) => {
-                let batch = batch.into_iter()
-                    .map(|_| {
-                        Some((CbContext::new(),
-                              Ok(box RocksSnapshot::new(self.0.clone()) as Box<Snapshot>)))
-                    });
-                on_finish(Ok(batch.collect()));
+            Task::SnapshotBath(size, on_finished) => {
+                let mut results = Vec::with_capacity(size);
+                for _ in 0..size {
+                    let res = Some((CbContext::new(),
+                                    Ok(box RocksSnapshot::new(self.0.clone()) as Box<Snapshot>)));
+                    results.push(res);
+                }
+                on_finished(results);
             }
         }
     }
@@ -157,12 +158,11 @@ impl Engine for EngineRocksdb {
         Ok(())
     }
 
-    fn async_snapshots_batch(&self,
-                             batch: Vec<Context>,
-                             on_finish: BatchCallback<Box<Snapshot>>)
-                             -> Result<()> {
-        let batch = batch.into_iter().map(|_| ());
-        box_try!(self.sched.schedule(Task::SnapshotBath(batch.collect(), on_finish)));
+    fn async_batch_snapshot(&self,
+                            batch: Vec<Context>,
+                            on_finished: BatchCallback<Box<Snapshot>>)
+                            -> Result<()> {
+        box_try!(self.sched.schedule(Task::SnapshotBath(batch.len(), on_finished)));
         Ok(())
     }
 

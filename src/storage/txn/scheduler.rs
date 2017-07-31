@@ -113,9 +113,9 @@ impl Debug for Msg {
             Msg::SnapshotFinished { ref cids, .. } => {
                 write!(f, "SnapshotFinished [cids={:?}]", cids)
             }
-            Msg::BatchSnapshotFinished { .. } => {
-                // TODO: write cids.
-                write!(f, "BatchSnapshotFinished")
+            Msg::BatchSnapshotFinished { ref batch } => {
+                let ids: Vec<Vec<_>> = batch.iter().map(|&(ref ids, _, _)| ids.clone()).collect();
+                write!(f, "BatchSnapshotFinished cids: {:?}", ids)
             }
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WritePrepareFinished { cid, ref cmd, .. } => {
@@ -890,8 +890,9 @@ impl Scheduler {
         }
     }
 
-    /// Initiates an async operation to get a snapshot from the storage engine, then posts a
-    /// `BatchSnapshotFinished` message back to the event loop when it finishes.
+    /// Initiates an async operation to batch get snapshot from the storage engine, then posts a
+    /// `BatchSnapshotFinished` message back to the event loop when it finishes, also it posts a
+    /// `BacklogSnapshot` message if there are any `None` responses.
     fn batch_get_snapshot(&mut self, batch: Vec<(Context, Vec<u64>)>) {
         let mut all_cids = Vec::new();
         for &(_, ref cids) in &batch {
@@ -900,49 +901,48 @@ impl Scheduler {
 
         let batch1 = batch.clone();
         let ch = self.schedch.clone();
-        let on_finish: engine::BatchCallback<Box<Snapshot>> =
-            box move |results: engine::Result<Vec<_>>| {
-                let results = results.expect("can not be an Err(_)");
-                let mut ready = Vec::with_capacity(results.len());
-                let mut ready_ids: Vec<u64> = Vec::new();
-                let mut backlog = Vec::new();
-                for ((ctx, cids), snapshot) in batch.into_iter().zip(results) {
-                    match snapshot {
-                        Some((cb_ctx, snapshot)) => {
-                            ready_ids.extend(&cids);
-                            ready.push((cids, cb_ctx, snapshot));
-                        }
-                        None => {
-                            backlog.push((ctx, cids));
-                        }
+        let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
+            let mut ready = Vec::with_capacity(results.len());
+            let mut ready_ids: Vec<u64> = Vec::new();
+            let mut backlog = Vec::new();
+            for ((ctx, cids), snapshot) in batch.into_iter().zip(results) {
+                match snapshot {
+                    Some((cb_ctx, snapshot)) => {
+                        ready_ids.extend(&cids);
+                        ready.push((cids, cb_ctx, snapshot));
+                    }
+                    None => {
+                        backlog.push((ctx, cids));
                     }
                 }
-                if !ready.is_empty() {
-                    match ch.send(Msg::BatchSnapshotFinished { batch: ready }) {
-                        Ok(_) => {}
-                        e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-                        Err(e) => {
-                            panic!("send SnapshotFinish failed cmd ids err cmd ids {:?}, {:?}",
-                                   ready_ids,
-                                   e);
-                        }
+            }
+            if !ready.is_empty() {
+                match ch.send(Msg::BatchSnapshotFinished { batch: ready }) {
+                    Ok(_) => {}
+                    e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
+                    Err(e) => {
+                        panic!("send SnapshotFinish failed cmd ids err cmd ids {:?}, {:?}",
+                               ready_ids,
+                               e);
                     }
                 }
-                if !backlog.is_empty() {
-                    match ch.send(Msg::BacklogSnapshot(backlog)) {
-                        Ok(_) => {}
-                        e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-                        Err(e) => {
-                            panic!("send SnapshotFinish failed cmd ids err cmd ids {:?}, {:?}",
-                                   ready_ids,
-                                   e);
-                        }
+            }
+            if !backlog.is_empty() {
+                match ch.send(Msg::BacklogSnapshot(backlog)) {
+                    Ok(_) => {}
+                    e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
+                    Err(e) => {
+                        panic!("send SnapshotFinish failed cmd ids err cmd ids {:?}, {:?}",
+                               ready_ids,
+                               e);
                     }
                 }
-            };
+            }
+        };
 
         if let Err(e) = self.engine
-            .async_snapshots_batch(batch1.into_iter().map(|(ctx, _)| ctx).collect(), on_finish) {
+            .async_batch_snapshot(batch1.into_iter().map(|(ctx, _)| ctx).collect(),
+                                  on_finished) {
             for cid in all_cids {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])

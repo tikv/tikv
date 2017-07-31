@@ -992,7 +992,9 @@ impl Peer {
         }
     }
 
-    /// Batch propose read-only requests.
+    /// Batch propose read-only requests. Note that the size of returned responses
+    /// may be smaller then the requests, because the missing responses require the
+    /// peer to perform a read-index.
     pub fn batch_propose_read(&mut self,
                               batch: Vec<(usize, RaftCmdRequest, RaftCmdResponse)>,
                               metrics: &mut RaftProposeMetrics)
@@ -1010,7 +1012,7 @@ impl Peer {
                 Ok(RequestPolicy::ReadLocal) => {
                     reqs.push((idx, req));
                 }
-                // require to send again, and send it to the `propose` above.
+                // require to propose again, and use the `propose` above.
                 Ok(RequestPolicy::ReadIndex) => (),
                 Ok(_) => unreachable!(),
                 Err(e) => {
@@ -1632,8 +1634,8 @@ impl Peer {
                             }
                         }
                     }
-                    CmdType::Prewrite | CmdType::Get => unreachable!(),
-                    CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
+                    CmdType::Prewrite | CmdType::Get | CmdType::Put | CmdType::Delete |
+                    CmdType::Invalid => unreachable!(),
                 };
 
                 resp.set_cmd_type(cmd_type);

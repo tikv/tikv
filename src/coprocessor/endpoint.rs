@@ -128,7 +128,7 @@ impl Host {
 pub enum Task {
     Request(RequestTask),
     SnapRes(u64, engine::Result<Box<Snapshot>>),
-    SnapResBatch(Vec<(u64, engine::Result<Box<Snapshot>>)>),
+    BatchSnapRes(Vec<(u64, engine::Result<Box<Snapshot>>)>),
     BacklogRequests(Vec<u64>),
 }
 
@@ -137,9 +137,9 @@ impl Display for Task {
         match *self {
             Task::Request(ref req) => write!(f, "{}", req),
             Task::SnapRes(req_id, _) => write!(f, "snapres [{}]", req_id),
-            Task::SnapResBatch(ref batch) => {
+            Task::BatchSnapRes(ref batch) => {
                 let ids: Vec<u64> = batch.iter().map(|&(id, _)| id).collect();
-                write!(f, "snapres batch {:?}", ids)
+                write!(f, "batch snapres {:?}", ids)
             }
             Task::BacklogRequests(ref backlog) => write!(f, "backlog RequestTasks: {:?}", backlog),
         }
@@ -289,7 +289,7 @@ impl BatchRunnable<Task> for Host {
                 Task::SnapRes(q_id, snap_res) => {
                     self.handle_snapshot_result(q_id, snap_res);
                 }
-                Task::SnapResBatch(batch) => {
+                Task::BatchSnapRes(batch) => {
                     for (q_id, snap_res) in batch {
                         self.handle_snapshot_result(q_id, snap_res);
                     }
@@ -332,31 +332,29 @@ impl BatchRunnable<Task> for Host {
 
         let req_ids1 = req_ids.clone();
         let sched = self.sched.clone();
-        let on_finish: engine::BatchCallback<Box<Snapshot>> =
-            box move |results: engine::Result<Vec<_>>| {
-                let results = results.expect("can not be an Err(_)");
-                let mut ready = Vec::with_capacity(results.len());
-                let mut backlog = Vec::new();
-                for (id, res) in req_ids1.into_iter().zip(results) {
-                    match res {
-                        Some((_, res)) => {
-                            ready.push((id, res));
-                        }
-                        None => {
-                            backlog.push(id);
-                        }
+        let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
+            let mut ready = Vec::with_capacity(results.len());
+            let mut backlog = Vec::new();
+            for (id, res) in req_ids1.into_iter().zip(results) {
+                match res {
+                    Some((_, res)) => {
+                        ready.push((id, res));
+                    }
+                    None => {
+                        backlog.push(id);
                     }
                 }
+            }
 
-                if !ready.is_empty() {
-                    sched.schedule(Task::SnapResBatch(ready)).unwrap();
-                }
-                if !backlog.is_empty() {
-                    sched.schedule(Task::BacklogRequests(backlog)).unwrap();
-                }
-            };
+            if !ready.is_empty() {
+                sched.schedule(Task::BatchSnapRes(ready)).unwrap();
+            }
+            if !backlog.is_empty() {
+                sched.schedule(Task::BacklogRequests(backlog)).unwrap();
+            }
+        };
 
-        if let Err(e) = self.engine.async_snapshots_batch(batch, on_finish) {
+        if let Err(e) = self.engine.async_batch_snapshot(batch, on_finished) {
             for id in req_ids {
                 let reqs = self.reqs.remove(&id).unwrap();
                 let err = e.maybe_clone().unwrap_or_else(|| {
