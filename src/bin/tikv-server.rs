@@ -39,9 +39,10 @@ extern crate futures;
 extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;
-extern crate grpc;
+extern crate grpcio as grpc;
 
 mod signal_handler;
+#[cfg(unix)]
 mod profiling;
 
 use std::process;
@@ -54,7 +55,7 @@ use std::time::Duration;
 use std::env;
 
 use clap::{Arg, App, ArgMatches};
-use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
+use rocksdb::{DBOptions, ColumnFamilyOptions, BlockBasedOptions};
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
@@ -123,8 +124,20 @@ fn get_flag_int(matches: &ArgMatches, name: &str) -> Option<i64> {
     i
 }
 
+fn lookup<'a>(config: &'a toml::Value, key: &str) -> Option<&'a toml::Value> {
+    let keys = key.split('.');
+    let mut res = config;
+    for key in keys {
+        match res.get(key) {
+            Some(v) => res = v,
+            None => return None,
+        }
+    }
+    Some(res)
+}
+
 fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> bool {
-    let b = match config.lookup(name) {
+    let b = match lookup(config, name) {
         Some(&toml::Value::Boolean(b)) => b,
         None => {
             info!("{} use default {:?}", name, default);
@@ -138,7 +151,7 @@ fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> 
 }
 
 fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) -> String {
-    let s = match config.lookup(name) {
+    let s = match lookup(config, name) {
         Some(&toml::Value::String(ref s)) => s.clone(),
         None => {
             info!("{} use default {:?}", name, default);
@@ -152,13 +165,13 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
 }
 
 fn get_toml_string_opt(config: &toml::Value, name: &str) -> Option<String> {
-    config.lookup(name)
+    lookup(config, name)
         .and_then(|val| val.as_str())
         .map(|s| s.to_owned())
 }
 
 fn get_toml_int_opt(config: &toml::Value, name: &str) -> Option<i64> {
-    let res = match config.lookup(name) {
+    let res = match lookup(config, name) {
         Some(&toml::Value::Integer(i)) => Some(i),
         Some(&toml::Value::String(ref s)) => {
             Some(util::config::parse_readable_int(s)
@@ -182,7 +195,7 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
 }
 
 fn get_toml_float_opt(config: &toml::Value, name: &str) -> Option<f64> {
-    let res = match config.lookup(name) {
+    let res = match lookup(config, name) {
         Some(&toml::Value::Float(f)) => Some(f),
         Some(&toml::Value::String(ref s)) => {
             Some(s.parse()
@@ -325,8 +338,8 @@ fn check_advertise_address(addr: &str) {
     }
 }
 
-fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
-    let mut opts = RocksdbOptions::new();
+fn get_rocksdb_db_option(config: &toml::Value) -> DBOptions {
+    let mut opts = DBOptions::new();
     let rmode = get_toml_int(config, "rocksdb.wal-recovery-mode", Some(2));
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
@@ -350,15 +363,8 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
                                           Some(4 * 1024 * 1024 * 1024));
     opts.set_max_total_wal_size(max_total_wal_size as u64);
 
-    let max_background_compactions =
-        get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
-    opts.set_max_background_compactions(max_background_compactions as i32);
-
-    let max_background_flushes = get_toml_int(config, "rocksdb.max-background-flushes", Some(2));
-    opts.set_max_background_flushes(max_background_flushes as i32);
-
-    let base_bg_compactions = get_toml_int(config, "rocksdb.base-background-compactions", Some(1));
-    opts.set_base_background_compactions(base_bg_compactions as i32);
+    let max_background_jobs = get_toml_int(config, "rocksdb.max-background-jobs", Some(6));
+    opts.set_max_background_jobs(max_background_jobs as i32);
 
     let max_manifest_file_size = get_toml_int(config,
                                               "rocksdb.max-manifest-file-size",
@@ -439,6 +445,7 @@ struct CfOptValues {
     pub level_zero_slowdown_writes_trigger: i64,
     pub level_zero_stop_writes_trigger: i64,
     pub max_compaction_bytes: i64,
+    pub compaction_pri: i64,
 }
 
 impl Default for CfOptValues {
@@ -461,6 +468,7 @@ impl Default for CfOptValues {
             level_zero_slowdown_writes_trigger: 20,
             level_zero_stop_writes_trigger: 36,
             max_compaction_bytes: 2 * GB as i64,
+            compaction_pri: 0,
         }
     }
 }
@@ -468,7 +476,7 @@ impl Default for CfOptValues {
 fn get_rocksdb_cf_option(config: &toml::Value,
                          cf: &str,
                          default_values: CfOptValues)
-                         -> RocksdbOptions {
+                         -> ColumnFamilyOptions {
     let prefix = String::from("rocksdb.") + cf + ".";
     let mut block_base_opts = BlockBasedOptions::new();
     let block_size = get_toml_int(config,
@@ -499,71 +507,79 @@ fn get_rocksdb_cf_option(config: &toml::Value,
 
         block_base_opts.set_whole_key_filtering(default_values.whole_key_filtering);
     }
-    let mut opts = RocksdbOptions::new();
-    opts.set_block_based_table_factory(&block_base_opts);
+    let mut cf_opts = ColumnFamilyOptions::new();
+    cf_opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_toml_string(config,
                               (prefix.clone() + "compression-per-level").as_str(),
                               Some(default_values.compression_per_level.clone()));
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    opts.compression_per_level(&per_level_compression);
+    cf_opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_toml_int(config,
                                          (prefix.clone() + "write-buffer-size").as_str(),
                                          Some(default_values.write_buffer_size));
-    opts.set_write_buffer_size(write_buffer_size as u64);
+    cf_opts.set_write_buffer_size(write_buffer_size as u64);
 
     let max_write_buffer_number = get_toml_int(config,
                                                (prefix.clone() + "max-write-buffer-number")
                                                    .as_str(),
                                                Some(default_values.max_write_buffer_number));
-    opts.set_max_write_buffer_number(max_write_buffer_number as i32);
+    cf_opts.set_max_write_buffer_number(max_write_buffer_number as i32);
 
     let min_write_buffer_number_to_merge =
         get_toml_int(config,
                      (prefix.clone() + "min-write-buffer-number-to-merge").as_str(),
                      Some(default_values.min_write_buffer_number_to_merge));
-    opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
+    cf_opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
 
     let max_bytes_for_level_base = get_toml_int(config,
                                                 (prefix.clone() + "max-bytes-for-level-base")
                                                     .as_str(),
                                                 Some(default_values.max_bytes_for_level_base));
-    opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
+    cf_opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
 
     let target_file_size_base = get_toml_int(config,
                                              (prefix.clone() + "target-file-size-base").as_str(),
                                              Some(default_values.target_file_size_base));
-    opts.set_target_file_size_base(target_file_size_base as u64);
+    cf_opts.set_target_file_size_base(target_file_size_base as u64);
 
     let level_zero_file_num_compaction_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-file-num-compaction-trigger").as_str(),
                      Some(default_values.level_zero_file_num_compaction_trigger));
-    opts.set_level_zero_file_num_compaction_trigger(level_zero_file_num_compaction_trigger as i32);
+    cf_opts.set_level_zero_file_num_compaction_trigger(
+        level_zero_file_num_compaction_trigger as i32);
 
     let level_zero_slowdown_writes_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-slowdown-writes-trigger").as_str(),
                      Some(default_values.level_zero_slowdown_writes_trigger));
-    opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
+    cf_opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
 
     let level_zero_stop_writes_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-stop-writes-trigger").as_str(),
                      Some(default_values.level_zero_stop_writes_trigger));
-    opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
+    cf_opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
     let max_compaction_bytes = get_toml_int(config,
                                             (prefix.clone() + "max-compaction-bytes").as_str(),
                                             Some(default_values.max_compaction_bytes));
-    opts.set_max_compaction_bytes(max_compaction_bytes as u64);
+    cf_opts.set_max_compaction_bytes(max_compaction_bytes as u64);
 
-    opts
+    let priority = get_toml_int(config,
+                                (prefix.clone() + "compaction-pri").as_str(),
+                                Some(0));
+    let compaction_priority = util::config::parse_rocksdb_compaction_pri(priority)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    cf_opts.compaction_priority(compaction_priority);
+
+    cf_opts
 }
 
-fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size =
         align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64) as i64;
@@ -573,40 +589,40 @@ fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     get_rocksdb_cf_option(config, "defaultcf", default_values)
 }
 
-fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size =
         align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64) as i64;
     default_values.use_bloom_filter = true;
     default_values.whole_key_filtering = false;
 
-    let mut opts = get_rocksdb_cf_option(config, "writecf", default_values);
+    let mut cf_opts = get_rocksdb_cf_option(config, "writecf", default_values);
     // Prefix extractor(trim the timestamp at tail) for write cf.
-    opts.set_prefix_extractor("FixedSuffixSliceTransform",
+    cf_opts.set_prefix_extractor("FixedSuffixSliceTransform",
                               Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     // Create prefix bloom filter for memtable.
-    opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+    cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
     // Collects user defined properties.
     let f = Box::new(UserPropertiesCollectorFactory::default());
-    opts.add_table_properties_collector_factory("tikv.user-properties-collector", f);
-    opts
+    cf_opts.add_table_properties_collector_factory("tikv.user-properties-collector", f);
+    cf_opts
 }
 
-fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
     let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
     let block_cache_size = adjust_block_cache_size(cache_size, RAFTCF_MIN_MEM, RAFTCF_MAX_MEM);
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size = block_cache_size as i64;
 
-    let mut opts = get_rocksdb_cf_option(config, "raftcf", default_values);
-    opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
+    let mut cf_opts = get_rocksdb_cf_option(config, "raftcf", default_values);
+    cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
             Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    opts
+    cf_opts
 }
 
-fn get_rocksdb_lock_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+fn get_rocksdb_lock_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
     let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[3]) as u64);
     let block_cache_size = adjust_block_cache_size(cache_size, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM);
     let mut default_values = CfOptValues::default();
@@ -618,13 +634,13 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOp
     default_values.level_zero_file_num_compaction_trigger = 1;
     default_values.max_bytes_for_level_base = 128 * MB as i64;
 
-    let mut opts = get_rocksdb_cf_option(config, "lockcf", default_values);
+    let mut cf_opts = get_rocksdb_cf_option(config, "lockcf", default_values);
     // Currently if we want create bloom filter for memtable, we must set prefix extractor.
-    opts.set_prefix_extractor("NoopSliceTransform",
+    cf_opts.set_prefix_extractor("NoopSliceTransform",
                               Box::new(rocksdb_util::NoopSliceTransform))
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
-    opts
+    cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+    cf_opts
 }
 
 fn adjust_block_cache_size(cache_size: u64, min_limit: u64, max_limit: u64) -> u64 {
@@ -881,7 +897,7 @@ fn run_raft_server(pd_client: RpcClient,
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
     // Create engine, storage.
-    let db_opts = get_rocksdb_db_option(config);
+    let opts = get_rocksdb_db_option(config);
     let cfs_opts =
         vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
                                           get_rocksdb_default_cf_option(config, total_mem)),
@@ -892,7 +908,7 @@ fn run_raft_server(pd_client: RpcClient,
                                           get_rocksdb_raftlog_cf_option(config, total_mem))];
     let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
                                                            .unwrap(),
-                                                       db_opts,
+                                                       opts,
                                                        cfs_opts)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
     let mut storage = create_raft_storage(raft_router.clone(), engine.clone(), &cfg)
@@ -1027,7 +1043,7 @@ fn main() {
             let mut config_file = File::open(&path).expect("config open failed");
             let mut s = String::new();
             config_file.read_to_string(&mut s).expect("config read failed");
-            toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
+            s.parse().expect("malformed config file")
         }
         // Default empty value, lookup() always returns `None`.
         None => toml::Value::Integer(0),
@@ -1095,4 +1111,33 @@ fn main() {
     }
     let _m = TimeMonitor::default();
     run_raft_server(pd_client, cfg, &backup_path, &config, total_mem);
+}
+
+#[cfg(test)]
+mod tests {
+    use toml::Value;
+
+    #[test]
+    fn test_lookup() {
+        let value = r#"
+            foo = 'bar'
+            [rocksdb]
+            compaction-readahead-size = 0
+            [rocksdb.defaultcf]
+            compression-per-level = "no"
+            "#
+            .parse()
+            .unwrap();
+
+        let queries = vec![
+            ("foo", Value::String("bar".to_owned())),
+            ("rocksdb.compaction-readahead-size", Value::Integer(0)),
+            ("rocksdb.defaultcf.compression-per-level", Value::String("no".to_owned())),
+        ];
+        for (key, exp) in queries {
+            let res = super::lookup(&value, key).unwrap();
+            assert_eq!(*res, exp);
+        }
+        assert!(super::lookup(&value, "foo1").is_none());
+    }
 }

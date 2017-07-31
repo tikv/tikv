@@ -203,6 +203,8 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
             info!("resolve store {} address ok, addr {}", store_id, addr);
             trans.raft_client.wl().addrs.insert(store_id, addr);
             trans.write_data(store_id, addr, msg);
+            // There may be no messages in the near future, so flush it immediately.
+            trans.raft_client.wl().flush();
         };
         if let Err(e) = self.resolver.lock().unwrap().resolve(store_id, cb) {
             error!("try to resolve err {:?}", e);

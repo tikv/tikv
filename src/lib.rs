@@ -58,7 +58,7 @@ extern crate backtrace;
 extern crate url;
 extern crate fs2;
 extern crate regex;
-extern crate grpc;
+extern crate grpcio as grpc;
 extern crate fnv;
 extern crate ordermap;
 extern crate flat_map;
@@ -67,6 +67,9 @@ extern crate tokio_core;
 extern crate tokio_timer;
 extern crate serde_json;
 extern crate serde;
+#[macro_use]
+extern crate serde_derive;
+extern crate toml;
 
 #[macro_use]
 pub mod util;

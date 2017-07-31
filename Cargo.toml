@@ -39,7 +39,7 @@ quick-error = "0.2"
 tempdir = "0.3"
 time = "0.1"
 threadpool = "1.0.0"
-toml = "0.1"
+toml = "0.4"
 num = "0.1"
 libc = "0.2"
 crc = "1.2"
@@ -64,6 +64,8 @@ tokio-core = "0.1"
 tokio-timer = "0.1"
 serde = "1.0"
 serde_json = "1.0"
+serde_derive = "1.0"
+grpcio = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
@@ -81,9 +83,6 @@ git = "https://github.com/pingcap/tipb.git"
 git = "https://github.com/pingcap/rust-prometheus.git"
 default-features = false
 features = ["nightly", "push", "process"]
-
-[dependencies.grpc]
-git = "https://github.com/pingcap/grpc-rs.git"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"
