@@ -14,6 +14,7 @@
 use std::collections::{HashMap, BTreeMap};
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::i64;
 use protobuf::{RepeatedField, Message};
 
@@ -575,7 +576,8 @@ fn init_with_data(tbl: &ProductTable,
     store.commit();
 
     let mut end_point = Worker::new("test select worker");
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8, 2, 2);
+    let r = Arc::new(Mutex::new(HashMap::new()));
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), r, 8, 2, 2);
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)

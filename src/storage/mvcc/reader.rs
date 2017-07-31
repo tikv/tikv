@@ -96,6 +96,7 @@ impl<'a> MvccReader<'a> {
         };
 
         self.statistics.data.processed += 1;
+        self.statistics.data.read_bytes += key.raw().unwrap().len() as u64 + res.len() as u64;
 
         Ok(res)
     }
@@ -179,6 +180,7 @@ impl<'a> MvccReader<'a> {
         }
         let write = try!(Write::parse(cursor.value()));
         self.statistics.write.processed += 1;
+        self.statistics.write.read_bytes += cursor.key().len() as u64 + cursor.value().len() as u64;
         Ok(Some((commit_ts, write)))
     }
 
@@ -219,7 +221,6 @@ impl<'a> MvccReader<'a> {
                 Some((commit_ts, mut write)) => {
                     match write.write_type {
                         WriteType::Put => {
-                            self.statistics.write.processed += 1;
                             if write.short_value.is_some() {
                                 if self.key_only {
                                     return Ok(Some(vec![]));
@@ -229,7 +230,6 @@ impl<'a> MvccReader<'a> {
                             return self.load_data(key, write.start_ts).map(Some);
                         }
                         WriteType::Delete => {
-                            self.statistics.write.processed += 1;
                             return Ok(None);
                         }
                         WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
@@ -247,7 +247,6 @@ impl<'a> MvccReader<'a> {
         let mut seek_ts = start_ts;
         while let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, seek_ts)) {
             if write.start_ts == start_ts {
-                self.statistics.write.processed += 1;
                 return Ok(Some((commit_ts, write.write_type)));
             }
             seek_ts = commit_ts + 1;
@@ -420,6 +419,7 @@ impl<'a> MvccReader<'a> {
                 locks.push((key.clone(), lock));
                 if let Some(limit) = limit {
                     if locks.len() >= limit {
+                        self.statistics.lock.processed += locks.len();
                         return Ok((locks, Some(key)));
                     }
                 }

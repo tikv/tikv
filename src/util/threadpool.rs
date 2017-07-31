@@ -201,6 +201,8 @@ impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupFirstQ
 }
 
 // First in first out queue.
+// derive Default trait to make clippy happy
+#[derive(Default)]
 pub struct FifoQueue<T> {
     queue: VecDeque<Task<T>>,
 }

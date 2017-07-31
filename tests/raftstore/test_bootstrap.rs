@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, mpsc, Mutex};
+use std::collections::HashMap;
 use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store};
 use tikv::server::Node;
 use tikv::storage::ALL_CFS;
@@ -73,12 +74,14 @@ fn test_node_bootstrap_with_prepared_data() {
     let region_state_key = keys::region_state_key(region.get_id());
     assert!(engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_some());
 
+    let r = Arc::new(Mutex::new(HashMap::new()));
     // try to restart this node, will clear the prepare data
     node.start(event_loop,
                engine.clone(),
                simulate_trans,
                snap_mgr,
-               snapshot_status_receiver)
+               snapshot_status_receiver,
+               r)
         .unwrap();
     assert!(engine.clone()
         .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())

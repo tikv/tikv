@@ -16,6 +16,7 @@ use std::sync::mpsc::Sender;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 
+use util::ReadStatisticMap;
 use grpc::{Server as GrpcServer, ServerBuilder, Environment, ChannelBuilder};
 use kvproto::tikvpb_grpc::*;
 use util::worker::Worker;
@@ -50,6 +51,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
+    read_statistic: ReadStatisticMap,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -58,7 +60,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                raft_router: T,
                snapshot_status_sender: Sender<SnapshotStatusMsg>,
                resolver: S,
-               snap_mgr: SnapManager)
+               snap_mgr: SnapManager,
+               read_statistic: ReadStatisticMap)
                -> Result<Server<T, S>> {
         let env = Arc::new(Environment::new(cfg.grpc_concurrency));
         let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.clone())));
@@ -104,6 +107,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
+            read_statistic: read_statistic,
         };
 
         Ok(svr)
@@ -116,6 +120,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     pub fn start(&mut self, cfg: &Config) -> Result<()> {
         let end_point = EndPointHost::new(self.storage.get_engine(),
                                           self.end_point_worker.scheduler(),
+                                          self.read_statistic.clone(),
                                           cfg.end_point_concurrency,
                                           cfg.end_point_txn_concurrency_on_busy,
                                           cfg.end_point_small_txn_tasks_limit);
@@ -154,6 +159,7 @@ mod tests {
     use std::sync::mpsc::{self, Sender};
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::collections::HashMap;
 
     use super::*;
     use super::super::{Result, Config};
@@ -223,13 +229,15 @@ mod tests {
         let (snapshot_status_sender, _) = mpsc::channel();
 
         let addr = Arc::new(Mutex::new(None));
+        let m = Arc::new(Mutex::new(HashMap::new()));
         let mut server =
             Server::new(&cfg,
                         storage,
                         router,
                         snapshot_status_sender,
                         MockResolver { addr: addr.clone() },
-                        SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot))
+                        SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot),
+                        m)
                 .unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 

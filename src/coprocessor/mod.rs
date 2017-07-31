@@ -13,9 +13,9 @@
 
 mod endpoint;
 mod aggregate;
-mod metrics;
 mod executor;
 mod dag;
+pub mod metrics;
 pub mod codec;
 pub mod xeval;
 

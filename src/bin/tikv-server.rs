@@ -49,7 +49,8 @@ use std::process;
 use std::fs::{self, File};
 use std::usize;
 use std::path::Path;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, mpsc, Mutex};
+use std::collections::HashMap as StdHashMap;
 use std::io::Read;
 use std::time::Duration;
 use std::env;
@@ -60,7 +61,7 @@ use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
 use tikv::storage::{TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, ReadStatisticMap};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
@@ -921,12 +922,16 @@ fn run_raft_server(pd_client: RpcClient,
     let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
                                     Some(store_sendch),
                                     cfg.raft_store.use_sst_file_snapshot);
+
+    // region_id => (read_bytes, read_keys)
+    let read_statistic: ReadStatisticMap = Arc::new(Mutex::new(StdHashMap::new()));
     let mut server = Server::new(&cfg,
                                  storage.clone(),
                                  raft_router,
                                  snap_status_sender,
                                  resolver,
-                                 snap_mgr.clone())
+                                 snap_mgr.clone(),
+                                 read_statistic.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let trans = server.transport();
 
@@ -936,7 +941,8 @@ fn run_raft_server(pd_client: RpcClient,
                engine.clone(),
                trans,
                snap_mgr,
-               snap_status_receiver)
+               snap_status_receiver,
+               read_statistic.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     initial_metric(config, Some(node.id()));
 

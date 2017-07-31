@@ -164,6 +164,7 @@ pub struct CFStatistics {
     // How many keys that's effective to user. This counter should be increased
     // by the caller.
     pub processed: usize,
+    pub read_bytes: u64,
     pub get: usize,
     pub next: usize,
     pub prev: usize,
@@ -202,6 +203,10 @@ impl Statistics {
 
     pub fn total_processed(&self) -> usize {
         self.lock.processed + self.write.processed + self.data.processed
+    }
+
+    pub fn total_read_bytes(&self) -> u64 {
+        self.write.read_bytes + self.data.read_bytes
     }
 
     pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {

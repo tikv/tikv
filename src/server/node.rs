@@ -24,6 +24,7 @@ use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
+use util::ReadStatisticMap;
 use util::transport::SendCh;
 use raftstore::store::{self, Msg, SnapshotStatusMsg, StoreChannel, Store, Config as StoreConfig,
                        keys, Peekable, Transport, SnapManager};
@@ -113,7 +114,8 @@ impl<C> Node<C>
                     engine: Arc<DB>,
                     trans: T,
                     snap_mgr: SnapManager,
-                    snap_status_receiver: Receiver<SnapshotStatusMsg>)
+                    snap_status_receiver: Receiver<SnapshotStatusMsg>,
+                    r: ReadStatisticMap)
                     -> Result<()>
         where T: Transport + 'static
     {
@@ -147,7 +149,8 @@ impl<C> Node<C>
                               engine,
                               trans,
                               snap_mgr,
-                              snap_status_receiver));
+                              snap_status_receiver,
+                              r));
         Ok(())
     }
 
@@ -278,7 +281,8 @@ impl<C> Node<C>
                       db: Arc<DB>,
                       trans: T,
                       snap_mgr: SnapManager,
-                      snapshot_status_receiver: Receiver<SnapshotStatusMsg>)
+                      snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
+                      r: ReadStatisticMap)
                       -> Result<()>
         where T: Transport + 'static
     {
@@ -300,7 +304,7 @@ impl<C> Node<C>
                 sender: sender,
                 snapshot_status_receiver: snapshot_status_receiver,
             };
-            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
+            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr, r) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };

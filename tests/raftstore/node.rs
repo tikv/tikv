@@ -179,11 +179,13 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
+        let m = Arc::new(Mutex::new(HashMap::new()));
         node.start(event_loop,
                    engine.clone(),
                    simulate_trans.clone(),
                    snap_mgr.clone(),
-                   snap_status_receiver)
+                   snap_status_receiver,
+                   m)
             .unwrap();
         assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
             .unwrap()

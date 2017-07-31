@@ -18,8 +18,9 @@ use std::{slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
 use std::collections::hash_map::Entry;
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, Arc, Mutex};
 use std::collections::vec_deque::{Iter, VecDeque};
+use std::collections::HashMap;
 use std::u64;
 
 use prometheus;
@@ -50,6 +51,8 @@ pub mod properties;
 mod thread_metrics;
 
 pub const NO_LIMIT: u64 = u64::MAX;
+
+pub type ReadStatisticMap = Arc<Mutex<HashMap<u64, (u64, u64)>>>;
 
 pub fn get_limit_at_size<'a, T, I>(entries: I, max: u64) -> usize
     where T: Message + Clone,
