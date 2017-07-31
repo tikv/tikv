@@ -280,26 +280,27 @@ impl BatchRunnable<Task> for Host {
                     }
 
                     for req in reqs {
+                        let pri = req.priority();
+                        let pri_str = get_req_pri_str(pri);
                         let type_str = get_req_type_str(req.req.get_tp());
-                        COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
+                        COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).add(1.0);
                         let end_point = TiDbEndPoint::new(snap.clone());
                         let txn_id = req.start_ts.unwrap_or_default();
 
-                        let pri = req.priority();
                         if pri == CommandPri::Low {
                             self.low_priority_pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str]).dec();
+                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
                             });
                         } else if pri == CommandPri::High {
                             self.high_priority_pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str]).dec();
+                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
                             });
                         } else {
                             self.pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str]).dec();
+                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
                             });
                         }
                     }
@@ -1321,6 +1322,19 @@ pub fn get_req_type_str(tp: i64) -> &'static str {
         REQ_TYPE_INDEX => STR_REQ_TYPE_INDEX,
         REQ_TYPE_DAG => STR_REQ_TYPE_DAG,
         _ => STR_REQ_TYPE_UNKNOWN,
+    }
+}
+
+pub const STR_REQ_PRI_LOW: &'static str = "low";
+pub const STR_REQ_PRI_NORMAL: &'static str = "normal";
+pub const STR_REQ_PRI_HIGH: &'static str = "high";
+
+#[inline]
+pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
+    match pri {
+        CommandPri::Low => STR_REQ_PRI_LOW,
+        CommandPri::Normal => STR_REQ_PRI_NORMAL,
+        CommandPri::High => STR_REQ_PRI_HIGH,
     }
 }
 
