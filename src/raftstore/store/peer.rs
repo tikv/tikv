@@ -992,6 +992,69 @@ impl Peer {
         }
     }
 
+    /// Batch propose requests.
+    pub fn batch_propose(&mut self,
+                         batch: Vec<(usize, Callback, RaftCmdRequest, RaftCmdResponse)>,
+                         metrics: &mut RaftProposeMetrics,
+                         pending_raft_groups: &mut HashSet<u64>)
+                         -> Vec<(usize, RaftCmdResponse)> {
+        let mut reqs = Vec::with_capacity(batch.len());
+        for (idx, cb, req, mut err_resp) in batch {
+            if self.pending_remove {
+                continue;
+            }
+
+            metrics.all += 1;
+
+            let mut is_conf_change = false;
+
+            let res = match self.get_handle_policy(&req) {
+                Ok(RequestPolicy::ReadLocal) => {
+                    reqs.push((idx, req));
+                    // The corresponding callback is dropped here,
+                    // the response will be collected and sent in a batch.
+                    continue;
+                }
+                Ok(RequestPolicy::ReadIndex) => {
+                    if self.read_index(req, cb, metrics) {
+                        self.mark_to_be_checked(pending_raft_groups);
+                    }
+                    continue;
+                }
+                Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
+                Ok(RequestPolicy::ProposeTransferLeader) => {
+                    if self.propose_transfer_leader(req, cb, metrics) {
+                        self.mark_to_be_checked(pending_raft_groups);
+                    }
+                    continue;
+                }
+                Ok(RequestPolicy::ProposeConfChange) => {
+                    is_conf_change = true;
+                    self.propose_conf_change(req, metrics)
+                }
+                Err(e) => Err(e),
+            };
+
+            match res {
+                Err(e) => {
+                    cmd_resp::bind_error(&mut err_resp, e);
+                    cb(err_resp);
+                }
+                Ok(idx) => {
+                    let meta = ProposalMeta {
+                        index: idx,
+                        term: self.term(),
+                        renew_lease_time: None,
+                    };
+                    self.post_propose(meta, is_conf_change, cb);
+                    self.mark_to_be_checked(pending_raft_groups);
+                }
+            }
+        }
+
+        self.batch_read_local(reqs, metrics)
+    }
+
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(clocktime::raw_now());
@@ -1178,6 +1241,15 @@ impl Peer {
         self.handle_read(req, cb);
     }
 
+    fn batch_read_local(&mut self,
+                        batch: Vec<(usize, RaftCmdRequest)>,
+                        metrics: &mut RaftProposeMetrics)
+                        -> Vec<(usize, RaftCmdResponse)> {
+        metrics.local_read += batch.len() as u64;
+        metrics.batch_local_read.observe(batch.len() as f64);
+        self.handle_batch_read(batch)
+    }
+
     fn read_index(&mut self,
                   req: RaftCmdRequest,
                   cb: Callback,
@@ -1334,6 +1406,26 @@ impl Peer {
         }
 
         Ok(propose_index)
+    }
+
+    fn handle_batch_read(&mut self,
+                         batch: Vec<(usize, RaftCmdRequest)>)
+                         -> Vec<(usize, RaftCmdResponse)> {
+        self.batch_exec_read(batch)
+            .into_iter()
+            .map(|(idx, resp)| {
+                let mut resp = resp.unwrap_or_else(|e| {
+                    match e {
+                        Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                        _ => error!("{} execute raft command err: {:?}", self.tag, e),
+                    }
+                    cmd_resp::new_error(e)
+                });
+
+                cmd_resp::bind_term(&mut resp, self.term());
+                (idx, resp)
+            })
+            .collect()
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest, cb: Callback) {
@@ -1543,6 +1635,60 @@ impl Peer {
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(protobuf::RepeatedField::from_vec(responses));
         Ok(resp)
+    }
+
+    fn batch_exec_read(&mut self,
+                       batch: Vec<(usize, RaftCmdRequest)>)
+                       -> Vec<(usize, Result<RaftCmdResponse>)> {
+        let mut snap = None;
+        let mut ret = Vec::with_capacity(batch.len());
+
+        'bat: for (idx, cmd) in batch {
+            if let Err(e) = check_epoch(self.region(), &cmd) {
+                ret.push((idx, Err(e)));
+                continue;
+            }
+
+            let requests = cmd.get_requests();
+            let mut responses = Vec::with_capacity(requests.len());
+            for req in requests {
+                let cmd_type = req.get_cmd_type();
+                let mut resp = match cmd_type {
+                    CmdType::Get => {
+                        if snap.is_none() {
+                            snap = Some(Snapshot::new(self.engine.clone()));
+                        }
+                        match apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req) {
+                            Ok(resp) => resp,
+                            Err(e) => {
+                                ret.push((idx, Err(e)));
+                                continue 'bat;
+                            }
+                        }
+                    }
+                    CmdType::Snap => {
+                        match apply::do_snap(self.region().to_owned()) {
+                            Ok(resp) => resp,
+                            Err(e) => {
+                                ret.push((idx, Err(e)));
+                                continue 'bat;
+                            }
+                        }
+                    }
+                    CmdType::Prewrite => unreachable!(),
+                    CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
+                };
+
+                resp.set_cmd_type(cmd_type);
+
+                responses.push(resp);
+            }
+            let mut resp = RaftCmdResponse::new();
+            resp.set_responses(protobuf::RepeatedField::from_vec(responses));
+            ret.push((idx, Ok(resp)));
+        }
+
+        ret
     }
 }
 

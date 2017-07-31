@@ -44,6 +44,7 @@ const STAT_SEEK: &'static str = "seek";
 const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
+pub type BatchCallback<T> = Box<FnBox((CbContext, Result<Vec<Option<Result<T>>>>)) + Send>;
 
 pub struct CbContext {
     pub term: Option<u64>,
@@ -64,6 +65,11 @@ pub enum Modify {
 pub trait Engine: Send + Debug {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
+    // batch and on_finish should be called in the same thread and in order.
+    fn async_snapshots_batch(&self,
+                             batch: Vec<(Context, Callback<Box<Snapshot>>)>,
+                             on_finish: BatchCallback<Box<Snapshot>>)
+                             -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);

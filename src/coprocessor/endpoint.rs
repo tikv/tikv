@@ -18,6 +18,7 @@ use std::rc::Rc;
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::{self, Ordering as CmpOrdering};
 use std::cell::RefCell;
+
 use tipb::select::{self, SelectRequest, SelectResponse, DAGRequest, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType, ByItem};
@@ -33,6 +34,7 @@ use util::threadpool::{ThreadPool, SmallGroupFirstQueue};
 use util::codec::number::NumberDecoder;
 use server::OnResponse;
 use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode, Statistics};
+use storage::engine::Error as EngineError;
 
 use super::codec::{table, datum, mysql};
 use super::codec::table::{RowColsDict, TableDecoder};
@@ -94,11 +96,39 @@ impl Host {
             pool: ThreadPool::new(thd_name!("endpoint-pool"), concurrency, queue),
         }
     }
+
+    fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
+        let reqs = self.reqs.remove(&id).unwrap();
+        let snap = match snapshot {
+            Ok(s) => s,
+            Err(e) => {
+                notify_batch_failed(e, reqs);
+                return;
+            }
+        };
+
+        if self.pool.get_task_count() >= self.max_running_task_count {
+            notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
+            return;
+        }
+
+        for req in reqs {
+            let type_str = get_req_type_str(req.req.get_tp());
+            COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
+            let end_point = TiDbEndPoint::new(snap.clone());
+            let txn_id = req.start_ts.unwrap_or_default();
+            self.pool.execute(txn_id, move || {
+                end_point.handle_request(req);
+                COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
+            });
+        }
+    }
 }
 
 pub enum Task {
     Request(RequestTask),
     SnapRes(u64, engine::Result<Box<Snapshot>>),
+    SnapResBatch(Vec<(u64, engine::Result<Box<Snapshot>>)>),
 }
 
 impl Display for Task {
@@ -106,6 +136,10 @@ impl Display for Task {
         match *self {
             Task::Request(ref req) => write!(f, "{}", req),
             Task::SnapRes(req_id, _) => write!(f, "snapres [{}]", req_id),
+            Task::SnapResBatch(ref batch) => {
+                let ids: Vec<u64> = batch.iter().map(|&(id, _)| id).collect();
+                write!(f, "snapres batch {:?}", ids)
+            }
         }
     }
 }
@@ -233,6 +267,7 @@ impl BatchRunnable<Task> for Host {
     // TODO: limit pending reqs
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
+        let mut total_reqs = 0;
         let mut grouped_reqs = map![];
         for task in tasks.drain(..) {
             match task {
@@ -249,48 +284,64 @@ impl BatchRunnable<Task> for Host {
                     };
                     let mut group = grouped_reqs.entry(key).or_insert_with(Vec::new);
                     group.push(req);
+                    total_reqs += 1;
                 }
                 Task::SnapRes(q_id, snap_res) => {
-                    let reqs = self.reqs.remove(&q_id).unwrap();
-                    let snap = match snap_res {
-                        Ok(s) => s,
-                        Err(e) => {
-                            notify_batch_failed(e, reqs);
-                            continue;
-                        }
-                    };
-
-                    if self.pool.get_task_count() >= self.max_running_task_count {
-                        notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
-                        continue;
-                    }
-
-                    for req in reqs {
-                        let type_str = get_req_type_str(req.req.get_tp());
-                        COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
-                        let end_point = TiDbEndPoint::new(snap.clone());
-                        let txn_id = req.start_ts.unwrap_or_default();
-                        self.pool.execute(txn_id, move || {
-                            end_point.handle_request(req);
-                            COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
-                        });
+                    self.handle_snapshot_result(q_id, snap_res);
+                }
+                Task::SnapResBatch(batch) => {
+                    for (q_id, snap_res) in batch {
+                        self.handle_snapshot_result(q_id, snap_res);
                     }
                 }
             }
         }
+        if total_reqs <= 0 {
+            return;
+        }
+
+        let mut req_ids = Vec::new();
+        let mut batch = Vec::with_capacity(grouped_reqs.len());
         for (_, reqs) in grouped_reqs {
             self.last_req_id += 1;
             let id = self.last_req_id;
             let sched = self.sched.clone();
-            if let Err(e) = self.engine.async_snapshot(reqs[0].req.get_context(),
-                                                       box move |(_, res)| {
-                                                           sched.schedule(Task::SnapRes(id, res))
-                                                               .unwrap()
-                                                       }) {
-                notify_batch_failed(e, reqs);
-                continue;
-            }
+            let cb: engine::Callback<Box<Snapshot>> = box move |(_, res)| {
+                sched.schedule(Task::SnapRes(id, res)).unwrap();
+            };
+            let ctx = reqs[0].req.get_context().clone();
             self.reqs.insert(id, reqs);
+            req_ids.push(id);
+            batch.push((ctx, cb));
+        }
+
+        let req_ids1 = req_ids.clone();
+        let sched = self.sched.clone();
+        let on_finish: engine::BatchCallback<Box<Snapshot>> =
+            box move |(_, results)| {
+                if let Ok(results) = results {
+                    let batch = req_ids1.into_iter().zip(results).filter_map(|(id, res)| {
+                        if let Some(res) = res {
+                            Some((id, res))
+                        } else {
+                            None
+                        }
+                    });
+                    sched.schedule(Task::SnapResBatch(batch.collect())).unwrap()
+                } else {
+                    unreachable!();
+                }
+            };
+
+        if let Err(e) = self.engine.async_snapshots_batch(batch, on_finish) {
+            for id in req_ids {
+                let reqs = self.reqs.remove(&id).unwrap();
+                let err = e.maybe_clone().unwrap_or_else(|| {
+                    error!("async snapshot batch failed error {:?}", e);
+                    EngineError::Other(box_err!("{:?}", e))
+                });
+                notify_batch_failed(err, reqs);
+            }
         }
     }
 

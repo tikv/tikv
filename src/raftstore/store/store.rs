@@ -58,7 +58,7 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, StaleState, ConsistencyState, ReadyContext};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::Callback;
+use super::msg::{Callback, BatchCallback};
 use super::cmd_resp::{bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
@@ -1290,6 +1290,70 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // we will call the callback with timeout error.
     }
 
+    fn batch_propose_raft_commands(&mut self,
+                                   batch: Vec<(RaftCmdRequest, Callback)>,
+                                   on_finish: BatchCallback) {
+        let size = batch.len();
+        let mut batches: HashMap<u64, Vec<(usize, Callback, RaftCmdRequest, RaftCmdResponse)>> =
+            HashMap::default();
+        for (idx, (msg, cb)) in batch.into_iter().enumerate() {
+            let mut resp = RaftCmdResponse::new();
+
+            if let Err(e) = self.validate_store_id(&msg) {
+                bind_error(&mut resp, e);
+                cb.call_box((resp,));
+                continue;
+            }
+
+            if msg.has_status_request() {
+                // For status commands, we handle it here directly.
+                match self.execute_status_command(msg) {
+                    Err(e) => bind_error(&mut resp, e),
+                    Ok(status_resp) => resp = status_resp,
+                };
+                cb.call_box((resp,));
+                continue;
+            }
+
+            if let Err(e) = self.validate_region(&msg) {
+                bind_error(&mut resp, e);
+                cb.call_box((resp,));
+                continue;
+            }
+
+            let region_id = msg.get_header().get_region_id();
+            let peer = self.region_peers.get(&region_id).unwrap();
+            let term = peer.term();
+            bind_term(&mut resp, term);
+            let mut group = batches.entry(region_id).or_insert_with(Vec::new);
+            group.push((idx, cb, msg, resp));
+        }
+
+        // Note:
+        // The peer that is being checked is a leader. It might step down to be a follower
+        // later. It doesn't matter whether the peer is a leader or not.
+        // If it's not a leader, the proposing command log entry can't be committed.
+
+        let mut call_on_finish = false;
+        let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
+        for (region_id, batch) in batches {
+            let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+            let resps = peer.batch_propose(batch,
+                                           &mut self.raft_metrics.propose,
+                                           &mut self.pending_raft_groups);
+            for (idx, resp) in resps {
+                ret[idx] = Some(resp);
+                call_on_finish = true;
+            }
+        }
+        if call_on_finish {
+            on_finish.call_box((ret,));
+        }
+
+        // TODO: add timeout, if the command is not applied after timeout,
+        // we will call the callback with timeout error.
+    }
+
     fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
         let store_id = msg.get_header().get_peer().get_store_id();
         if store_id != self.store.get_id() {
@@ -2045,6 +2109,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     .request_wait_time
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
                 self.propose_raft_command(request, callback)
+            }
+            Msg::RaftCmdsBatch { send_time, batch, on_finish } => {
+                self.raft_metrics
+                    .propose
+                    .request_wait_time
+                    .observe(duration_to_sec(send_time.elapsed()) as f64);
+                self.batch_propose_raft_commands(batch, on_finish);
             }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);

@@ -155,6 +155,7 @@ pub struct RaftProposeMetrics {
     pub transfer_leader: u64,
     pub conf_change: u64,
     pub request_wait_time: LocalHistogram,
+    pub batch_local_read: LocalHistogram,
 }
 
 impl Default for RaftProposeMetrics {
@@ -167,6 +168,7 @@ impl Default for RaftProposeMetrics {
             transfer_leader: 0,
             conf_change: 0,
             request_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
+            batch_local_read: BTACH_LOCAL_READ_HISTOGRAM.local(),
         }
     }
 }
@@ -212,6 +214,7 @@ impl RaftProposeMetrics {
             self.conf_change = 0;
         }
         self.request_wait_time.flush();
+        self.batch_local_read.flush();
     }
 }
 

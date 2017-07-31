@@ -13,6 +13,7 @@
 
 
 use server::transport::RaftStoreRouter;
+use raftstore::store;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
@@ -32,7 +33,7 @@ use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
-use super::{CbContext, Engine, Modify, Cursor, Snapshot, ScanMode, Callback,
+use super::{CbContext, Engine, Modify, Cursor, Snapshot, ScanMode, Callback, BatchCallback,
             Iterator as EngineIterator};
 use storage::{Key, Value, CfName, CF_DEFAULT};
 use super::metrics::*;
@@ -166,6 +167,46 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         Ok(())
     }
 
+    fn batch_call_commands(&self,
+                           batch: Vec<(RaftCmdRequest, Callback<CmdRes>)>,
+                           on_finish: Callback<Vec<Option<super::Result<CmdRes>>>>)
+                           -> Result<()> {
+        let mut ls = Vec::with_capacity(batch.len());
+        let mut batch1 = Vec::with_capacity(batch.len());
+        for (req, cb) in batch {
+            let l = req.get_requests().len();
+            ls.push(l);
+            let db = self.db.clone();
+            let callback: store::Callback = box move |resp| {
+                let (cb_ctx, res) = on_result(resp, l, db);
+                cb((cb_ctx, res.map_err(Error::into)));
+            };
+            batch1.push((req, callback));
+        }
+
+        let db = self.db.clone();
+        let on_finish: store::BatchCallback = box move |resps: Vec<Option<RaftCmdResponse>>| {
+            let mut batch = Vec::with_capacity(resps.len());
+            let mut ctx = None;
+            for (l, resp) in ls.into_iter().zip(resps) {
+                match resp {
+                    Some(resp) => {
+                        let (cb_ctx, res) = on_result(resp, l, db.clone());
+                        batch.push(Some(res.map_err(Error::into)));
+                        if ctx.is_none() {
+                            ctx = Some(cb_ctx);
+                        }
+                    }
+                    None => batch.push(None),
+                }
+            }
+
+            on_finish((ctx.unwrap_or_else(CbContext::new), Ok(batch)));
+        };
+        try!(self.router.send_commands_batch(batch1, on_finish));
+        Ok(())
+    }
+
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
         let mut header = RaftRequestHeader::new();
         header.set_region_id(ctx.get_region_id());
@@ -183,6 +224,22 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         cmd.set_header(header);
         cmd.set_requests(RepeatedField::from_vec(reqs));
         self.call_command(cmd, cb)
+    }
+
+    fn batch_exec_requests(&self,
+                           batch: Vec<(Context, Vec<Request>, Callback<CmdRes>)>,
+                           on_finish: Callback<Vec<Option<super::Result<CmdRes>>>>)
+                           -> Result<()> {
+        let batch = batch.into_iter().map(|(ctx, reqs, cb)| {
+            let header = self.new_request_header(&ctx);
+            let mut cmd = RaftCmdRequest::new();
+            cmd.set_header(header);
+            cmd.set_requests(RepeatedField::from_vec(reqs));
+
+            (cmd, cb)
+        });
+
+        self.batch_call_commands(batch.collect(), on_finish)
     }
 }
 
@@ -293,6 +350,77 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
                 e.into()
             })
+    }
+
+    fn async_snapshots_batch(&self,
+                             batch: Vec<(Context, Callback<Box<Snapshot>>)>,
+                             on_finish: BatchCallback<Box<Snapshot>>)
+                             -> engine::Result<()> {
+        let batch = batch.into_iter().map(|(ctx, cb)| {
+            let mut req = Request::new();
+            req.set_cmd_type(CmdType::Snap);
+
+            ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "all"]).inc();
+            let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["snapshot"])
+                .start_timer();
+
+            let callback: Callback<CmdRes> = box move |(cb_ctx, res)| {
+                match res {
+                    Ok(CmdRes::Resp(r)) => {
+                        cb((cb_ctx,
+                            Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into())))
+                    }
+                    Ok(CmdRes::Snap(s)) => {
+                        req_timer.observe_duration();
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"])
+                            .inc();
+                        cb((cb_ctx, Ok(box s)))
+                    }
+                    Err(e) => {
+                        let tag = get_tag_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
+                        cb((cb_ctx, Err(e)))
+                    }
+                }
+            };
+
+            (ctx, vec![req], callback)
+        });
+
+        let on_finish =
+            box move |(cb_ctx, batch): (_, super::Result<Vec<Option<super::Result<CmdRes>>>>)| {
+                if let Ok(batch) = batch {
+                    let mut snapshots = Vec::with_capacity(batch.len());
+                    for res in batch {
+                        match res {
+                            Some(Ok(CmdRes::Resp(r))) => {
+                                snapshots.push(Some(Err(invalid_resp_type(CmdType::Snap,
+                                                                          r[0].get_cmd_type())
+                                    .into())));
+                            }
+                            Some(Ok(CmdRes::Snap(s))) => {
+                                snapshots.push(Some(Ok(box s as Box<Snapshot>)));
+                            }
+                            Some(Err(e)) => {
+                                let tag = get_tag_from_engine_error(&e);
+                                ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag])
+                                    .inc();
+                                snapshots.push(Some(Err(e)));
+                            }
+                            None => snapshots.push(None),
+                        }
+                    }
+                    on_finish((cb_ctx, Ok(snapshots)));
+                } else {
+                    unreachable!();
+                }
+            };
+
+        self.batch_exec_requests(batch.collect(), on_finish).map_err(|e| {
+            let tag = get_tag_from_error(&e);
+            ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
+            e.into()
+        })
     }
 
     fn clone(&self) -> Box<Engine> {
