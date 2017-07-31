@@ -1007,7 +1007,7 @@ impl ApplyDelegate {
                            -> Result<Response> {
         let start_key = req.get_delete_range().get_start_key();
         let end_key = req.get_delete_range().get_end_key();
-        if start_key >= end_key {
+        if !end_key.is_empty() && start_key >= end_key {
             return Err(box_err!("invalid delete range parameters, start_key: {:?}, end_key: {:?}",
                                 start_key,
                                 end_key));
@@ -1020,7 +1020,7 @@ impl ApplyDelegate {
         let resp = Response::new();
 
         let start_key = keys::data_key(start_key);
-        let end_key = keys::data_key(end_key);
+        let end_key = keys::data_end_key(end_key);
         let cf = req.get_delete_range().get_cf();
         let cf = if cf.is_empty() { CF_DEFAULT } else { cf };
         rocksdb::get_cf_handle(&self.engine, cf)
