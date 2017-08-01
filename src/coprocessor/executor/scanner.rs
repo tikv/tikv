@@ -85,6 +85,7 @@ impl<'a> Scanner<'a> {
     }
 
     pub fn get_row(&mut self, key: &[u8]) -> Result<Option<Value>> {
+        self.reader.reset(None);
         let data = try!(self.reader
             .get(&Key::from_raw(key), self.start_ts));
         Ok(data)
@@ -274,6 +275,17 @@ pub mod test {
         let mut key_range = KeyRange::new();
         key_range.set_start(table::encode_row_key(table_id, &start_buf));
         key_range.set_end(table::encode_row_key(table_id, &end_buf));
+        key_range
+    }
+
+    pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
+        let mut start_buf = Vec::with_capacity(8);
+        start_buf.encode_i64(handle).unwrap();
+        let start_key = table::encode_row_key(table_id, &start_buf);
+        let end = prefix_next(&start_key);
+        let mut key_range = KeyRange::new();
+        key_range.set_start(start_key);
+        key_range.set_end(end);
         key_range
     }
 

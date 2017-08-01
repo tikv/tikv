@@ -98,7 +98,10 @@ impl<'a> Executor for TableScanExecutor<'a> {
                 let data = try!(self.get_row_from_point());
                 self.scanner.set_seek_key(None);
                 self.cursor += 1;
-                return Ok(data);
+                if data.is_some() {
+                    return Ok(data);
+                }
+                continue;
             }
 
             let data = try!(self.get_row_from_range());
@@ -116,13 +119,13 @@ impl<'a> Executor for TableScanExecutor<'a> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use super::super::scanner::test::{Data, TestStore, prepare_table_data, get_range};
     use std::i64;
     use tipb::schema::ColumnInfo;
     use storage::Statistics;
     use protobuf::RepeatedField;
-    use coprocessor::endpoint::{is_point, prefix_next};
+    use super::*;
+    use super::super::scanner::test::{Data, TestStore, prepare_table_data, get_range,
+                                      get_point_range};
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
@@ -133,6 +136,12 @@ mod test {
         table_scan: TableScan,
         ranges: Vec<KeyRange>,
         cols: Vec<ColumnInfo>,
+    }
+
+    impl TableScanTestWrapper {
+        fn get_point_range(&self, handle: i64) -> KeyRange {
+            get_point_range(TABLE_ID, handle)
+        }
     }
 
     impl Default for TableScanTestWrapper {
@@ -161,18 +170,14 @@ mod test {
     fn test_point_get() {
         let mut statistics = Statistics::default();
         let mut wrapper = TableScanTestWrapper::default();
+        // point get returns none
+        let r1 = wrapper.get_point_range(i64::MIN);
+        // point get return something
         let handle = 0;
-        let (ref key, _) = wrapper.data.kv_data[handle];
-        // prepare range
-        let mut range = KeyRange::new();
-        range.set_start(key.clone());
-        let end = prefix_next(&key.clone());
-        range.set_end(end);
-        assert!(is_point(&range));
-        wrapper.ranges = vec![range];
+        let r2 = wrapper.get_point_range(handle);
+        wrapper.ranges = vec![r1, r2];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-
         let mut table_scanner = TableScanExecutor::new(wrapper.table_scan,
                                                        wrapper.ranges,
                                                        snapshot,
@@ -184,7 +189,7 @@ mod test {
         assert_eq!(row.handle, handle as i64);
         assert_eq!(row.data.len(), wrapper.cols.len());
 
-        let expect_row = &wrapper.data.expect_rows[handle];
+        let expect_row = &wrapper.data.expect_rows[handle as usize];
         for col in &wrapper.cols {
             let cid = col.get_column_id();
             let v = row.data.get(cid).unwrap();
@@ -200,8 +205,13 @@ mod test {
         // prepare range
         let r1 = get_range(TABLE_ID, i64::MIN, 0);
         let r2 = get_range(TABLE_ID, 0, (KEY_NUMBER / 2) as i64);
-        let r3 = get_range(TABLE_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
-        wrapper.ranges = vec![r1, r2, r3];
+
+        // prepare point get
+        let handle = KEY_NUMBER / 2;
+        let r3 = wrapper.get_point_range(handle as i64);
+
+        let r4 = get_range(TABLE_ID, (handle + 1) as i64, i64::MAX);
+        wrapper.ranges = vec![r1, r2, r3, r4];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let mut table_scanner = TableScanExecutor::new(wrapper.table_scan,
