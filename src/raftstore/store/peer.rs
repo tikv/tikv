@@ -1614,7 +1614,7 @@ impl Peer {
                        -> Vec<(usize, Result<RaftCmdResponse>)> {
         let mut ret = Vec::with_capacity(batch.len());
 
-        'bat: for (idx, cmd) in batch {
+        for (idx, cmd) in batch {
             if let Err(e) = check_epoch(self.region(), &cmd) {
                 ret.push((idx, Err(e)));
                 continue;
@@ -1622,24 +1622,16 @@ impl Peer {
 
             let requests = cmd.get_requests();
             let mut responses = Vec::with_capacity(requests.len());
+            let resp = apply::do_snap(self.region().to_owned()).unwrap();
             for req in requests {
                 let cmd_type = req.get_cmd_type();
                 let mut resp = match cmd_type {
-                    CmdType::Snap => {
-                        match apply::do_snap(self.region().to_owned()) {
-                            Ok(resp) => resp,
-                            Err(e) => {
-                                ret.push((idx, Err(e)));
-                                continue 'bat;
-                            }
-                        }
-                    }
+                    CmdType::Snap => resp.clone(),
                     CmdType::Prewrite | CmdType::Get | CmdType::Put | CmdType::Delete |
                     CmdType::Invalid | CmdType::DeleteRange => unreachable!(),
                 };
 
                 resp.set_cmd_type(cmd_type);
-
                 responses.push(resp);
             }
             let mut resp = RaftCmdResponse::new();
