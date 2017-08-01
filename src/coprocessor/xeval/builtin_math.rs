@@ -176,6 +176,7 @@ mod test {
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CeilInt),
                      Datum::Null)]);
+
     test_eval!(test_floor_int,
                vec![(build_expr_with_sig(vec![Datum::F64(-1.23)],
                                          ExprType::ScalarFunc,
