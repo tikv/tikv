@@ -1000,7 +1000,7 @@ impl Peer {
                     cb: Callback,
                     now: &mut Option<Timespec>) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(now.get_or_insert_with(clocktime::raw_now).clone());
+        meta.renew_lease_time = Some(*now.get_or_insert_with(clocktime::raw_now));
 
         let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
         self.apply_proposals.push(p);
