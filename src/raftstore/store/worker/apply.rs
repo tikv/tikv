@@ -1023,15 +1023,21 @@ impl ApplyDelegate {
         let end_key = keys::data_end_key(end_key);
         let cf = req.get_delete_range().get_cf();
         let cf = if cf.is_empty() { CF_DEFAULT } else { cf };
-        rocksdb::get_cf_handle(&self.engine, cf)
-            .and_then(|handle| ctx.wb.delete_range_cf(handle, &start_key, &end_key))
-            .unwrap_or_else(|e| {
-                panic!("{} failed to delete range [{}, {}): {:?}",
-                       self.tag,
-                       escape(&start_key),
-                       escape(&end_key),
-                       e)
-            });
+        let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+
+        // Use delete_file_in_range to drop as many sst files as possible, this is
+        // a way to reclaim disk space quickly after drop a table/index.
+        try!(self.engine.delete_file_in_range_cf(handle, &start_key, &end_key));
+
+        // Use delete_range to mark all the contents in this range is deleted.
+        ctx.wb.delete_range_cf(handle, &start_key, &end_key).unwrap_or_else(|e| {
+            panic!("{} failed to delete range [{}, {}): {:?}",
+                   self.tag,
+                   escape(&start_key),
+                   escape(&end_key),
+                   e)
+        });
+
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
