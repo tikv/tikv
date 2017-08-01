@@ -1013,8 +1013,8 @@ impl ApplyDelegate {
                                 end_key));
         }
         try!(check_data_key(start_key, &self.region));
-        if end_key > self.region.get_end_key() {
-            return Err(Error::KeyNotInRegion(end_key.to_vec(), self.region.clone()));
+        if end_key != self.region.get_end_key() {
+            try!(check_data_key(end_key, &self.region));
         }
 
         let resp = Response::new();
