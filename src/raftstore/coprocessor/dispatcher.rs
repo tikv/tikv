@@ -101,12 +101,6 @@ impl CoprocessorHost {
     }
 }
 
-impl Drop for CoprocessorHost {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
-
 #[cfg(test)]
 mod test {
     use raftstore::coprocessor::*;

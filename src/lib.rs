@@ -71,6 +71,7 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate toml;
+extern crate sys_info;
 
 #[macro_use]
 pub mod util;
