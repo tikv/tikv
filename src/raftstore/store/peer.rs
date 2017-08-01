@@ -478,6 +478,8 @@ impl Peer {
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
                 MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
+                MessageType::MsgRequestPreVote => metrics.pre_vote += 1,
+                MessageType::MsgRequestPreVoteResponse => metrics.pre_vote_resp += 1,
                 MessageType::MsgSnapshot => metrics.snapshot += 1,
                 MessageType::MsgHeartbeat => metrics.heartbeat += 1,
                 MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp += 1,
@@ -1484,12 +1486,13 @@ impl Peer {
         // 1. Target peer already exists but has not established communication with leader yet
         // 2. Target peer is added newly due to member change or region split, but it's not
         //    created yet
-        // For both cases the region start key and end key are attached in RequestVote and
+        // For both cases the region start key and end key are attached in Request{Pre,}Vote and
         // Heartbeat message for the store of that peer to check whether to create a new peer
         // when receiving these messages, or just to wait for a pending region split to perform
         // later.
         if self.get_store().is_initialized() &&
            (msg_type == MessageType::MsgRequestVote ||
+            msg_type == MessageType::MsgRequestPreVote ||
             // the peer has not been known to this leader, it may exist or not.
             (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX)) {
             let region = self.region();
