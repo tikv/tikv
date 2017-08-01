@@ -15,18 +15,19 @@ use std::thread;
 use std::str::FromStr;
 use std::time::{Instant, Duration};
 use std::net::{SocketAddr, IpAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Sender, Receiver, channel};
 
 use kvproto::tikvpb_grpc::*;
 use kvproto::coprocessor::{Request, Response};
 use kvproto::raft_serverpb::{RaftMessage, Done, SnapshotChunk};
 use kvproto::kvrpcpb::*;
 
-use futures::{Future, Stream, future};
+use futures::{Future, Stream, future, stream};
+use futures::sync::oneshot;
 use grpc::{Server as GrpcServer, ServerBuilder, Environment, ChannelBuilder, RpcContext,
            UnarySink, RequestStream, ClientStreamingSink};
+use crossbeam::sync::{MsQueue, ArcCell};
 
 use tikv::server::{RaftClient, Config};
 
@@ -37,54 +38,55 @@ const NANOS_PER_SEC: u32 = 1_000_000_000;
 
 struct Inner {
     name: String,
-    counter: Arc<AtomicUsize>,
+    counter: AtomicUsize,
     // useful in bench.iter()
-    forwarder: Option<Sender<()>>,
+    forwarder: Arc<MsQueue<()>>,
 }
 
 #[derive(Clone)]
 struct BenchTikvHandler {
     // TODO: It's only suitable for streaming benchmarks.
     //      Maybe using Either later.
-    running: Arc<Mutex<Option<Inner>>>,
+    running: Arc<ArcCell<Option<Inner>>>,
 }
 
 impl BenchTikvHandler {
     fn init_recording(&self,
                       name: String,
-                      counter: Arc<AtomicUsize>,
-                      forwarder: Sender<()>)
+                      counter: AtomicUsize,
+                      forwarder: Arc<MsQueue<()>>)
                       -> Result<(), String> {
-        let mut running = self.running.lock().unwrap();
+        let running = self.running.get();
         if running.is_some() {
-            return Err(running.as_ref().unwrap().name.clone());
+            return Err(Option::as_ref(&running).unwrap().name.clone());
         }
 
-        *running = Some(Inner {
+        let new = Arc::new(Some(Inner {
             name: name,
             counter: counter,
-            forwarder: Some(forwarder),
-        });
+            forwarder: forwarder,
+        }));
+        self.running.set(new);
         Ok(())
     }
 
     fn start_recording(&self) -> Result<(), String> {
-        let running = self.running.lock().unwrap();
+        let running = self.running.get();
         if running.is_none() {
             return Err("not initialize".to_owned());
         }
 
-        running.as_ref().unwrap().counter.store(1, Ordering::Release);
+        Option::as_ref(&running).unwrap().counter.store(1, Ordering::Release);
         Ok(())
     }
 
     fn stop_recording(&self) -> Result<usize, String> {
-        let mut running = self.running.lock().unwrap();
+        let running = self.running.set(Arc::new(None));
         if running.is_none() {
             return Err("not initialize".to_owned());
         }
-        let case = running.take().unwrap();
-        let count = case.counter.swap(0, Ordering::Acquire);
+        let inner = Option::as_ref(&running).unwrap();
+        let count = inner.counter.swap(0, Ordering::Acquire);
         Ok(count)
     }
 }
@@ -94,24 +96,34 @@ impl Tikv for BenchTikvHandler {
             ctx: RpcContext,
             stream: RequestStream<RaftMessage>,
             _: ClientStreamingSink<Done>) {
-        let running = self.running.lock().unwrap();
-        let inner = running.as_ref().unwrap();
-        let counter = inner.counter.clone();
-        let forwarder = inner.forwarder.as_ref().unwrap().clone();
+        let running = self.running.get();
 
         ctx.spawn(stream.for_each(move |_| {
-                if 0 != counter.load(Ordering::Acquire) {
-                    counter.fetch_add(1, Ordering::Release);
-                    let _ = forwarder.send(());
-                };
+                let running = Option::as_ref(&running).unwrap();
+                if 0 != running.counter.load(Ordering::Acquire) {
+                    running.counter.fetch_add(1, Ordering::Release);
+                    running.forwarder.push(());
+                }
                 future::ok(())
             })
             .map_err(|_| ())
             .then(|_| future::ok::<_, ()>(())));
     }
 
-    fn kv_get(&self, _: RpcContext, _: GetRequest, _: UnarySink<GetResponse>) {
-        unimplemented!()
+    fn kv_get(&self, ctx: RpcContext, _: GetRequest, sink: UnarySink<GetResponse>) {
+        let running = self.running.get();
+        let mut resp = GetResponse::new();
+        resp.set_value(b"something".to_vec());
+
+        ctx.spawn(sink.success(resp)
+            .then(move |_| {
+                let running = Option::as_ref(&running).unwrap();
+                if 0 != running.counter.load(Ordering::Acquire) {
+                    running.counter.fetch_add(1, Ordering::Release);
+                    running.forwarder.push(());
+                }
+                future::ok::<_, ()>(())
+            }));
     }
 
     fn kv_scan(&self, _: RpcContext, _: ScanRequest, _: UnarySink<ScanResponse>) {
@@ -200,37 +212,45 @@ impl Tikv for BenchTikvHandler {
                             _: UnarySink<MvccGetByStartTsResponse>) {
         unimplemented!()
     }
+
+    fn kv_delete_range(&self,
+                       _: RpcContext,
+                       _: DeleteRangeRequest,
+                       _: UnarySink<DeleteRangeResponse>) {
+        unimplemented!()
+    }
 }
 
 // Default settings used in TiKV.
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: usize = 2 * 1024 * 1024;
-const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
+const SERVER_MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const SERVER_MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
+const CLIENT_MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const CLIENT_MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
 
 /// A mock `TiKV` server for benching purpose, all `GrpcServer`
 /// configuration MUST be consist with the real server in
 /// `src/server/server.rs`.
-// TODO: a better way for handling the cfgs.
 pub struct BenchTikvServer {
     server: GrpcServer,
     local_addr: SocketAddr,
     handler: BenchTikvHandler,
 
     // Coupled with forwarder in `BenchTikvHandler`.
-    rx: Option<Receiver<()>>,
+    rx: Option<Arc<MsQueue<()>>>,
 }
 
 impl BenchTikvServer {
     pub fn new(env: Arc<Environment>) -> BenchTikvServer {
-        let h = BenchTikvHandler { running: Arc::new(Mutex::new(None)) };
+        let h = BenchTikvHandler { running: Arc::new(ArcCell::new(Arc::new(None))) };
 
         let channel_args = ChannelBuilder::new(env.clone())
             .stream_initial_window_size(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE)
             .max_concurrent_stream(DEFAULT_GRPC_CONCURRENT_STREAM)
-            .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
+            .max_receive_message_len(SERVER_MAX_GRPC_RECV_MSG_LEN)
+            .max_send_message_len(SERVER_MAX_GRPC_SEND_MSG_LEN)
             .build_args();
 
         let grpc_server = ServerBuilder::new(env.clone())
@@ -257,17 +277,16 @@ impl BenchTikvServer {
         self.server.start();
     }
 
-    // TODO: addrs.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
     pub fn init_recording(&mut self, name: String) -> Result<(), String> {
-        let (tx, rx) = channel();
-        let counter = Arc::new(AtomicUsize::new(0));
+        let queue = Arc::new(MsQueue::new());
+        let counter = AtomicUsize::new(0);
 
-        self.rx = Some(rx);
-        self.handler.init_recording(name, counter, tx)
+        self.rx = Some(queue.clone());
+        self.handler.init_recording(name, counter, queue)
     }
 
     pub fn start_recording(&self) -> Result<(), String> {
@@ -281,7 +300,8 @@ impl BenchTikvServer {
 
     pub fn recv(&self) -> Result<(), String> {
         if self.rx.is_some() {
-            self.rx.as_ref().unwrap().recv().map_err(|_| "channel has hung up".to_owned())
+            self.rx.as_ref().unwrap().pop();
+            Ok(())
         } else {
             Err("Benchmark is not ready".to_owned())
         }
@@ -299,40 +319,15 @@ fn new_bench_server() -> (Arc<Environment>, BenchTikvServer) {
     (env, server)
 }
 
-// TODO: Stabilize result.
-pub fn bench_raft_rpc() {
-    let name = "raft_client_streaming";
+fn run_bench<F, C>(name: &'static str, run: F, clean: C)
+    where F: FnOnce(Arc<Environment>, &mut BenchTikvServer),
+          C: FnOnce()
+{
     printf!("benching RPC on {}\t...", name);
 
     let (env, mut server) = new_bench_server();
-    let addr = server.local_addr();
-    let mut client = RaftClient::new(env, Config::default());
 
-    let quit = Arc::new(AtomicUsize::new(0));
-    let quit1 = quit.clone();
-    server.init_recording(name.to_owned()).unwrap();
-
-    thread::spawn(move || {
-        // TODO: calc the precise duration for every eventloop tick.
-        let batch_size = 1024;
-        let flush_duration = 1;
-
-        let mut region_id = 0;
-        let sample = RaftMessage::new();
-        loop {
-            if 0 != quit.load(Ordering::Acquire) {
-                return;
-            }
-            region_id += 1;
-            let mut msg = sample.clone();
-            msg.set_region_id(region_id);
-            let _ = client.send(1, addr, msg);
-            if region_id % batch_size == 0 {
-                client.flush();
-                thread::sleep(Duration::from_millis(flush_duration));
-            }
-        }
-    });
+    run(env, &mut server);
 
     // Warming up about 5 seconds.
     thread::sleep(Duration::from_secs(5));
@@ -350,6 +345,93 @@ pub fn bench_raft_rpc() {
     printf!("\tQPS: {:.1}", qps);
     print_result(result);
 
-    quit1.store(1, Ordering::Release);
-    drop(server);
+    clean();
+    drop(server)
+}
+
+fn bench_kv_get_rpc() {
+    let name = "kv_get_unary";
+    let (tx_close, rx_close) = oneshot::channel();
+    let clean = move || {
+        drop(tx_close);
+    };
+    let run = move |env: Arc<Environment>, server: &mut BenchTikvServer| {
+        let addr = server.local_addr();
+
+        // Those settings are used by RaftClient.
+        let channel = ChannelBuilder::new(env)
+            .stream_initial_window_size(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE)
+            .max_receive_message_len(CLIENT_MAX_GRPC_RECV_MSG_LEN)
+            .max_send_message_len(CLIENT_MAX_GRPC_SEND_MSG_LEN)
+            .connect(&format!("{}", addr));
+        let client = TikvClient::new(channel);
+
+        server.init_recording(name.to_owned()).unwrap();
+
+        thread::spawn(move || {
+            let sample = vec![Ok(GetRequest::new())];
+
+            // If the relax_duration is too short, may cause oom.
+            let mut count = 0;
+            let relax = 1024;
+            let relax_duration = 10;
+
+            let _ = rx_close.select(stream::iter(sample.into_iter().cycle()).for_each(|req| {
+                    count += 1;
+                    if count % relax == 0 {
+                        thread::sleep(Duration::from_millis(relax_duration));
+                    }
+                    let req = client.kv_get_async(req).map(|_| ()).map_err(|_| ());
+                    client.spawn(req);
+                    Ok(())
+                }))
+                .wait();
+        });
+    };
+
+    run_bench(name, run, clean);
+}
+
+fn bench_raft_rpc() {
+    let name = "raft_client_streaming";
+    let quit = Arc::new(AtomicUsize::new(0));
+    let quit1 = quit.clone();
+    let clean = move || {
+        quit1.store(1, Ordering::Release);
+    };
+    let run = move |env: Arc<Environment>, server: &mut BenchTikvServer| {
+        let addr = server.local_addr();
+        let mut client = RaftClient::new(env, Config::default());
+        server.init_recording(name.to_owned()).unwrap();
+
+        thread::spawn(move || {
+            // TODO: calc the precise duration for every eventloop tick.
+            //       if the flush_duration is too short, may cause oom.
+            let batch_size = 1024;
+            let flush_duration = 1;
+
+            let mut region_id = 0;
+            let sample = RaftMessage::new();
+            loop {
+                if 0 != quit.load(Ordering::Acquire) {
+                    return;
+                }
+                region_id += 1;
+                let mut msg = sample.clone();
+                msg.set_region_id(region_id);
+                let _ = client.send(1, addr, msg);
+                if region_id % batch_size == 0 {
+                    client.flush();
+                    thread::sleep(Duration::from_millis(flush_duration));
+                }
+            }
+        });
+    };
+
+    run_bench(name, run, clean);
+}
+
+pub fn bench_rpc() {
+    bench_raft_rpc();
+    bench_kv_get_rpc();
 }

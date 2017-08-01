@@ -37,6 +37,7 @@ extern crate time;
 extern crate futures;
 extern crate tokio_core;
 extern crate grpcio as grpc;
+extern crate crossbeam;
 
 #[allow(dead_code)]
 #[path="../../tests/util.rs"]
@@ -98,5 +99,5 @@ fn main() {
     // TODO allow user to specify flag to just bench some cases.
     raftstore::bench_raftstore();
     mvcc::bench_engine();
-    rpc::bench_raft_rpc();
+    rpc::bench_rpc();
 }
