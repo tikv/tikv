@@ -17,12 +17,12 @@ use raftstore::store;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
+use rocksdb::TablePropertiesCollection;
 use storage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
-use util::properties::{UserProperties, GetPropertiesOptions};
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Debug};
@@ -426,11 +426,8 @@ impl Snapshot for RegionSnapshot {
         Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, iter_opt)), mode))
     }
 
-    fn get_properties_cf(&self,
-                         cf: CfName,
-                         opts: &GetPropertiesOptions)
-                         -> engine::Result<UserProperties> {
-        RegionSnapshot::get_properties_cf(self, cf, opts).map_err(|e| e.into())
+    fn get_properties_cf(&self, cf: CfName) -> engine::Result<TablePropertiesCollection> {
+        RegionSnapshot::get_properties_cf(self, cf).map_err(|e| e.into())
     }
 
     fn clone(&self) -> Box<Snapshot> {
