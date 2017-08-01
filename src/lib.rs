@@ -67,7 +67,6 @@ extern crate tokio_core;
 extern crate tokio_timer;
 extern crate serde_json;
 extern crate serde;
-#[cfg(test)]
 #[macro_use]
 extern crate serde_derive;
 extern crate toml;
