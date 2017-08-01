@@ -1298,7 +1298,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
