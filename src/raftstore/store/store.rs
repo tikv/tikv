@@ -1248,7 +1248,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     self.on_ready_verify_hash(region_id, index, hash)
                 }
                 ExecResult::DeleteRange { .. } => {
-                    // TODO: reclaim disk space
+                    // TODO: clean user properties?
                 }
             }
         }
