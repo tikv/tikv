@@ -29,7 +29,7 @@ pub mod config;
 pub mod types;
 mod metrics;
 
-pub use self::config::Config;
+pub use self::config::{Config, DEFAULT_DATA_DIR};
 pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cursor,
                        Error as EngineError, ScanMode, Statistics, CFStatistics};
 pub use self::engine::raftkv::RaftKv;
@@ -416,7 +416,7 @@ pub struct Storage {
 
 impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
-        let (tx, rx) = mpsc::sync_channel(config.sched_notify_capacity);
+        let (tx, rx) = mpsc::sync_channel(config.scheduler_notify_capacity);
         let sendch = SyncSendCh::new(tx, "kv-storage");
 
         info!("storage {:?} started.", engine);
@@ -432,7 +432,7 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let engine = try!(engine::new_local_engine(&config.path, ALL_CFS));
+        let engine = try!(engine::new_local_engine(&config.data_dir, ALL_CFS));
         Storage::from_engine(engine, config)
     }
 
@@ -445,9 +445,9 @@ impl Storage {
         let engine = self.engine.clone();
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
         let rx = handle.receiver.take().unwrap();
-        let sched_concurrency = config.sched_concurrency;
-        let sched_worker_pool_size = config.sched_worker_pool_size;
-        let sched_too_busy_threshold = config.sched_too_busy_threshold;
+        let sched_concurrency = config.scheduler_concurrency;
+        let sched_worker_pool_size = config.scheduler_worker_pool_size;
+        let sched_too_busy_threshold = config.scheduler_too_busy_threshold;
         let ch = self.sendch.clone();
         let h = try!(builder.spawn(move || {
             let mut sched = Scheduler::new(engine,
@@ -933,7 +933,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -975,9 +975,9 @@ mod tests {
 
     #[test]
     fn test_put_with_err() {
-        let config = Config::new();
+        let config = Config::default();
         // New engine lack of some column families.
-        let engine = engine::new_local_engine(&config.path, &["default"]).unwrap();
+        let engine = engine::new_local_engine(&config.data_dir, &["default"]).unwrap();
         let mut storage = Storage::from_engine(engine, &config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -998,7 +998,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1040,7 +1040,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1080,7 +1080,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1139,8 +1139,8 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
-        let mut config = Config::new();
-        config.sched_too_busy_threshold = 1;
+        let mut config = Config::default();
+        config.scheduler_too_busy_threshold = 1;
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1179,7 +1179,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1208,7 +1208,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let config = Config::new();
+        let config = Config::default();
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -1254,8 +1254,8 @@ mod tests {
 
     #[test]
     fn test_high_priority_no_block() {
-        let mut config = Config::new();
-        config.sched_worker_pool_size = 1;
+        let mut config = Config::default();
+        config.scheduler_worker_pool_size = 1;
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
