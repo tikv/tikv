@@ -70,6 +70,10 @@ pub trait Engine: Send + Debug {
     /// Snapshots are token by `Context`s, the results are send to the `on_finished` callback,
     /// with the same order. If a read-index is occurred, a `None` is placed in the corresponding
     /// slot, and the caller is responsible for reissuing it again, in `async_snapshot`.
+    // TODO:
+    //   - replace Option with Result and define an Error for requiring read-index.
+    //   - add a new method for force read-index, that may be done
+    //     by renaming the `async_snapshot`.
     fn async_batch_snapshot(&self,
                             batch: Vec<Context>,
                             on_finished: BatchCallback<Box<Snapshot>>)

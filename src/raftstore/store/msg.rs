@@ -57,7 +57,7 @@ pub enum Msg {
         callback: Callback,
     },
 
-    BatchRaftCmds {
+    BatchRaftSnapCmds {
         send_time: Instant,
         batch: Vec<RaftCmdRequest>,
         on_finished: BatchCallback,
@@ -89,7 +89,7 @@ impl fmt::Debug for Msg {
             Msg::Quit => write!(fmt, "Quit"),
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
-            Msg::BatchRaftCmds { .. } => write!(fmt, "Batch Raft Commands"),
+            Msg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
             Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
             Msg::ReportUnreachable { ref region_id, ref to_peer_id } => {
                 write!(fmt,
@@ -118,8 +118,8 @@ impl Msg {
         }
     }
 
-    pub fn new_batch_raft_cmds(batch: Vec<RaftCmdRequest>, on_finished: BatchCallback) -> Msg {
-        Msg::BatchRaftCmds {
+    pub fn new_batch_raft_snapshot_cmd(batch: Vec<RaftCmdRequest>, on_finished: BatchCallback) -> Msg {
+        Msg::BatchRaftSnapCmds {
             send_time: Instant::now(),
             batch: batch,
             on_finished: on_finished,

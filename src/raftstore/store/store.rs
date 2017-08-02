@@ -1290,50 +1290,57 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // we will call the callback with timeout error.
     }
 
-    fn batch_propose_raft_commands_for_snapshot(&mut self,
+    fn propose_batch_raft_snapshot_command(&mut self,
                                                 batch: Vec<RaftCmdRequest>,
                                                 on_finished: BatchCallback) {
-        let batch_size = batch.len();
-        let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; batch_size];
-        let mut grouped: HashMap<u64, Vec<(usize, RaftCmdRequest, RaftCmdResponse)>> =
-            HashMap::default();
+        let size = batch.len();
+        let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
+        let mut batch_sizes: HashMap<_, u64> = HashMap::default();
+        let mut cache: HashMap<u64, Option<Option<RaftCmdResponse>>> = HashMap::default();
         for (idx, msg) in batch.into_iter().enumerate() {
-            let mut resp = RaftCmdResponse::new();
+            let mut err_resp = RaftCmdResponse::new();
 
             if let Err(e) = self.validate_store_id(&msg) {
-                bind_error(&mut resp, e);
-                ret[idx] = Some(resp);
+                bind_error(&mut err_resp, e);
+                ret[idx] = Some(err_resp);
                 continue;
             }
 
-            // Skip handling status requests, since it does not contain any status requests.
-
             if let Err(e) = self.validate_region(&msg) {
-                bind_error(&mut resp, e);
-                ret[idx] = Some(resp);
+                bind_error(&mut err_resp, e);
+                ret[idx] = Some(err_resp);
                 continue;
             }
 
             let region_id = msg.get_header().get_region_id();
-            let peer = self.region_peers.get(&region_id).unwrap();
-            let term = peer.term();
-            bind_term(&mut resp, term);
-            let mut group = grouped.entry(region_id).or_insert_with(Vec::new);
-            group.push((idx, msg, resp));
-        }
-
-        // Note:
-        // The peer that is being checked is a leader. It might step down to be a follower
-        // later. It doesn't matter whether the peer is a leader or not.
-        // If it's not a leader, the proposing command log entry can't be committed.
-
-        for (region_id, batch) in grouped {
             let mut peer = self.region_peers.get_mut(&region_id).unwrap();
-            let resps = peer.batch_propose_read(batch, &mut self.raft_metrics.propose);
-            for (idx, resp) in resps {
-                ret[idx] = Some(resp);
+
+            let mut count = batch_sizes.entry(region_id).or_insert(0);
+            *count += 1;
+            let mut resp = cache.entry(region_id).or_insert_with(|| None);
+            match *resp {
+                None => {
+                    let r = peer.propose_snapshot(msg, &mut self.raft_metrics.propose);
+                    match r {
+                        Some(r) => {
+                            ret[idx] = Some(r.clone());
+                            *resp = Some(Some(r));
+                        }
+                        None => *resp = Some(None),
+                    }
+                }
+                Some(Some(ref resp)) => {
+                    ret[idx] = Some(resp.clone());
+                }
+                // ReadIndex occurred.
+                Some(None) => (),
             }
         }
+
+        for (_, size) in batch_sizes {
+            self.raft_metrics.propose.batch_local_read.observe(size as u64 as f64);
+        }
+
         on_finished.call_box((ret,));
 
         // TODO: add timeout, if the command is not applied after timeout,
@@ -2097,12 +2104,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.propose_raft_command(request, callback)
             }
             // For now, it is only called by batch snapshot.
-            Msg::BatchRaftCmds { send_time, batch, on_finished } => {
+            Msg::BatchRaftSnapCmds { send_time, batch, on_finished } => {
                 self.raft_metrics
                     .propose
                     .request_wait_time
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
-                self.batch_propose_raft_commands_for_snapshot(batch, on_finished);
+                self.propose_batch_raft_snapshot_command(batch, on_finished);
             }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);

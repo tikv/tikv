@@ -52,7 +52,7 @@ pub trait RaftStoreRouter: Send + Clone {
                            batch: Vec<RaftCmdRequest>,
                            on_finished: BatchCallback)
                            -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_batch_raft_cmds(batch, on_finished))
+        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64, _: u64) -> RaftStoreResult<()> {
@@ -97,7 +97,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
                            batch: Vec<RaftCmdRequest>,
                            on_finished: BatchCallback)
                            -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_batch_raft_cmds(batch, on_finished))
+        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
 
     fn report_unreachable(&self,
