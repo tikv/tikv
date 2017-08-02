@@ -18,6 +18,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::error;
 use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
+use std::u64;
 use kvproto::kvrpcpb::{LockInfo, CommandPri};
 use kvproto::errorpb;
 use self::metrics::*;
@@ -606,7 +607,17 @@ impl Storage {
                               -> Result<()> {
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
-            modifies.push(Modify::DeleteRange(cf, start_key.clone(), end_key.clone()));
+            // We enable memtable prefix bloom for CF_WRITE, for delete_range operation
+            // RocksDB will add start key to the prefix bloom, and the start key will go
+            // through function prefix_extractor, in our case the prefix_extractor is
+            // FixedSuffixSliceTransform which will trim the timestamp at the tail. If the
+            // length of start key less than 8, we will encounter index out of range error.
+            let s = if *cf == CF_WRITE {
+                start_key.append_ts(u64::MAX)
+            } else {
+                start_key.clone()
+            };
+            modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
         }
 
         try!(self.engine.async_write(&ctx,
