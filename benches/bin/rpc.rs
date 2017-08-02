@@ -16,12 +16,13 @@ use std::str::FromStr;
 use std::time::{Instant, Duration};
 use std::net::{SocketAddr, IpAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
 use kvproto::tikvpb_grpc::*;
 use kvproto::coprocessor::{Request, Response};
 use kvproto::raft_serverpb::{RaftMessage, Done, SnapshotChunk};
 use kvproto::kvrpcpb::*;
+use kvproto::metapb::*;
 
 use futures::{Future, Stream, future, stream};
 use futures::sync::oneshot;
@@ -299,8 +300,8 @@ impl BenchTikvServer {
     }
 
     pub fn recv(&self) -> Result<(), String> {
-        if self.rx.is_some() {
-            self.rx.as_ref().unwrap().pop();
+        if let Some(ref rx) = self.rx {
+            rx.pop();
             Ok(())
         } else {
             Err("Benchmark is not ready".to_owned())
@@ -369,7 +370,23 @@ fn bench_kv_get_rpc() {
         server.init_recording(name.to_owned()).unwrap();
 
         thread::spawn(move || {
-            let sample = vec![Ok(GetRequest::new())];
+            let mut get = GetRequest::new();
+            let mut ctx = Context::new();
+            ctx.set_region_id(1);
+            let mut epoch = RegionEpoch::new();
+            epoch.set_conf_ver(1);
+            epoch.set_version(1);
+            ctx.set_region_epoch(epoch);
+            let mut peer = Peer::new();
+            peer.set_id(1);
+            peer.set_store_id(1);
+            ctx.set_peer(peer);
+            ctx.set_term(1);
+            get.set_context(ctx);
+
+            get.set_key(b"key".to_vec());
+            get.set_version(1);
+            let sample = vec![Ok(get)];
 
             // If the relax_duration is too short, may cause oom.
             let mut count = 0;
@@ -394,10 +411,10 @@ fn bench_kv_get_rpc() {
 
 fn bench_raft_rpc() {
     let name = "raft_client_streaming";
-    let quit = Arc::new(AtomicUsize::new(0));
+    let quit = Arc::new(AtomicBool::new(false));
     let quit1 = quit.clone();
     let clean = move || {
-        quit1.store(1, Ordering::Release);
+        quit1.store(true, Ordering::Release);
     };
     let run = move |env: Arc<Environment>, server: &mut BenchTikvServer| {
         let addr = server.local_addr();
@@ -410,17 +427,31 @@ fn bench_raft_rpc() {
             let batch_size = 1024;
             let flush_duration = 1;
 
-            let mut region_id = 0;
-            let sample = RaftMessage::new();
+            let mut sample = RaftMessage::new();
+            sample.set_region_id(1);
+
+            let mut epoch = RegionEpoch::new();
+            epoch.set_conf_ver(1);
+            epoch.set_version(1);
+            sample.set_region_epoch(epoch);
+
+            let mut peer = Peer::new();
+            peer.set_id(1);
+            peer.set_store_id(1);
+            sample.set_from_peer(peer.clone());
+            sample.set_to_peer(peer);
+
+            sample.set_start_key(b"aaaa".to_vec());
+            sample.set_end_key(b"bbbb".to_vec());
+
+            let mut count = 0;
             loop {
-                if 0 != quit.load(Ordering::Acquire) {
+                if quit.load(Ordering::Acquire) {
                     return;
                 }
-                region_id += 1;
-                let mut msg = sample.clone();
-                msg.set_region_id(region_id);
-                let _ = client.send(1, addr, msg);
-                if region_id % batch_size == 0 {
+                let _ = client.send(1, addr, sample.clone());
+                count += 1;
+                if count % batch_size == 0 {
                     client.flush();
                     thread::sleep(Duration::from_millis(flush_duration));
                 }
