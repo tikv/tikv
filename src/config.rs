@@ -388,7 +388,7 @@ impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
             log_level: LogLevelFilter::Info,
-            log_file: "tikv.log".to_owned(),
+            log_file: "".to_owned(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),

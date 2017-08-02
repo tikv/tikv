@@ -77,7 +77,7 @@ fn exit_with_err<E: Error>(e: E) -> ! {
 }
 
 fn exit_with_msg(msg: String) -> ! {
-    error!("{}", msg);
+    eprintln!("{}", msg);
     process::exit(1)
 }
 
@@ -334,16 +334,24 @@ fn main() {
     }
 
     let mut config = matches.value_of("config").map_or_else(TiKvConfig::default, |path| {
-        let mut config_file = File::open(&path).expect("config open failed");
-        let mut s = String::new();
-        config_file.read_to_string(&mut s).expect("config read failed");
-        toml::from_str(&s).unwrap_or_else(|e| exit_with_err(e))
+        File::open(&path)
+            .map_err::<Box<Error>, _>(|e| Box::new(e))
+            .and_then(|mut f| {
+                let mut s = String::new();
+                try!(f.read_to_string(&mut s));
+                let c = try!(toml::from_str(&s));
+                Ok(c)
+            }).unwrap_or_else(|e| {
+                eprintln!("{:?}", e);
+                process::exit(-1);
+            })
     });
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
     if let Err(e) = config.validate() {
-        exit_with_msg(format!("{:?}", e));
+        eprintln!("{:?}", e);
+        process::exit(-1);
     }
 
     init_log(&config);
