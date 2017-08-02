@@ -311,7 +311,7 @@ pub trait DecodeProperties {
         while !buf.is_empty() {
             let klen = try!(buf.decode_u64());
             let mut k = vec![0; klen as usize];
-            try!(buf.read_exact(k.as_mut_slice()));
+            try!(buf.read_exact(&mut k));
             let mut v = IndexHandle::default();
             v.size = try!(buf.decode_u64());
             v.offset = try!(buf.decode_u64());
