@@ -1291,8 +1291,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn propose_batch_raft_snapshot_command(&mut self,
-                                                batch: Vec<RaftCmdRequest>,
-                                                on_finished: BatchCallback) {
+                                           batch: Vec<RaftCmdRequest>,
+                                           on_finished: BatchCallback) {
         let size = batch.len();
         let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
         let mut batch_sizes: HashMap<_, u64> = HashMap::default();
