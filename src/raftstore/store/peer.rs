@@ -947,7 +947,8 @@ impl Peer {
                    cb: Callback,
                    req: RaftCmdRequest,
                    mut err_resp: RaftCmdResponse,
-                   metrics: &mut RaftProposeMetrics)
+                   metrics: &mut RaftProposeMetrics,
+                   now: &mut Option<Timespec>)
                    -> bool {
         if self.pending_remove {
             return false;
@@ -957,12 +958,13 @@ impl Peer {
 
         let mut is_conf_change = false;
 
-        let res = match self.get_handle_policy(&req) {
+        let res = match self.get_handle_policy(&req, now) {
             Ok(RequestPolicy::ReadLocal) => {
                 self.read_local(req, cb, metrics);
+                // Do we need to renew now here in case read local takes too much time?
                 return false;
             }
-            Ok(RequestPolicy::ReadIndex) => return self.read_index(req, cb, metrics),
+            Ok(RequestPolicy::ReadIndex) => return self.read_index(req, cb, metrics, now),
             Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(req, cb, metrics)
@@ -986,15 +988,19 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: None,
                 };
-                self.post_propose(meta, is_conf_change, cb);
+                self.post_propose(meta, is_conf_change, cb, now);
                 true
             }
         }
     }
 
-    fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
+    fn post_propose(&mut self,
+                    mut meta: ProposalMeta,
+                    is_conf_change: bool,
+                    cb: Callback,
+                    now: &mut Option<Timespec>) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(clocktime::raw_now());
+        meta.renew_lease_time = Some(*now.get_or_insert_with(clocktime::raw_now));
 
         let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
         self.apply_proposals.push(p);
@@ -1002,7 +1008,10 @@ impl Peer {
         self.proposals.push(meta);
     }
 
-    fn get_handle_policy(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
+    fn get_handle_policy(&mut self,
+                         req: &RaftCmdRequest,
+                         now: &mut Option<Timespec>)
+                         -> Result<RequestPolicy> {
         if req.has_admin_request() {
             if apply::get_change_peer_cmd(req).is_some() {
                 return Ok(RequestPolicy::ProposeConfChange);
@@ -1052,7 +1061,7 @@ impl Peer {
         }
 
         if let Some(Either::Left(safe_expired_time)) = self.leader_lease_expired_time {
-            if clocktime::raw_now() <= safe_expired_time {
+            if *now.get_or_insert_with(clocktime::raw_now) <= safe_expired_time {
                 return Ok(RequestPolicy::ReadLocal);
             }
 
@@ -1181,11 +1190,12 @@ impl Peer {
     fn read_index(&mut self,
                   req: RaftCmdRequest,
                   cb: Callback,
-                  metrics: &mut RaftProposeMetrics)
+                  metrics: &mut RaftProposeMetrics,
+                  now: &mut Option<Timespec>)
                   -> bool {
         metrics.read_index += 1;
 
-        let renew_lease_time = clocktime::raw_now();
+        let renew_lease_time = *now.get_or_insert_with(clocktime::raw_now);
         if let Some(read) = self.pending_reads.reads.back_mut() {
             if read.renew_lease_time + self.cfg.raft_store_max_leader_lease > renew_lease_time {
                 read.cmds.push((req, cb));
@@ -1232,7 +1242,7 @@ impl Peer {
                 term: self.term(),
                 renew_lease_time: Some(renew_lease_time),
             };
-            self.post_propose(meta, false, box |_| {});
+            self.post_propose(meta, false, box |_| {}, now);
         }
 
         true

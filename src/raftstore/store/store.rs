@@ -1282,7 +1282,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
         bind_term(&mut resp, term);
-        if peer.propose(cb, msg, resp, &mut self.raft_metrics.propose) {
+        let mut now = None;
+        if peer.propose(cb, msg, resp, &mut self.raft_metrics.propose, &mut now) {
             peer.mark_to_be_checked(&mut self.pending_raft_groups);
         }
 
