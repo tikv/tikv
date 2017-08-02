@@ -992,39 +992,42 @@ impl Peer {
         }
     }
 
-    /// Batch propose read-only requests. Note that the size of returned responses
-    /// may be smaller then the requests, because the missing responses require the
-    /// peer to perform a read-index.
-    pub fn batch_propose_read(&mut self,
-                              batch: Vec<(usize, RaftCmdRequest, RaftCmdResponse)>,
-                              metrics: &mut RaftProposeMetrics)
-                              -> Vec<(usize, RaftCmdResponse)> {
-        let mut err_resps = Vec::new();
-        let mut reqs = Vec::with_capacity(batch.len());
-        for (idx, req, mut err_resp) in batch {
-            if self.pending_remove {
-                continue;
-            }
-
-            metrics.all += 1;
-
-            match self.get_handle_policy(&req) {
-                Ok(RequestPolicy::ReadLocal) => {
-                    reqs.push((idx, req));
-                }
-                // require to propose again, and use the `propose` above.
-                Ok(RequestPolicy::ReadIndex) => (),
-                Ok(_) => unreachable!(),
-                Err(e) => {
-                    cmd_resp::bind_error(&mut err_resp, e);
-                    err_resps.push((idx, err_resp));
-                }
-            }
+    /// propose a snapshot request. Note that the `None` response means
+    /// it requires the peer to perform a read-index.
+    pub fn propose_snapshot(&mut self,
+                            req: RaftCmdRequest,
+                            metrics: &mut RaftProposeMetrics)
+                            -> Option<RaftCmdResponse> {
+        metrics.all += 1;
+        if self.pending_remove {
+            return None;
         }
 
-        let mut resps = self.batch_read_local(reqs, metrics);
-        resps.extend(err_resps);
-        resps
+        // TODO: deny no snapshot request.
+
+        match self.get_handle_policy(&req) {
+            Ok(RequestPolicy::ReadLocal) => {
+                metrics.local_read += 1;
+                let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
+                    match e {
+                        Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                        _ => error!("{} execute raft command err: {:?}", self.tag, e),
+                    }
+                    cmd_resp::new_error(e)
+                });
+
+                cmd_resp::bind_term(&mut resp, self.term());
+                Some(resp)
+            }
+            // require to propose again, and use the `propose` above.
+            Ok(RequestPolicy::ReadIndex) => None,
+            Ok(_) => unreachable!(),
+            Err(e) => {
+                let mut resp = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut resp, self.term());
+                Some(resp)
+            }
+        }
     }
 
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
@@ -1213,15 +1216,6 @@ impl Peer {
         self.handle_read(req, cb);
     }
 
-    fn batch_read_local(&mut self,
-                        batch: Vec<(usize, RaftCmdRequest)>,
-                        metrics: &mut RaftProposeMetrics)
-                        -> Vec<(usize, RaftCmdResponse)> {
-        metrics.local_read += batch.len() as u64;
-        metrics.batch_local_read.observe(batch.len() as f64);
-        self.handle_batch_read(batch)
-    }
-
     fn read_index(&mut self,
                   req: RaftCmdRequest,
                   cb: Callback,
@@ -1378,26 +1372,6 @@ impl Peer {
         }
 
         Ok(propose_index)
-    }
-
-    fn handle_batch_read(&mut self,
-                         batch: Vec<(usize, RaftCmdRequest)>)
-                         -> Vec<(usize, RaftCmdResponse)> {
-        self.batch_exec_read(batch)
-            .into_iter()
-            .map(|(idx, resp)| {
-                let mut resp = resp.unwrap_or_else(|e| {
-                    match e {
-                        Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
-                        _ => error!("{} execute raft command err: {:?}", self.tag, e),
-                    }
-                    cmd_resp::new_error(e)
-                });
-
-                cmd_resp::bind_term(&mut resp, self.term());
-                (idx, resp)
-            })
-            .collect()
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest, cb: Callback) {
@@ -1595,8 +1569,8 @@ impl Peer {
                     try!(apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req))
                 }
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
-                CmdType::Prewrite | CmdType::Put | CmdType::Delete | CmdType::Invalid |
-                CmdType::DeleteRange => unreachable!(),
+                CmdType::Prewrite => unreachable!(),
+                CmdType::Put | CmdType::Delete | CmdType::Invalid | CmdType::DeleteRange => unreachable!(),
             };
 
             resp.set_cmd_type(cmd_type);
@@ -1607,39 +1581,6 @@ impl Peer {
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(protobuf::RepeatedField::from_vec(responses));
         Ok(resp)
-    }
-
-    fn batch_exec_read(&mut self,
-                       batch: Vec<(usize, RaftCmdRequest)>)
-                       -> Vec<(usize, Result<RaftCmdResponse>)> {
-        let mut ret = Vec::with_capacity(batch.len());
-
-        for (idx, cmd) in batch {
-            if let Err(e) = check_epoch(self.region(), &cmd) {
-                ret.push((idx, Err(e)));
-                continue;
-            }
-
-            let requests = cmd.get_requests();
-            let mut responses = Vec::with_capacity(requests.len());
-            let resp = apply::do_snap(self.region().to_owned()).unwrap();
-            for req in requests {
-                let cmd_type = req.get_cmd_type();
-                let mut resp = match cmd_type {
-                    CmdType::Snap => resp.clone(),
-                    CmdType::Prewrite | CmdType::Get | CmdType::Put | CmdType::Delete |
-                    CmdType::Invalid | CmdType::DeleteRange => unreachable!(),
-                };
-
-                resp.set_cmd_type(cmd_type);
-                responses.push(resp);
-            }
-            let mut resp = RaftCmdResponse::new();
-            resp.set_responses(protobuf::RepeatedField::from_vec(responses));
-            ret.push((idx, Ok(resp)));
-        }
-
-        ret
     }
 }
 
