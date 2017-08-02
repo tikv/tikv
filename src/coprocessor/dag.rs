@@ -98,19 +98,19 @@ impl<'s> DAGContext<'s> {
                        mut first: Executor,
                        statistics: &'s mut Statistics)
                        -> Box<DAGExecutor + 's> {
-        let snapshot = SnapshotStore::new(self.snap, self.req.get_start_ts(), self.isolation_level);
+        let store = SnapshotStore::new(self.snap, self.req.get_start_ts(), self.isolation_level);
 
         match first.get_tp() {
             ExecType::TypeTableScan => {
                 Box::new(TableScanExecutor::new(first.take_tbl_scan(),
                                                 self.ranges.clone(),
-                                                snapshot,
+                                                store,
                                                 statistics))
             }
             ExecType::TypeIndexScan => {
                 Box::new(IndexScanExecutor::new(first.take_idx_scan(),
                                                 self.ranges.clone(),
-                                                snapshot,
+                                                store,
                                                 statistics))
             }
             _ => unreachable!(),
