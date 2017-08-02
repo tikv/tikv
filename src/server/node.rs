@@ -338,13 +338,6 @@ impl<C> Node<C>
     }
 }
 
-impl<C> Drop for Node<C>
-    where C: PdClient
-{
-    fn drop(&mut self) {
-        self.stop().unwrap();
-    }
-}
 #[cfg(test)]
 mod tests {
     use raftstore::store::keys;

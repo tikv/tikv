@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::ascii::AsciiExt;
-use std::cmp;
 
 use sys_info;
 
@@ -32,8 +31,6 @@ const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
-const DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO: f64 = 0.25;
-const DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT: usize = 2;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,8 +53,6 @@ pub struct Config {
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub end_point_concurrency: usize,
-    pub end_point_txn_concurrency_on_busy: usize,
-    pub end_point_small_txn_tasks_limit: usize,
 
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
@@ -66,7 +61,12 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let (concurrency, txn_concurrency) = Config::default_concurrency();
+        let cpu_num = sys_info::cpu_num().unwrap();
+        let concurrency = if cpu_num > 8 {
+            (cpu_num as f64 * 0.8) as usize
+        } else {
+            4
+        };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -79,29 +79,11 @@ impl Default for Config {
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             end_point_concurrency: concurrency,
-            end_point_txn_concurrency_on_busy: txn_concurrency,
-            end_point_small_txn_tasks_limit: DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT,
         }
     }
 }
 
 impl Config {
-    fn default_concurrency() -> (usize, usize) {
-        let cpu_num = sys_info::cpu_num().unwrap();
-        let concurrency = if cpu_num > 8 {
-            (cpu_num as f64 * 0.8) as usize
-        } else {
-            4
-        };
-        let txn_concurrency = Config::calc_txn_concurrency(concurrency);
-        (concurrency, txn_concurrency)
-    }
-
-    fn calc_txn_concurrency(concurrency: usize) -> usize {
-        let txn_concurrency = (concurrency as f64 * DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
-        cmp::max(txn_concurrency, 1)
-    }
-
     pub fn validate(&mut self) -> Result<()> {
         box_try!(config::check_addr(&self.addr));
         if !self.advertise_addr.is_empty() {
@@ -118,24 +100,6 @@ impl Config {
             return Err(box_err!("server.server.end-point-concurrency: {} is invalid, \
                                  shouldn't be 0",
                                 self.end_point_concurrency));
-        }
-
-        let (concurrency, txn_concurrency) = Config::default_concurrency();
-        if self.end_point_concurrency != concurrency && self.end_point_txn_concurrency_on_busy == txn_concurrency {
-            self.end_point_txn_concurrency_on_busy = Config::calc_txn_concurrency(self.end_point_concurrency);
-        }
-
-        if self.end_point_txn_concurrency_on_busy > self.end_point_concurrency ||
-           self.end_point_txn_concurrency_on_busy == 0 {
-            return Err(box_err!("server.end-point-txn-concurrency-on-busy: {} is invalid, \
-                                 should be in [1,{}]",
-                                self.end_point_txn_concurrency_on_busy,
-                                self.end_point_concurrency));
-        }
-
-        if self.end_point_small_txn_tasks_limit == 0 {
-            return Err(box_err!("server.end-point-small-txn-tasks-limit: \
-                                    shouldn't be 0"));
         }
 
         for (k, v) in &self.labels {
@@ -179,52 +143,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_end_point_txn_concurrency() {
+    fn test_config_validate() {
         let mut cfg = Config::default();
-        let default_txn_concurrency = cfg.end_point_txn_concurrency_on_busy;
-        let expect = ((cfg.end_point_concurrency as f64) *
-                      DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
-        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
-        cfg.end_point_concurrency = 18;
+        assert!(cfg.advertise_addr.is_empty());
         cfg.validate().unwrap();
-        let expect = ((cfg.end_point_concurrency as f64) *
-                      DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
-        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
+        assert_eq!(cfg.addr, cfg.advertise_addr);
 
-        cfg.end_point_concurrency = 2;
-        cfg.end_point_txn_concurrency_on_busy = default_txn_concurrency;
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.end_point_concurrency = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        invalid_cfg = Config::default();
+        invalid_cfg.addr = "0.0.0.0:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
+        invalid_cfg.validate().unwrap();
+
+        cfg.labels.insert("k1".to_owned(), "v1".to_owned());
         cfg.validate().unwrap();
-        assert_eq!(cfg.end_point_txn_concurrency_on_busy, 1);
-    }
-
-    #[test]
-    fn test_validate_endpoint_cfg() {
-        let mut cfg = Config::default();
-        assert!(cfg.validate().is_ok());
-        let txn_concurrency = cfg.end_point_txn_concurrency_on_busy;
-
-        // invalid end-point-concurrency
-        cfg.end_point_concurrency = 0;
+        cfg.labels.insert("k2".to_owned(), "v2?".to_owned());
         assert!(cfg.validate().is_err());
-        cfg.end_point_concurrency = 10;
-        assert!(cfg.validate().is_ok());
-
-        // invalid end-point-txn-concurrency-on-busy
-        cfg.end_point_txn_concurrency_on_busy = cfg.end_point_concurrency + 1;
-        assert!(cfg.validate().is_err());
-        cfg.end_point_txn_concurrency_on_busy = 0;
-        assert!(cfg.validate().is_err());
-        cfg.end_point_txn_concurrency_on_busy = txn_concurrency;
-        // It should auto reconfig txn concurrency if it's default value.
-        assert!(cfg.validate().is_ok());
-        assert_ne!(cfg.end_point_txn_concurrency_on_busy, txn_concurrency);
-
-        // invalid end-point-small-txn-tasks-limit
-        cfg.end_point_small_txn_tasks_limit = 0;
-        assert!(cfg.validate().is_err());
-        cfg.end_point_small_txn_tasks_limit = DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT;
-
-        assert!(cfg.validate().is_ok());
     }
 
     #[test]

@@ -25,11 +25,13 @@ use super::cluster::{Simulator, Cluster};
 use tikv::config::TiKvConfig;
 use tikv::server::{Server, ServerTransport};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, RaftClient};
+use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
 use tikv::util::transport::SendCh;
+use tikv::util::worker::Worker;
 use tikv::storage::{Engine, CfName, ALL_CFS};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
@@ -42,13 +44,18 @@ type SimulateServerTransport = SimulateTransport<RaftMessage,
                                                  ServerTransport<SimulateStoreTransport,
                                                                  PdStoreAddrResolver>>;
 
+struct ServerMeta {
+    node: Node<TestPdClient>,
+    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    router: SimulateStoreTransport,
+    sim_trans: SimulateServerTransport,
+    store_ch: SendCh<StoreMsg>,
+    worker: Worker<ResolveTask>,
+}
+
 pub struct ServerCluster {
-    routers: HashMap<u64, SimulateStoreTransport>,
-    servers: HashMap<u64, Server<SimulateStoreTransport, PdStoreAddrResolver>>,
-    nodes: HashMap<u64, Node<TestPdClient>>,
+    metas: HashMap<u64, ServerMeta>,
     addrs: HashMap<u64, SocketAddr>,
-    sim_trans: HashMap<u64, SimulateServerTransport>,
-    store_chs: HashMap<u64, SendCh<StoreMsg>>,
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
@@ -58,13 +65,9 @@ pub struct ServerCluster {
 impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
         ServerCluster {
-            routers: HashMap::new(),
-            servers: HashMap::new(),
-            nodes: HashMap::new(),
+            metas: HashMap::new(),
             addrs: HashMap::new(),
-            sim_trans: HashMap::new(),
             pd_client: pd_client,
-            store_chs: HashMap::new(),
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
             raft_client: RaftClient::new(Arc::new(Environment::new(1)), Config::default()),
@@ -75,8 +78,7 @@ impl ServerCluster {
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
     fn run_node(&mut self, node_id: u64, mut cfg: TiKvConfig, engine: Arc<DB>) -> u64 {
-        assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
-        assert!(node_id == 0 || !self.servers.contains_key(&node_id));
+        assert!(node_id == 0 || !self.metas.contains_key(&node_id));
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = TempDir::new("test_cluster").unwrap();
@@ -105,7 +107,7 @@ impl Simulator for ServerCluster {
         self.storages.insert(node_id, store.get_engine());
 
         // Create pd client, snapshot manager, server.
-        let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
+        let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
         let snap_mgr = SnapManager::new(tmp_str,
                                         Some(store_sendch),
                                         cfg.raft_store.use_sst_file_snapshot);
@@ -135,14 +137,18 @@ impl Simulator for ServerCluster {
         if let Some(tmp) = tmp {
             self.snap_paths.insert(node_id, tmp);
         }
-        self.store_chs.insert(node_id, node.get_sendch());
-        self.sim_trans.insert(node_id, simulate_trans);
 
         server.start(&cfg.server).unwrap();
 
-        self.nodes.insert(node_id, node);
-        self.servers.insert(node_id, server);
-        self.routers.insert(node_id, sim_router);
+        self.metas.insert(node_id,
+                          ServerMeta {
+                              store_ch: node.get_sendch(),
+                              node: node,
+                              server: server,
+                              router: sim_router,
+                              sim_trans: simulate_trans,
+                              worker: worker,
+                          });
         self.addrs.insert(node_id, addr);
 
         node_id
@@ -153,15 +159,15 @@ impl Simulator for ServerCluster {
     }
 
     fn stop_node(&mut self, node_id: u64) {
-        let mut server = self.servers.remove(&node_id).unwrap();
-        server.stop().unwrap();
-        let mut node = self.nodes.remove(&node_id).unwrap();
-        node.stop().unwrap();
-        let _ = self.store_chs.remove(&node_id).unwrap();
+        if let Some(mut meta) = self.metas.remove(&node_id) {
+            meta.server.stop().unwrap();
+            meta.node.stop().unwrap();
+            meta.worker.stop().unwrap().join().unwrap();
+        }
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {
-        self.nodes.keys().cloned().collect()
+        self.metas.keys().cloned().collect()
     }
 
     fn call_command_on_node(&self,
@@ -169,11 +175,10 @@ impl Simulator for ServerCluster {
                             request: RaftCmdRequest,
                             timeout: Duration)
                             -> Result<RaftCmdResponse> {
-        if !self.routers.contains_key(&node_id) {
-            return Err(box_err!("missing sender for store {}", node_id));
-        }
-
-        let router = self.routers.get(&node_id).cloned().unwrap();
+        let router = match self.metas.get(&node_id) {
+            None => return Err(box_err!("missing sender for store {}", node_id)),
+            Some(meta) => meta.router.clone(),
+        };
         wait_op!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
                      router.send_command(request, cb).unwrap()
                  },
@@ -190,23 +195,23 @@ impl Simulator for ServerCluster {
     }
 
     fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {
-        self.sim_trans.get_mut(&node_id).unwrap().add_filter(filter);
+        self.metas.get_mut(&node_id).unwrap().sim_trans.add_filter(filter);
     }
 
     fn clear_send_filters(&mut self, node_id: u64) {
-        self.sim_trans.get_mut(&node_id).unwrap().clear_filters();
+        self.metas.get_mut(&node_id).unwrap().sim_trans.clear_filters();
     }
 
     fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter) {
-        self.routers.get_mut(&node_id).unwrap().add_filter(filter);
+        self.metas.get_mut(&node_id).unwrap().router.add_filter(filter);
     }
 
     fn clear_recv_filters(&mut self, node_id: u64) {
-        self.routers.get_mut(&node_id).unwrap().clear_filters();
+        self.metas.get_mut(&node_id).unwrap().router.clear_filters();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<StoreMsg>> {
-        self.store_chs.get(&node_id).cloned()
+        self.metas.get(&node_id).map(|m| m.store_ch.clone())
     }
 }
 

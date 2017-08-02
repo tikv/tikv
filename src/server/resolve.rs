@@ -21,7 +21,7 @@ use kvproto::metapb;
 
 use util;
 use util::collections::HashMap;
-use util::worker::{Runnable, Worker};
+use util::worker::{Runnable, Scheduler, Worker};
 use pd::PdClient;
 
 use super::Result;
@@ -32,13 +32,13 @@ const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 pub type Callback = Box<FnBox(Result<SocketAddr>) + Send>;
 
 // StoreAddrResolver resolves the store address.
-pub trait StoreAddrResolver: Send {
+pub trait StoreAddrResolver: Send + Clone {
     // Resolve resolves the store address asynchronously.
     fn resolve(&self, store_id: u64, cb: Callback) -> Result<()>;
 }
 
 /// Snapshot generating task.
-struct Task {
+pub struct Task {
     store_id: u64,
     cb: Callback,
 }
@@ -107,23 +107,29 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct PdStoreAddrResolver {
-    worker: Worker<Task>,
+    sched: Scheduler<Task>,
 }
 
 impl PdStoreAddrResolver {
-    pub fn new<T>(pd_client: Arc<T>) -> Result<PdStoreAddrResolver>
-        where T: PdClient + 'static
-    {
-        let mut r = PdStoreAddrResolver { worker: Worker::new("store address resolve worker") };
-
-        let runner = Runner {
-            pd_client: pd_client,
-            store_addrs: HashMap::default(),
-        };
-        box_try!(r.worker.start(runner));
-        Ok(r)
+    pub fn new(sched: Scheduler<Task>) -> PdStoreAddrResolver {
+        PdStoreAddrResolver { sched: sched }
     }
+}
+
+pub fn new_resolver<T>(pd_client: Arc<T>) -> Result<(Worker<Task>, PdStoreAddrResolver)>
+    where T: PdClient + 'static
+{
+    let mut worker = Worker::new("store address resolve worker");
+
+    let runner = Runner {
+        pd_client: pd_client,
+        store_addrs: HashMap::default(),
+    };
+    box_try!(worker.start(runner));
+    let resolver = PdStoreAddrResolver { sched: worker.scheduler() };
+    Ok((worker, resolver))
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -132,16 +138,8 @@ impl StoreAddrResolver for PdStoreAddrResolver {
             store_id: store_id,
             cb: cb,
         };
-        box_try!(self.worker.schedule(task));
+        box_try!(self.sched.schedule(task));
         Ok(())
-    }
-}
-
-impl Drop for PdStoreAddrResolver {
-    fn drop(&mut self) {
-        if let Some(Err(e)) = self.worker.stop().map(|h| h.join()) {
-            error!("failed to stop store address resolve thread: {:?}!!!", e);
-        }
     }
 }
 

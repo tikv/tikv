@@ -63,9 +63,14 @@ impl Evaluator {
         }
     }
 
-    pub fn ceil_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn ceil_real(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let d = try!(self.eval(ctx, child));
+        match d {
+            Datum::F64(f) => Ok(Datum::F64(f.ceil())),
+            Datum::Null => Ok(Datum::Null),
+            _ => invalid_type_error(&d, TYPE_FLOAT),
+        }
     }
 
     pub fn floor_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -163,5 +168,23 @@ mod test {
                     (build_expr_with_sig(vec![Datum::Null],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CeilInt),
+                     Datum::Null)]);
+
+    test_eval!(test_ceil_real,
+               vec![(build_expr_with_sig(vec![Datum::F64(-1.5)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CeilReal),
+                     Datum::F64(-1.0)),
+                    (build_expr_with_sig(vec![Datum::F64(1.1)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CeilReal),
+                     Datum::F64(2.0)),
+                    (build_expr_with_sig(vec![Datum::F64(2.0)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CeilReal),
+                     Datum::F64(2.0)),
+                    (build_expr_with_sig(vec![Datum::Null],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CeilReal),
                      Datum::Null)]);
 }

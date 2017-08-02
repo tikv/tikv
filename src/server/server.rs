@@ -115,9 +115,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     pub fn start(&mut self, cfg: &Config) -> Result<()> {
         let end_point = EndPointHost::new(self.storage.get_engine(),
                                           self.end_point_worker.scheduler(),
-                                          cfg.end_point_concurrency,
-                                          cfg.end_point_txn_concurrency_on_busy,
-                                          cfg.end_point_small_txn_tasks_limit);
+                                          cfg.end_point_concurrency);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         let snap_runner = SnapHandler::new(self.env.clone(),
                                            self.snap_mgr.clone(),
@@ -164,6 +162,7 @@ mod tests {
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::transport::Transport;
 
+    #[derive(Clone)]
     struct MockResolver {
         addr: Arc<Mutex<Option<SocketAddr>>>,
     }

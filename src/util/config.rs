@@ -130,7 +130,8 @@ pub mod compression_type_level_serde {
                 let mut i = 0;
                 while let Some(value) = try!(seq.next_element::<String>()) {
                     if i == 7 {
-                        return Err(S::Error::invalid_value(Unexpected::Str(&value), &"only 7 compression types"));
+                        return Err(S::Error::invalid_value(Unexpected::Str(&value),
+                                                           &"only 7 compression types"));
                     }
                     seqs[i] = match &*value.trim().to_lowercase() {
                         "no" => DBCompressionType::No,
@@ -140,9 +141,12 @@ pub mod compression_type_level_serde {
                         "lz4" => DBCompressionType::Lz4,
                         "lz4hc" => DBCompressionType::Lz4hc,
                         "zstd" => DBCompressionType::Zstd,
-                        "zstd-not-final" => DBCompressionType::ZstdNotFinal ,
-                        "disable" => DBCompressionType::Disable ,
-                        _ => return Err(S::Error::invalid_value(Unexpected::Str(&value), &"invalid compression type")),
+                        "zstd-not-final" => DBCompressionType::ZstdNotFinal,
+                        "disable" => DBCompressionType::Disable,
+                        _ => {
+                            return Err(S::Error::invalid_value(Unexpected::Str(&value),
+                                                               &"invalid compression type"))
+                        }
                     };
                     i += 1;
                 }
@@ -155,22 +159,6 @@ pub mod compression_type_level_serde {
 
         deserializer.deserialize_seq(SeqVisitor)
     }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "DBCompressionType")]
-#[serde(rename_all = "kebab-case")]
-pub enum CompressionType {
-    No,
-    Snappy,
-    Zlib,
-    #[serde(rename = "bzip2")]
-    Bz2,
-    Lz4,
-    Lz4hc,
-    Zstd,
-    ZstdNotFinal,
-    Disable,
 }
 
 pub mod order_map_serde {
@@ -838,12 +826,33 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 
 #[cfg(test)]
 mod test {
+    use std::fs::File;
+    use std::path::Path;
+
     use super::*;
 
+    use tempdir::TempDir;
     use toml;
     use rocksdb::DBRecoveryMode;
 
     use util::collections::HashMap;
+
+    #[test]
+    fn test_readable_size() {
+        let s = ReadableSize::kb(2);
+        assert_eq!(s.0, 2048);
+        assert_eq!(s.as_mb(), 0);
+        let s = ReadableSize::mb(2);
+        assert_eq!(s.0, 2 * 1024 * 1024);
+        assert_eq!(s.as_mb(), 2);
+        let s = ReadableSize::gb(2);
+        assert_eq!(s.0, 2 * 1024 * 1024 * 1024);
+        assert_eq!(s.as_mb(), 2048);
+
+        assert_eq!((ReadableSize::mb(2) / 2).0, MB);
+        assert_eq!((ReadableSize::mb(1) / 2).0, 512 * KB);
+        assert_eq!(ReadableSize::mb(2) / ReadableSize::kb(1), 2048);
+    }
 
     #[test]
     fn test_parse_readable_size() {
@@ -934,6 +943,26 @@ mod test {
     }
 
     #[test]
+    fn test_duration_construction() {
+        let mut dur = ReadableDuration::secs(1);
+        assert_eq!(dur.0, Duration::new(1, 0));
+        assert_eq!(dur.as_secs(), 1);
+        assert_eq!(dur.as_millis(), 1000);
+        dur = ReadableDuration::millis(1001);
+        assert_eq!(dur.0, Duration::new(1, 1_000_000));
+        assert_eq!(dur.as_secs(), 1);
+        assert_eq!(dur.as_millis(), 1001);
+        dur = ReadableDuration::minutes(2);
+        assert_eq!(dur.0, Duration::new(2 * 60, 0));
+        assert_eq!(dur.as_secs(), 120);
+        assert_eq!(dur.as_millis(), 120000);
+        dur = ReadableDuration::hours(2);
+        assert_eq!(dur.0, Duration::new(2 * 3600, 0));
+        assert_eq!(dur.as_secs(), 7200);
+        assert_eq!(dur.as_millis(), 7200000);
+    }
+
+    #[test]
     fn test_parse_readable_duration() {
         #[derive(Serialize, Deserialize)]
         struct DurHolder {
@@ -980,6 +1009,7 @@ mod test {
         }
         assert!(toml::from_str::<DurHolder>("d = 23").is_err());
     }
+
     #[test]
     fn test_parse_readable_int() {
         // file size
@@ -1053,11 +1083,11 @@ mod test {
     fn test_parse_compression_type() {
         #[derive(Serialize, Deserialize)]
         struct CompressionTypeHolder {
-            #[serde(with = "CompressionType")]
-            tp: DBCompressionType,
+            #[serde(with = "compression_type_level_serde")]
+            tp: [DBCompressionType; 7],
         }
 
-        let case = vec![
+        let all_tp = vec![
             (DBCompressionType::No, "no"),
             (DBCompressionType::Snappy, "snappy"),
             (DBCompressionType::Zlib, "zlib"),
@@ -1068,16 +1098,32 @@ mod test {
             (DBCompressionType::ZstdNotFinal, "zstd-not-final"),
             (DBCompressionType::Disable, "disable"),
         ];
-        for (tp, exp) in case {
-            let holder = CompressionTypeHolder { tp: tp };
-            let res = toml::to_string(&holder).unwrap();
-            let exp_str = format!("tp = {:?}\n", exp);
-            assert_eq!(res, exp_str);
+        for i in 0..all_tp.len() - 7 {
+            let mut src = [DBCompressionType::No; 7];
+            let mut exp = ["no"; 7];
+            for (i, &t) in all_tp[i..i + 7].iter().enumerate() {
+                src[i] = t.0;
+                exp[i] = t.1;
+            }
+            let holder = CompressionTypeHolder { tp: src };
+            let res_str = toml::to_string(&holder).unwrap();
+            let exp_str = format!("tp = [\"{}\"]\n", exp.join("\", \""));
+            assert_eq!(res_str, exp_str);
             let h: CompressionTypeHolder = toml::from_str(&exp_str).unwrap();
             assert_eq!(h.tp, holder.tp);
         }
 
-        assert!(toml::from_str::<CompressionTypeHolder>("tp = \"tp\"").is_err());
+        // length is wrong.
+        assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
+        assert!(toml::from_str::<CompressionTypeHolder>(r#"tp = [
+            "no", "no", "no", "no", "no", "no", "no", "no"
+        ]"#)
+            .is_err());
+        // value is wrong.
+        assert!(toml::from_str::<CompressionTypeHolder>(r#"tp = [
+            "no", "no", "no", "no", "no", "no", "yes"
+        ]"#)
+            .is_err());
     }
 
     #[test]
@@ -1091,6 +1137,25 @@ mod test {
                 parse_rocksdb_compaction_pri(3).unwrap());
 
         assert!(parse_rocksdb_compaction_pri(4).is_err());
+    }
+
+    #[test]
+    fn test_canonicalize_path() {
+        let tmp_dir = TempDir::new("test-canonicalize").unwrap();
+        let path1 = format!("{}",
+                            tmp_dir.path().to_path_buf().join("test1.dump").display());
+        let res_path1 = canonicalize_path(&path1).unwrap();
+        assert!(Path::new(&path1).exists());
+        assert_eq!(Path::new(&res_path1),
+                   Path::new(&path1).canonicalize().unwrap());
+
+        let path2 = format!("{}",
+                            tmp_dir.path().to_path_buf().join("test2.dump").display());
+        {
+            File::create(&path2).unwrap();
+        }
+        assert!(canonicalize_path(&path2).is_err());
+        assert!(Path::new(&path2).exists());
     }
 
     #[cfg(target_os = "linux")]

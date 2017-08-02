@@ -24,7 +24,7 @@ use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, DEFAULT_DATA_DIR};
 use util::config::{self, ReadableDuration, ReadableSize, KB, MB, GB, compression_type_level_serde};
-use util::properties::UserPropertiesCollectorFactory;
+use util::properties::MvccPropertiesCollectorFactory;
 use util::rocksdb::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform, CFOptions};
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
@@ -182,8 +182,8 @@ impl CfConfig {
                 // Create prefix bloom filter for memtable.
                 cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
                 // Collects user defined properties.
-                let f = Box::new(UserPropertiesCollectorFactory::default());
-                cf_opts.add_table_properties_collector_factory("tikv.user-properties-collector", f);
+                let f = Box::new(MvccPropertiesCollectorFactory::default());
+                cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
             }
             CF_RAFT => {
                 let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));

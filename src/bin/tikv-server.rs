@@ -67,7 +67,7 @@ use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_CLUSTER_ID, Server, Node, create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::PdStoreAddrResolver;
+use tikv::server::resolve;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::util::time_monitor::TimeMonitor;
@@ -154,7 +154,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     // Create pd client, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
-    let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap_or_else(|e| exit_with_err(e));
+    let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
+        .unwrap_or_else(|e| exit_with_err(e));
     let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
                                     Some(store_sendch),
                                     cfg.raft_store.use_sst_file_snapshot);
@@ -191,6 +192,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     // Stop.
     server.stop().unwrap_or_else(|e| exit_with_err(e));
     node.stop().unwrap_or_else(|e| exit_with_err(e));
+    if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
+        info!("ignore failure when stopping resolver: {:?}", e);
+    }
 }
 
 fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {

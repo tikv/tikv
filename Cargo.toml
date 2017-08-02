@@ -9,7 +9,7 @@ time = "0.1"
 
 [features]
 default = []
-dev = ["clippy", "mem-profiling"]
+dev = ["clippy"]
 static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
@@ -48,7 +48,7 @@ clippy = {version = "*", optional = true}
 protobuf = "1.4"
 nix = "0.6.0"
 utime = "0.1"
-chrono = "0.2"
+chrono = "0.4"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
 clap = "2"
