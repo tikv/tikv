@@ -210,6 +210,14 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
         config.server.addr = addr.to_owned();
     }
 
+    if let Some(advertise_addr) = matches.value_of("advertise-addr") {
+        config.server.advertise_addr = advertise_addr.to_owned();
+    }
+
+    if let Some(data_dir) = matches.value_of("data-dir") {
+        config.storage.data_dir = data_dir.to_owned();
+    }
+
     if let Some(endpoints) = matches.values_of("pd-endpoints") {
         config.pd.endpoints = endpoints.map(|e| e.to_owned()).collect();
     }
