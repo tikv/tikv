@@ -62,9 +62,7 @@ impl<'a> Scanner<'a> {
         } else {
             try!(scanner.seek(Key::from_raw(&seek_key)))
         };
-
         self.scanner = Some(scanner);
-
 
         let (key, value) = match kv {
             Some((key, value)) => (box_try!(key.raw()), value),
@@ -82,11 +80,7 @@ impl<'a> Scanner<'a> {
     }
 
     pub fn get_row(&mut self, key: &[u8]) -> Result<Option<Value>> {
-        let statistics = self.scanner
-            .take()
-            .map(|scanner| scanner.reader.statistics)
-            .or_else(|| self.statistics.take())
-            .unwrap();
+        let statistics = self.take_statistics();
         let data = try!(self.snap
             .get(&Key::from_raw(key), statistics));
         self.statistics = Some(statistics);
@@ -106,15 +100,19 @@ impl<'a> Scanner<'a> {
             self.seek_key = Some(range.get_start().to_vec());
             Some(Key::from_raw(range.get_end()).encoded().to_vec())
         };
-        let statistics = self.scanner
-            .take()
-            .map(|scanner| scanner.reader.statistics)
-            .or_else(|| self.statistics.take())
-            .unwrap();
+        let statistics = self.take_statistics();
         let scanner = try!(self.snap
             .scanner(self.scan_mode, self.key_only, upper_bound, statistics));
         self.scanner = Some(scanner);
         Ok(())
+    }
+
+    fn take_statistics(&mut self) -> &'a mut Statistics {
+        self.scanner
+            .take()
+            .map(|scanner| scanner.close())
+            .or_else(|| self.statistics.take())
+            .unwrap()
     }
 }
 

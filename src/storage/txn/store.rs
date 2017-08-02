@@ -86,7 +86,7 @@ impl<'a> SnapshotStore<'a> {
 }
 
 pub struct StoreScanner<'a> {
-    pub reader: MvccReader<'a>,
+    reader: MvccReader<'a>,
     start_ts: u64,
 }
 
@@ -146,6 +146,10 @@ impl<'a> StoreScanner<'a> {
             }
         }
         Ok(results)
+    }
+
+    pub fn close(self) -> &'a mut Statistics {
+        self.reader.close()
     }
 }
 
