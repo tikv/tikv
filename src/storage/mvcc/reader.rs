@@ -25,7 +25,7 @@ const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
-    statistics: &'a mut Statistics,
+    pub statistics: &'a mut Statistics,
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor<'a>>,
     lock_cursor: Option<Cursor<'a>>,

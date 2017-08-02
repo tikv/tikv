@@ -468,7 +468,8 @@ impl TiDbEndPoint {
                                       t.deadline,
                                       ranges,
                                       self.snap.as_ref(),
-                                      eval_ctx.clone());
+                                      eval_ctx.clone(),
+                                      t.req.get_context().get_isolation_level());
         try!(ctx.validate_dag());
         let mut exec = try!(ctx.build_dag(&mut t.statistics));
         let mut chunks = vec![];

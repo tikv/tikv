@@ -11,18 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use byteorder::{BigEndian, ReadBytesExt};
+
+use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
-use kvproto::coprocessor::KeyRange;
-use kvproto::kvrpcpb::IsolationLevel;
-use storage::{Snapshot, Statistics};
-use byteorder::{BigEndian, ReadBytesExt};
+use storage::{Statistics, SnapshotStore};
+
 use super::{Executor, Row};
 use super::scanner::Scanner;
 use super::super::codec::{table, datum, mysql};
 use super::super::endpoint::prefix_next;
-use super::super::Result;
 use super::super::metrics::*;
+use super::super::Result;
 
 pub struct IndexScanExecutor<'a> {
     desc: bool,
@@ -36,10 +37,8 @@ pub struct IndexScanExecutor<'a> {
 impl<'a> IndexScanExecutor<'a> {
     pub fn new(mut meta: IndexScan,
                key_ranges: Vec<KeyRange>,
-               snapshot: &'a Snapshot,
-               statistics: &'a mut Statistics,
-               start_ts: u64,
-               isolation_level: IsolationLevel)
+               snapshot: SnapshotStore<'a>,
+               statistics: &'a mut Statistics)
                -> IndexScanExecutor<'a> {
         let mut pk_col = None;
         let desc = meta.get_desc();
@@ -50,7 +49,7 @@ impl<'a> IndexScanExecutor<'a> {
         let col_ids = cols.iter()
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = Scanner::new(desc, false, snapshot, statistics, start_ts, isolation_level);
+        let scanner = Scanner::new(snapshot, desc, false, statistics);
 
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
@@ -123,16 +122,20 @@ impl<'a> Executor for IndexScanExecutor<'a> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use super::super::scanner::test::{Data, TestStore, new_col_info};
+    use std::i64;
+
+    use kvproto::kvrpcpb::IsolationLevel;
+    use protobuf::RepeatedField;
+    use tipb::schema::ColumnInfo;
+
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum};
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
-    use std::i64;
-    use tipb::schema::ColumnInfo;
-    use storage::Statistics;
-    use protobuf::RepeatedField;
+    use storage::{Statistics, SnapshotStore};
+
+    use super::*;
+    use super::super::scanner::test::{Data, TestStore, new_col_info};
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
@@ -240,12 +243,10 @@ mod test {
         r2.set_end(end_key.clone());
         wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let mut scanner = IndexScanExecutor::new(wrapper.scan,
-                                                 wrapper.ranges,
-                                                 snapshot,
-                                                 &mut statistics,
-                                                 start_ts,
-                                                 IsolationLevel::SI);
+        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+
+        let mut scanner =
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, snap, &mut statistics);
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap();
@@ -267,12 +268,10 @@ mod test {
         let mut wrapper = IndexTestWrapper::default();
         wrapper.scan.set_desc(true);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let mut scanner = IndexScanExecutor::new(wrapper.scan,
-                                                 wrapper.ranges,
-                                                 snapshot,
-                                                 &mut statistics,
-                                                 start_ts,
-                                                 IsolationLevel::SI);
+        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+
+        let mut scanner =
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, snap, &mut statistics);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -294,12 +293,10 @@ mod test {
         let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::include_pk_cols();
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let mut scanner = IndexScanExecutor::new(wrapper.scan,
-                                                 wrapper.ranges,
-                                                 snapshot,
-                                                 &mut statistics,
-                                                 start_ts,
-                                                 IsolationLevel::SI);
+        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+
+        let mut scanner =
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, snap, &mut statistics);
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();

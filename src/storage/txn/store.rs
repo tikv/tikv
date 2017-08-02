@@ -70,7 +70,7 @@ impl<'a> SnapshotStore<'a> {
                    key_only: bool,
                    upper_bound: Option<Vec<u8>>,
                    statistics: &'a mut Statistics)
-                   -> Result<StoreScanner> {
+                   -> Result<StoreScanner<'a>> {
         let mut reader = MvccReader::new(self.snapshot,
                                          statistics,
                                          Some(mode),
@@ -86,7 +86,7 @@ impl<'a> SnapshotStore<'a> {
 }
 
 pub struct StoreScanner<'a> {
-    reader: MvccReader<'a>,
+    pub reader: MvccReader<'a>,
     start_ts: u64,
 }
 
