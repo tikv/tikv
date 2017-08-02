@@ -174,11 +174,11 @@ mod test {
                vec![(build_expr_with_sig(vec![Datum::F64(-1.5)],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CeilReal),
-                    Datum::F64(-1.0)),
+                     Datum::F64(-1.0)),
                     (build_expr_with_sig(vec![Datum::F64(1.1)],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CeilReal),
-                    Datum::F64(2.0)),
+                     Datum::F64(2.0)),
                     (build_expr_with_sig(vec![Datum::F64(2.0)],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CeilReal),
@@ -186,5 +186,5 @@ mod test {
                     (build_expr_with_sig(vec![Datum::Null],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CeilReal),
-                    Datum::Null)]);
+                     Datum::Null)]);
 }
