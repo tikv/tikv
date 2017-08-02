@@ -61,6 +61,10 @@ impl<'s> DAGContext<'s> {
         }
     }
 
+    pub fn get_output_offsets(&self) -> &[u32] {
+        self.req.get_output_offsets()
+    }
+
     pub fn validate_dag(&mut self) -> Result<()> {
         let execs = self.req.get_executors();
         let first = try!(execs.first()

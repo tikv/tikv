@@ -785,6 +785,8 @@ impl DAGSelect {
         dag.set_executors(RepeatedField::from_vec(self.execs));
         dag.set_start_ts(next_id() as u64);
         dag.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
+        let output_offsets = (0..self.cols.len() as u32).collect();
+        dag.set_output_offsets(output_offsets);
 
         let mut req = Request::new();
         req.set_tp(REQ_TYPE_DAG);
