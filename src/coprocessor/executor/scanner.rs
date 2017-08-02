@@ -56,13 +56,16 @@ impl<'a> Scanner<'a> {
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
-        let mut scanner = self.scanner.take().unwrap();
-        let kv = if self.scan_mode == ScanMode::Backward {
-            try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
+
+        let kv = if let Some(scanner) = self.scanner.as_mut() {
+            if self.scan_mode == ScanMode::Backward {
+                try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
+            } else {
+                try!(scanner.seek(Key::from_raw(&seek_key)))
+            }
         } else {
-            try!(scanner.seek(Key::from_raw(&seek_key)))
+            None
         };
-        self.scanner = Some(scanner);
 
         let (key, value) = match kv {
             Some((key, value)) => (box_try!(key.raw()), value),
