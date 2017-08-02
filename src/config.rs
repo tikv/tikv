@@ -16,7 +16,8 @@ use std::path::Path;
 use std::usize;
 
 use log::LogLevelFilter;
-use rocksdb::{DBCompressionType, DBRecoveryMode, DBOptions, ColumnFamilyOptions, BlockBasedOptions, CompactionPriority};
+use rocksdb::{DBCompressionType, DBRecoveryMode, DBOptions, ColumnFamilyOptions,
+              BlockBasedOptions, CompactionPriority};
 use sys_info;
 
 use server::Config as ServerConfig;
@@ -25,7 +26,8 @@ use raftstore::store::keys::region_raft_prefix_len;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, DEFAULT_DATA_DIR};
 use util::config::{self, ReadableDuration, ReadableSize, KB, MB, GB, compression_type_level_serde};
 use util::properties::MvccPropertiesCollectorFactory;
-use util::rocksdb::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform, CFOptions};
+use util::rocksdb::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
+                    CFOptions};
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -39,7 +41,7 @@ fn memory_for_cf(cf: &str) -> usize {
         CF_LOCK => (0.02, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM),
         CF_WRITE => (0.15, 0, usize::MAX),
         CF_RAFT => (0.02, RAFTCF_MIN_MEM, RAFTCF_MAX_MEM),
-        _ => unreachable!()
+        _ => unreachable!(),
     };
     let mut size = (total_mem as f64 * radio) as usize;
     if size < min {
@@ -89,15 +91,13 @@ impl Default for CfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
-            compression_per_level: [
-                DBCompressionType::No,
-                DBCompressionType::No,
-                DBCompressionType::Lz4,
-                DBCompressionType::Lz4,
-                DBCompressionType::Lz4,
-                DBCompressionType::Zstd,
-                DBCompressionType::Zstd,
-            ],
+            compression_per_level: [DBCompressionType::No,
+                                    DBCompressionType::No,
+                                    DBCompressionType::Lz4,
+                                    DBCompressionType::Lz4,
+                                    DBCompressionType::Lz4,
+                                    DBCompressionType::Zstd,
+                                    DBCompressionType::Zstd],
             write_buffer_size: ReadableSize::mb(128),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
@@ -156,7 +156,8 @@ impl CfConfig {
         block_base_opts.set_lru_cache(self.block_cache_size.0 as usize);
         block_base_opts.set_cache_index_and_filter_blocks(self.cache_index_and_filter_blocks);
         if self.use_bloom_filter {
-            block_base_opts.set_bloom_filter(self.bloom_filter_bits_per_key, self.block_based_bloom_filter);
+            block_base_opts.set_bloom_filter(self.bloom_filter_bits_per_key,
+                                             self.block_based_bloom_filter);
             block_base_opts.set_whole_key_filtering(self.whole_key_filtering);
         }
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -174,7 +175,7 @@ impl CfConfig {
         cf_opts.compaction_priority(self.compaction_pri);
 
         match self.cf.as_str() {
-            CF_DEFAULT => {},
+            CF_DEFAULT => {}
             CF_WRITE => {
                 // Prefix extractor(trim the timestamp at tail) for write cf.
                 let e = Box::new(FixedSuffixSliceTransform::new(8));
@@ -187,14 +188,15 @@ impl CfConfig {
             }
             CF_RAFT => {
                 let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
-                cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f).unwrap();
+                cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
+                    .unwrap();
             }
             CF_LOCK => {
                 let f = Box::new(NoopSliceTransform);
                 cf_opts.set_prefix_extractor("NoopSliceTransform", f).unwrap();
                 cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
 
         cf_opts
@@ -288,7 +290,9 @@ impl DbConfig {
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         if !self.info_log_dir.is_empty() {
             opts.create_info_log(&self.info_log_dir).unwrap_or_else(|e| {
-                panic!("create RocksDB info log {} error: {:?}", self.info_log_dir, e);
+                panic!("create RocksDB info log {} error: {:?}",
+                       self.info_log_dir,
+                       e);
             })
         }
         if self.rate_bytes_per_sec > 0 {
@@ -328,7 +332,7 @@ pub struct PdConfig {
 impl PdConfig {
     fn validate(&self) -> Result<(), Box<Error>> {
         if self.endpoints.is_empty() {
-            return Err(format!("please specify pd.endpoints.").into());
+            return Err("please specify pd.endpoints.".into());
         }
         for addr in &self.endpoints {
             try!(config::check_addr(addr));
@@ -403,7 +407,9 @@ impl TiKvConfig {
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
         try!(self.storage.validate());
         if self.rocksdb.backup_dir.is_empty() && self.storage.data_dir != DEFAULT_DATA_DIR {
-            self.rocksdb.backup_dir = format!("{}", Path::new(&self.storage.data_dir).join("backup").display());
+            self.rocksdb.backup_dir =
+                format!("{}",
+                        Path::new(&self.storage.data_dir).join("backup").display());
         }
         try!(self.rocksdb.validate());
         try!(self.server.validate());

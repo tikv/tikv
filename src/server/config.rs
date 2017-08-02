@@ -95,7 +95,7 @@ impl Config {
         if self.advertise_addr.starts_with("0.") {
             return Err(box_err!("invalid advertise-addr: {:?}", self.advertise_addr));
         }
-        
+
         if self.end_point_concurrency == 0 {
             return Err(box_err!("server.server.end-point-concurrency: {} is invalid, \
                                  shouldn't be 0",
@@ -113,7 +113,9 @@ impl Config {
 
 fn validate_label(s: &str, tp: &str) -> Result<()> {
     let report_err = || {
-        box_err!("store label {}: {:?} not match ^[a-z0-9]([a-z0-9-._]*[a-z0-9])?", tp, s)
+        box_err!("store label {}: {:?} not match ^[a-z0-9]([a-z0-9-._]*[a-z0-9])?",
+                 tp,
+                 s)
     };
     if s.is_empty() {
         return Err(report_err());
@@ -130,7 +132,7 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
     if !last_char.is_ascii_lowercase() && !last_char.is_ascii_digit() {
         return Err(report_err());
     }
-    while let Some(c) = chrs.next() {
+    for c in chrs {
         if !c.is_ascii_lowercase() && !c.is_ascii_digit() && !"-._".contains(c) {
             return Err(report_err());
         }

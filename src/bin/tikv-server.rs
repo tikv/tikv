@@ -77,7 +77,7 @@ fn exit_with_err<E: Error>(e: E) -> ! {
 }
 
 fn exit_with_msg(msg: String) -> ! {
-    eprintln!("{}", msg);
+    error!("{}", msg);
     process::exit(1)
 }
 
@@ -104,9 +104,7 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
     util::monitor_threads("tikv").unwrap_or_else(|e| exit_with_err(e));
 
-    util::run_prometheus(cfg.interval.0,
-                         &cfg.address,
-                         &push_job);
+    util::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
 }
 
 fn check_system_config(config: &TiKvConfig) {
@@ -132,11 +130,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     let f = File::create(lock_path).unwrap_or_else(|e| exit_with_err(e));
     if f.try_lock_exclusive().is_err() {
-        exit_with_msg(format!("lock {:?} failed, maybe another instance is using this directory.", store_path));
+        exit_with_msg(format!("lock {:?} failed, maybe another instance is using this directory.",
+                              store_path));
     }
 
     // Initialize raftstore channels.
-    let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap_or_else(|e| exit_with_err(e));
+    let mut event_loop = store::create_event_loop(&cfg.raft_store)
+        .unwrap_or_else(|e| exit_with_err(e));
     let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
@@ -217,17 +217,18 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
     if let Some(labels_vec) = matches.values_of("labels") {
         let mut labels = HashMap::new();
         labels_vec.map(|s| {
-            let mut parts = s.split('=');
-            let key = parts.next().unwrap().to_owned();
-            let value = match parts.next() {
-                None => exit_with_msg(format!("invalid label: {:?}", s)),
-                Some(v) => v.to_owned(),
-            };
-            if parts.next().is_some() {
-                exit_with_msg(format!("invalid label: {:?}", s));
-            }
-            labels.insert(key, value);
-        }).count();
+                let mut parts = s.split('=');
+                let key = parts.next().unwrap().to_owned();
+                let value = match parts.next() {
+                    None => exit_with_msg(format!("invalid label: {:?}", s)),
+                    Some(v) => v.to_owned(),
+                };
+                if parts.next().is_some() {
+                    exit_with_msg(format!("invalid label: {:?}", s));
+                }
+                labels.insert(key, value);
+            })
+            .count();
         config.server.labels = labels;
     }
 
@@ -323,8 +324,8 @@ fn main() {
             .long_help("Sets server labels. Uses `,` to separate kv pairs, like \
                         `zone=cn,disk=ssd`"))
         .arg(Arg::with_name("print-sample-config")
-             .long("print-sample-config")
-             .help("Print a sample config to stdout"))
+            .long("print-sample-config")
+            .help("Print a sample config to stdout"))
         .get_matches();
     
     if matches.is_present("print-sample-config") {
@@ -341,7 +342,8 @@ fn main() {
                 try!(f.read_to_string(&mut s));
                 let c = try!(toml::from_str(&s));
                 Ok(c)
-            }).unwrap_or_else(|e| {
+            })
+            .unwrap_or_else(|e| {
                 eprintln!("{:?}", e);
                 process::exit(-1);
             })
@@ -361,7 +363,8 @@ fn main() {
 
     panic_hook::set_exit_hook();
 
-    info!("using config: {}", serde_json::to_string_pretty(&config).unwrap());
+    info!("using config: {}",
+          serde_json::to_string_pretty(&config).unwrap());
 
     // Before any startup, check system configuration.
     check_system_config(&config);

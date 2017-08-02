@@ -39,7 +39,7 @@ pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &StorageConfig) -> Re
     where S: RaftStoreRouter + 'static
 {
     let engine = box RaftKv::new(db, router);
-    let store = try!(Storage::from_engine(engine, &cfg));
+    let store = try!(Storage::from_engine(engine, cfg));
     Ok(store)
 }
 

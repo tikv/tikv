@@ -53,7 +53,10 @@ fn test_node_bootstrap_with_prepared_data() {
         .unwrap());
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
-    let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client.clone());
+    let mut node = Node::new(&mut event_loop,
+                             &cfg.server,
+                             &cfg.raft_store,
+                             pd_client.clone());
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(),
                                     Some(node.get_sendch()),
                                     cfg.raft_store.use_sst_file_snapshot);

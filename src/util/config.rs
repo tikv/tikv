@@ -142,7 +142,7 @@ pub mod order_map_serde {
     pub fn serialize<S, K, V>(m: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
         where S: Serializer,
               K: Serialize + Hash + Eq,
-              V: Serialize,
+              V: Serialize
     {
         let mut s = try!(serializer.serialize_map(Some(m.len())));
         for (k, v) in m {
@@ -154,7 +154,7 @@ pub mod order_map_serde {
     pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
         where D: Deserializer<'de>,
               K: Deserialize<'de> + Eq + Hash,
-              V: Deserialize<'de>,
+              V: Deserialize<'de>
     {
         struct MapVisitor<K, V> {
             phantom: PhantomData<HashMap<K, V>>,
@@ -162,7 +162,7 @@ pub mod order_map_serde {
 
         impl<'de, K, V> Visitor<'de> for MapVisitor<K, V>
             where K: Deserialize<'de> + Eq + Hash,
-                  V: Deserialize<'de>,
+                  V: Deserialize<'de>
         {
             type Value = HashMap<K, V>;
 

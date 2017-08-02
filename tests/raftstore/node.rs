@@ -164,7 +164,10 @@ impl Simulator for NodeCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
-        let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, self.pd_client.clone());
+        let mut node = Node::new(&mut event_loop,
+                                 &cfg.server,
+                                 &cfg.raft_store,
+                                 self.pd_client.clone());
 
         let (snap_mgr, tmp) = if node_id == 0 ||
                                  !self.trans.rl().snap_paths.contains_key(&node_id) {

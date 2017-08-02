@@ -222,15 +222,14 @@ mod tests {
         let (snapshot_status_sender, _) = mpsc::channel();
 
         let addr = Arc::new(Mutex::new(None));
-        let mut server =
-            Server::new(&cfg,
-                        1024,
-                        storage,
-                        router,
-                        snapshot_status_sender,
-                        MockResolver { addr: addr.clone() },
-                        SnapManager::new("", None, true))
-                .unwrap();
+        let mut server = Server::new(&cfg,
+                                     1024,
+                                     storage,
+                                     router,
+                                     snapshot_status_sender,
+                                     MockResolver { addr: addr.clone() },
+                                     SnapManager::new("", None, true))
+            .unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 
         server.start(&cfg).unwrap();

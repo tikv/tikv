@@ -37,7 +37,7 @@ pub struct RpcClient {
 impl RpcClient {
     pub fn new(endpoints: &[String]) -> Result<RpcClient> {
         let env = Arc::new(EnvBuilder::new().cq_count(CQ_COUNT).name_prefix(CLIENT_PREFIX).build());
-        let (client, members) = try!(validate_endpoints(env.clone(), &endpoints));
+        let (client, members) = try!(validate_endpoints(env.clone(), endpoints));
 
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),

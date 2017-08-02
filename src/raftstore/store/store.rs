@@ -486,7 +486,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        if let Err(e) = register_timer(event_loop, Tick::Raft, self.cfg.raft_base_tick_interval.as_millis()) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::Raft,
+                                       self.cfg.raft_base_tick_interval.as_millis()) {
             error!("{} register raft base tick err: {:?}", self.tag, e);
         };
     }
@@ -1166,7 +1168,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // check again after split.
                 if right_derive {
                     self.region_peers.get_mut(&region_id).unwrap().size_diff_hint = self.cfg
-                        .region_check_size_diff.0;
+                        .region_check_size_diff
+                        .0;
                 } else {
                     new_peer.size_diff_hint = self.cfg.region_check_size_diff.0;
                 }
