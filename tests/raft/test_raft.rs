@@ -3247,3 +3247,53 @@ fn test_pre_vote_with_check_quorum() {
     assert_eq!(nt.peers[&2].state, StateRole::Leader);
     assert_eq!(nt.peers[&3].state, StateRole::Follower);
 }
+
+// test_pre_vote_with_split_vote verifies that after split vote, cluster can complete
+// election in next round.
+#[test]
+fn test_pre_vote_with_split_vote() {
+    let mut n1 = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let mut n2 = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let mut n3 = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+
+    n1.become_follower(1, INVALID_ID);
+    n2.become_follower(1, INVALID_ID);
+    n3.become_follower(1, INVALID_ID);
+
+    n1.pre_vote = true;
+    n2.pre_vote = true;
+    n3.pre_vote = true;
+
+    let mut nt = Network::new(vec![Some(n1), Some(n2), Some(n3)]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    // simulate leader down. followers start split vote.
+    nt.isolate(1);
+    nt.send(vec![new_message(2, 2, MessageType::MsgHup, 0),
+                 new_message(3, 3, MessageType::MsgHup, 0)]);
+
+    // check whether the term values are expected
+    // n2.Term == 3
+    // n3.Term == 3
+    assert_eq!(nt.peers[&2].term, 3);
+    assert_eq!(nt.peers[&3].term, 3);
+    // check state
+    // n2 == candidate
+    // n3 == candidate
+    assert_eq!(nt.peers[&2].state, StateRole::Candidate);
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
+
+    // node 2 election timeout first
+    nt.send(vec![new_message(2, 2, MessageType::MsgHup, 0)]);
+
+    // check whether the term values are expected
+    // n2.Term == 4
+    // n3.Term == 4
+    assert_eq!(nt.peers[&2].term, 4);
+    assert_eq!(nt.peers[&3].term, 4);
+    // check state
+    // n2 == leader
+    // n3 == follower
+    assert_eq!(nt.peers[&2].state, StateRole::Leader);
+    assert_eq!(nt.peers[&3].state, StateRole::Follower);
+}
