@@ -80,7 +80,7 @@ fn test_raft_storage_batch_snapshot() {
             assert!(s.is_some());
         }
     }
-    thread::sleep(Duration::from_secs(3));
+    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
     {
         let (tx, rx) = channel();
         let batch = vec![ctx; 3];
