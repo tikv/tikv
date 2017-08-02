@@ -118,7 +118,9 @@ impl Msg {
         }
     }
 
-    pub fn new_batch_raft_snapshot_cmd(batch: Vec<RaftCmdRequest>, on_finished: BatchCallback) -> Msg {
+    pub fn new_batch_raft_snapshot_cmd(batch: Vec<RaftCmdRequest>,
+                                       on_finished: BatchCallback)
+                                       -> Msg {
         Msg::BatchRaftSnapCmds {
             send_time: Instant::now(),
             batch: batch,

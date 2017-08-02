@@ -1569,8 +1569,8 @@ impl Peer {
                     try!(apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req))
                 }
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
-                CmdType::Prewrite => unreachable!(),
-                CmdType::Put | CmdType::Delete | CmdType::Invalid | CmdType::DeleteRange => unreachable!(),
+                CmdType::Prewrite | CmdType::Put | CmdType::Delete | CmdType::Invalid |
+                CmdType::DeleteRange => unreachable!(),
             };
 
             resp.set_cmd_type(cmd_type);
