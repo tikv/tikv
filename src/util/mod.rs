@@ -35,7 +35,6 @@ pub mod codec;
 pub mod rocksdb;
 pub mod config;
 pub mod buf;
-pub mod sockopt;
 pub mod transport;
 pub mod time_monitor;
 pub mod file;
