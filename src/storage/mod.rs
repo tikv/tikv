@@ -34,7 +34,7 @@ pub use self::config::{Config, DEFAULT_DATA_DIR};
 pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cursor,
                        Error as EngineError, ScanMode, Statistics, CFStatistics};
 pub use self::engine::raftkv::RaftKv;
-pub use self::txn::{SnapshotStore, Scheduler, Msg};
+pub use self::txn::{SnapshotStore, StoreScanner, Scheduler, Msg};
 pub use self::types::{Key, Value, KvPair, MvccInfo, make_key};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 

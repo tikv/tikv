@@ -20,7 +20,7 @@ use tipb::select::{DAGRequest, Chunk};
 use kvproto::coprocessor::KeyRange;
 use kvproto::kvrpcpb::IsolationLevel;
 
-use storage::{Snapshot, Statistics};
+use storage::{Snapshot, SnapshotStore, Statistics};
 use super::xeval::EvalContext;
 use super::{Result, Error};
 use super::executor::Executor as DAGExecutor;
@@ -40,6 +40,7 @@ pub struct DAGContext<'s> {
     ranges: Vec<KeyRange>,
     snap: &'s Snapshot,
     eval_ctx: Rc<EvalContext>,
+    isolation_level: IsolationLevel,
 }
 
 impl<'s> DAGContext<'s> {
@@ -47,7 +48,8 @@ impl<'s> DAGContext<'s> {
                deadline: Instant,
                ranges: Vec<KeyRange>,
                snap: &'s Snapshot,
-               eval_ctx: Rc<EvalContext>)
+               eval_ctx: Rc<EvalContext>,
+               isolation_level: IsolationLevel)
                -> DAGContext<'s> {
         DAGContext {
             req: req,
@@ -58,7 +60,12 @@ impl<'s> DAGContext<'s> {
             has_aggr: false,
             eval_ctx: eval_ctx,
             chunks: vec![],
+            isolation_level: isolation_level,
         }
+    }
+
+    pub fn get_output_offsets(&self) -> &[u32] {
+        self.req.get_output_offsets()
     }
 
     pub fn validate_dag(&mut self) -> Result<()> {
@@ -91,22 +98,20 @@ impl<'s> DAGContext<'s> {
                        mut first: Executor,
                        statistics: &'s mut Statistics)
                        -> Box<DAGExecutor + 's> {
+        let store = SnapshotStore::new(self.snap, self.req.get_start_ts(), self.isolation_level);
+
         match first.get_tp() {
             ExecType::TypeTableScan => {
                 Box::new(TableScanExecutor::new(first.take_tbl_scan(),
                                                 self.ranges.clone(),
-                                                self.snap,
-                                                statistics,
-                                                self.req.get_start_ts(),
-                                                IsolationLevel::SI))
+                                                store,
+                                                statistics))
             }
             ExecType::TypeIndexScan => {
                 Box::new(IndexScanExecutor::new(first.take_idx_scan(),
                                                 self.ranges.clone(),
-                                                self.snap,
-                                                statistics,
-                                                self.req.get_start_ts(),
-                                                IsolationLevel::SI))
+                                                store,
+                                                statistics))
             }
             _ => unreachable!(),
         }

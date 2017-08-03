@@ -61,11 +61,8 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn reset(&mut self, upper_bound: Option<Vec<u8>>) {
-        self.upper_bound = upper_bound;
-        self.data_cursor = None;
-        self.lock_cursor = None;
-        self.write_cursor = None;
+    pub fn close(self) -> &'a mut Statistics {
+        self.statistics
     }
 
     pub fn set_key_only(&mut self, key_only: bool) {
