@@ -269,7 +269,7 @@ impl Command {
             Command::RawGet { .. } |
             Command::RawScan { .. } |
             // DeleteRange only called by DDL bg thread after table is dropped and
-            // must guarantee that there is no other read or write these keys, so
+            // must guarantee that there is no other read or write on these keys, so
             // we can treat DeleteRange as readonly Command.
             Command::DeleteRange { .. } |
             Command::Pause { .. } |
@@ -1373,6 +1373,20 @@ mod tests {
                        make_key(b"z"),
                        101,
                        expect_get_val(tx.clone(), b"100".to_vec(), 8))
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Delete range ["", ""), it means delete all
+        storage.async_delete_range(Context::new(),
+                                make_key(b""),
+                                make_key(b""),
+                                expect_ok(tx.clone(), 9))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"z"),
+                       101,
+                       expect_get_none(tx.clone(), 10))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();

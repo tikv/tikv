@@ -1668,6 +1668,14 @@ mod tests {
             self.add_delete_req(Some(cf), key)
         }
 
+        fn delete_range(self, start_key: &[u8], end_key: &[u8]) -> EntryBuilder {
+            self.add_delete_range_req(None, start_key, end_key)
+        }
+
+        fn delete_range_cf(self, cf: &str, start_key: &[u8], end_key: &[u8]) -> EntryBuilder {
+            self.add_delete_range_req(Some(cf), start_key, end_key)
+        }
+
         fn add_delete_req(mut self, cf: Option<&str>, key: &[u8]) -> EntryBuilder {
             let mut cmd = Request::new();
             cmd.set_cmd_type(CmdType::Delete);
@@ -1675,6 +1683,22 @@ mod tests {
                 cmd.mut_delete().set_cf(cf.to_owned());
             }
             cmd.mut_delete().set_key(key.to_vec());
+            self.req.mut_requests().push(cmd);
+            self
+        }
+
+        fn add_delete_range_req(mut self,
+                                cf: Option<&str>,
+                                start_key: &[u8],
+                                end_key: &[u8])
+                                -> EntryBuilder {
+            let mut cmd = Request::new();
+            cmd.set_cmd_type(CmdType::DeleteRange);
+            if let Some(cf) = cf {
+                cmd.mut_delete_range().set_cf(cf.to_owned());
+            }
+            cmd.mut_delete_range().set_start_key(start_key.to_vec());
+            cmd.mut_delete_range().set_end_key(end_key.to_vec());
             self.req.mut_requests().push(cmd);
             self
         }
@@ -1814,9 +1838,48 @@ mod tests {
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
 
+        let delete_range_entry = EntryBuilder::new(7, 3)
+            .delete_range(b"", b"")
+            .epoch(1, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .build();
+        let mut apply_ctx = ApplyContext::new(&host);
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
+        let resp = rx.try_recv().unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let dk_k1 = keys::data_key(b"k1");
+        let dk_k2 = keys::data_key(b"k2");
+        let dk_k3 = keys::data_key(b"k3");
+        assert!(db.get(&dk_k1).unwrap().is_none());
+        assert!(db.get(&dk_k2).unwrap().is_none());
+        assert!(db.get(&dk_k3).unwrap().is_none());
+
+        let delete_range_entry = EntryBuilder::new(8, 3)
+            .delete_range_cf(CF_DEFAULT, b"", b"k5")
+            .delete_range_cf(CF_LOCK, b"", b"k5")
+            .delete_range_cf(CF_WRITE, b"", b"k5")
+            .epoch(1, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .build();
+        let mut apply_ctx = ApplyContext::new(&host);
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
+        let resp = rx.try_recv().unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        assert!(db.get(&dk_k1).unwrap().is_none());
+        assert!(db.get(&dk_k2).unwrap().is_none());
+        assert!(db.get(&dk_k3).unwrap().is_none());
+
         let mut entries = vec![];
         for i in 0..WRITE_BATCH_MAX_KEYS {
-            let put_entry = EntryBuilder::new(i as u64 + 7, 2)
+            let put_entry = EntryBuilder::new(i as u64 + 9, 2)
                 .put(b"k", b"v")
                 .epoch(1, 3)
                 .capture_resp(&mut delegate, tx.clone())
@@ -1833,6 +1896,6 @@ mod tests {
             rx.try_recv().unwrap();
         }
         assert_eq!(delegate.apply_state.get_applied_index(),
-                   WRITE_BATCH_MAX_KEYS as u64 + 6);
+                   WRITE_BATCH_MAX_KEYS as u64 + 8);
     }
 }
