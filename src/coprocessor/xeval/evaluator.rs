@@ -82,8 +82,8 @@ impl EvalContext {
 }
 
 // `Evaluator` evaluates `tipb::Expr`.
-// TODO(performance) Evaluator should not contains any data member
-// since Managing data is not his responsibility but calculation.
+// TODO(performance) Evaluator should not contain any data member,
+// because its responsibility is calculating, not managing data.
 #[derive(Default)]
 pub struct Evaluator {
     // column_id -> column_value
@@ -147,6 +147,7 @@ impl Evaluator {
             ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
             ExprType::JsonObject => self.eval_json_object(ctx, expr),
             ExprType::JsonArray => self.eval_json_array(ctx, expr),
+            ExprType::JsonRemove => self.eval_json_remove(ctx, expr),
             ExprType::ScalarFunc => self.eval_scalar_function(ctx, expr),
             _ => Ok(Datum::Null),
         }
@@ -314,7 +315,7 @@ impl Evaluator {
 
     fn eval_in(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         if expr.get_children().len() != 2 {
-            return Err(Error::Expr(format!("IN need 2 operand, got {}",
+            return Err(Error::Expr(format!("IN need 2 operands, got {}",
                                            expr.get_children().len())));
         }
         let children = expr.get_children();
@@ -324,7 +325,7 @@ impl Evaluator {
         }
         let value_list_expr = &children[1];
         if value_list_expr.get_tp() != ExprType::ValueList {
-            return Err(Error::Expr("the second children should be value list type".to_owned()));
+            return Err(Error::Expr("the second child should be of the value list type".to_owned()));
         }
         let decoded = try!(self.decode_value_list(value_list_expr));
         if try!(check_in(ctx, target, decoded)) {
@@ -434,7 +435,8 @@ impl Evaluator {
                         -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 2));
         if is_even(children.len()) {
-            return Err(Error::Expr(format!("expect odd number operands, got {}", children.len())));
+            return Err(Error::Expr(format!("expect odd number of operands, got {}",
+                                           children.len())));
         }
 
         let mut index = 0 as i64;
@@ -466,13 +468,26 @@ impl Evaluator {
         Ok(Datum::Json(json))
     }
 
+    fn eval_json_remove(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2));
+        if children.iter().any(|item| *item == Datum::Null) {
+            return Ok(Datum::Null);
+        }
+        let mut children = children.into_iter();
+        let mut json = try!(children.next().unwrap().cast_as_json());
+        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.to_json_path_expr())
+            .collect());
+        try!(json.remove(&path_extrs));
+        Ok(Datum::Json(json))
+    }
+
     fn eval_json_unquote(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let child = try!(self.eval_one_child(ctx, expr));
         if child == Datum::Null {
             return Ok(Datum::Null);
         }
         // here Datum::Byte(bs) should be converted into Json::String(bs)
-        // select JSON_UNQUOTE('{"a":   "b"}');
+        // > select JSON_UNQUOTE('{"a":   "b"}');
         // +------------------------------+
         // | JSON_UNQUOTE('{"a":   "b"}') |
         // +------------------------------+
@@ -1275,6 +1290,15 @@ pub mod test {
           build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
           build_expr(vec![], ExprType::JsonMerge),
           build_expr(vec![Datum::Null], ExprType::JsonMerge),
+          build_expr(vec![Datum::Null], ExprType::JsonRemove),
+          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$"],
+                                 ExprType::JsonRemove),
+          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$.*"],
+                                 ExprType::JsonRemove),
+          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$[*]"],
+                                 ExprType::JsonRemove),
+          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$**.a"],
+                                 ExprType::JsonRemove),
     ]);
 
     test_eval!(test_eval_json_object,
@@ -1294,5 +1318,31 @@ pub mod test {
             Datum::Json("[null]".parse().unwrap())),
         (build_expr(vec![Datum::U64(1), Datum::Null, Datum::Bytes(b"sdf".to_vec())],
             ExprType::JsonArray), Datum::Json(r#"[1,null,"sdf"]"#.parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_json_remove,
+               vec![
+        (build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonRemove),
+                    Datum::Null),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[2].aa"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, 2, {}]}"#.parse().unwrap())),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[1]"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, {"aa": "xx"}]}"#.parse().unwrap())),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[2].aa", b"$.a[1]"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, {}]}"#.parse().unwrap())),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[1]", b"$.a[1].aa"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, {}]}"#.parse().unwrap())),
+        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                                  b"$.a[3]", b"$.b"],
+                                ExprType::JsonRemove),
+                    Datum::Json(r#"{"a": [1, 2, {"aa": "xx"}]}"#.parse().unwrap())),
     ]);
 }

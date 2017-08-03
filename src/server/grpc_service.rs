@@ -483,6 +483,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
+    fn kv_delete_range(&self,
+                       _: RpcContext,
+                       _: DeleteRangeRequest,
+                       _: UnarySink<DeleteRangeResponse>) {
+        unimplemented!()
+    }
+
     fn raw_get(&self, ctx: RpcContext, mut req: RawGetRequest, sink: UnarySink<RawGetResponse>) {
         let label = "raw_get";
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
@@ -829,9 +836,9 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             lock_info.set_lock_ttl(ttl);
             key_error.set_locked(lock_info);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict)) |
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound)) => {
-            debug!("txn conflicts: {}", err);
+        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. })) |
+        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
+            warn!("txn conflicts: {}", err);
             key_error.set_retryable(format!("{:?}", err));
         }
         _ => {

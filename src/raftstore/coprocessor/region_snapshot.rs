@@ -11,11 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::u64;
 use std::sync::Arc;
-use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator};
+use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator, TablePropertiesCollection};
 use kvproto::metapb::Region;
-use util::properties::{UserProperties, GetPropertiesOptions};
 
 use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
 use raftstore::store::{keys, util, PeerStorage};
@@ -109,35 +107,14 @@ impl RegionSnapshot {
         Ok(())
     }
 
-    pub fn get_properties_cf(&self,
-                             cf: &str,
-                             opts: &GetPropertiesOptions)
-                             -> Result<UserProperties> {
+    pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
         let db = self.snap.get_db();
         let cf = try!(db.cf_handle(cf)
             .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
-
         let start = keys::enc_start_key(self.get_region());
         let end = keys::enc_end_key(self.get_region());
         let range = Range::new(&start, &end);
-        let collection = try!(db.get_properties_of_tables_in_range(cf, &[range]));
-        if collection.is_empty() {
-            return Err(Error::RocksDb("no user properties".to_owned()));
-        }
-
-        let max_ts = opts.max_ts.unwrap_or(u64::MAX);
-
-        // Aggregates properties from multiple tables.
-        let mut res = UserProperties::new();
-        for (_, v) in &*collection {
-            let props = v.user_collected_properties();
-            let other = try!(UserProperties::decode(props));
-            if other.min_ts > max_ts {
-                continue;
-            }
-            res.add(&other);
-        }
-        Ok(res)
+        db.get_properties_of_tables_in_range(cf, &[range]).map_err(|e| e.into())
     }
 
     pub fn get_start_key(&self) -> &[u8] {

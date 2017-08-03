@@ -414,8 +414,8 @@ fn test_txn_store_gc3() {
     let key = "k";
     let store = AssertionStorage::default();
     store.test_txn_store_gc3(key.as_bytes()[0]);
-    let (_cluster, kv_store) = AssertionStorage::new_kv_storage_with_store_count(3, key);
-    kv_store.test_txn_store_gc3(key.as_bytes()[0]);
+    let (mut cluster, mut kv_store) = AssertionStorage::new_kv_storage_with_store_count(3, key);
+    kv_store.test_txn_store_gc3_for_cluster(&mut cluster, key.as_bytes()[0]);
 }
 
 #[test]
