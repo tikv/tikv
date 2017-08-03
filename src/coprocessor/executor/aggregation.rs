@@ -18,6 +18,7 @@ use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 use util::collections::{HashMap, HashMapEntry as Entry};
 
+use super::{Executor, Row, ExprColumnRefVisitor, inflate_with_col_for_dag};
 use super::super::codec::table::RowColsDict;
 use super::super::codec::datum::{self, Datum, DatumEncoder, approximate_size};
 use super::super::xeval::{Evaluator, EvalContext};
@@ -25,7 +26,6 @@ use super::super::endpoint::SINGLE_GROUP;
 use super::super::aggregate::{self, AggrFunc};
 use super::super::metrics::*;
 use super::super::Result;
-use super::{Executor, Row, ExprColumnRefVisitor, inflate_with_col_for_dag};
 
 pub struct AggregationExecutor<'a> {
     group_by: Vec<Expr>,
@@ -149,18 +149,19 @@ impl<'a> Executor for AggregationExecutor<'a> {
 #[cfg(test)]
 mod test {
     use std::i64;
-    use protobuf::RepeatedField;
 
+    use kvproto::kvrpcpb::IsolationLevel;
+    use protobuf::RepeatedField;
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
-    use kvproto::kvrpcpb::IsolationLevel;
 
-    use super::*;
-    use storage::Statistics;
-    use util::codec::number::NumberEncoder;
     use coprocessor::codec::datum::{Datum, DatumDecoder};
     use coprocessor::codec::mysql::decimal::Decimal;
     use coprocessor::codec::mysql::types;
+    use storage::{Statistics, SnapshotStore};
+    use util::codec::number::NumberEncoder;
+
+    use super::*;
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
     use super::super::topn::test::gen_table_data;
@@ -218,13 +219,10 @@ mod test {
         // init TableScan Exectutor
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+
         let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(table_scan,
-                                            key_ranges,
-                                            snapshot,
-                                            &mut statistics,
-                                            start_ts,
-                                            IsolationLevel::SI);
+        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
