@@ -392,6 +392,9 @@ fn convert_gbmb(mut bytes: u64) -> String {
 
 fn dump_region_size(db: &DB, region_id: u64, cf: Option<&str>) {
     println!("region id: {}", region_id);
+    if let Some(cf_name) = cf {
+        println!("cf_name: {}", cf_name);
+    }
     let size = get_region_size(db, region_id, cf);
     println!("region size: {}", convert_gbmb(size));
 }
@@ -412,10 +415,6 @@ fn dump_all_region_size(db: &DB, cf: Option<&str>) {
     let mut v: Vec<(u64, u64)> = region_sizes.drain(..).zip(region_ids.drain(..)).collect();
     v.sort();
     v.reverse();
-    match cf {
-        Some(cf_name) => println!("cf_name: {}", cf_name),
-        None => {}
-    };
     println!("total region number: {}", region_number);
     println!("total region size: {}", convert_gbmb(total_size));
     for (size, id) in v {
