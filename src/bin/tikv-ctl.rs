@@ -78,7 +78,11 @@ fn main() {
             .arg(Arg::with_name("region")
                 .short("r")
                 .takes_value(true)
-                .help("set the region id, if not specified, print all regions.")))
+                .help("set the region id, if not specified, print all regions."))
+            .arg(Arg::with_name("cf")
+                .short("c")
+                .takes_value(true)
+                .help("set the cf name, if not specified, print all cf.")))
         .subcommand(SubCommand::with_name("scan")
             .about("print the range db range")
             .arg(Arg::with_name("from")
@@ -168,11 +172,12 @@ fn main() {
             panic!("Currently only support raft log entry and scan.")
         }
     } else if let Some(matches) = matches.subcommand_matches("size") {
+        let cf_name = matches.value_of("cf");
         match matches.value_of("region") {
             Some(id) => {
-                dump_region_size(&db, id.parse().unwrap());
+                dump_region_size(&db, id.parse().unwrap(), cf_name);
             }
-            None => dump_all_region_size(&db),
+            None => dump_all_region_size(&db, cf_name),
         }
     } else if let Some(matches) = matches.subcommand_matches("scan") {
         let from = String::from(matches.value_of("from").unwrap());
@@ -371,6 +376,9 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
 fn convert_gbmb(mut bytes: u64) -> String {
     const GB: u64 = 1024 * 1024 * 1024;
     const MB: u64 = 1024 * 1024;
+    if bytes < MB {
+        return bytes.to_string();
+    }
     let mb = if bytes % GB == 0 {
         String::from("")
     } else {
@@ -385,9 +393,12 @@ fn convert_gbmb(mut bytes: u64) -> String {
     format!("{}{}", gb, mb)
 }
 
-fn dump_region_size(db: &DB, region_id: u64) {
+fn dump_region_size(db: &DB, region_id: u64, cf: Option<&str>) {
     println!("region id: {}", region_id);
-    let size = get_region_size(db, region_id);
+    if let Some(cf_name) = cf {
+        println!("cf_name: {}", cf_name);
+    }
+    let size = get_region_size(db, region_id, cf);
     println!("region size: {}", convert_gbmb(size));
 }
 
@@ -398,10 +409,10 @@ fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
     }
 }
 
-fn dump_all_region_size(db: &DB) {
+fn dump_all_region_size(db: &DB, cf: Option<&str>) {
     let mut region_ids = get_all_region_ids(db);
     let mut region_sizes: Vec<u64> =
-        region_ids.iter().map(|&region_id| get_region_size(db, region_id)).collect();
+        region_ids.iter().map(|&region_id| get_region_size(db, region_id, cf)).collect();
     let region_number = region_ids.len();
     let total_size = region_sizes.iter().sum();
     let mut v: Vec<(u64, u64)> = region_sizes.drain(..).zip(region_ids.drain(..)).collect();
@@ -434,14 +445,17 @@ fn get_all_region_ids(db: &DB) -> Vec<u64> {
     region_ids
 }
 
-fn get_region_size(db: &DB, region_id: u64) -> u64 {
+fn get_region_size(db: &DB, region_id: u64, cf: Option<&str>) -> u64 {
     let region_state_key = keys::region_state_key(region_id);
     let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
     let region = region_state.get_region();
     let start_key = &keys::data_key(region.get_start_key());
     let end_key = &keys::data_end_key(region.get_end_key());
     let mut size: u64 = 0;
-    let cf_arr = [CF_DEFAULT, CF_WRITE, CF_LOCK];
+    let cf_arr = match cf {
+        Some(s) => vec![s],
+        None => vec![CF_DEFAULT, CF_WRITE, CF_LOCK],
+    };
     for cf in &cf_arr {
         db.scan_cf(cf,
                      start_key,
