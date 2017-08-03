@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{HistogramVec, CounterVec, GaugeVec, exponential_buckets};
+use prometheus::*;
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec =
@@ -88,5 +88,13 @@ lazy_static! {
             "tikv_coprocessor_get_or_scan_count",
             "Total number of rocksdb query of get or scan count",
             &["type"]
+        ).unwrap();
+
+    pub static ref BATCH_REQUEST_TASKS: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_batch_request_tasks_total",
+            "Bucketed histogram of total number of a batch request task",
+            &["type"],
+            linear_buckets(0.0, 2.0, 20).unwrap()
         ).unwrap();
 }

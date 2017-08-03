@@ -324,8 +324,9 @@ impl BatchRunnable<Task> for Host {
                         self.handle_snapshot_result(q_id, snap_res);
                     }
                 }
-                Task::BacklogRequests(batch) => {
-                    for id in batch {
+                Task::BacklogRequests(backlog) => {
+                    BATCH_REQUEST_TASKS.with_label_values(&["backlog"]).observe(backlog.len() as f64);
+                    for id in backlog {
                         let reqs = self.reqs.remove(&id).unwrap();
                         let sched = self.sched.clone();
                         if let Err(e) =
@@ -384,6 +385,7 @@ impl BatchRunnable<Task> for Host {
             }
         };
 
+        BATCH_REQUEST_TASKS.with_label_values(&["all"]).observe(batch.len() as f64);
         if let Err(e) = self.engine.async_batch_snapshot(batch, on_finished) {
             for id in req_ids {
                 let reqs = self.reqs.remove(&id).unwrap();
