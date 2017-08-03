@@ -1053,7 +1053,6 @@ impl Scheduler {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
                     .inc();
-
                 let e = e.maybe_clone().unwrap_or_else(|| {
                     error!("async snapshot failed for cid={}, error {:?}", cid, e);
                     EngineError::Other(box_err!("{:?}", e))
@@ -1205,6 +1204,8 @@ impl Scheduler {
                     Msg::Quit => return Ok(()),
                     Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
                     Msg::BacklogSnapshot(backlog) => {
+                        BATCH_COMMANDS.with_label_values(&["backlog"])
+                            .observe(backlog.len() as f64);
                         for (ctx, cids) in backlog {
                             self.get_snapshot(&ctx, cids);
                         }
@@ -1234,7 +1235,8 @@ impl Scheduler {
 
             if let Some(cmds) = self.grouped_cmds.take() {
                 let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
-                    BATCH_COMMANDS.observe(cids.len() as f64);
+                    BATCH_COMMANDS.with_label_values(&["all"])
+                        .observe(cids.len() as f64);
                     (hash_ctx.0, cids)
                 });
                 self.batch_get_snapshot(batch.collect());
