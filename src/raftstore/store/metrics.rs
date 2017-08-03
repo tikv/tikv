@@ -186,10 +186,11 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref BTACH_LOCAL_READ_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_batch_local_read",
-            "Bucketed histogram of batch size of local read",
-            linear_buckets(0.0, 1.0, 25).unwrap()
+    pub static ref BATCH_SNAPSHOT_COMMANDS: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_batch_snapshot_commands",
+            "Bucketed histogram of batch snapshot",
+            &["type"],
+            linear_buckets(0.0, 2.0, 20).unwrap()
         ).unwrap();
 }

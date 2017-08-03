@@ -1294,9 +1294,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                            batch: Vec<RaftCmdRequest>,
                                            on_finished: BatchCallback) {
         let size = batch.len();
+        let mut ready = 0;
+        let mut read_index = 0;
         let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
-        let mut batch_sizes: HashMap<_, u64> = HashMap::default();
-        let mut cache: HashMap<u64, Option<Option<RaftCmdResponse>>> = HashMap::default();
         for (idx, msg) in batch.into_iter().enumerate() {
             let mut err_resp = RaftCmdResponse::new();
 
@@ -1314,34 +1314,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             let region_id = msg.get_header().get_region_id();
             let mut peer = self.region_peers.get_mut(&region_id).unwrap();
-
-            let mut count = batch_sizes.entry(region_id).or_insert(0);
-            *count += 1;
-            let mut resp = cache.entry(region_id).or_insert_with(|| None);
-            match *resp {
-                None => {
-                    let r = peer.propose_snapshot(msg, &mut self.raft_metrics.propose);
-                    match r {
-                        Some(r) => {
-                            ret[idx] = Some(r.clone());
-                            *resp = Some(Some(r));
-                        }
-                        None => *resp = Some(None),
-                    }
-                }
-                Some(Some(ref resp)) => {
-                    ret[idx] = Some(resp.clone());
-                }
-                // ReadIndex occurred.
-                Some(None) => (),
+            if let Some(r) = peer.propose_snapshot(msg, &mut self.raft_metrics.propose) {
+                ret[idx] = Some(r);
+                ready += 1;
+            } else {
+                read_index += 1;
             }
         }
-
-        for (_, size) in batch_sizes {
-            self.raft_metrics.propose.batch_local_read.observe(size as u64 as f64);
-        }
-
         on_finished.call_box((ret,));
+
+        BATCH_SNAPSHOT_COMMANDS.with_label_values(&["ready"]).observe(ready as f64);
+        BATCH_SNAPSHOT_COMMANDS.with_label_values(&["read_index"]).observe(read_index as f64);
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.

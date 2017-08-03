@@ -998,10 +998,10 @@ impl Peer {
                             req: RaftCmdRequest,
                             metrics: &mut RaftProposeMetrics)
                             -> Option<RaftCmdResponse> {
-        metrics.all += 1;
         if self.pending_remove {
             return None;
         }
+        metrics.all += 1;
 
         // TODO: deny no snapshot request.
 
