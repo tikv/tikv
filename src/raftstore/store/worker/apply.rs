@@ -1021,8 +1021,10 @@ impl ApplyDelegate {
 
         let start_key = keys::data_key(start_key);
         let end_key = keys::data_end_key(end_key);
-        let cf = req.get_delete_range().get_cf();
-        let cf = if cf.is_empty() { CF_DEFAULT } else { cf };
+        let mut cf = req.get_delete_range().get_cf();
+        if cf.is_empty() {
+            cf = CF_DEFAULT;
+        }
         let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
 
         // Use delete_file_in_range to drop as many sst files as possible, this is
