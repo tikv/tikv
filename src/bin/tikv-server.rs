@@ -585,6 +585,7 @@ fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> Column
         align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64) as i64;
     default_values.use_bloom_filter = true;
     default_values.whole_key_filtering = true;
+    default_values.compaction_pri = 3;
 
     get_rocksdb_cf_option(config, "defaultcf", default_values)
 }
@@ -595,6 +596,7 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFa
         align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64) as i64;
     default_values.use_bloom_filter = true;
     default_values.whole_key_filtering = false;
+    default_values.compaction_pri = 3;
 
     let mut cf_opts = get_rocksdb_cf_option(config, "writecf", default_values);
     // Prefix extractor(trim the timestamp at tail) for write cf.
