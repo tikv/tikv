@@ -37,7 +37,7 @@ pub struct IndexScanExecutor<'a> {
 impl<'a> IndexScanExecutor<'a> {
     pub fn new(mut meta: IndexScan,
                key_ranges: Vec<KeyRange>,
-               snapshot: SnapshotStore<'a>,
+               store: SnapshotStore<'a>,
                statistics: &'a mut Statistics)
                -> IndexScanExecutor<'a> {
         let mut pk_col = None;
@@ -49,7 +49,7 @@ impl<'a> IndexScanExecutor<'a> {
         let col_ids = cols.iter()
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = Scanner::new(snapshot, desc, false, statistics);
+        let scanner = Scanner::new(store, desc, false, statistics);
 
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
@@ -243,10 +243,10 @@ mod test {
         r2.set_end(end_key.clone());
         wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
 
         let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, snap, &mut statistics);
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap();
@@ -268,10 +268,10 @@ mod test {
         let mut wrapper = IndexTestWrapper::default();
         wrapper.scan.set_desc(true);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
 
         let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, snap, &mut statistics);
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -293,10 +293,10 @@ mod test {
         let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::include_pk_cols();
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
 
         let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, snap, &mut statistics);
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();

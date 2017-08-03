@@ -219,10 +219,10 @@ mod test {
         // init TableScan Exectutor
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
 
         let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, snap, &mut statistics);
+        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();

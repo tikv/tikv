@@ -19,7 +19,7 @@ use util::escape;
 // `Scanner` is a helper struct to wrap all common scan operations
 // for `TableScanExecutor` and `IndexScanExecutor`
 pub struct Scanner<'a> {
-    snap: SnapshotStore<'a>,
+    store: SnapshotStore<'a>,
     scan_mode: ScanMode,
     key_only: bool,
     statistics: Option<&'a mut Statistics>,
@@ -28,7 +28,7 @@ pub struct Scanner<'a> {
 }
 
 impl<'a> Scanner<'a> {
-    pub fn new(snap: SnapshotStore<'a>,
+    pub fn new(store: SnapshotStore<'a>,
                desc: bool,
                key_only: bool,
                statistics: &'a mut Statistics)
@@ -39,7 +39,7 @@ impl<'a> Scanner<'a> {
             ScanMode::Forward
         };
         Scanner {
-            snap: snap,
+            store: store,
             scan_mode: scan_mode,
             key_only: key_only,
             statistics: Some(statistics),
@@ -56,15 +56,11 @@ impl<'a> Scanner<'a> {
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
-
-        let kv = if let Some(scanner) = self.scanner.as_mut() {
-            if self.scan_mode == ScanMode::Backward {
-                try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
-            } else {
-                try!(scanner.seek(Key::from_raw(&seek_key)))
-            }
+        let scanner = self.scanner.as_mut().unwrap();
+        let kv = if self.scan_mode == ScanMode::Backward {
+            try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
         } else {
-            None
+            try!(scanner.seek(Key::from_raw(&seek_key)))
         };
 
         let (key, value) = match kv {
@@ -84,7 +80,7 @@ impl<'a> Scanner<'a> {
 
     pub fn get_row(&mut self, key: &[u8]) -> Result<Option<Value>> {
         let statistics = self.take_statistics();
-        let data = try!(self.snap
+        let data = try!(self.store
             .get(&Key::from_raw(key), statistics));
         self.statistics = Some(statistics);
         Ok(data)
@@ -104,7 +100,7 @@ impl<'a> Scanner<'a> {
             Some(Key::from_raw(range.get_end()).encoded().to_vec())
         };
         let statistics = self.take_statistics();
-        let scanner = try!(self.snap
+        let scanner = try!(self.store
             .scanner(self.scan_mode, self.key_only, upper_bound, statistics));
         self.scanner = Some(scanner);
         Ok(())
@@ -314,10 +310,9 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
 
-
-        let mut scanner = Scanner::new(snap, false, false, &mut statistics);
+        let mut scanner = Scanner::new(store, false, false, &mut statistics);
         let data = scanner.get_row(&key).unwrap().unwrap();
         assert_eq!(data, value);
     }
@@ -334,8 +329,8 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
-        let mut scanner = Scanner::new(snap, false, false, &mut statistics);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let mut scanner = Scanner::new(store, false, false, &mut statistics);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         for &(ref k, ref v) in &test_data {
             let (key, value) = scanner.next_row(&range).unwrap().unwrap();
@@ -355,8 +350,8 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&data.kv_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
-        let mut scanner = Scanner::new(snap, true, false, &mut statistics);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let mut scanner = Scanner::new(store, true, false, &mut statistics);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         data.kv_data.reverse();
         for &(ref k, ref v) in &data.kv_data {
@@ -381,8 +376,8 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
-        let mut scanner = Scanner::new(snap, false, true, &mut statistics);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let mut scanner = Scanner::new(store, false, true, &mut statistics);
 
         let range = get_range(table_id, i64::MIN, i64::MAX);
         let (_, value) = scanner.next_row(&range).unwrap().unwrap();
@@ -400,8 +395,8 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
-        let mut scanner = Scanner::new(snap, true, false, &mut statistics);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let mut scanner = Scanner::new(store, true, false, &mut statistics);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         // 1. seek_key is some
         scanner.set_seek_key(Some(pk.clone()));

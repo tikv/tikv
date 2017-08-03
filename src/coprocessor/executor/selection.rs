@@ -149,12 +149,12 @@ mod tests {
         let key_ranges = vec![get_range(tid, 0, i64::MAX)];
 
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
 
         let mut statistics = Statistics::default();
 
         let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, snap, &mut statistics);
+            TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
 
         // selection executor
         let mut selection = Selection::new();
@@ -202,11 +202,11 @@ mod tests {
         let key_ranges = vec![get_range(tid, 0, i64::MAX)];
 
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
         let mut statistics = Statistics::default();
 
         let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, snap, &mut statistics);
+            TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
 
         // selection executor
         let mut selection = Selection::new();
