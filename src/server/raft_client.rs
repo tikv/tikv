@@ -28,6 +28,7 @@ const INITIAL_BUFFER_CAP: usize = 1024;
 
 use util::collections::HashMap;
 use super::{Error, Result, Config};
+use super::metrics::*;
 
 struct Conn {
     stream: UnboundedSender<Vec<(RaftMessage, WriteFlags)>>,
@@ -66,7 +67,11 @@ impl Conn {
                     r
                 })
                 .map(|_| ())
-                .map_err(move |e| warn!("send raftmessage to {} failed: {:?}", addr, e)))
+                .map_err(move |e| {
+                    let store = store_id.to_string();
+                    REPORT_FAILURE_MSG_COUNTER.with_label_values(&["unreachable", &*store]).inc();
+                    warn!("send raftmessage to {} failed: {:?}", addr, e);
+                }))
             .map(|_| ())
             .map_err(|_| ()));
         Conn {

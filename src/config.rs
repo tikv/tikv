@@ -118,6 +118,7 @@ impl CfConfig {
         cfg.block_cache_size = ReadableSize::mb(memory_for_cf(CF_DEFAULT) as u64);
         cfg.use_bloom_filter = true;
         cfg.whole_key_filtering = true;
+        cfg.compaction_pri = CompactionPriority::MinOverlappingRatio;
         cfg
     }
 
@@ -127,6 +128,7 @@ impl CfConfig {
         cfg.block_cache_size = ReadableSize::mb(memory_for_cf(CF_WRITE) as u64);
         cfg.use_bloom_filter = true;
         cfg.whole_key_filtering = false;
+        cfg.compaction_pri = CompactionPriority::MinOverlappingRatio;
         cfg
     }
 
