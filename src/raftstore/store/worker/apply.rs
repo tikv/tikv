@@ -29,7 +29,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
-use storage::{CF_LOCK, CF_RAFT, CF_DEFAULT};
+use storage::{CF_LOCK, CF_RAFT, CF_DEFAULT, ALL_CFS};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Store, cmd_resp, keys, util};
@@ -1005,31 +1005,40 @@ impl ApplyDelegate {
                            req: &Request,
                            ranges: &mut Vec<Range>)
                            -> Result<Response> {
-        let start_key = req.get_delete_range().get_start_key();
-        let end_key = req.get_delete_range().get_end_key();
-        if !end_key.is_empty() && start_key >= end_key {
-            return Err(box_err!("invalid delete range parameters, start_key: {:?}, end_key: {:?}",
-                                start_key,
-                                end_key));
+        let s_key = req.get_delete_range().get_start_key();
+        let e_key = req.get_delete_range().get_end_key();
+        if !e_key.is_empty() && s_key >= e_key {
+            return Err(box_err!("invalid delete range command, start_key: {:?}, end_key: {:?}",
+                                s_key,
+                                e_key));
         }
-        try!(check_data_key(start_key, &self.region));
-        if end_key != self.region.get_end_key() {
-            try!(check_data_key(end_key, &self.region));
+        try!(check_data_key(s_key, &self.region));
+        let end_key = keys::data_end_key(e_key);
+        let region_end_key = keys::data_end_key(self.region.get_end_key());
+        if end_key > region_end_key {
+            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
         }
 
         let resp = Response::new();
-
-        let start_key = keys::data_key(start_key);
-        let end_key = keys::data_end_key(end_key);
         let mut cf = req.get_delete_range().get_cf();
         if cf.is_empty() {
             cf = CF_DEFAULT;
         }
+        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
+            return Err(box_err!("invalid delete range command, cf: {:?}", cf));
+        }
         let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
 
+        let start_key = keys::data_key(s_key);
         // Use delete_file_in_range to drop as many sst files as possible, this is
         // a way to reclaim disk space quickly after drop a table/index.
-        try!(self.engine.delete_file_in_range_cf(handle, &start_key, &end_key));
+        self.engine.delete_file_in_range_cf(handle, &start_key, &end_key).unwrap_or_else(|e| {
+            panic!("{} failed to delete files in range [{}, {}): {:?}",
+                   self.tag,
+                   escape(&start_key),
+                   escape(&end_key),
+                   e)
+        });
 
         // Use delete_range to mark all the contents in this range is deleted.
         ctx.wb.delete_range_cf(handle, &start_key, &end_key).unwrap_or_else(|e| {
@@ -1722,6 +1731,8 @@ mod tests {
 
         let put_entry = EntryBuilder::new(1, 1)
             .put(b"k1", b"v1")
+            .put(b"k2", b"v1")
+            .put(b"k3", b"v1")
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
@@ -1735,9 +1746,13 @@ mod tests {
         assert!(res.is_empty());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses().len(), 3);
         let dk_k1 = keys::data_key(b"k1");
+        let dk_k2 = keys::data_key(b"k2");
+        let dk_k3 = keys::data_key(b"k3");
         assert_eq!(db.get(&dk_k1).unwrap().unwrap(), b"v1");
+        assert_eq!(db.get(&dk_k2).unwrap().unwrap(), b"v1");
+        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
         assert_eq!(delegate.applied_index_term, 1);
         assert_eq!(delegate.apply_state.get_applied_index(), 1);
 
@@ -1852,13 +1867,7 @@ mod tests {
             cb(resp);
         }
         let resp = rx.try_recv().unwrap();
-        assert!(!resp.get_header().has_error(), "{:?}", resp);
-        let dk_k1 = keys::data_key(b"k1");
-        let dk_k2 = keys::data_key(b"k2");
-        let dk_k3 = keys::data_key(b"k3");
-        assert!(db.get(&dk_k1).unwrap().is_none());
-        assert!(db.get(&dk_k2).unwrap().is_none());
-        assert!(db.get(&dk_k3).unwrap().is_none());
+        assert!(resp.get_header().get_error().has_key_not_in_region());
 
         let delete_range_entry = EntryBuilder::new(8, 3)
             .delete_range_cf(CF_DEFAULT, b"", b"k5")
