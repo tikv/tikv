@@ -42,7 +42,7 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler, FutureWorker};
 use util::transport::SendCh;
-use util::{rocksdb, RingQueue};
+use util::{rocksdb, RingQueue, Either};
 use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
@@ -1251,33 +1251,48 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
-        let mut resp = RaftCmdResponse::new();
-
+    fn pre_propose_raft_command(&mut self,
+                                msg: RaftCmdRequest)
+                                -> Either<RaftCmdRequest, RaftCmdResponse> {
         if let Err(e) = self.validate_store_id(&msg) {
+            let mut resp = RaftCmdResponse::new();
             bind_error(&mut resp, e);
-            return cb.call_box((resp,));
+            return Either::Right(resp);
         }
 
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
+            let mut resp = RaftCmdResponse::new();
             match self.execute_status_command(msg) {
                 Err(e) => bind_error(&mut resp, e),
                 Ok(status_resp) => resp = status_resp,
             };
-            return cb.call_box((resp,));
+            return Either::Right(resp);
         }
 
         if let Err(e) = self.validate_region(&msg) {
+            let mut resp = RaftCmdResponse::new();
             bind_error(&mut resp, e);
-            return cb.call_box((resp,));
+            return Either::Right(resp);
         }
+
+        Either::Left(msg)
+    }
+
+    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
+        let msg = match self.pre_propose_raft_command(msg) {
+            Either::Left(msg) => msg,
+            Either::Right(resp) => {
+                return cb.call_box((resp,));
+            }
+        };
 
         // Note:
         // The peer that is being checked is a leader. It might step down to be a follower later. It
         // doesn't matter whether the peer is a leader or not. If it's not a leader, the proposing
         // command log entry can't be committed.
 
+        let mut resp = RaftCmdResponse::new();
         let region_id = msg.get_header().get_region_id();
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
@@ -1294,37 +1309,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                            batch: Vec<RaftCmdRequest>,
                                            on_finished: BatchCallback) {
         let size = batch.len();
-        let mut ready = 0;
-        let mut read_index = 0;
+        BATCH_SNAPSHOT_COMMANDS.observe(size as f64);
         let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
         for (idx, msg) in batch.into_iter().enumerate() {
-            let mut err_resp = RaftCmdResponse::new();
-
-            if let Err(e) = self.validate_store_id(&msg) {
-                bind_error(&mut err_resp, e);
-                ret[idx] = Some(err_resp);
-                continue;
-            }
-
-            if let Err(e) = self.validate_region(&msg) {
-                bind_error(&mut err_resp, e);
-                ret[idx] = Some(err_resp);
-                continue;
-            }
+            let msg = match self.pre_propose_raft_command(msg) {
+                Either::Left(msg) => msg,
+                Either::Right(resp) => {
+                    ret[idx] = Some(resp);
+                    continue;
+                }
+            };
 
             let region_id = msg.get_header().get_region_id();
             let mut peer = self.region_peers.get_mut(&region_id).unwrap();
             if let Some(r) = peer.propose_snapshot(msg, &mut self.raft_metrics.propose) {
                 ret[idx] = Some(r);
-                ready += 1;
-            } else {
-                read_index += 1;
             }
         }
         on_finished.call_box((ret,));
-
-        BATCH_SNAPSHOT_COMMANDS.with_label_values(&["ready"]).observe(ready as f64);
-        BATCH_SNAPSHOT_COMMANDS.with_label_values(&["read_index"]).observe(read_index as f64);
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
