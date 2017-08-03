@@ -117,7 +117,7 @@ fn check_system_config(config: &TiKvConfig) {
     }
 
     if cfg!(unix) && env::var("TZ").is_err() {
-        env::set_var("TZ", "/etc/localtime");
+        env::set_var("TZ", ":/etc/localtime");
         warn!("environment variable `TZ` is missing, use `/etc/localtime`");
     }
 }
