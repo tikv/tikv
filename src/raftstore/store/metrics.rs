@@ -185,4 +185,12 @@ lazy_static! {
             "Total number of raft entry fetches",
             &["type"]
         ).unwrap();
+
+    pub static ref BATCH_SNAPSHOT_COMMANDS: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_batch_snapshot_commands",
+            "Bucketed histogram of batch snapshot",
+            &["type"],
+            linear_buckets(0.0, 2.0, 20).unwrap()
+        ).unwrap();
 }

@@ -1294,6 +1294,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                            batch: Vec<RaftCmdRequest>,
                                            on_finished: BatchCallback) {
         let size = batch.len();
+        let mut ready = 0;
+        let mut read_index = 0;
         let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
         for (idx, msg) in batch.into_iter().enumerate() {
             let mut err_resp = RaftCmdResponse::new();
@@ -1314,10 +1316,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut peer = self.region_peers.get_mut(&region_id).unwrap();
             if let Some(r) = peer.propose_snapshot(msg, &mut self.raft_metrics.propose) {
                 ret[idx] = Some(r);
+                ready += 1;
+            } else {
+                read_index += 1;
             }
         }
-
         on_finished.call_box((ret,));
+
+        BATCH_SNAPSHOT_COMMANDS.with_label_values(&["ready"]).observe(ready as f64);
+        BATCH_SNAPSHOT_COMMANDS.with_label_values(&["read_index"]).observe(read_index as f64);
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
