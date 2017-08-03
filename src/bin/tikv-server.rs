@@ -335,7 +335,7 @@ fn main() {
             .long("print-sample-config")
             .help("Print a sample config to stdout"))
         .get_matches();
-    
+
     if matches.is_present("print-sample-config") {
         let config = TiKvConfig::default();
         println!("{}", toml::to_string_pretty(&config).unwrap());
