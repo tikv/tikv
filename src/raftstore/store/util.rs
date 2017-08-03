@@ -128,6 +128,8 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
 
 #[cfg(test)]
 mod tests {
+    use std::process;
+
     use kvproto::metapb;
     use kvproto::raft_serverpb::RaftMessage;
     use kvproto::eraftpb::{Message, ConfChangeType, MessageType};
@@ -259,5 +261,44 @@ mod tests {
         // Delete all in ["k2", "k4").
         delete_all_in_range(&db, b"k2", b"k4").unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
+    }
+
+    fn exit_with_err(msg: String) -> ! {
+        error!("{}", msg);
+        process::exit(1)
+    }
+
+    #[test]
+    fn test_delete_range_prefix_bloom_case() {
+        let path = TempDir::new("_raftstore_util_delete_range_prefix_bloom").expect("");
+        let path_str = path.path().to_str().unwrap();
+
+        let mut opts = DBOptions::new();
+        opts.create_if_missing(true);
+
+        let mut cf_opts = ColumnFamilyOptions::new();
+        // Prefix extractor(trim the timestamp at tail) for write cf.
+        cf_opts.set_prefix_extractor("FixedSuffixSliceTransform",
+                                     Box::new(rocksdb::FixedSuffixSliceTransform::new(8)))
+            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+        // Create prefix bloom filter for memtable.
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+        let cf = "default";
+        let db = DB::open_cf(opts, path_str, vec![cf], vec![cf_opts]).unwrap();
+        let wb = WriteBatch::new();
+        let kvs: Vec<(&[u8], &[u8])> =
+            vec![(b"kabcdefg1", b"v1"), (b"kabcdefg2", b"v2"), (b"kabcdefg3", b"v3"), (b"kabcdefg4", b"v4")];
+        let kvs_left: Vec<(&[u8], &[u8])> = vec![(b"kabcdefg1", b"v1"), (b"kabcdefg4", b"v4")];
+
+        for &(k, v) in kvs.as_slice() {
+            let handle = get_cf_handle(&db, cf).unwrap();
+            wb.put_cf(handle, k, v).unwrap();
+        }
+        db.write(wb).unwrap();
+        check_data(&db, &[cf], kvs.as_slice());
+
+        // Delete all in ["k2", "k4").
+        delete_all_in_range(&db, b"kabcdefg2", b"kabcdefg4").unwrap();
+        check_data(&db, &[cf], kvs_left.as_slice());
     }
 }
