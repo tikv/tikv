@@ -598,6 +598,7 @@ struct DAGSelect {
     aggregate: Vec<Expr>,
     group_by: Vec<Expr>,
     key_range: KeyRange,
+    output_offsets: Option<Vec<u32>>,
 }
 
 impl DAGSelect {
@@ -627,6 +628,7 @@ impl DAGSelect {
             aggregate: vec![],
             group_by: vec![],
             key_range: range,
+            output_offsets: None,
         }
     }
 
@@ -660,6 +662,7 @@ impl DAGSelect {
             aggregate: vec![],
             group_by: vec![],
             key_range: range,
+            output_offsets: None,
         }
     }
 
@@ -730,6 +733,11 @@ impl DAGSelect {
         self
     }
 
+    fn output_offsets(mut self, output_offsets: Option<Vec<u32>>) -> DAGSelect {
+        self.output_offsets = output_offsets;
+        self
+    }
+
     fn where_expr(mut self, expr: Expr) -> DAGSelect {
         let mut exec = Executor::new();
         exec.set_tp(ExecType::TypeSelection);
@@ -785,6 +793,13 @@ impl DAGSelect {
         dag.set_executors(RepeatedField::from_vec(self.execs));
         dag.set_start_ts(next_id() as u64);
         dag.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
+
+        let output_offsets = if self.output_offsets.is_some() {
+            self.output_offsets.take().unwrap()
+        } else {
+            (0..self.cols.len() as u32).collect()
+        };
+        dag.set_output_offsets(output_offsets);
 
         let mut req = Request::new();
         req.set_tp(REQ_TYPE_DAG);
@@ -2206,6 +2221,33 @@ fn test_default_val() {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
             datum::encode_value(&[id.into(), name_datum, cnt.into(), Datum::I64(3)]).unwrap();
+        assert_eq!(id, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+
+#[test]
+fn test_output_offsets() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let req = DAGSelect::from(&product.table).output_offsets(Some(vec![1])).build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), data.len());
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, name, _)) in spliter.zip(data) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded = datum::encode_value(&[name_datum]).unwrap();
         assert_eq!(id, row.handle);
         assert_eq!(row.data, &*expected_encoded);
     }
