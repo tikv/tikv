@@ -185,11 +185,4 @@ lazy_static! {
             "Total number of raft entry fetches",
             &["type"]
         ).unwrap();
-
-    pub static ref BTACH_LOCAL_READ_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_batch_local_read",
-            "Bucketed histogram of batch size of local read",
-            linear_buckets(0.0, 1.0, 25).unwrap()
-        ).unwrap();
 }
