@@ -28,7 +28,7 @@ use futures::{Future, Stream, future, stream};
 use futures::sync::oneshot;
 use grpc::{Server as GrpcServer, ServerBuilder, Environment, ChannelBuilder, RpcContext,
            UnarySink, RequestStream, ClientStreamingSink};
-use crossbeam::sync::{MsQueue, ArcCell};
+use crossbeam::sync::MsQueue;
 
 use tikv::server::{RaftClient, Config};
 
@@ -38,7 +38,7 @@ use super::print_result;
 const NANOS_PER_SEC: u32 = 1_000_000_000;
 
 struct Inner {
-    name: String,
+    start: AtomicBool,
     counter: AtomicUsize,
     // useful in bench.iter()
     forwarder: Arc<MsQueue<()>>,
@@ -46,49 +46,27 @@ struct Inner {
 
 #[derive(Clone)]
 struct BenchTikvHandler {
-    // TODO: It's only suitable for streaming benchmarks.
-    //      Maybe using Either later.
-    running: Arc<ArcCell<Option<Inner>>>,
+    inner: Arc<Inner>,
 }
 
 impl BenchTikvHandler {
-    fn init_recording(&self,
-                      name: String,
-                      counter: AtomicUsize,
-                      forwarder: Arc<MsQueue<()>>)
-                      -> Result<(), String> {
-        let running = self.running.get();
-        if running.is_some() {
-            return Err(Option::as_ref(&running).unwrap().name.clone());
+    fn new(forwarder: Arc<MsQueue<()>>) -> Self {
+        BenchTikvHandler {
+            inner: Arc::new(Inner {
+                start: AtomicBool::new(false),
+                counter: AtomicUsize::new(0),
+                forwarder: forwarder,
+            }),
         }
-
-        let new = Arc::new(Some(Inner {
-            name: name,
-            counter: counter,
-            forwarder: forwarder,
-        }));
-        self.running.set(new);
-        Ok(())
     }
 
-    fn start_recording(&self) -> Result<(), String> {
-        let running = self.running.get();
-        if running.is_none() {
-            return Err("not initialize".to_owned());
-        }
-
-        Option::as_ref(&running).unwrap().counter.store(1, Ordering::Release);
-        Ok(())
+    fn stop_recording(&self) -> usize {
+        self.inner.start.store(false, Ordering::Release);
+        self.inner.counter.load(Ordering::Acquire)
     }
 
-    fn stop_recording(&self) -> Result<usize, String> {
-        let running = self.running.set(Arc::new(None));
-        if running.is_none() {
-            return Err("not initialize".to_owned());
-        }
-        let inner = Option::as_ref(&running).unwrap();
-        let count = inner.counter.swap(0, Ordering::Acquire);
-        Ok(count)
+    fn start_recording(&self) {
+        self.inner.start.store(true, Ordering::Release);
     }
 }
 
@@ -97,13 +75,12 @@ impl Tikv for BenchTikvHandler {
             ctx: RpcContext,
             stream: RequestStream<RaftMessage>,
             _: ClientStreamingSink<Done>) {
-        let running = self.running.get();
+        let inner = self.inner.clone();
 
         ctx.spawn(stream.for_each(move |_| {
-                let running = Option::as_ref(&running).unwrap();
-                if 0 != running.counter.load(Ordering::Acquire) {
-                    running.counter.fetch_add(1, Ordering::Release);
-                    running.forwarder.push(());
+                if inner.start.load(Ordering::Acquire) {
+                    inner.counter.fetch_add(1, Ordering::Release);
+                    inner.forwarder.push(());
                 }
                 future::ok(())
             })
@@ -112,16 +89,15 @@ impl Tikv for BenchTikvHandler {
     }
 
     fn kv_get(&self, ctx: RpcContext, _: GetRequest, sink: UnarySink<GetResponse>) {
-        let running = self.running.get();
+        let inner = self.inner.clone();
         let mut resp = GetResponse::new();
         resp.set_value(b"something".to_vec());
 
         ctx.spawn(sink.success(resp)
             .then(move |_| {
-                let running = Option::as_ref(&running).unwrap();
-                if 0 != running.counter.load(Ordering::Acquire) {
-                    running.counter.fetch_add(1, Ordering::Release);
-                    running.forwarder.push(());
+                if inner.start.load(Ordering::Acquire) {
+                    inner.counter.fetch_add(1, Ordering::Release);
+                    inner.forwarder.push(());
                 }
                 future::ok::<_, ()>(())
             }));
@@ -245,14 +221,15 @@ pub struct BenchTikvServer {
 
 impl BenchTikvServer {
     pub fn new(env: Arc<Environment>) -> BenchTikvServer {
-        let h = BenchTikvHandler { running: Arc::new(ArcCell::new(Arc::new(None))) };
-
         let channel_args = ChannelBuilder::new(env.clone())
             .stream_initial_window_size(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE)
             .max_concurrent_stream(DEFAULT_GRPC_CONCURRENT_STREAM)
             .max_receive_message_len(SERVER_MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(SERVER_MAX_GRPC_SEND_MSG_LEN)
             .build_args();
+
+        let queue = Arc::new(MsQueue::new());
+        let h = BenchTikvHandler::new(queue.clone());
 
         let grpc_server = ServerBuilder::new(env.clone())
             .register_service(create_tikv(h.clone()))
@@ -270,7 +247,7 @@ impl BenchTikvServer {
             server: grpc_server,
             local_addr: addr,
             handler: h,
-            rx: None,
+            rx: Some(queue),
         }
     }
 
@@ -282,19 +259,11 @@ impl BenchTikvServer {
         self.local_addr
     }
 
-    pub fn init_recording(&mut self, name: String) -> Result<(), String> {
-        let queue = Arc::new(MsQueue::new());
-        let counter = AtomicUsize::new(0);
-
-        self.rx = Some(queue.clone());
-        self.handler.init_recording(name, counter, queue)
-    }
-
-    pub fn start_recording(&self) -> Result<(), String> {
+    pub fn start_recording(&self) {
         self.handler.start_recording()
     }
 
-    pub fn stop_recording(&mut self) -> Result<usize, String> {
+    pub fn stop_recording(&mut self) -> usize {
         self.rx.take();
         self.handler.stop_recording()
     }
@@ -304,7 +273,7 @@ impl BenchTikvServer {
             rx.pop();
             Ok(())
         } else {
-            Err("Benchmark is not ready".to_owned())
+            Err("Benchmark is not running".to_owned())
         }
     }
 }
@@ -334,12 +303,12 @@ fn run_bench<F, C>(name: &'static str, run: F, clean: C)
     thread::sleep(Duration::from_secs(5));
 
     let start = Instant::now();
-    server.start_recording().unwrap();
+    server.start_recording();
     let result = bench!{
         server.recv().unwrap()
     };
+    let count = server.stop_recording();
     let duration = start.elapsed();
-    let count = server.stop_recording().unwrap();
 
     let qps = count as f64 /
               (duration.as_secs() as f64 + duration.subsec_nanos() as f64 / NANOS_PER_SEC as f64);
@@ -357,37 +326,33 @@ fn bench_kv_get_rpc() {
         drop(tx_close);
     };
     let run = move |env: Arc<Environment>, server: &mut BenchTikvServer| {
-        let addr = server.local_addr();
+        let mut get = GetRequest::new();
+        let mut ctx = Context::new();
+        ctx.set_region_id(1);
+        let mut epoch = RegionEpoch::new();
+        epoch.set_conf_ver(1);
+        epoch.set_version(1);
+        ctx.set_region_epoch(epoch);
+        let mut peer = Peer::new();
+        peer.set_id(1);
+        peer.set_store_id(1);
+        ctx.set_peer(peer);
+        ctx.set_term(1);
+        get.set_context(ctx);
+
+        get.set_key(b"key".to_vec());
+        get.set_version(1);
+        let sample = vec![Ok(get)];
 
         // Those settings are used by RaftClient.
         let channel = ChannelBuilder::new(env)
             .stream_initial_window_size(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE)
             .max_receive_message_len(CLIENT_MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(CLIENT_MAX_GRPC_SEND_MSG_LEN)
-            .connect(&format!("{}", addr));
+            .connect(&format!("{}", server.local_addr()));
         let client = TikvClient::new(channel);
 
-        server.init_recording(name.to_owned()).unwrap();
-
         thread::spawn(move || {
-            let mut get = GetRequest::new();
-            let mut ctx = Context::new();
-            ctx.set_region_id(1);
-            let mut epoch = RegionEpoch::new();
-            epoch.set_conf_ver(1);
-            epoch.set_version(1);
-            ctx.set_region_epoch(epoch);
-            let mut peer = Peer::new();
-            peer.set_id(1);
-            peer.set_store_id(1);
-            ctx.set_peer(peer);
-            ctx.set_term(1);
-            get.set_context(ctx);
-
-            get.set_key(b"key".to_vec());
-            get.set_version(1);
-            let sample = vec![Ok(get)];
-
             // If the relax_duration is too short, may cause oom.
             let mut count = 0;
             let relax = 1024;
@@ -417,39 +382,39 @@ fn bench_raft_rpc() {
         quit1.store(true, Ordering::Release);
     };
     let run = move |env: Arc<Environment>, server: &mut BenchTikvServer| {
+        let mut sample = RaftMessage::new();
+
+        let mut epoch = RegionEpoch::new();
+        epoch.set_conf_ver(1);
+        epoch.set_version(1);
+        sample.set_region_epoch(epoch);
+
+        let mut peer = Peer::new();
+        peer.set_id(1);
+        peer.set_store_id(1);
+        sample.set_from_peer(peer.clone());
+        sample.set_to_peer(peer);
+
+        sample.set_start_key(b"aaaa".to_vec());
+        sample.set_end_key(b"bbbb".to_vec());
+
         let addr = server.local_addr();
         let mut client = RaftClient::new(env, Config::default());
-        server.init_recording(name.to_owned()).unwrap();
 
         thread::spawn(move || {
             // TODO: calc the precise duration for every eventloop tick.
             //       if the flush_duration is too short, may cause oom.
             let batch_size = 1024;
             let flush_duration = 1;
-
-            let mut sample = RaftMessage::new();
-            sample.set_region_id(1);
-
-            let mut epoch = RegionEpoch::new();
-            epoch.set_conf_ver(1);
-            epoch.set_version(1);
-            sample.set_region_epoch(epoch);
-
-            let mut peer = Peer::new();
-            peer.set_id(1);
-            peer.set_store_id(1);
-            sample.set_from_peer(peer.clone());
-            sample.set_to_peer(peer);
-
-            sample.set_start_key(b"aaaa".to_vec());
-            sample.set_end_key(b"bbbb".to_vec());
-
             let mut count = 0;
             loop {
                 if quit.load(Ordering::Acquire) {
                     return;
                 }
-                let _ = client.send(1, addr, sample.clone());
+                // Differen region id for different Conn.
+                let mut req = sample.clone();
+                req.set_region_id(count);
+                let _ = client.send(1, addr, req);
                 count += 1;
                 if count % batch_size == 0 {
                     client.flush();
