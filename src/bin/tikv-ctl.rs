@@ -30,7 +30,7 @@ use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState, PeerState};
 use kvproto::eraftpb::Entry;
-use rocksdb::DB;
+use rocksdb::{DB, SeekKey};
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
@@ -138,7 +138,17 @@ fn main() {
                 .help("set start_ts as filter"))
             .arg(Arg::with_name("commit_ts")
                 .takes_value(true)
-                .help("set commit_ts as filter")));
+                .help("set commit_ts as filter")))
+        .subcommand(SubCommand::with_name("diff")
+            .about("diff two region keys")
+            .args(Args::with_name("to")
+                .short("t")
+                .takes_value(true)
+                .help("to which db"))
+            .args(Args::with_name("region")
+                .short("r")
+                .takes_value(true)
+                .help("specify region id")));
     let matches = app.clone().get_matches();
 
     let db_path = matches.value_of("db").unwrap();
@@ -219,6 +229,11 @@ fn main() {
                 let _ = app.print_help();
             }
         }
+    } else if let Some(matches) = matches.subcommand_matches("diff") {
+        let region = String::from(matches.value_of("region").unwrap());
+        let db_path2 = matches.value_of("to").unwrap();
+        let db2 = util::rocksdb::open(db_path2, ALL_CFS).unwrap();
+        dump_diff(&db, &db2, region);
     } else {
         let _ = app.print_help();
     }
@@ -350,6 +365,34 @@ fn dump_raft_log_entry(db: DB, idx_key: &[u8]) {
     msg.merge_from_bytes(&data).unwrap();
     println!("msg len: {}", data.len());
     println!("{:?}", msg);
+}
+
+fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
+    let region_state_key = keys::region_state_key(region_id);
+    let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
+    let region = region_state.get_region();
+    let start_key = &keys::data_key(region.get_start_key());
+    let end_key = &keys::data_end_key(region.get_end_key());
+    for cf in ALL_CFS {
+        let handle = db.cf_handle(cf).unwrap();
+        let handle2 = db2.cf_handle(cf).unwrap();
+        println!("cf: {}", cf);
+        let mut iter = db.iter_cf(handle);
+        let mut iter2 = db2.iter_cf(handle2);
+        iter.seek(SeekKey::Key(start_key));
+        iter2.seek(SeekKey::Key(start_key));
+        while iter.valid() && iter2.valid() {
+            if iter.key() != iter2.key() {
+                println!("diff: {}", iter.key(), iter2.key());
+            }
+        }
+        if !iter.valid() && iter2.valid() {
+            panic!("iter1 invalid but iter2 valid!");
+        }
+        if iter.valid() && !iter2.valid() {
+            panic!("iter1 valid but iter2 invalid!");
+        }
+    }
 }
 
 fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
