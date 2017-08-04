@@ -992,18 +992,21 @@ impl Peer {
         }
     }
 
-    /// propose a snapshot request. Note that the `None` response means
-    /// it requires the peer to perform a read-index.
+    /// Propose a snapshot request. Note that the `None` response means
+    /// it requires the peer to perform a read-index. The request never
+    /// be actual proposed to other nodes.
     pub fn propose_snapshot(&mut self,
                             req: RaftCmdRequest,
                             metrics: &mut RaftProposeMetrics)
                             -> Option<RaftCmdResponse> {
         if self.pending_remove {
-            return None;
+            let mut resp = RaftCmdResponse::new();
+            cmd_resp::bind_error(&mut resp, box_err!("peer is pending remove"));
+            return Some(resp);
         }
         metrics.all += 1;
 
-        // TODO: deny no snapshot request.
+        // TODO: deny non-snapshot request.
 
         match self.get_handle_policy(&req) {
             Ok(RequestPolicy::ReadLocal) => {
