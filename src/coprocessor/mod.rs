@@ -18,6 +18,7 @@ mod executor;
 mod dag;
 pub mod codec;
 pub mod xeval;
+pub mod expression;
 
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
