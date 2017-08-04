@@ -287,7 +287,6 @@ fn test_smoke() {
     pb.mut_val().encode_i64(1);
 
     let e: Result<Expression> = pb.try_into();
-
-    println!("e => {:?}", e);
+    let _  = e.unwrap();
 }
 
