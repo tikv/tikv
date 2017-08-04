@@ -167,96 +167,23 @@ pub trait ExprExt {
     }
 
     /// EvalInt returns the int64 representation of expression.
-    fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<i64>> {
-        match try!(self.eval(row, ctx)) {
-            Datum::Null => Ok(Nullable::Null),
-            val => {
-                if self.type_class() == TypeClass::Int || self.is_hybird_type() {
-                    Ok(val.i64().into())
-                } else {
-                    Err(Error::Type { has: self.type_class(), expected: TypeClass::Int })
-                }
-            }
-        }
-    }
+    fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<i64>>;
 
     /// EvalReal returns the float64 representation of expression.
-    fn eval_real(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<f64>> {
-        match try!(self.eval(row, ctx)) {
-            Datum::Null => Ok(Nullable::Null),
-            val => {
-                if self.type_class() == TypeClass::Real || self.is_hybird_type() {
-                    Ok(val.f64().into())
-                } else {
-                    Err(Error::Type { has: self.type_class(), expected: TypeClass::Real })
-                }
-            }
-        }
-    }
+    fn eval_real(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<f64>>;
 
     /// EvalString returns the string representation of expression.
-    fn eval_string(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<String>> {
-        match try!(self.eval(row, ctx)) {
-            Datum::Null => Ok(Nullable::Null),
-            val => {
-                if self.type_class() == TypeClass::String || self.is_hybird_type() {
-                    Ok(try!(val.to_string()).into())
-                } else {
-                    Err(Error::Type { has: self.type_class(), expected: TypeClass::String })
-                }
-            }
-        }
-    }
+    fn eval_string(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<String>>;
 
     /// EvalDecimal returns the decimal representation of expression.
-    fn eval_decimal(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Decimal>> {
-        match try!(self.eval(row, ctx)) {
-            Datum::Null => Ok(Nullable::Null),
-            // FIXME: to_dec?
-            val => {
-                if self.type_class() == TypeClass::Decimal || self.is_hybird_type() {
-                    Ok(try!(val.into_dec()).into())
-                } else {
-                    Err(Error::Type { has: self.type_class(), expected: TypeClass::Decimal })
-                }
-            }
-        }
-    }
+    fn eval_decimal(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Decimal>>;
 
     /// EvalTime returns the DATE/DATETIME/TIMESTAMP representation of expression.
-    fn eval_time(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Time>> {
-        if self.is_hybird_type() {
-            return Ok(Nullable::Null)
-        }
-        match try!(self.eval(row, ctx)) {
-            Datum::Null => Ok(Nullable::Null),
-            val => {
-                if self.data_type().is_time_type() {
-                    Ok(try!(val.to_mysql_time()).into())
-                } else {
-                    Err(Error::Type { has: self.type_class(), expected: TypeClass::Int })
-                }
-            }
-        }
-    }
+    fn eval_time(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Time>>;
 
     /// returns the duration representation of expression.
-    fn eval_duration(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Duration>> {
-        if self.is_hybird_type() {
-            return Ok(Nullable::Null)
-        }
+    fn eval_duration(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Duration>>;
 
-        match try!(self.eval(row, ctx)) {
-            Datum::Null => Ok(Nullable::Null),
-            val => {
-                if self.data_type() == DataType::TypeDuration {
-                    Ok(try!(val.to_mysql_duration()).into())
-                } else {
-                    Err(Error::Type { has: self.type_class(), expected: TypeClass::Int })
-                }
-            }
-        }
-    }
 }
 
 
@@ -310,6 +237,7 @@ impl ExprExt for Expr {
         }
     }
 
+    /// EvalInt returns the int64 representation of expression.
     fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<i64>> {
         match self.get_tp() {
             ExprType::ScalarFunc => {
@@ -319,6 +247,62 @@ impl ExprExt for Expr {
             _ => unimplemented!("TODO: implement all INT family Constant/ColumnRef")
         }
     }
+
+    /// EvalReal returns the float64 representation of expression.
+    fn eval_real(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<f64>> {
+        match self.get_tp() {
+            ExprType::ScalarFunc => {
+                assert_eq!(self.get_sig().return_type(), TypeClass::Real);
+                eval_expr_as_real(self, row, ctx)
+            },
+            _ => unimplemented!("TODO: implement all REAL family Constant/ColumnRef")
+        }
+    }
+
+    /// EvalString returns the string representation of expression.
+    fn eval_string(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<String>> {
+        match self.get_tp() {
+            ExprType::ScalarFunc => {
+                assert_eq!(self.get_sig().return_type(), TypeClass::String);
+                eval_expr_as_string(self, row, ctx)
+            },
+            _ => unimplemented!("TODO: implement all STR family Constant/ColumnRef")
+        }
+    }
+
+    /// EvalDecimal returns the decimal representation of expression.
+    fn eval_decimal(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Decimal>> {
+        match self.get_tp() {
+            ExprType::ScalarFunc => {
+                assert_eq!(self.get_sig().return_type(), TypeClass::Decimal);
+                eval_expr_as_decimal(self, row, ctx)
+            },
+            _ => unimplemented!("TODO: implement all DECIMAL family Constant/ColumnRef")
+        }
+    }
+
+    /// EvalTime returns the DATE/DATETIME/TIMESTAMP representation of expression.
+    fn eval_time(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Time>> {
+        match self.get_tp() {
+            ExprType::ScalarFunc => {
+                assert_eq!(self.get_sig().return_type(), unimplemented!());
+                eval_expr_as_time(self, row, ctx)
+            },
+            _ => unimplemented!("TODO: implement all TIME family Constant/ColumnRef")
+        }
+    }
+
+    /// returns the duration representation of expression.
+    fn eval_duration(&self, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Duration>> {
+        match self.get_tp() {
+            ExprType::ScalarFunc => {
+                assert_eq!(self.get_sig().return_type(), unimplemented!());
+                eval_expr_as_duration(self, row, ctx)
+            },
+            _ => unimplemented!("TODO: implement all DURATION family Constant/ColumnRef")
+        }
+    }
+
 }
 
 
@@ -490,5 +474,26 @@ fn eval_expr_as_int(expr: &Expr, row: &[Datum], ctx: &StatementContext) -> Resul
         // ...
         _ => unimplemented!()
     }
+}
+
+
+fn eval_expr_as_real(expr: &Expr, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<f64>> {
+    unimplemented!()
+}
+
+fn eval_expr_as_string(expr: &Expr, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<String>> {
+    unimplemented!()
+}
+
+fn eval_expr_as_decimal(expr: &Expr, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Decimal>> {
+  unimplemented!()
+}
+
+fn eval_expr_as_time(expr: &Expr, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Time>> {
+    unimplemented!()
+}
+
+fn eval_expr_as_duration(expr: &Expr, row: &[Datum], ctx: &StatementContext) -> Result<Nullable<Duration>> {
+    unimplemented!()
 }
 
