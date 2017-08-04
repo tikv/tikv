@@ -25,11 +25,12 @@ use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
+use kvproto::kvrpcpb::CommandPri;
 
 use util::{escape, duration_to_ms, duration_to_sec, Either};
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
-use util::threadpool::{ThreadPool, SmallGroupFirstQueue};
+use util::threadpool::{ThreadPool, FifoQueue};
 use util::codec::number::NumberDecoder;
 use server::OnResponse;
 use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode, Statistics};
@@ -73,26 +74,35 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<SmallGroupFirstQueue<u64>, u64>,
+    pool: ThreadPool<FifoQueue<u64>, u64>,
+    low_priority_pool: ThreadPool<FifoQueue<u64>, u64>,
+    high_priority_pool: ThreadPool<FifoQueue<u64>, u64>,
     max_running_task_count: usize,
 }
 
 impl Host {
-    pub fn new(engine: Box<Engine>,
-               scheduler: Scheduler<Task>,
-               concurrency: usize,
-               txn_concurrency_on_busy: usize,
-               small_txn_tasks_limit: usize)
-               -> Host {
-        let queue = SmallGroupFirstQueue::new(txn_concurrency_on_busy, small_txn_tasks_limit);
+    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, concurrency: usize) -> Host {
         Host {
             engine: engine,
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
-            pool: ThreadPool::new(thd_name!("endpoint-pool"), concurrency, queue),
+            pool: ThreadPool::new(thd_name!("endpoint-normal-pool"),
+                                  concurrency,
+                                  FifoQueue::new()),
+            low_priority_pool: ThreadPool::new(thd_name!("endpoint-low-pool"),
+                                               concurrency,
+                                               FifoQueue::new()),
+            high_priority_pool: ThreadPool::new(thd_name!("endpoint-high-pool"),
+                                                concurrency,
+                                                FifoQueue::new()),
         }
+    }
+
+    fn running_task_count(&self) -> usize {
+        self.pool.get_task_count() + self.low_priority_pool.get_task_count() +
+        self.high_priority_pool.get_task_count()
     }
 }
 
@@ -216,6 +226,10 @@ impl RequestTask {
                   self.req.get_ranges().get(0));
         }
     }
+
+    pub fn priority(&self) -> CommandPri {
+        self.req.get_context().get_priority()
+    }
 }
 
 impl Display for RequestTask {
@@ -260,20 +274,35 @@ impl BatchRunnable<Task> for Host {
                         }
                     };
 
-                    if self.pool.get_task_count() >= self.max_running_task_count {
+                    if self.running_task_count() >= self.max_running_task_count {
                         notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
                         continue;
                     }
 
                     for req in reqs {
+                        let pri = req.priority();
+                        let pri_str = get_req_pri_str(pri);
                         let type_str = get_req_type_str(req.req.get_tp());
-                        COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
+                        COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).add(1.0);
                         let end_point = TiDbEndPoint::new(snap.clone());
                         let txn_id = req.start_ts.unwrap_or_default();
-                        self.pool.execute(txn_id, move || {
-                            end_point.handle_request(req);
-                            COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
-                        });
+
+                        if pri == CommandPri::Low {
+                            self.low_priority_pool.execute(txn_id, move || {
+                                end_point.handle_request(req);
+                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
+                            });
+                        } else if pri == CommandPri::High {
+                            self.high_priority_pool.execute(txn_id, move || {
+                                end_point.handle_request(req);
+                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
+                            });
+                        } else {
+                            self.pool.execute(txn_id, move || {
+                                end_point.handle_request(req);
+                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
+                            });
+                        }
                     }
                 }
             }
@@ -439,7 +468,8 @@ impl TiDbEndPoint {
                                       t.deadline,
                                       ranges,
                                       self.snap.as_ref(),
-                                      eval_ctx.clone());
+                                      eval_ctx.clone(),
+                                      t.req.get_context().get_isolation_level());
         try!(ctx.validate_dag());
         let mut exec = try!(ctx.build_dag(&mut t.statistics));
         let mut chunks = vec![];
@@ -452,7 +482,8 @@ impl TiDbEndPoint {
                     if ctx.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
-                        let value = try!(inflate_cols(&row, &ctx.columns));
+                        let value =
+                            try!(inflate_cols(&row, &ctx.columns, ctx.get_output_offsets()));
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                     let mut meta = RowMeta::new();
@@ -521,7 +552,7 @@ pub fn is_point(range: &KeyRange) -> bool {
 }
 
 #[inline]
-fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
+pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     if mysql::has_unsigned_flag(col.get_flag() as u64) {
         // PK column is unsigned
         Datum::U64(h as u64)
@@ -531,12 +562,12 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 }
 
 #[inline]
-pub fn inflate_with_col<'a, T>(eval: &mut Evaluator,
-                               ctx: &EvalContext,
-                               values: &RowColsDict,
-                               cols: T,
-                               h: i64)
-                               -> Result<()>
+fn inflate_with_col<'a, T>(eval: &mut Evaluator,
+                           ctx: &EvalContext,
+                           values: &RowColsDict,
+                           cols: T,
+                           h: i64)
+                           -> Result<()>
     where T: IntoIterator<Item = &'a ColumnInfo>
 {
     for col in cols {
@@ -567,11 +598,12 @@ pub fn inflate_with_col<'a, T>(eval: &mut Evaluator,
 // TODO(performance), there are too much decoding logic.
 // we could do it only once when getting RowColsDict in cut_row.
 #[inline]
-fn inflate_cols(row: &Row, cols: &[ColumnInfo]) -> Result<Vec<u8>> {
+fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Result<Vec<u8>> {
     let data = &row.data;
     // TODO capacity is not enough
     let mut values = Vec::with_capacity(data.value.len());
-    for col in cols {
+    for offset in output_offsets {
+        let col = &cols[*offset as usize];
         let col_id = col.get_column_id();
         match data.get(col_id) {
             Some(value) => values.extend_from_slice(value),
@@ -1296,6 +1328,19 @@ pub fn get_req_type_str(tp: i64) -> &'static str {
     }
 }
 
+pub const STR_REQ_PRI_LOW: &'static str = "low";
+pub const STR_REQ_PRI_NORMAL: &'static str = "normal";
+pub const STR_REQ_PRI_HIGH: &'static str = "high";
+
+#[inline]
+pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
+    match pri {
+        CommandPri::Low => STR_REQ_PRI_LOW,
+        CommandPri::Normal => STR_REQ_PRI_NORMAL,
+        CommandPri::High => STR_REQ_PRI_HIGH,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1330,7 +1375,7 @@ mod tests {
     fn test_req_outdated() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let end_point = Host::new(engine, worker.scheduler(), 1, 1, 1);
+        let end_point = Host::new(engine, worker.scheduler(), 1);
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(),
@@ -1348,13 +1393,21 @@ mod tests {
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut end_point = Host::new(engine, worker.scheduler(), 1, 1, 1);
+        let mut end_point = Host::new(engine, worker.scheduler(), 1);
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
-        for _ in 0..30 * 4 {
+        for pos in 0..30 * 4 {
             let tx = tx.clone();
-            let task = RequestTask::new(Request::new(),
+            let mut req = Request::new();
+            if pos % 3 == 0 {
+                req.mut_context().set_priority(CommandPri::Low);
+            } else if pos % 3 == 1 {
+                req.mut_context().set_priority(CommandPri::Normal);
+            } else {
+                req.mut_context().set_priority(CommandPri::High);
+            }
+            let task = RequestTask::new(req,
                                         box move |msg| {
                                             thread::sleep(Duration::from_millis(100));
                                             let _ = tx.send(msg);

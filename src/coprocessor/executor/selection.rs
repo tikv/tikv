@@ -18,13 +18,13 @@ use tipb::schema::ColumnInfo;
 use tipb::expression::Expr;
 use super::super::xeval::{Evaluator, EvalContext};
 use super::super::Result;
-use super::{Row, Executor, ExprColumnRefVisitor};
-use super::super::endpoint::inflate_with_col;
+use super::{Row, Executor, ExprColumnRefVisitor, inflate_with_col_for_dag};
 use super::super::metrics::*;
 
 pub struct SelectionExecutor<'a> {
     conditions: Vec<Expr>,
-    columns: Vec<ColumnInfo>,
+    cols: Rc<Vec<ColumnInfo>>,
+    related_cols_offset: Vec<usize>, // offset of related columns
     ctx: Rc<EvalContext>,
     src: Box<Executor + 'a>,
 }
@@ -32,23 +32,17 @@ pub struct SelectionExecutor<'a> {
 impl<'a> SelectionExecutor<'a> {
     pub fn new(mut meta: Selection,
                ctx: Rc<EvalContext>,
-               columns_info: &[ColumnInfo],
+               columns_info: Rc<Vec<ColumnInfo>>,
                src: Box<Executor + 'a>)
                -> Result<SelectionExecutor<'a>> {
         let conditions = meta.take_conditions().into_vec();
-        let mut visitor = ExprColumnRefVisitor::new();
-        for cond in &conditions {
-            try!(visitor.visit(cond));
-        }
-
-        let columns = columns_info.iter()
-            .filter(|col| visitor.col_ids.get(&col.get_column_id()).is_some())
-            .cloned()
-            .collect::<Vec<ColumnInfo>>();
+        let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
+        try!(visitor.batch_visit(&conditions));
         COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
         Ok(SelectionExecutor {
             conditions: conditions,
-            columns: columns,
+            cols: columns_info,
+            related_cols_offset: visitor.column_offsets(),
             ctx: ctx,
             src: src,
         })
@@ -60,11 +54,12 @@ impl<'a> Executor for SelectionExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = try!(self.src.next()) {
             let mut evaluator = Evaluator::default();
-            try!(inflate_with_col(&mut evaluator,
-                                  &self.ctx,
-                                  &row.data,
-                                  &self.columns,
-                                  row.handle));
+            try!(inflate_with_col_for_dag(&mut evaluator,
+                                          &self.ctx,
+                                          &row.data,
+                                          self.cols.clone(),
+                                          &self.related_cols_offset,
+                                          row.handle));
             for expr in &self.conditions {
                 let val = box_try!(evaluator.eval(&self.ctx, expr));
                 if !box_try!(val.into_bool(&self.ctx)).unwrap_or(false) {
@@ -81,14 +76,15 @@ impl<'a> Executor for SelectionExecutor<'a> {
 mod tests {
     use std::i64;
 
-    use storage::Statistics;
+    use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
-    use util::codec::number::NumberEncoder;
+    use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
+
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::Datum;
-    use tipb::executor::TableScan;
-    use kvproto::kvrpcpb::IsolationLevel;
+    use storage::{Statistics, SnapshotStore};
+    use util::codec::number::NumberEncoder;
 
     use super::*;
     use super::super::topn::test::gen_table_data;
@@ -111,13 +107,13 @@ mod tests {
         expr
     }
 
-    fn new_col_gt_u64_expr(col_id: i64, val: u64) -> Expr {
+    fn new_col_gt_u64_expr(offset: i64, val: u64) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::GT);
         expr.mut_children().push({
             let mut lhs = Expr::new();
             lhs.set_tp(ExprType::ColumnRef);
-            lhs.mut_val().encode_i64(col_id).unwrap();
+            lhs.mut_val().encode_i64(offset).unwrap();
             lhs
         });
         expr.mut_children().push({
@@ -153,14 +149,12 @@ mod tests {
         let key_ranges = vec![get_range(tid, 0, i64::MAX)];
 
         let (snapshot, start_ts) = test_store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+
         let mut statistics = Statistics::default();
 
-        let inner_table_scan = TableScanExecutor::new(table_scan,
-                                                      key_ranges,
-                                                      snapshot,
-                                                      &mut statistics,
-                                                      start_ts,
-                                                      IsolationLevel::SI);
+        let inner_table_scan =
+            TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
 
         // selection executor
         let mut selection = Selection::new();
@@ -169,7 +163,7 @@ mod tests {
 
         let mut selection_executor = SelectionExecutor::new(selection,
                                                             Rc::new(EvalContext::default()),
-                                                            &cis,
+                                                            Rc::new(cis),
                                                             Box::new(inner_table_scan))
             .unwrap();
 
@@ -208,23 +202,20 @@ mod tests {
         let key_ranges = vec![get_range(tid, 0, i64::MAX)];
 
         let (snapshot, start_ts) = test_store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
         let mut statistics = Statistics::default();
 
-        let inner_table_scan = TableScanExecutor::new(table_scan,
-                                                      key_ranges,
-                                                      snapshot,
-                                                      &mut statistics,
-                                                      start_ts,
-                                                      IsolationLevel::SI);
+        let inner_table_scan =
+            TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
 
         // selection executor
         let mut selection = Selection::new();
-        let expr = new_col_gt_u64_expr(3, 5);
+        let expr = new_col_gt_u64_expr(2, 5);
         selection.mut_conditions().push(expr);
 
         let mut selection_executor = SelectionExecutor::new(selection,
                                                             Rc::new(EvalContext::default()),
-                                                            &cis,
+                                                            Rc::new(cis),
                                                             Box::new(inner_table_scan))
             .unwrap();
 

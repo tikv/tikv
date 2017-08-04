@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
 use std::net::SocketAddr;
 use kvproto::raft_serverpb::RaftMessage;
@@ -101,19 +101,19 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
 pub struct ServerTransport<T, S>
     where T: RaftStoreRouter + 'static,
-          S: StoreAddrResolver + Send + 'static
+          S: StoreAddrResolver + 'static
 {
     raft_client: Arc<RwLock<RaftClient>>,
     snap_scheduler: Scheduler<SnapTask>,
     raft_router: T,
     snapshot_status_sender: Sender<SnapshotStatusMsg>,
     resolving: Arc<RwLock<HashSet<u64>>>,
-    resolver: Arc<Mutex<S>>,
+    resolver: S,
 }
 
 impl<T, S> Clone for ServerTransport<T, S>
     where T: RaftStoreRouter + 'static,
-          S: StoreAddrResolver + Send + 'static
+          S: StoreAddrResolver + 'static
 {
     fn clone(&self) -> Self {
         ServerTransport {
@@ -127,7 +127,7 @@ impl<T, S> Clone for ServerTransport<T, S>
     }
 }
 
-impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> ServerTransport<T, S> {
+impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTransport<T, S> {
     pub fn new(raft_client: Arc<RwLock<RaftClient>>,
                snap_scheduler: Scheduler<SnapTask>,
                raft_router: T,
@@ -140,7 +140,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
             raft_router: raft_router,
             snapshot_status_sender: snapshot_status_sender,
             resolving: Arc::new(RwLock::new(Default::default())),
-            resolver: Arc::new(Mutex::new(resolver)),
+            resolver: resolver,
         }
     }
 
@@ -188,8 +188,10 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
             info!("resolve store {} address ok, addr {}", store_id, addr);
             trans.raft_client.wl().addrs.insert(store_id, addr);
             trans.write_data(store_id, addr, msg);
+            // There may be no messages in the near future, so flush it immediately.
+            trans.raft_client.wl().flush();
         };
-        if let Err(e) = self.resolver.lock().unwrap().resolve(store_id, cb) {
+        if let Err(e) = self.resolver.resolve(store_id, cb) {
             error!("try to resolve err {:?}", e);
         }
     }
@@ -257,7 +259,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
 
 impl<T, S> Transport for ServerTransport<T, S>
     where T: RaftStoreRouter + 'static,
-          S: StoreAddrResolver + Send + 'static
+          S: StoreAddrResolver + 'static
 {
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();

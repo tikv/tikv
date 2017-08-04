@@ -57,7 +57,7 @@ lazy_static! {
         register_gauge_vec!(
             "tikv_coprocessor_pending_request",
             "Total number of pending push down request.",
-            &["req"]
+            &["req", "priority"]
         ).unwrap();
 
     pub static ref COPR_SCAN_KEYS: HistogramVec =

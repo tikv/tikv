@@ -16,7 +16,7 @@ use std::cmp::Ordering;
 use std::str;
 use std::fmt::{self, Formatter, Display};
 
-use chrono::{DateTime, Timelike, UTC, Datelike, FixedOffset, Duration, TimeZone};
+use chrono::{DateTime, Timelike, Utc, Datelike, FixedOffset, Duration, TimeZone};
 
 use coprocessor::codec::mysql::{self, types, parse_frac, check_fsp};
 use coprocessor::codec::mysql::Decimal;
@@ -53,7 +53,7 @@ fn ymd_hms_nanos<T: TimeZone>(tz: &T,
     tz.ymd_opt(year, month, day)
         .and_hms_opt(hour, min, secs)
         .single()
-        .and_then(|t| t.checked_add(Duration::nanoseconds(nanos as i64)))
+        .and_then(|t| t.checked_add_signed(Duration::nanoseconds(nanos as i64)))
         .ok_or_else(|| {
             box_err!("'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime",
                      year,
@@ -271,7 +271,7 @@ impl Time {
         let hour = (hms >> 12) as u32;
         let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
         let t = if tp == types::TIMESTAMP {
-            let t = try!(ymd_hms_nanos(&UTC, year, month, day, hour, minute, second, nanosec));
+            let t = try!(ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanosec));
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             try!(ymd_hms_nanos(tz, year, month, day, hour, minute, second, nanosec))
