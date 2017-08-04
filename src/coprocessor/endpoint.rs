@@ -205,12 +205,12 @@ impl RequestTask {
         COPR_SCAN_KEYS.with_label_values(&[type_str])
             .observe(self.statistics.total_op_count() as f64);
 
-        for (cf, details) in self.statistics.details() {
-            for (tag, count) in details {
-                COPR_SCAN_DETAILS.with_label_values(&[type_str, cf, tag])
-                    .observe(count as f64);
-            }
-        }
+        // for (cf, details) in self.statistics.details() {
+        //     for (tag, count) in details {
+        //         COPR_SCAN_DETAILS.with_label_values(&[type_str, cf, tag])
+        //             .observe(count as f64);
+        //     }
+        // }
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!("[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
