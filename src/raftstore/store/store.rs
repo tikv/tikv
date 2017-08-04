@@ -42,7 +42,7 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler, FutureWorker};
 use util::transport::SendCh;
-use util::{rocksdb, RingQueue, Either};
+use util::{rocksdb, RingQueue};
 use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
@@ -59,7 +59,7 @@ use super::config::Config;
 use super::peer::{self, Peer, StaleState, ConsistencyState, ReadyContext};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::msg::{Callback, BatchCallback};
-use super::cmd_resp::{bind_term, bind_error};
+use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::engine_metrics::*;
@@ -1252,40 +1252,30 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn pre_propose_raft_command(&mut self,
-                                msg: RaftCmdRequest)
-                                -> Either<RaftCmdRequest, RaftCmdResponse> {
-        if let Err(e) = self.validate_store_id(&msg) {
-            let mut resp = RaftCmdResponse::new();
-            bind_error(&mut resp, e);
-            return Either::Right(resp);
-        }
-
+                                msg: &RaftCmdRequest)
+                                -> Result<Option<RaftCmdResponse>> {
+        try!(self.validate_store_id(msg));
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
-            let mut resp = RaftCmdResponse::new();
-            match self.execute_status_command(msg) {
-                Err(e) => bind_error(&mut resp, e),
-                Ok(status_resp) => resp = status_resp,
-            };
-            return Either::Right(resp);
+            let resp = try!(self.execute_status_command(msg));
+            return Ok(Some(resp));
         }
-
-        if let Err(e) = self.validate_region(&msg) {
-            let mut resp = RaftCmdResponse::new();
-            bind_error(&mut resp, e);
-            return Either::Right(resp);
-        }
-
-        Either::Left(msg)
+        try!(self.validate_region(msg));
+        Ok(None)
     }
 
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
-        let msg = match self.pre_propose_raft_command(msg) {
-            Either::Left(msg) => msg,
-            Either::Right(resp) => {
-                return cb.call_box((resp,));
+        match self.pre_propose_raft_command(&msg) {
+            Ok(Some(resp)) => {
+                cb.call_box((resp,));
+                return;
             }
-        };
+            Err(e) => {
+                cb.call_box((new_error(e),));
+                return;
+            }
+            _ => (),
+        }
 
         // Note:
         // The peer that is being checked is a leader. It might step down to be a follower later. It
@@ -1312,13 +1302,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         BATCH_SNAPSHOT_COMMANDS.observe(size as f64);
         let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
         for (idx, msg) in batch.into_iter().enumerate() {
-            let msg = match self.pre_propose_raft_command(msg) {
-                Either::Left(msg) => msg,
-                Either::Right(resp) => {
+            match self.pre_propose_raft_command(&msg) {
+                Ok(Some(resp)) => {
                     ret[idx] = Some(resp);
                     continue;
                 }
-            };
+                Err(e) => {
+                    ret[idx] = Some(new_error(e));
+                    continue;
+                }
+                _ => (),
+            }
+
 
             let region_id = msg.get_header().get_region_id();
             let mut peer = self.region_peers.get_mut(&region_id).unwrap();
@@ -1327,9 +1322,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         on_finished.call_box((ret,));
-
-        // TODO: add timeout, if the command is not applied after timeout,
-        // we will call the callback with timeout error.
     }
 
     fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
@@ -2163,7 +2155,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current
     // store status, so no need to handle it in raft group.
-    fn execute_status_command(&mut self, request: RaftCmdRequest) -> Result<RaftCmdResponse> {
+    fn execute_status_command(&mut self, request: &RaftCmdRequest) -> Result<RaftCmdResponse> {
         let cmd_type = request.get_status_request().get_cmd_type();
         let region_id = request.get_header().get_region_id();
 
@@ -2183,8 +2175,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(resp)
     }
 
-    fn execute_region_leader(&mut self, request: RaftCmdRequest) -> Result<StatusResponse> {
-        let peer = try!(self.mut_target_peer(&request));
+    fn execute_region_leader(&mut self, request: &RaftCmdRequest) -> Result<StatusResponse> {
+        let peer = try!(self.mut_target_peer(request));
 
         let mut resp = StatusResponse::new();
         if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
@@ -2194,8 +2186,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(resp)
     }
 
-    fn execute_region_detail(&mut self, request: RaftCmdRequest) -> Result<StatusResponse> {
-        let peer = try!(self.mut_target_peer(&request));
+    fn execute_region_detail(&mut self, request: &RaftCmdRequest) -> Result<StatusResponse> {
+        let peer = try!(self.mut_target_peer(request));
         if !peer.get_store().is_initialized() {
             let region_id = request.get_header().get_region_id();
             return Err(Error::RegionNotInitialized(region_id));

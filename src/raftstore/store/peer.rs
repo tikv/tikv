@@ -1006,7 +1006,7 @@ impl Peer {
         }
         metrics.all += 1;
 
-        // TODO: deny no snapshot request.
+        // TODO: deny non-snapshot request.
 
         match self.get_handle_policy(&req) {
             Ok(RequestPolicy::ReadLocal) => {
