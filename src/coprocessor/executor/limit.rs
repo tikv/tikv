@@ -53,16 +53,18 @@ impl<'a> Executor for LimitExecutor<'a> {
 
 #[cfg(test)]
 mod test {
+    use kvproto::kvrpcpb::IsolationLevel;
+    use protobuf::RepeatedField;
+    use tipb::executor::TableScan;
+
+    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::datum::Datum;
+    use storage::{Statistics, SnapshotStore};
+
     use super::*;
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
     use super::super::topn::test::gen_table_data;
-    use coprocessor::codec::mysql::types;
-    use coprocessor::codec::datum::Datum;
-    use storage::Statistics;
-    use tipb::executor::TableScan;
-    use protobuf::RepeatedField;
-    use kvproto::kvrpcpb::IsolationLevel;
 
     #[test]
     fn test_limit_executor() {
@@ -88,13 +90,9 @@ mod test {
         let key_ranges = vec![range1, range2];
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
         let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(table_scan,
-                                            key_ranges,
-                                            snapshot,
-                                            &mut statistics,
-                                            start_ts,
-                                            IsolationLevel::SI);
+        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
 
         // init Limit meta
         let mut limit_meta = Limit::default();
