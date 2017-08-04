@@ -791,7 +791,6 @@ impl PeerStorage {
         try!(clear_meta(&self.engine,
                         wb,
                         region_id,
-                        &self.apply_state,
                         &self.raft_state));
         self.cache = EntryCache::default();
         Ok(())
@@ -1001,21 +1000,30 @@ impl PeerStorage {
 pub fn clear_meta(engine: &DB,
                   wb: &WriteBatch,
                   region_id: u64,
-                  apply_state: &RaftApplyState,
                   raft_state: &RaftLocalState)
                   -> Result<()> {
     let t = Instant::now();
     try!(wb.delete(&keys::region_state_key(region_id)));
 
-    let first_index = first_index(apply_state);
     let last_index = last_index(raft_state);
+    let mut first_index = last_index + 1;
+    let begin_log_key = keys::raft_log_key(region_id, 0);
+    let end_log_key = keys::raft_log_key(region_id, first_index);
+    try!(engine.scan_cf(CF_RAFT,
+                        &begin_log_key,
+                        &end_log_key,
+                        false,
+                        &mut |key, _| {
+                            first_index = keys::raft_log_index(key).unwrap();
+                            Ok(false)
+                        }));
     let handle = try!(rocksdb::get_cf_handle(engine, CF_RAFT));
     for id in first_index..last_index + 1 {
         try!(wb.delete_cf(handle, &keys::raft_log_key(region_id, id)));
     }
     try!(wb.delete_cf(handle, &keys::raft_state_key(region_id)));
     try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
- 
+
     info!("[region {}] clear peer {} meta keys and {} raft keys, takes {:?}",
           region_id,
           1,

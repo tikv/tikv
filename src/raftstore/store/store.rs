@@ -29,7 +29,7 @@ use fs2;
 use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
-                             PeerState, RaftApplyState, RaftLocalState};
+                             PeerState, RaftLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{SlowTimer, duration_to_sec, escape};
@@ -300,28 +300,8 @@ impl<T, C> Store<T, C> {
                 None => return,
                 Some(value) => value,
             };
-        let apply_key = keys::apply_state_key(region.get_id());
-        let apply_state: RaftApplyState =
-            self.engine.get_msg_cf(CF_RAFT, &apply_key).unwrap().unwrap();
-        let handle = self.engine.cf_handle(CF_RAFT).unwrap();
-        let truncated_index = apply_state.get_truncated_state().get_index();
-        let truncated_log_key = keys::raft_log_key(region.get_id(), truncated_index);
-        if self.engine.get_cf(handle, &truncated_log_key).unwrap().is_some() {
-            let task = RaftlogGcTask {
-                engine: self.engine.clone(),
-                region_id: region.get_id(),
-                start_idx: 0,
-                end_idx: truncated_index + 1,
-            };
-            if let Err(e) = self.raftlog_gc_worker.schedule(task) {
-                error!("[region {}] failed to schedule compact task: {}",
-                       region.get_id(),
-                       e);
-            }
-        }
 
-        peer_storage::clear_meta(&self.engine, wb, region.get_id(), &apply_state, &raft_state)
-            .unwrap();
+        peer_storage::clear_meta(&self.engine, wb, region.get_id(), &raft_state).unwrap();
         peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
     }
 
