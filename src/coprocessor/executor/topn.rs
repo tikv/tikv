@@ -107,16 +107,19 @@ impl<'a> Executor for TopNExecutor<'a> {
 #[cfg(test)]
 pub mod test {
     use std::rc::Rc;
-    use util::collections::HashMap;
-    use util::codec::number::NumberEncoder;
+
+    use kvproto::kvrpcpb::IsolationLevel;
+    use protobuf::RepeatedField;
+    use tipb::executor::TableScan;
+    use tipb::expression::{Expr, ExprType};
+
     use coprocessor::codec::Datum;
     use coprocessor::codec::table::{self, RowColsDict};
     use coprocessor::codec::mysql::types;
-    use storage::Statistics;
-    use tipb::executor::TableScan;
-    use tipb::expression::{Expr, ExprType};
-    use protobuf::RepeatedField;
-    use kvproto::kvrpcpb::IsolationLevel;
+    use util::collections::HashMap;
+    use util::codec::number::NumberEncoder;
+
+    use storage::{Statistics, SnapshotStore};
 
     use super::*;
     use super::super::table_scan::TableScanExecutor;
@@ -264,13 +267,9 @@ pub mod test {
         let key_ranges = vec![range1, range2];
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
+        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
         let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(table_scan,
-                                            key_ranges,
-                                            snapshot,
-                                            &mut statistics,
-                                            start_ts,
-                                            IsolationLevel::SI);
+        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, snap, &mut statistics);
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);

@@ -186,11 +186,11 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref BATCH_SNAPSHOT_COMMANDS: HistogramVec =
-        register_histogram_vec!(
-            "tikv_raftstore_batch_snapshot_commands",
-            "Bucketed histogram of batch snapshot",
-            &["type"],
-            linear_buckets(0.0, 2.0, 20).unwrap()
+    pub static ref BATCH_SNAPSHOT_COMMANDS: Histogram =
+        register_histogram!(
+            "tikv_raftstore_batch_snapshot_commands_total",
+            "Bucketed histogram of total size of batch snapshot commands",
+            vec![1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0,
+                 20.0, 24.0, 32.0, 64.0, 128.0, 256.0]
         ).unwrap();
 }
