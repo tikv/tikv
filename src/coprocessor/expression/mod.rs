@@ -124,8 +124,8 @@ pub struct StatementContext {
 	  /// Read-only statements should ignore truncate error, write statements should not ignore truncate error.
     ignore_truncate: bool,
     /// FlagTruncateAsWarning indicates if truncate error should be returned as warning.
-	/// This flag only matters if FlagIgnoreTruncate is not set, in strict sql mode, truncate error should
-	/// be returned as error, in non-strict sql mode, truncate error should be saved as warning.
+	  /// This flag only matters if FlagIgnoreTruncate is not set, in strict sql mode, truncate error should
+	  /// be returned as error, in non-strict sql mode, truncate error should be saved as warning.
     truncate_as_warning: bool,
 }
 
