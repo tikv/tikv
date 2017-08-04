@@ -13,7 +13,7 @@
 
 
 use std::io;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 
 use super::codec::mysql::{Duration, Time, Decimal};
 use super::codec::Datum;
@@ -22,11 +22,11 @@ use super::super::util;
 use chrono::FixedOffset;
 
 use tipb::expression::{DataType, ExprType, ScalarFuncSig};
-use tipb::expression::Expr as ExprPb;
+use tipb::expression::Expr;
 use tipb::expression::FieldType;
 use tipb::select::DAGRequest;
 
-use util::codec::number::NumberDecoder;
+use util::codec::number::{NumberDecoder, NumberEncoder};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::MAX_FSP;
 
@@ -92,7 +92,7 @@ pub enum TypeClass {
 
 /// Expression represents all scalar expression in SQL.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Expr {
+pub struct Expression {
     pub expr: ExprKind,
     pub ret_type: TypeClass,
 }
@@ -148,23 +148,23 @@ pub enum BinOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseArm {
-    pub condition: Option<Box<Expr>>,
-    pub result: Box<Expr>,
+    pub condition: Option<Box<Expression>>,
+    pub result: Box<Expression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BuiltinFn {
     // ## operators
-    Unary(UnOp, Box<Expr>),
-    Binary(BinOp, Box<Expr>, Box<Expr>),
+    Unary(UnOp, Box<Expression>),
+    Binary(BinOp, Box<Expression>, Box<Expression>),
     // COALESCE(value,...)
     Coalesce(Vec<Expr>),
     // GREATEST(value1,value2,...)
     Greatest(Vec<Expr>),
     // expr IN (value,...)
-    In(Box<Expr>, Vec<Expr>),
+    In(Box<Expression>, Vec<Expr>),
     // INTERVAL(N,N1,N2,N3,...)
-    Interval(Box<Expr>, Vec<Expr>),
+    Interval(Box<Expression>, Vec<Expr>),
     // LEAST(value1,value2,...)
     Least(Vec<Expr>),
 
@@ -172,33 +172,33 @@ pub enum BuiltinFn {
     //
     // CASE value WHEN [compare_value] THEN result [WHEN [compare_value] THEN result ...]
     // [ELSE result] END
-    Case(Box<Expr>, Vec<CaseArm>, Option<Box<Expr>>),
+    Case(Box<Expression>, Vec<CaseArm>, Option<Box<Expression>>),
     // CASE WHEN [condition] THEN result [WHEN [condition] THEN result ...] [ELSE result] END
-    CaseWhen(Vec<CaseArm>, Option<Box<Expr>>),
+    CaseWhen(Vec<CaseArm>, Option<Box<Expression>>),
     // IF(expr1,expr2,expr3)
-    If(Box<Expr>, Box<Expr>, Box<Expr>),
+    If(Box<Expression>, Box<Expression>, Box<Expression>),
     // IFNULL(expr1,expr2)
-    IfNull(Box<Expr>, Box<Expr>),
+    IfNull(Box<Expression>, Box<Expression>),
     // NULLIF(expr1,expr2)
-    NullIf(Box<Expr>, Box<Expr>),
+    NullIf(Box<Expression>, Box<Expression>),
 
     // ## String Comparison Functions
     // expr LIKE pat [ESCAPE 'escape_char']
-    Like(Box<Expr>, Box<Expr>, Option<String>),
+    Like(Box<Expression>, Box<Expression>, Option<String>),
 
-    Cast(Box<Expr>),
+    Cast(Box<Expression>),
 
     // TODO: add more here
 }
 
 
-impl TryFrom<ExprPb> for Expr {
+impl TryFrom<Expr> for Expression {
     type Error = Error;
 
-    fn try_from(expr: ExprPb) -> ::std::result::Result<Expr, Self::Error> {
+    fn try_from(expr: Expr) -> ::std::result::Result<Expression, Self::Error> {
         match expr.get_tp() {
             ExprType::ColumnRef => {
-                Ok(Expr {
+                Ok(Expression {
                     expr: ExprKind::ColumnRef(try!(expr.get_val().decode_i64()) as usize),
                     ret_type: expr.get_field_type().get_tp().type_class(),
                 })
@@ -278,3 +278,16 @@ impl DataTypeExt for DataType {
         }
     }
 }
+
+
+#[test]
+fn test_smoke() {
+    let mut pb = Expr::new();
+    pb.set_tp(ExprType::ColumnRef);
+    pb.mut_val().encode_i64(1);
+
+    let e: Result<Expression> = pb.try_into();
+
+    println!("e => {:?}", e);
+}
+
