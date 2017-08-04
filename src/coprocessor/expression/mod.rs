@@ -373,39 +373,6 @@ impl DataTypeExt for DataType {
     }
 }
 
-// FieldType.flags
-pub const FLAG_NOT_NULL         : u32 =  0b00000001;
-pub const FLAG_PRIMARY_KEY      : u32 =  0b00000010;
-pub const FLAG_UNIQUE_KEY       : u32 =  0b00000100;
-pub const FLAG_MULTIPLE_KEY     : u32 =  0b00001000;
-pub const FLAG_BLOB             : u32 =  0b00010000;
-pub const FLAG_UNSIGNED         : u32 =  0b00100000;
-pub const FLAG_ZEROFILL         : u32 =  0b01000000;
-pub const FLAG_BINARY           : u32 =  0b10000000;
-
-pub const FLAG_ENUM             : u32 =  0b00000001_00000000;
-pub const FLAG_AUTO_INCREMENT   : u32 =  0b00000010_00000000;
-pub const FLAG_TIMESTAMP        : u32 =  0b00000100_00000000;
-pub const FLAG_SET              : u32 =  0b00001000_00000000;
-pub const FLAG_NO_DEFAULT_VALUE : u32 =  0b00010000_00000000;
-pub const FLAG_ON_UPDATE_NOW    : u32 =  0b00100000_00000000;
-pub const FLAG_NUM              : u32 =  0b01000000_00000000;
-pub const FLAG_PART_KEY         : u32 =  0b10000000_00000000;
-
-trait FieldTypeExt {
-    fn is_binary_string(&self) -> bool;
-}
-
-impl FieldTypeExt for FieldType {
-    fn is_binary_string(&self) -> bool {
-        let flags = self.get_flag();
-        let type_ = self.get_tp();
-        (flags & FLAG_BINARY != 0) &&
-            (type_.is_char_type() || type_.is_blob_type() || type_.is_var_char_type())
-    }
-}
-
-
 
 pub trait ScalarFnSigExt {
     fn return_type(&self) -> TypeClass;
