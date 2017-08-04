@@ -277,7 +277,7 @@ stats-dump-period-sec = 600
 # 1 : OldestLargestSeqFirst
 # 2 : OldestSmallestSeqFirst
 # 3 : MinOverlappingRatio
-# compaction-pri = 0
+# compaction-pri = 3
 
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read.
 # in normal cases should tune to 30%-50% system's total memory.
@@ -306,6 +306,7 @@ stats-dump-period-sec = 600
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# compaction-pri = 3
 
 # options for Column Family raft.
 # Column Family raft is used to store raft log and raft states.
@@ -317,7 +318,6 @@ stats-dump-period-sec = 600
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "32MB"
-# compaction-pri = 0
 
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"

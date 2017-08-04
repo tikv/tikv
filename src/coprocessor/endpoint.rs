@@ -468,7 +468,8 @@ impl TiDbEndPoint {
                                       t.deadline,
                                       ranges,
                                       self.snap.as_ref(),
-                                      eval_ctx.clone());
+                                      eval_ctx.clone(),
+                                      t.req.get_context().get_isolation_level());
         try!(ctx.validate_dag());
         let mut exec = try!(ctx.build_dag(&mut t.statistics));
         let mut chunks = vec![];
@@ -481,7 +482,8 @@ impl TiDbEndPoint {
                     if ctx.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
-                        let value = try!(inflate_cols(&row, &ctx.columns));
+                        let value =
+                            try!(inflate_cols(&row, &ctx.columns, ctx.get_output_offsets()));
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                     let mut meta = RowMeta::new();
@@ -596,11 +598,12 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
 // TODO(performance), there are too much decoding logic.
 // we could do it only once when getting RowColsDict in cut_row.
 #[inline]
-fn inflate_cols(row: &Row, cols: &[ColumnInfo]) -> Result<Vec<u8>> {
+fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Result<Vec<u8>> {
     let data = &row.data;
     // TODO capacity is not enough
     let mut values = Vec::with_capacity(data.value.len());
-    for col in cols {
+    for offset in output_offsets {
+        let col = &cols[*offset as usize];
         let col_id = col.get_column_id();
         match data.get(col_id) {
             Some(value) => values.extend_from_slice(value),
