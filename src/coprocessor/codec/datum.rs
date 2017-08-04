@@ -370,6 +370,21 @@ impl Datum {
         self.i64() as u64
     }
 
+    pub fn to_mysql_duration(&self) -> Result<Duration> {
+        match *self {
+            Datum::Dur(ref d) => Ok(d.clone()),
+            _ => unimplemented!(),
+        }
+    }
+
+    pub fn to_mysql_time(&self) -> Result<Time> {
+        match *self {
+            Datum::Time(ref t) => Ok(t.clone()),
+            _ => unimplemented!(),
+        }
+    }
+
+
     /// into_arith converts datum to appropriate datum for arithmetic computing.
     /// Keep compatible with TiDB's `CoerceArithmetic` fucntion.
     pub fn into_arith(self, ctx: &EvalContext) -> Result<Datum> {
