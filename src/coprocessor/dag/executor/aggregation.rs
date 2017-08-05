@@ -18,14 +18,15 @@ use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 use util::collections::{HashMap, HashMapEntry as Entry};
 
+use coprocessor::codec::table::RowColsDict;
+use coprocessor::codec::datum::{self, Datum, DatumEncoder, approximate_size};
+use coprocessor::endpoint::SINGLE_GROUP;
+use coprocessor::select::aggregate::{self, AggrFunc};
+use coprocessor::select::xeval::{Evaluator, EvalContext};
+use coprocessor::metrics::*;
+use coprocessor::Result;
+
 use super::{Executor, Row, ExprColumnRefVisitor, inflate_with_col_for_dag};
-use super::super::codec::table::RowColsDict;
-use super::super::codec::datum::{self, Datum, DatumEncoder, approximate_size};
-use super::super::xeval::{Evaluator, EvalContext};
-use super::super::endpoint::SINGLE_GROUP;
-use super::super::aggregate::{self, AggrFunc};
-use super::super::metrics::*;
-use super::super::Result;
 
 pub struct AggregationExecutor<'a> {
     group_by: Vec<Expr>,
@@ -162,9 +163,9 @@ mod test {
     use util::codec::number::NumberEncoder;
 
     use super::*;
-    use super::super::table_scan::TableScanExecutor;
-    use super::super::scanner::test::{TestStore, get_range, new_col_info};
-    use super::super::topn::test::gen_table_data;
+    use coprocessor::table_scan::TableScanExecutor;
+    use coprocessor::scanner::test::{TestStore, get_range, new_col_info};
+    use coprocessor::topn::test::gen_table_data;
 
     #[inline]
     fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {

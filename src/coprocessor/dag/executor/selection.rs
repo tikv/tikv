@@ -16,10 +16,12 @@ use std::rc::Rc;
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 use tipb::expression::Expr;
-use super::super::xeval::{Evaluator, EvalContext};
-use super::super::Result;
+
+use coprocessor::metrics::*;
+use coprocessor::select::xeval::{Evaluator, EvalContext};
+use coprocessor::Result;
+
 use super::{Row, Executor, ExprColumnRefVisitor, inflate_with_col_for_dag};
-use super::super::metrics::*;
 
 pub struct SelectionExecutor<'a> {
     conditions: Vec<Expr>,

@@ -24,7 +24,7 @@ use util::escape;
 use util::codec::{number, bytes};
 use util::codec::number::NumberDecoder;
 use util::codec::bytes::BytesEncoder;
-use super::super::xeval::EvalContext;
+use coprocessor::select::xeval::EvalContext;
 use super::{Result, convert};
 use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
                    Time, Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr};

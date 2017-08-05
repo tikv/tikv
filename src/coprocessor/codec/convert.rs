@@ -14,7 +14,7 @@
 use std::{self, str, i64};
 use std::borrow::Cow;
 
-use coprocessor::xeval::EvalContext;
+use coprocessor::select::xeval::EvalContext;
 use super::Result;
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64

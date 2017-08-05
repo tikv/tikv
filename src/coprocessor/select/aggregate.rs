@@ -14,10 +14,10 @@
 use std::cmp::Ordering;
 use tipb::expression::{Expr, ExprType};
 
-use super::codec::Datum;
-use super::xeval::{evaluator, EvalContext};
-use super::Result;
+use coprocessor::codec::Datum;
+use coprocessor::Result;
 
+use super::xeval::{evaluator, EvalContext};
 
 pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
     match expr.get_tp() {

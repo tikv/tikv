@@ -16,9 +16,10 @@
 
 use tipb::executor::Limit;
 
+use coprocessor::Result;
+use coprocessor::metrics::*;
+
 use super::{Row, Executor};
-use super::super::Result;
-use super::super::metrics::*;
 
 pub struct LimitExecutor<'a> {
     limit: u64,
@@ -62,9 +63,9 @@ mod test {
     use storage::{Statistics, SnapshotStore};
 
     use super::*;
-    use super::super::table_scan::TableScanExecutor;
-    use super::super::scanner::test::{TestStore, get_range, new_col_info};
-    use super::super::topn::test::gen_table_data;
+    use coprocessor::table_scan::TableScanExecutor;
+    use coprocessor::scanner::test::{TestStore, get_range, new_col_info};
+    use coprocessor::topn::test::gen_table_data;
 
     #[test]
     fn test_limit_executor() {

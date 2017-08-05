@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use tipb::expression::Expr;
-use super::super::codec::datum::Datum;
+use coprocessor::codec::datum::Datum;
 use super::{Evaluator, EvalContext, Result, Error};
 
 const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
@@ -88,8 +88,8 @@ impl Evaluator {
 mod test {
     use tipb::expression::{ExprType, ScalarFuncSig};
     use coprocessor::codec::datum::Datum;
-    use super::super::Evaluator;
-    use super::super::evaluator::test::build_expr_with_sig;
+    use coprocessor::Evaluator;
+    use coprocessor::evaluator::test::build_expr_with_sig;
 
     macro_rules! test_eval {
         ($tag:ident, $cases:expr) => {
