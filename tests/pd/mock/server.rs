@@ -56,11 +56,11 @@ impl Server {
         {
             let addrs = server.bind_addrs();
             handler.set_endpoints(addrs.iter()
-                .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+                .map(|addr| format!("{}:{}", addr.0, addr.1))
                 .collect());
             if let Some(case) = case.as_ref() {
                 case.set_endpoints(addrs.iter()
-                    .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+                    .map(|addr| format!("{}:{}", addr.0, addr.1))
                     .collect());
             }
         }
