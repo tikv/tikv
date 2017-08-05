@@ -209,7 +209,14 @@ fn main() {
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         println!("You are searching Key {}: ", key);
-        println!("Timestamp of this key: {}", Key::from_encoded(key.as_bytes().to_vec()).decode_ts().unwrap());
+        let encoded_prefix = if key_encoded {
+            unescape(key)
+        } else {
+            encode_bytes(unescape(key).as_slice())
+        };
+        let data_key = keys::data_key(&encoded_prefix);
+        println!("Timestamp of this key: {}",
+                 Key::from_encoded(data_key).decode_ts().unwrap());
         match cf_name {
             CF_DEFAULT => {
                 dump_mvcc_default(&db, key, key_encoded, start_ts);
@@ -432,12 +439,18 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
                  common_tail_len);
 
         if !iter.valid() && iter2.valid() {
-            println!("db2: {:?}", escape(iter2.key()));
-            panic!("iter1 invalid but iter2 valid!");
+            println!("iter1 invalid but iter2 valid!");
+            while iter2.valid() {
+                println!("only db2 has : {:?}", escape(iter2.key()));
+                iter2.next();
+            }
         }
         if iter.valid() && !iter2.valid() {
-            println!("db1: {:?}", escape(iter.key()));
-            panic!("iter1 valid but iter2 invalid!");
+            println!("iter2 invalid but iter valid!");
+            while iter.valid() {
+                println!("only db2 has : {:?}", escape(iter.key()));
+                iter.next();
+            }
         }
     }
 }
