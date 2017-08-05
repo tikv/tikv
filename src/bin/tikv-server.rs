@@ -381,7 +381,7 @@ fn main() {
     let cluster_id = pd_client.get_cluster_id()
         .unwrap_or_else(|e| exit_with_err(e));
     if cluster_id == DEFAULT_CLUSTER_ID {
-        exit_with_msg(format!("cluster id can't be {}", cluster_id));
+        exit_with_msg(format!("cluster id can't be {}", DEFAULT_CLUSTER_ID));
     }
     config.server.cluster_id = cluster_id;
     info!("connect to PD cluster {}", cluster_id);

@@ -85,9 +85,9 @@ impl Default for CfConfig {
         CfConfig {
             cf: CF_DEFAULT.to_owned(),
             block_size: ReadableSize::kb(64),
-            block_cache_size: ReadableSize::mb(256),
+            block_cache_size: ReadableSize::mb(memory_for_cf(CF_DEFAULT) as u64),
             cache_index_and_filter_blocks: true,
-            use_bloom_filter: false,
+            use_bloom_filter: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -107,35 +107,26 @@ impl Default for CfConfig {
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
-            compaction_pri: CompactionPriority::ByCompensatedSize,
+            compaction_pri: CompactionPriority::MinOverlappingRatio,
         }
     }
 }
 
 impl CfConfig {
-    fn default_config() -> CfConfig {
-        let mut cfg = CfConfig::default();
-        cfg.block_cache_size = ReadableSize::mb(memory_for_cf(CF_DEFAULT) as u64);
-        cfg.use_bloom_filter = true;
-        cfg.whole_key_filtering = true;
-        cfg.compaction_pri = CompactionPriority::MinOverlappingRatio;
-        cfg
-    }
-
     fn write_config() -> CfConfig {
         let mut cfg = CfConfig::default();
         cfg.cf = CF_WRITE.to_owned();
         cfg.block_cache_size = ReadableSize::mb(memory_for_cf(CF_WRITE) as u64);
-        cfg.use_bloom_filter = true;
         cfg.whole_key_filtering = false;
-        cfg.compaction_pri = CompactionPriority::MinOverlappingRatio;
         cfg
     }
 
     fn raft_config() -> CfConfig {
         let mut cfg = CfConfig::default();
         cfg.cf = CF_RAFT.to_owned();
+        cfg.use_bloom_filter = false;
         cfg.block_cache_size = ReadableSize::mb(memory_for_cf(CF_RAFT) as u64);
+        cfg.compaction_pri = CompactionPriority::ByCompensatedSize;
         cfg
     }
 
@@ -144,11 +135,11 @@ impl CfConfig {
         cfg.cf = CF_LOCK.to_owned();
         cfg.block_cache_size = ReadableSize::mb(memory_for_cf(CF_LOCK) as u64);
         cfg.block_size = ReadableSize::kb(16);
-        cfg.use_bloom_filter = true;
         cfg.whole_key_filtering = true;
         cfg.compression_per_level = [DBCompressionType::No; 7];
         cfg.level0_file_num_compaction_trigger = 1;
         cfg.max_bytes_for_level_base = ReadableSize::mb(128);
+        cfg.compaction_pri = CompactionPriority::ByCompensatedSize;
         cfg
     }
 
@@ -261,7 +252,7 @@ impl Default for DbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             backup_dir: "".to_owned(),
-            defaultcf: CfConfig::default_config(),
+            defaultcf: CfConfig::default(),
             writecf: CfConfig::write_config(),
             raftcf: CfConfig::raft_config(),
             lockcf: CfConfig::lock_config(),
