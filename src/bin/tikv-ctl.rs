@@ -209,6 +209,7 @@ fn main() {
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         println!("You are searching Key {}: ", key);
+        println!("Timestamp of this key: {}", Key::from_encoded(key.as_bytes().to_vec()).decode_ts().unwrap());
         match cf_name {
             CF_DEFAULT => {
                 dump_mvcc_default(&db, key, key_encoded, start_ts);
