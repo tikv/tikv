@@ -242,9 +242,9 @@ impl<S: RaftStoreRouter> RaftKv<S> {
     }
 
     fn batch_exec_snap_requests(&self,
-                           batch: Vec<(Context, Vec<Request>)>,
-                           on_finished: BatchCallback<CmdRes>)
-                           -> Result<()> {
+                                batch: Vec<(Context, Vec<Request>)>,
+                                on_finished: BatchCallback<CmdRes>)
+                                -> Result<()> {
         let batch = batch.into_iter().map(|(ctx, reqs)| {
             let header = self.new_request_header(&ctx);
             let mut cmd = RaftCmdRequest::new();

@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 
@@ -53,49 +52,6 @@ fn test_raft_storage() {
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(storage.scan(ctx.clone(), key.clone(), 1, false, 20).is_err());
     assert!(storage.scan_lock(ctx.clone(), 20).is_err());
-}
-
-#[test]
-fn test_raft_storage_batch_snapshot() {
-    let (_cluster, storage, ctx) = new_raft_storage();
-    let key = b"key";
-    let value = b"value";
-    assert_eq!(storage.raw_get(ctx.clone(), key.to_vec()).unwrap(), None);
-    storage.raw_put(ctx.clone(), key.to_vec(), value.to_vec()).unwrap();
-    assert_eq!(storage.raw_get(ctx.clone(), key.to_vec()).unwrap().unwrap(),
-               value.to_vec());
-
-    {
-        let (tx, rx) = channel();
-        let batch = vec![ctx.clone(); 3];
-        let size = batch.len();
-        let on_finished = box move |snapshots: Vec<_>| {
-            tx.send(snapshots).unwrap();
-        };
-        storage.get_engine().async_batch_snapshot(batch, on_finished).unwrap();
-
-        let snapshots = rx.recv().unwrap();
-        assert_eq!(size, snapshots.len());
-        for s in snapshots {
-            assert!(s.is_some());
-        }
-    }
-    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
-    {
-        let (tx, rx) = channel();
-        let batch = vec![ctx; 3];
-        let size = batch.len();
-        let on_finished = box move |snapshots: Vec<_>| {
-            tx.send(snapshots).unwrap();
-        };
-        storage.get_engine().async_batch_snapshot(batch, on_finished).unwrap();
-
-        let snapshots = rx.recv().unwrap();
-        assert_eq!(size, snapshots.len());
-        for s in snapshots {
-            assert!(s.is_none());
-        }
-    }
 }
 
 #[test]
