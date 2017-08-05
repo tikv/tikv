@@ -219,7 +219,7 @@ mod test {
 
     use chrono::FixedOffset;
 
-    use coprocessor::xeval::EvalContext;
+    use coprocessor::select::xeval::EvalContext;
 
     #[test]
     fn test_bytes_to_i64() {

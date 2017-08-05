@@ -1328,7 +1328,7 @@ mod test {
             (Datum::Dec(0u64.into()), Some(false)),
         ];
         use chrono::FixedOffset;
-        use coprocessor::xeval::EvalContext;
+        use coprocessor::select::xeval::EvalContext;
 
         let ctx = EvalContext {
             tz: FixedOffset::east(0),

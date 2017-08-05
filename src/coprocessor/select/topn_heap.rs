@@ -171,3 +171,164 @@ impl PartialOrd for SortRow {
         Some(self.cmp(rhs))
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use tipb::expression::{Expr, ExprType, ByItem};
+
+    use util::collections::HashMap;
+    use util::codec::number::*;
+    use coprocessor::codec::Datum;
+    use coprocessor::codec::table::RowColsDict;
+    use coprocessor::select::xeval::EvalContext;
+
+    use super::*;
+
+    fn new_order_by(col_id: i64, desc: bool) -> ByItem {
+        let mut item = ByItem::new();
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ColumnRef);
+        expr.mut_val().encode_i64(col_id).unwrap();
+        item.set_expr(expr);
+        item.set_desc(desc);
+        item
+    }
+
+    #[test]
+    fn test_topn_heap() {
+        let mut order_cols = Vec::new();
+        order_cols.push(new_order_by(0, true));
+        order_cols.push(new_order_by(1, false));
+        let order_cols = Rc::new(order_cols);
+        let ctx = Rc::new(EvalContext::default());
+        let mut topn_heap = TopNHeap::new(5).unwrap();
+        let test_data = vec![
+            (1, String::from("data1"), Datum::Null, Datum::I64(1)),
+            (2, String::from("data2"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
+            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+            (5, String::from("data5"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(6)),
+            (6, String::from("data6"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(4)),
+            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+        ];
+
+        let exp = vec![
+            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+        ];
+
+        for (handle, data, name, count) in test_data {
+            let cur_key: Vec<Datum> = vec![name, count];
+            let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
+            topn_heap.try_add_row(handle as i64,
+                             row_data,
+                             cur_key,
+                             order_cols.clone(),
+                             ctx.clone())
+                .unwrap();
+        }
+        let result = topn_heap.into_sorted_vec().unwrap();
+        assert_eq!(result.len(), exp.len());
+        for (row, (handle, _, name, count)) in result.iter().zip(exp) {
+            let exp_keys: Vec<Datum> = vec![name, count];
+            assert_eq!(row.handle, handle);
+            assert_eq!(row.key, exp_keys);
+        }
+    }
+
+    #[test]
+    fn test_topn_heap_with_cmp_error() {
+        let mut order_cols = Vec::new();
+        order_cols.push(new_order_by(0, true));
+        order_cols.push(new_order_by(1, false));
+        let order_cols = Rc::new(order_cols);
+        let ctx = Rc::new(EvalContext::default());
+        let mut topn_heap = TopNHeap::new(5).unwrap();
+
+        let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
+        let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
+        topn_heap.try_add_row(0 as i64, row_data, std_key, order_cols.clone(), ctx.clone())
+            .unwrap();
+
+        let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
+        let row_data2 = RowColsDict::new(HashMap::default(), b"name:2".to_vec());
+        topn_heap.try_add_row(0 as i64,
+                         row_data2,
+                         std_key2,
+                         order_cols.clone(),
+                         ctx.clone())
+            .unwrap();
+
+        let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
+        let row_data3 = RowColsDict::new(HashMap::default(), b"name:3".to_vec());
+
+        assert!(topn_heap.try_add_row(0 as i64,
+                         row_data3,
+                         bad_key1,
+                         order_cols.clone(),
+                         ctx.clone())
+            .is_err());
+
+        assert!(topn_heap.into_sorted_vec().is_err());
+    }
+
+    #[test]
+    fn test_topn_heap_with_few_data() {
+        let mut order_cols = Vec::new();
+        order_cols.push(new_order_by(0, true));
+        order_cols.push(new_order_by(1, false));
+        let order_cols = Rc::new(order_cols);
+        let ctx = Rc::new(EvalContext::default());
+        let mut topn_heap = TopNHeap::new(10).unwrap();
+        let test_data = vec![
+            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+        ];
+
+        let exp = vec![
+            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+        ];
+
+        for (handle, data, name, count) in test_data {
+            let cur_key: Vec<Datum> = vec![name, count];
+            let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
+            topn_heap.try_add_row(handle as i64,
+                             row_data,
+                             cur_key,
+                             order_cols.clone(),
+                             ctx.clone())
+                .unwrap();
+        }
+
+        let result = topn_heap.into_sorted_vec().unwrap();
+        assert_eq!(result.len(), exp.len());
+        for (row, (handle, _, name, count)) in result.iter().zip(exp) {
+            let exp_keys: Vec<Datum> = vec![name, count];
+            assert_eq!(row.handle, handle);
+            assert_eq!(row.key, exp_keys);
+        }
+    }
+
+    #[test]
+    fn test_topn_limit_oom() {
+        let topn_heap = TopNHeap::new(usize::MAX - 1);
+        assert!(topn_heap.is_ok());
+        let topn_heap = TopNHeap::new(usize::MAX);
+        assert!(topn_heap.is_err());
+    }
+}

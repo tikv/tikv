@@ -63,9 +63,9 @@ mod test {
     use storage::{Statistics, SnapshotStore};
 
     use super::*;
-    use coprocessor::table_scan::TableScanExecutor;
-    use coprocessor::scanner::test::{TestStore, get_range, new_col_info};
-    use coprocessor::topn::test::gen_table_data;
+    use super::super::table_scan::TableScanExecutor;
+    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::topn::test::gen_table_data;
 
     #[test]
     fn test_limit_executor() {

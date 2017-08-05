@@ -14,7 +14,7 @@
 mod endpoint;
 mod metrics;
 mod dag;
-mod select;
+pub mod select;
 pub mod codec;
 
 use kvproto::kvrpcpb::LockInfo;

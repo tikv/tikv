@@ -163,9 +163,9 @@ mod test {
     use util::codec::number::NumberEncoder;
 
     use super::*;
-    use coprocessor::table_scan::TableScanExecutor;
-    use coprocessor::scanner::test::{TestStore, get_range, new_col_info};
-    use coprocessor::topn::test::gen_table_data;
+    use super::super::table_scan::TableScanExecutor;
+    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::topn::test::gen_table_data;
 
     #[inline]
     fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
