@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,6 +23,8 @@ use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
 
 use super::xeval::EvalContext;
+
+const HEAP_MAX_CAPACITY: usize = 1024;
 
 pub struct SortRow {
     pub handle: i64,
@@ -93,8 +95,6 @@ pub struct TopNHeap {
     limit: usize,
     err: Rc<RefCell<Option<String>>>,
 }
-
-const HEAP_MAX_CAPACITY: usize = 1024;
 
 impl TopNHeap {
     pub fn new(limit: usize) -> Result<TopNHeap> {
