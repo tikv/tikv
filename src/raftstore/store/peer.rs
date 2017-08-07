@@ -791,7 +791,7 @@ impl Peer {
                     // TODO: we should add test case that a split happens before pending
                     // read-index is handled. To do this we need to control async-apply
                     // procedure precisely.
-                    self.handle_read(req, cb);
+                    cb(self.handle_read(req));
                 }
                 propose_time = Some(read.renew_lease_time);
             }
@@ -856,7 +856,7 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 for (req, cb) in read.cmds.drain(..) {
-                    self.handle_read(req, cb);
+                    cb(self.handle_read(req));
                 }
             }
             self.pending_reads.ready_cnt = 0;
@@ -1011,16 +1011,7 @@ impl Peer {
         match self.get_handle_policy(&req) {
             Ok(RequestPolicy::ReadLocal) => {
                 metrics.local_read += 1;
-                let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
-                    match e {
-                        Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
-                        _ => error!("{} execute raft command err: {:?}", self.tag, e),
-                    }
-                    cmd_resp::new_error(e)
-                });
-
-                cmd_resp::bind_term(&mut resp, self.term());
-                Some(resp)
+                Some(self.handle_read(req))
             }
             // require to propose again, and use the `propose` above.
             Ok(RequestPolicy::ReadIndex) => None,
@@ -1216,7 +1207,7 @@ impl Peer {
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
-        self.handle_read(req, cb);
+        cb(self.handle_read(req));
     }
 
     fn read_index(&mut self,
@@ -1377,7 +1368,7 @@ impl Peer {
         Ok(propose_index)
     }
 
-    fn handle_read(&mut self, req: RaftCmdRequest, cb: Callback) {
+    fn handle_read(&mut self, req: RaftCmdRequest) -> RaftCmdResponse {
         let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
@@ -1387,7 +1378,7 @@ impl Peer {
         });
 
         cmd_resp::bind_term(&mut resp, self.term());
-        cb(resp);
+        resp
     }
 
     pub fn term(&self) -> u64 {

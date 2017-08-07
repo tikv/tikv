@@ -12,12 +12,10 @@
 // limitations under the License.
 
 mod endpoint;
-mod aggregate;
 mod metrics;
-mod executor;
 mod dag;
+pub mod select;
 pub mod codec;
-pub mod xeval;
 
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
@@ -81,5 +79,5 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{Host as EndPointHost, RequestTask, SelectContext, SINGLE_GROUP,
-                         REQ_TYPE_SELECT, REQ_TYPE_INDEX, REQ_TYPE_DAG, Task as EndPointTask};
+pub use self::endpoint::{Host as EndPointHost, RequestTask, SINGLE_GROUP, REQ_TYPE_SELECT,
+                         REQ_TYPE_INDEX, REQ_TYPE_DAG, Task as EndPointTask};

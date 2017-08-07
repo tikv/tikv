@@ -16,7 +16,7 @@ use std::io::Write;
 use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
 
-use coprocessor::xeval::EvalContext;
+use coprocessor::select::xeval::EvalContext;
 use util::escape;
 use util::collections::{HashMap, HashSet};
 

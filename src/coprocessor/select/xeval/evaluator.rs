@@ -22,11 +22,11 @@ use util::is_even;
 use util::codec::number::NumberDecoder;
 use util::collections::{HashMap, HashMapEntry};
 
-use super::super::codec;
-use super::super::codec::datum::{Datum, DatumDecoder};
-use super::super::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression,
-                                 ModifyType};
-use super::super::codec::mysql::json::{json_object, json_array};
+use coprocessor::codec;
+use coprocessor::codec::datum::{Datum, DatumDecoder};
+use coprocessor::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression,
+                                ModifyType};
+use coprocessor::codec::mysql::json::{json_object, json_array};
 use super::{Result, Error};
 
 /// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
