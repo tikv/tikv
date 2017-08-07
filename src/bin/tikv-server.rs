@@ -59,7 +59,7 @@ use rocksdb::{DBOptions, ColumnFamilyOptions, BlockBasedOptions};
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
-use tikv::storage::{TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
+use tikv::storage::{TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
@@ -70,7 +70,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Con
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
-use tikv::raftstore::store::{self, SnapManager};
+use tikv::raftstore::store::{self, SnapManager, CF_RAFT};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::util::time_monitor::TimeMonitor;

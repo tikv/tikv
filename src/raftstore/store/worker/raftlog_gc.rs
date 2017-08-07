@@ -11,11 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::keys;
+use raftstore::store::{keys, CF_RAFT};
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
 use util::rocksdb;
-use storage::CF_RAFT;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use std::sync::Arc;
@@ -130,8 +129,9 @@ mod test {
     use std::time::Duration;
     use util::rocksdb::new_engine;
     use tempdir::TempDir;
-    use storage::{CF_DEFAULT, CF_RAFT};
+    use storage::CF_DEFAULT;
     use super::*;
+    use raftstore::store::CF_RAFT;
 
     #[test]
     fn test_gc_raft_log() {

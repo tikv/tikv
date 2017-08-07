@@ -108,7 +108,7 @@ impl Simulator for ServerCluster {
         // Create storage.
         let mut store = create_raft_storage(sim_router.clone(), kv_engine.clone(), &cfg).unwrap();
         store.start(&cfg.storage).unwrap();
-        self.storages.insert(node_id, store.get_kv_engine());
+        self.storages.insert(node_id, store.get_engine());
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();

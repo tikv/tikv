@@ -24,7 +24,7 @@ use futures::Future;
 
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
-use tikv::storage::{KV_CFS, RAFT_CFS};
+use tikv::storage::KV_CFS;
 use super::util::*;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;

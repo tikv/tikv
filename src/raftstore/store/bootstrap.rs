@@ -15,11 +15,11 @@ use rocksdb::{DB, Writable, WriteBatch};
 use kvproto::raft_serverpb::{StoreIdent, RegionLocalState};
 use kvproto::metapb;
 use raftstore::Result;
-use super::keys;
+use super::{keys, CF_RAFT};
 use super::engine::{Iterable, Mutable};
 use super::peer_storage::write_initial_state;
 use util::rocksdb;
-use storage::{CF_DEFAULT, CF_RAFT};
+use storage::CF_DEFAULT;
 
 const INIT_EPOCH_VER: u64 = 1;
 const INIT_EPOCH_CONF_VER: u64 = 1;
@@ -127,8 +127,8 @@ mod tests {
     use super::*;
     use util::rocksdb;
     use raftstore::store::engine::Peekable;
-    use raftstore::store::keys;
-    use storage::{CF_DEFAULT, CF_RAFT};
+    use raftstore::store::{keys, CF_RAFT};
+    use storage::CF_DEFAULT;
 
     #[test]
     fn test_bootstrap() {

@@ -44,7 +44,7 @@ use util::worker::{Worker, Scheduler, FutureWorker};
 use util::transport::SendCh;
 use util::{rocksdb, RingQueue};
 use util::collections::{HashMap, HashSet};
-use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
+use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -52,7 +52,7 @@ use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, 
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
                     ApplyTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
-use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
+use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter, CF_RAFT};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;

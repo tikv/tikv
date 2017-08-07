@@ -15,7 +15,8 @@ use std::sync::Arc;
 use prometheus::{Gauge, GaugeVec};
 use rocksdb::{DB, DBStatisticsTickerType as TickerType, DBStatisticsHistogramType as HistType,
               HistogramData};
-use storage::{CF_DEFAULT, CF_RAFT};
+use storage::CF_DEFAULT;
+use super::CF_RAFT;
 use util::rocksdb;
 use super::engine_metrics::*;
 

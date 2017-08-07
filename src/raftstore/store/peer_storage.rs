@@ -31,13 +31,17 @@ use util::worker::Scheduler;
 use util::{self, rocksdb};
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
+use storage::{CfName, CF_DEFAULT};
+
 use super::worker::RegionTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::peer::ReadyContext;
 use super::metrics::*;
 use super::{SnapshotStatistics, SnapKey, SnapEntry, SnapManager};
-use storage::CF_RAFT;
+
+pub const CF_RAFT: CfName = "raft";
+pub const RAFT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_RAFT];
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -1188,12 +1192,12 @@ mod test {
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, SnapKey, copy_snapshot};
+    use raftstore::store::{bootstrap, SnapKey, copy_snapshot, RAFT_CFS};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
     use util::worker::{Worker, Scheduler};
     use util::rocksdb::new_engine;
-    use storage::{KV_CFS, RAFT_CFS};
+    use storage::KV_CFS;
     use kvproto::eraftpb::HardState;
     use rocksdb::WriteBatch;
 

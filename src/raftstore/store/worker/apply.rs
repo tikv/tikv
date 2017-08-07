@@ -1403,7 +1403,9 @@ mod tests {
     use kvproto::raft_cmdpb::CmdType;
 
     use super::*;
-    use storage::{CF_WRITE, KV_CFS, RAFT_CFS};
+    use storage::{CF_WRITE, KV_CFS};
+    use raftstore::store::RAFT_CFS;
+
     use util::collections::HashMap;
 
     pub fn create_tmp_engine(path: &str) -> (Arc<DB>, Arc<DB>) {

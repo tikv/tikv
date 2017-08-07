@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tikv::raftstore::store::*;
-use tikv::storage::CF_RAFT;
 use tikv::util::rocksdb::get_cf_handle;
 use rocksdb::DB;
 use protobuf;

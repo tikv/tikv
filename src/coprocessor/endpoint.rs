@@ -70,7 +70,7 @@ const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
 
 pub struct Host {
-    kv_engine: Box<Engine>,
+    engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
@@ -81,9 +81,9 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(kv_engine: Box<Engine>, scheduler: Scheduler<Task>, concurrency: usize) -> Host {
+    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, concurrency: usize) -> Host {
         Host {
-            kv_engine: kv_engine,
+            engine: engine,
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
@@ -311,11 +311,11 @@ impl BatchRunnable<Task> for Host {
             self.last_req_id += 1;
             let id = self.last_req_id;
             let sched = self.sched.clone();
-            if let Err(e) = self.kv_engine.async_snapshot(reqs[0].req.get_context(),
-                                                          box move |(_, res)| {
-                                                              sched.schedule(Task::SnapRes(id, res))
-                                                                  .unwrap()
-                                                          }) {
+            if let Err(e) = self.engine.async_snapshot(reqs[0].req.get_context(),
+                                                       box move |(_, res)| {
+                                                           sched.schedule(Task::SnapRes(id, res))
+                                                               .unwrap()
+                                                       }) {
                 notify_batch_failed(e, reqs);
                 continue;
             }

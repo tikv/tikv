@@ -13,9 +13,10 @@
 
 use std::sync::{Arc, mpsc};
 use std::path::Path;
-use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store};
+use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store,
+                             RAFT_CFS};
 use tikv::server::Node;
-use tikv::storage::{KV_CFS, RAFT_CFS};
+use tikv::storage::KV_CFS;
 use tikv::util::rocksdb;
 use tempdir::TempDir;
 use kvproto::metapb;

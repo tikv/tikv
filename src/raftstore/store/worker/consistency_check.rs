@@ -18,9 +18,8 @@ use crc::crc32::{self, Digest, Hasher32};
 use byteorder::{BigEndian, WriteBytesExt};
 
 use kvproto::metapb::Region;
-use raftstore::store::{keys, Msg};
+use raftstore::store::{keys, Msg, CF_RAFT};
 use raftstore::store::engine::{Snapshot, Iterable, Peekable};
-use storage::CF_RAFT;
 use util::worker::Runnable;
 
 use super::metrics::*;
@@ -133,7 +132,7 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
 mod test {
     use rocksdb::Writable;
     use tempdir::TempDir;
-    use storage::{CF_DEFAULT, CF_RAFT};
+    use storage::CF_DEFAULT;
     use crc::crc32::{self, Digest, Hasher32};
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
@@ -142,7 +141,7 @@ mod test {
     use util::rocksdb::new_engine;
     use util::worker::Runnable;
     use raftstore::store::engine::Snapshot;
-    use raftstore::store::{keys, Msg};
+    use raftstore::store::{keys, Msg, CF_RAFT};
     use super::*;
 
     #[test]

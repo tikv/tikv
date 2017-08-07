@@ -41,11 +41,9 @@ pub type CfName = &'static str;
 pub const CF_DEFAULT: CfName = "default";
 pub const CF_LOCK: CfName = "lock";
 pub const CF_WRITE: CfName = "write";
-pub const CF_RAFT: CfName = "raft";
 // Cfs that should be very large generally.
 pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const KV_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
-pub const RAFT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_RAFT];
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -386,7 +384,7 @@ struct StorageHandle {
 }
 
 pub struct Storage {
-    kv_engine: Box<Engine>,
+    engine: Box<Engine>,
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
 
@@ -395,13 +393,13 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn from_engine(kv_engine: Box<Engine>, config: &Config) -> Result<Storage> {
+    pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let (tx, rx) = mpsc::sync_channel(config.scheduler_notify_capacity);
         let sendch = SyncSendCh::new(tx, "kv-storage");
 
-        info!("storage {:?} started.", kv_engine);
+        info!("storage {:?} started.", engine);
         Ok(Storage {
-            kv_engine: kv_engine,
+            engine: engine,
             sendch: sendch,
             handle: Arc::new(Mutex::new(StorageHandle {
                 handle: None,
@@ -412,8 +410,8 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let kv_engine = try!(engine::new_local_engine(&config.data_dir, KV_CFS));
-        Storage::from_engine(kv_engine, config)
+        let engine = try!(engine::new_local_engine(&config.data_dir, KV_CFS));
+        Storage::from_engine(engine, config)
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
@@ -422,7 +420,7 @@ impl Storage {
             return Err(box_err!("scheduler is already running"));
         }
 
-        let kv_engine = self.kv_engine.clone();
+        let engine = self.engine.clone();
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
         let rx = handle.receiver.take().unwrap();
         let sched_concurrency = config.scheduler_concurrency;
@@ -430,7 +428,7 @@ impl Storage {
         let sched_too_busy_threshold = config.scheduler_too_busy_threshold;
         let ch = self.sendch.clone();
         let h = try!(builder.spawn(move || {
-            let mut sched = Scheduler::new(kv_engine,
+            let mut sched = Scheduler::new(engine,
                                            ch,
                                            sched_concurrency,
                                            sched_worker_pool_size,
@@ -461,12 +459,12 @@ impl Storage {
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
 
-        info!("storage {:?} closed.", self.kv_engine);
+        info!("storage {:?} closed.", self.engine);
         Ok(())
     }
 
-    pub fn get_kv_engine(&self) -> Box<Engine> {
-        self.kv_engine.clone()
+    pub fn get_engine(&self) -> Box<Engine> {
+        self.engine.clone()
     }
 
     fn send(&self, cmd: Command, cb: StorageCb) -> Result<()> {
@@ -680,7 +678,7 @@ impl Storage {
                          value: Vec<u8>,
                          callback: Callback<()>)
                          -> Result<()> {
-        try!(self.kv_engine
+        try!(self.engine
             .async_write(&ctx,
                          vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
                          box |(_, res): (_, engine::Result<_>)| {
@@ -695,7 +693,7 @@ impl Storage {
                             key: Vec<u8>,
                             callback: Callback<()>)
                             -> Result<()> {
-        try!(self.kv_engine
+        try!(self.engine
             .async_write(&ctx,
                          vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
                          box |(_, res): (_, engine::Result<_>)| {
@@ -755,7 +753,7 @@ impl Storage {
 impl Clone for Storage {
     fn clone(&self) -> Storage {
         Storage {
-            kv_engine: self.kv_engine.clone(),
+            engine: self.engine.clone(),
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
             gc_ratio_threshold: self.gc_ratio_threshold,

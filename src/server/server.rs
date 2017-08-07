@@ -114,7 +114,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     }
 
     pub fn start(&mut self, cfg: &Config) -> Result<()> {
-        let end_point = EndPointHost::new(self.storage.get_kv_engine(),
+        let end_point = EndPointHost::new(self.storage.get_engine(),
                                           self.end_point_worker.scheduler(),
                                           cfg.end_point_concurrency);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));

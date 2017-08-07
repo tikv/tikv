@@ -301,8 +301,8 @@ mod tests {
     use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
-    use raftstore::store::{PeerStorage, CacheQueryStats};
-    use storage::{Cursor, Key, KV_CFS, RAFT_CFS, ScanMode, CFStatistics};
+    use raftstore::store::{PeerStorage, CacheQueryStats, RAFT_CFS};
+    use storage::{Cursor, Key, KV_CFS, ScanMode, CFStatistics};
     use util::{worker, rocksdb, escape};
 
     use super::*;

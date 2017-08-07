@@ -33,9 +33,9 @@ use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
-use tikv::raftstore::store::keys;
+use tikv::raftstore::store::{keys, CF_RAFT, RAFT_CFS};
 use tikv::raftstore::store::engine::{Peekable, Iterable, IterOption};
-use tikv::storage::{KV_CFS, RAFT_CFS, CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT, CfName};
+use tikv::storage::{KV_CFS, CF_LOCK, CF_WRITE, CF_DEFAULT, CfName};
 use tikv::storage::mvcc::{Lock, Write};
 use tikv::storage::types::Key;
 
