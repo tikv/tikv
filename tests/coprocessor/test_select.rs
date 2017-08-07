@@ -2298,7 +2298,6 @@ fn test_key_is_locked_for_index() {
     let product = ProductTable::new();
     let (_, mut end_point) = init_data_with_commit(&product, &data, false);
 
-    // let req = DAGSelect::from(&product.table).build();
     let req = DAGSelect::from_index(&product.table, product.name).build();
     let resp = handle_request(&end_point, req);
     assert!(resp.get_data().is_empty(), "{:?}", resp);
