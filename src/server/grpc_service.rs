@@ -838,11 +838,11 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         }
         storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. })) |
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
-            warn!("txn conflicts: {}", err);
+            warn!("txn conflicts: {:?}", err);
             key_error.set_retryable(format!("{:?}", err));
         }
         _ => {
-            error!("txn aborts: {}", err);
+            error!("txn aborts: {:?}", err);
             key_error.set_abort(format!("{:?}", err));
         }
     }
