@@ -31,12 +31,12 @@ use tipb::select::{SelectRequest, DAGRequest, SelectResponse, Chunk};
 use tipb::executor::{Executor, ExecType, TableScan, IndexScan, Selection, Aggregation, TopN, Limit};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{Expr, ExprType, ByItem};
-use tikv::coprocessor::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
 use protobuf::{RepeatedField, Message};
 
 use raftstore::util::MAX_LEADER_LEASE;
 use storage::sync_storage::SyncStorage;
 use storage::util::new_raft_engine;
+use tikv::coprocessor::select::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 

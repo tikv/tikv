@@ -56,49 +56,6 @@ fn test_raft_storage() {
 }
 
 #[test]
-fn test_raft_storage_batch_snapshot() {
-    let (_cluster, storage, ctx) = new_raft_storage();
-    let key = b"key";
-    let value = b"value";
-    assert_eq!(storage.raw_get(ctx.clone(), key.to_vec()).unwrap(), None);
-    storage.raw_put(ctx.clone(), key.to_vec(), value.to_vec()).unwrap();
-    assert_eq!(storage.raw_get(ctx.clone(), key.to_vec()).unwrap().unwrap(),
-               value.to_vec());
-
-    {
-        let (tx, rx) = channel();
-        let batch = vec![ctx.clone(); 3];
-        let size = batch.len();
-        let on_finished = box move |snapshots: Vec<_>| {
-            tx.send(snapshots).unwrap();
-        };
-        storage.get_engine().async_batch_snapshot(batch, on_finished).unwrap();
-
-        let snapshots = rx.recv().unwrap();
-        assert_eq!(size, snapshots.len());
-        for s in snapshots {
-            assert!(s.is_some());
-        }
-    }
-    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
-    {
-        let (tx, rx) = channel();
-        let batch = vec![ctx; 3];
-        let size = batch.len();
-        let on_finished = box move |snapshots: Vec<_>| {
-            tx.send(snapshots).unwrap();
-        };
-        storage.get_engine().async_batch_snapshot(batch, on_finished).unwrap();
-
-        let snapshots = rx.recv().unwrap();
-        assert_eq!(size, snapshots.len());
-        for s in snapshots {
-            assert!(s.is_none());
-        }
-    }
-}
-
-#[test]
 fn test_raft_storage_get_after_lease() {
     let (_cluster, storage, ctx) = new_raft_storage();
     let key = b"key";

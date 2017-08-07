@@ -16,14 +16,16 @@ use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
+
+use coprocessor::codec::{table, datum, mysql};
+use coprocessor::endpoint::prefix_next;
+use coprocessor::metrics::*;
+use coprocessor::Result;
 use storage::{Statistics, SnapshotStore};
 
 use super::{Executor, Row};
 use super::scanner::Scanner;
-use super::super::codec::{table, datum, mysql};
-use super::super::endpoint::prefix_next;
-use super::super::metrics::*;
-use super::super::Result;
+
 
 pub struct IndexScanExecutor<'a> {
     desc: bool,
