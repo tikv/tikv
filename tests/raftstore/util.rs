@@ -33,6 +33,8 @@ use tikv::util::escape;
 
 pub use tikv::raftstore::store::util::find_peer;
 
+pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
+
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
@@ -87,7 +89,7 @@ pub fn new_store_cfg() -> Config {
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: Duration::from_secs(3),
         report_region_flow_interval: 100, // 100ms
-        raft_store_max_leader_lease: TimeDuration::milliseconds(25 * 10),
+        raft_store_max_leader_lease: TimeDuration::milliseconds(MAX_LEADER_LEASE as i64),
         use_sst_file_snapshot: true,
         allow_remove_leader: true,
         ..Config::default()

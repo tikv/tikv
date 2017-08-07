@@ -16,9 +16,10 @@
 
 use tipb::executor::Limit;
 
+use coprocessor::Result;
+use coprocessor::metrics::*;
+
 use super::{Row, Executor};
-use super::super::Result;
-use super::super::metrics::*;
 
 pub struct LimitExecutor<'a> {
     limit: u64,

@@ -20,13 +20,14 @@ use raftstore::store::engine::{SyncSnapshot as RocksSnapshot, Peekable, Iterable
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
-use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, TEMP_DIR,
-            ScanMode, Result, Error, CbContext};
+use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, BatchCallback,
+            TEMP_DIR, ScanMode, Result, Error, CbContext};
 use tempdir::TempDir;
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
     Snapshot(Callback<Box<Snapshot>>),
+    SnapshotBath(usize, BatchCallback<Box<Snapshot>>),
 }
 
 impl Display for Task {
@@ -34,6 +35,7 @@ impl Display for Task {
         match *self {
             Task::Write(..) => write!(f, "write task"),
             Task::Snapshot(_) => write!(f, "snapshot task"),
+            Task::SnapshotBath(..) => write!(f, "snapshot task batch"),
         }
     }
 }
@@ -46,6 +48,15 @@ impl Runnable<Task> for Runner {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
             Task::Snapshot(cb) => {
                 cb((CbContext::new(), Ok(box RocksSnapshot::new(self.0.clone()))))
+            }
+            Task::SnapshotBath(size, on_finished) => {
+                let mut results = Vec::with_capacity(size);
+                for _ in 0..size {
+                    let res = Some((CbContext::new(),
+                                    Ok(box RocksSnapshot::new(self.0.clone()) as Box<Snapshot>)));
+                    results.push(res);
+                }
+                on_finished(results);
             }
         }
     }
@@ -152,6 +163,14 @@ impl Engine for EngineRocksdb {
 
     fn async_snapshot(&self, _: &Context, cb: Callback<Box<Snapshot>>) -> Result<()> {
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
+        Ok(())
+    }
+
+    fn async_batch_snapshot(&self,
+                            batch: Vec<Context>,
+                            on_finished: BatchCallback<Box<Snapshot>>)
+                            -> Result<()> {
+        box_try!(self.sched.schedule(Task::SnapshotBath(batch.len(), on_finished)));
         Ok(())
     }
 
