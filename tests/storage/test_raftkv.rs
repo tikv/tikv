@@ -1,3 +1,7 @@
+use std::thread;
+use std::sync::mpsc::channel;
+use std::time::Duration;
+
 use tikv::util::HandyRwLock;
 use tikv::storage::engine::*;
 use tikv::storage::{Key, CfName, CF_DEFAULT, CFStatistics};
@@ -7,6 +11,8 @@ use kvproto::kvrpcpb::Context;
 use raftstore::transport_simulate::IsolationFilterFactory;
 use raftstore::server::{new_server_cluster_with_cfs, new_server_cluster};
 use tikv::raftstore::store::engine::IterOption;
+
+use raftstore::util::MAX_LEADER_LEASE;
 
 #[test]
 fn test_raftkv() {
@@ -68,8 +74,53 @@ fn test_read_leader_in_lease() {
     assert_eq!(can_read(&ctx, storage.as_ref(), k2, v2), true);
 }
 
+#[test]
+fn test_batch_snapshot() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+
+    let key = b"key";
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(key), None);
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
+
+    let mut ctx = Context::new();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader.clone());
+
+    let size = 3;
+    let batch = vec![ctx.clone(); size];
+    let snapshots = mut_batch_snapshot(batch, storage.as_ref());
+    assert_eq!(size, snapshots.len());
+    for s in snapshots {
+        assert!(s.is_some());
+    }
+    // sleep util leader lease is expired.
+    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
+    let batch = vec![ctx; size];
+    let snapshots = mut_batch_snapshot(batch, storage.as_ref());
+    assert_eq!(size, snapshots.len());
+    for s in snapshots {
+        assert!(s.is_none());
+    }
+}
+
 pub fn make_key(k: &[u8]) -> Key {
     Key::from_raw(k)
+}
+
+fn mut_batch_snapshot(batch: Vec<Context>, engine: &Engine) -> BatchResults<Box<Snapshot>> {
+    let (tx, rx) = channel();
+    let on_finished = box move |snapshots| {
+        tx.send(snapshots).unwrap();
+    };
+    engine.async_batch_snapshot(batch, on_finished).unwrap();
+    rx.recv().unwrap()
 }
 
 fn must_put(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) {

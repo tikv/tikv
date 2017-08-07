@@ -30,7 +30,7 @@ mod engine_metrics;
 mod raft_engine_metrics;
 mod local_metrics;
 
-pub use self::msg::{Msg, Callback, Tick, SnapshotStatusMsg};
+pub use self::msg::{Msg, Callback, BatchCallback, Tick, SnapshotStatusMsg};
 pub use self::store::{StoreChannel, Store, create_event_loop};
 pub use self::config::Config;
 pub use self::transport::Transport;

@@ -18,21 +18,27 @@ use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 use util::collections::{HashMapEntry as Entry, HashSet};
 
-use super::codec::mysql;
-use super::codec::datum::Datum;
-use super::codec::table::{RowColsDict, TableDecoder};
-use super::endpoint::get_pk;
-use super::xeval::{Evaluator, EvalContext};
-use super::Result;
-use super::Error;
+use coprocessor::codec::mysql;
+use coprocessor::codec::datum::Datum;
+use coprocessor::codec::table::{RowColsDict, TableDecoder};
+use coprocessor::endpoint::get_pk;
+use coprocessor::select::xeval::{Evaluator, EvalContext};
+use coprocessor::{Error, Result};
 
 mod scanner;
-pub mod table_scan;
-pub mod index_scan;
-pub mod selection;
-pub mod topn;
-pub mod limit;
-pub mod aggregation;
+mod table_scan;
+mod index_scan;
+mod selection;
+mod topn;
+mod limit;
+mod aggregation;
+
+pub use self::table_scan::TableScanExecutor;
+pub use self::index_scan::IndexScanExecutor;
+pub use self::selection::SelectionExecutor;
+pub use self::topn::TopNExecutor;
+pub use self::limit::LimitExecutor;
+pub use self::aggregation::AggregationExecutor;
 
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,

@@ -12,8 +12,10 @@
 // limitations under the License.
 
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
+use std::collections::Bound::{Included, Unbounded};
 use std::u64;
+use std::io::Read;
 
 use storage::mvcc::{Write, WriteType};
 use storage::types;
@@ -30,6 +32,9 @@ const PROP_NUM_PUTS: &'static str = "tikv.num_puts";
 const PROP_NUM_VERSIONS: &'static str = "tikv.num_versions";
 const PROP_MAX_ROW_VERSIONS: &'static str = "tikv.max_row_versions";
 const PROP_NUM_ERRORS: &'static str = "tikv.num_errors";
+const PROP_TOTAL_SIZE: &'static str = "tikv.total_size";
+const PROP_SIZE_INDEX: &'static str = "tikv.size_index";
+const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default)]
 pub struct MvccProperties {
@@ -167,6 +172,101 @@ impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct IndexHandle {
+    pub size: u64, // The size of the stored block
+    pub offset: u64, // The offset of the block in the file
+}
+
+#[derive(Default)]
+pub struct SizeProperties {
+    pub total_size: u64,
+    pub index_handles: BTreeMap<Vec<u8>, IndexHandle>,
+}
+
+impl SizeProperties {
+    pub fn encode(&self) -> UserProperties {
+        let mut props = UserProperties::new();
+        props.encode_u64(PROP_TOTAL_SIZE, self.total_size);
+        props.encode_handles(PROP_SIZE_INDEX, &self.index_handles);
+        props
+    }
+
+    pub fn decode<T: DecodeProperties>(props: &T) -> Result<SizeProperties> {
+        let mut res = SizeProperties::default();
+        res.total_size = try!(props.decode_u64(PROP_TOTAL_SIZE));
+        res.index_handles = try!(props.decode_handles(PROP_SIZE_INDEX));
+        Ok(res)
+    }
+
+    pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
+        let mut range = self.index_handles.range::<[u8], _>((Included(start), Unbounded));
+        let start_offset = match range.next() {
+            Some((_, v)) => v.offset,
+            None => return 0,
+        };
+        let mut range = self.index_handles.range::<[u8], _>((Included(end), Unbounded));
+        let end_offset = match range.next() {
+            Some((_, v)) => v.offset,
+            None => {
+                // Last handle must exists if we have start offset.
+                let (_, v) = self.index_handles.iter().last().unwrap();
+                v.offset
+            }
+        };
+        assert!(end_offset >= start_offset);
+        end_offset - start_offset
+    }
+}
+
+pub struct SizePropertiesCollector {
+    props: SizeProperties,
+    last_key: Vec<u8>,
+    index_handle: IndexHandle,
+}
+
+impl SizePropertiesCollector {
+    fn new() -> SizePropertiesCollector {
+        SizePropertiesCollector {
+            props: SizeProperties::default(),
+            last_key: Vec::new(),
+            index_handle: IndexHandle::default(),
+        }
+    }
+}
+
+impl TablePropertiesCollector for SizePropertiesCollector {
+    fn add(&mut self, key: &[u8], value: &[u8], _: DBEntryType, _: u64, _: u64) {
+        let size = key.len() + value.len();
+        self.index_handle.size += size as u64;
+        self.index_handle.offset += size as u64;
+        // Add the start key for convenience.
+        if self.last_key.is_empty() || self.index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
+            self.props.index_handles.insert(key.to_owned(), self.index_handle.clone());
+            self.index_handle.size = 0;
+        }
+        self.last_key.clear();
+        self.last_key.extend_from_slice(key);
+    }
+
+    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        self.props.total_size = self.index_handle.offset;
+        if self.index_handle.size > 0 {
+            self.props.index_handles.insert(self.last_key.clone(), self.index_handle.clone());
+        }
+        self.props.encode().0
+    }
+}
+
+#[derive(Default)]
+pub struct SizePropertiesCollectorFactory {}
+
+impl TablePropertiesCollectorFactory for SizePropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+        Box::new(SizePropertiesCollector::new())
+    }
+}
+
 pub struct UserProperties(HashMap<Vec<u8>, Vec<u8>>);
 
 impl UserProperties {
@@ -183,6 +283,18 @@ impl UserProperties {
         buf.encode_u64(value).unwrap();
         self.encode(name, buf);
     }
+
+    // Format: | klen | k | v.size | v.offset |
+    pub fn encode_handles(&mut self, name: &str, handles: &BTreeMap<Vec<u8>, IndexHandle>) {
+        let mut buf = Vec::with_capacity(1024);
+        for (k, v) in handles {
+            buf.encode_u64(k.len() as u64).unwrap();
+            buf.extend(k);
+            buf.encode_u64(v.size).unwrap();
+            buf.encode_u64(v.offset).unwrap();
+        }
+        self.encode(name, buf);
+    }
 }
 
 pub trait DecodeProperties {
@@ -191,6 +303,21 @@ pub trait DecodeProperties {
     fn decode_u64(&self, k: &str) -> Result<u64> {
         let mut buf = try!(self.decode(k));
         buf.decode_u64()
+    }
+
+    fn decode_handles(&self, k: &str) -> Result<BTreeMap<Vec<u8>, IndexHandle>> {
+        let mut res = BTreeMap::new();
+        let mut buf = try!(self.decode(k));
+        while !buf.is_empty() {
+            let klen = try!(buf.decode_u64());
+            let mut k = vec![0; klen as usize];
+            try!(buf.read_exact(&mut k));
+            let mut v = IndexHandle::default();
+            v.size = try!(buf.decode_u64());
+            v.offset = try!(buf.decode_u64());
+            res.insert(k, v);
+        }
+        Ok(res)
     }
 }
 
@@ -247,5 +374,61 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 7);
         assert_eq!(props.max_row_versions, 3);
+    }
+
+    #[test]
+    fn test_size_properties_collector() {
+        let cases = [("a", 0),
+                     // handle "a": size = 1, offset = 1,
+                     ("b", PROP_SIZE_INDEX_DISTANCE / 8),
+                     ("c", PROP_SIZE_INDEX_DISTANCE / 4),
+                     ("d", PROP_SIZE_INDEX_DISTANCE / 2),
+                     ("e", PROP_SIZE_INDEX_DISTANCE / 8),
+                     // handle "e": size = DISTANCE + 4, offset = DISTANCE + 5
+                     ("f", PROP_SIZE_INDEX_DISTANCE / 4),
+                     ("g", PROP_SIZE_INDEX_DISTANCE / 2),
+                     ("h", PROP_SIZE_INDEX_DISTANCE / 8),
+                     ("i", PROP_SIZE_INDEX_DISTANCE / 4),
+                     // handle "i": size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9
+                     ("j", PROP_SIZE_INDEX_DISTANCE / 2),
+                     ("k", PROP_SIZE_INDEX_DISTANCE)];
+        // handle "k": size = DISTANCE / 8 * 12 + 2, offset = DISTANCE / 8 * 29 + 11
+
+        let mut collector = SizePropertiesCollector::new();
+        for &(k, vlen) in &cases {
+            let v = vec![0; vlen as usize];
+            collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+        }
+        let result = UserProperties(collector.finish());
+
+        let props = SizeProperties::decode(&result).unwrap();
+        assert_eq!(props.total_size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
+        let handles = &props.index_handles;
+        assert_eq!(handles.len(), 4);
+        let a = &handles[b"a".as_ref()];
+        assert_eq!(a.size, 1);
+        assert_eq!(a.offset, 1);
+        let e = &handles[b"e".as_ref()];
+        assert_eq!(e.size, PROP_SIZE_INDEX_DISTANCE + 4);
+        assert_eq!(e.offset, PROP_SIZE_INDEX_DISTANCE + 5);
+        let i = &handles[b"i".as_ref()];
+        assert_eq!(i.size, PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4);
+        assert_eq!(i.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
+        let k = &handles[b"k".as_ref()];
+        assert_eq!(k.size, PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
+        assert_eq!(k.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
+
+        let cases = [(" ", "z", k.offset - a.offset),
+                     (" ", " ", 0),
+                     ("z", "z", 0),
+                     ("a", "k", k.offset - a.offset),
+                     ("a", "i", i.offset - a.offset),
+                     ("e", "h", i.offset - e.offset),
+                     ("g", "h", 0),
+                     ("g", "g", 0)];
+        for &(start, end, size) in &cases {
+            assert_eq!(props.get_approximate_size_in_range(start.as_bytes(), end.as_bytes()),
+                       size);
+        }
     }
 }

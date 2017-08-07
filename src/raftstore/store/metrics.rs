@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{Counter, CounterVec, GaugeVec, Histogram, HistogramVec, exponential_buckets};
+use prometheus::*;
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
@@ -184,5 +184,13 @@ lazy_static! {
             "tikv_raftstore_entry_fetches",
             "Total number of raft entry fetches",
             &["type"]
+        ).unwrap();
+
+    pub static ref BATCH_SNAPSHOT_COMMANDS: Histogram =
+        register_histogram!(
+            "tikv_raftstore_batch_snapshot_commands_total",
+            "Bucketed histogram of total size of batch snapshot commands",
+            vec![1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0,
+                 20.0, 24.0, 32.0, 64.0, 128.0, 256.0]
         ).unwrap();
 }

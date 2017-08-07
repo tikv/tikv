@@ -30,15 +30,16 @@ pub struct RegionSnapshot {
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
-        RegionSnapshot {
-            snap: ps.raw_snapshot().into_sync(),
-            region: Arc::new(ps.get_region().clone()),
-        }
+        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.get_region().clone())
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
+        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region)
+    }
+
+    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> RegionSnapshot {
         RegionSnapshot {
-            snap: Snapshot::new(db).into_sync(),
+            snap: snap,
             region: Arc::new(region),
         }
     }

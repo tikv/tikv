@@ -16,13 +16,14 @@ use tipb::executor::TableScan;
 
 use util::collections::HashSet;
 use storage::{Statistics, SnapshotStore};
+use coprocessor::codec::table;
+use coprocessor::endpoint::{prefix_next, is_point};
+use coprocessor::Result;
+use coprocessor::metrics::*;
 
 use super::{Executor, Row};
 use super::scanner::Scanner;
-use super::super::codec::table;
-use super::super::endpoint::{prefix_next, is_point};
-use super::super::Result;
-use super::super::metrics::*;
+
 
 pub struct TableScanExecutor<'a> {
     meta: TableScan,
