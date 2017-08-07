@@ -107,7 +107,7 @@ impl<'a> IndexScanExecutor<'a> {
 impl<'a> Executor for IndexScanExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         while self.cursor < self.key_ranges.len() {
-            let data = box_try!(self.get_row_from_range());
+            let data = try!(self.get_row_from_range());
             if data.is_none() {
                 CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 self.scanner.set_seek_key(None);
