@@ -1809,6 +1809,7 @@ mod tests {
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(delegate.applied_index_term, 2);
         assert_eq!(delegate.apply_state.get_applied_index(), 4);
+        // a writebatch should be atomic.
         assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
 
         EntryBuilder::new(5, 2).capture_resp(&mut delegate, tx.clone()).build();
@@ -1866,6 +1867,7 @@ mod tests {
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
+        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
 
         let delete_range_entry = EntryBuilder::new(8, 3)
             .delete_range_cf(CF_DEFAULT, b"", b"k5")
