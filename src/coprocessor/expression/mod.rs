@@ -189,6 +189,13 @@ pub enum BuiltinFn {
 }
 
 
+impl Expression {
+    fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<i64>> {
+        unimplemented!()
+    }
+}
+
+
 impl TryFrom<Expr> for Expression {
     type Error = Error;
 
@@ -199,32 +206,32 @@ impl TryFrom<Expr> for Expression {
                     expr: ExprKind::Constant(Datum::Null),
                     ret_type: TypeClass::Int, // FIXME: a NULL variant?
                 })
-            },
+            }
             ExprType::Int64 => {
                 Ok(Expression {
                     expr: ExprKind::Constant(Datum::I64(expr.get_val().decode_i64()?)),
                     ret_type: TypeClass::Int,
                 })
-            },
+            }
             ExprType::Uint64 => {
                 Ok(Expression {
                     expr: ExprKind::Constant(Datum::U64(expr.get_val().decode_u64()?)),
                     ret_type: TypeClass::Int,
                 })
-            },
+            }
             ExprType::String | ExprType::Bytes => {
                 let mut expr = expr;
                 Ok(Expression {
                     expr: ExprKind::Constant(Datum::Bytes(expr.take_val())),
                     ret_type: TypeClass::String,
                 })
-            },
+            }
             ExprType::Float32 | ExprType::Float64 => {
                 Ok(Expression {
                     expr: ExprKind::Constant(Datum::F64(expr.get_val().decode_f64()?)),
                     ret_type: TypeClass::Real,
                 })
-            },
+            }
             ExprType::MysqlDuration => {
                 let n = try!(expr.get_val().decode_i64());
                 let dur = try!(Duration::from_nanos(n, MAX_FSP));
@@ -232,23 +239,22 @@ impl TryFrom<Expr> for Expression {
                     expr: ExprKind::Constant(Datum::Dur(dur)),
                     ret_type: TypeClass::Real,
                 })
-            },
+            }
             ExprType::MysqlDecimal => {
                 Ok(Expression {
                     expr: ExprKind::Constant(Datum::Dec(expr.get_val().decode_decimal()?)),
                     ret_type: TypeClass::Decimal,
                 })
-            },
+            }
             ExprType::ScalarFunc => {
                 expr_scalar_fn_into_expression(expr)
-            },
+            }
             ExprType::ColumnRef => {
                 Ok(Expression {
                     expr: ExprKind::ColumnRef(expr.get_val().decode_i64()? as usize),
                     ret_type: expr.get_field_type().get_tp().type_class(),
                 })
-            },
-
+            }
             _ => unimplemented!(),
         }
     }
@@ -266,7 +272,7 @@ fn expr_scalar_fn_into_expression(mut expr: Expr) -> Result<Expression> {
                 expr: ExprKind::ScalarFn(BuiltinFn::Cast(box inner)),
                 ret_type: TypeClass::Int,
             })
-        }
+        },
         ScalarFuncSig::CastIntAsReal => {
             let inner = expr.take_children().pop()
                 .ok_or(Error::Other("empty expr children"))
@@ -275,7 +281,7 @@ fn expr_scalar_fn_into_expression(mut expr: Expr) -> Result<Expression> {
                 expr: ExprKind::ScalarFn(BuiltinFn::Cast(box inner)),
                 ret_type: TypeClass::Real,
             })
-        }
+        },
         ScalarFuncSig::CastIntAsString => {
             let inner = expr.take_children().pop()
                 .ok_or(Error::Other("empty expr children"))
@@ -363,7 +369,20 @@ fn expr_scalar_fn_into_expression(mut expr: Expr) -> Result<Expression> {
                     BuiltinFn::Binary(BinOp::Lt, box lhs, box rhs)),
                 ret_type: TypeClass::Int,
             })
-        }
+        },
+        ScalarFuncSig::LTReal => {
+            let rhs = expr.take_children().pop()
+                .ok_or(Error::Other("empty expr children"))
+                .and_then(Expression::try_from)?;
+            let lhs = expr.take_children().pop()
+                .ok_or(Error::Other("non enough expr children"))
+                .and_then(Expression::try_from)?;
+            Ok(Expression {
+                expr: ExprKind::ScalarFn(
+                    BuiltinFn::Binary(BinOp::Lt, box lhs, box rhs)),
+                ret_type: TypeClass::Real,
+            })
+        },
 
         _ => unimplemented!()
     }
