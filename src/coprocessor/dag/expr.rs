@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::io;
 use std::convert::TryFrom;
 
@@ -28,7 +27,6 @@ use tipb::select::DAGRequest;
 use util::codec::number::{NumberDecoder, NumberEncoder};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::MAX_FSP;
-
 
 quick_error! {
     #[derive(Debug)]
@@ -57,7 +55,6 @@ quick_error! {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
-
 
 /// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
 /// truncate error.
@@ -92,7 +89,6 @@ pub struct FnCall {
     children: Vec<Expression>,
 }
 
-
 impl Datum {
     fn to_i64(&self) -> Option<i64> {
         match *self {
@@ -108,7 +104,6 @@ impl Datum {
         }
     }
 }
-
 
 impl Expression {
     fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<i64>> {
@@ -152,7 +147,6 @@ impl Expression {
         unimplemented!()
     }
 }
-
 
 impl TryFrom<Expr> for Expression {
     type Error = Error;
@@ -220,9 +214,6 @@ impl TryFrom<Expr> for Expression {
         }
     }
 }
-
-
-
 
 
 #[test]
