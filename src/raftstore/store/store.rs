@@ -1300,26 +1300,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                            on_finished: BatchCallback) {
         let size = batch.len();
         BATCH_SNAPSHOT_COMMANDS.observe(size as f64);
-        let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
-        for (idx, msg) in batch.into_iter().enumerate() {
+        let mut ret = Vec::with_capacity(size);
+        for msg in batch {
             match self.pre_propose_raft_command(&msg) {
                 Ok(Some(resp)) => {
-                    ret[idx] = Some(resp);
+                    ret.push(Some(resp));
                     continue;
                 }
                 Err(e) => {
-                    ret[idx] = Some(new_error(e));
+                    ret.push(Some(new_error(e)));
                     continue;
                 }
                 _ => (),
             }
 
-
             let region_id = msg.get_header().get_region_id();
             let mut peer = self.region_peers.get_mut(&region_id).unwrap();
-            if let Some(r) = peer.propose_snapshot(msg, &mut self.raft_metrics.propose) {
-                ret[idx] = Some(r);
-            }
+            ret.push(peer.propose_snapshot(msg, &mut self.raft_metrics.propose));
         }
         on_finished.call_box((ret,));
     }
