@@ -36,23 +36,23 @@ quick_error! {
     pub enum Error {
         Io(err: io::Error) {
             from()
-                description("io error")
-                display("I/O error: {}", err)
-                cause(err)
+            description("io error")
+            display("I/O error: {}", err)
+            cause(err)
         }
         Type { has: TypeClass, expected: TypeClass } {
             description("type error")
-                display("type error: cannot get {:?} result from {:?} expression", expected, has)
+            display("type error: cannot get {:?} result from {:?} expression", expected, has)
         }
         Codec(err: util::codec::Error) {
             from()
-                description("codec error")
-                display("codec error: {}", err)
-                cause(err)
+            description("codec error")
+            display("codec error: {}", err)
+            cause(err)
         }
         Other(desc: &'static str) {
             description(desc)
-                display("error {}", desc)
+            display("error {}", desc)
         }
     }
 }
@@ -82,11 +82,12 @@ pub struct StatementContext {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TypeClass {
-    String = 0,
-    Real = 1,
-    Int = 2,
-    Decimal = 4,
-    Time = 8,
+    String,
+    Real,
+    Int,
+    Decimal,
+    Time,
+    Duration,
 }
 
 
@@ -158,23 +159,21 @@ pub enum BuiltinFn {
     Unary(UnOp, Box<Expression>),
     Binary(BinOp, Box<Expression>, Box<Expression>),
     // COALESCE(value,...)
-    Coalesce(Vec<Expr>),
+    Coalesce(Vec<Expression>),
     // GREATEST(value1,value2,...)
-    Greatest(Vec<Expr>),
+    Greatest(Vec<Expression>),
     // expr IN (value,...)
-    In(Box<Expression>, Vec<Expr>),
+    In(Box<Expression>, Vec<Expression>),
     // INTERVAL(N,N1,N2,N3,...)
-    Interval(Box<Expression>, Vec<Expr>),
+    Interval(Box<Expression>, Vec<Expression>),
     // LEAST(value1,value2,...)
-    Least(Vec<Expr>),
+    Least(Vec<Expression>),
 
     // ## Control Flow Functions
     //
-    // CASE value WHEN [compare_value] THEN result [WHEN [compare_value] THEN result ...]
+    // CASE [value] WHEN [compare_value] THEN result [WHEN [compare_value] THEN result ...]
     // [ELSE result] END
-    Case(Box<Expression>, Vec<CaseArm>, Option<Box<Expression>>),
-    // CASE WHEN [condition] THEN result [WHEN [condition] THEN result ...] [ELSE result] END
-    CaseWhen(Vec<CaseArm>, Option<Box<Expression>>),
+    Case(Option<Box<Expression>>, Vec<CaseArm>, Option<Box<Expression>>),
     // IF(expr1,expr2,expr3)
     If(Box<Expression>, Box<Expression>, Box<Expression>),
     // IFNULL(expr1,expr2)
@@ -183,12 +182,10 @@ pub enum BuiltinFn {
     NullIf(Box<Expression>, Box<Expression>),
 
     // ## String Comparison Functions
-    // expr LIKE pat [ESCAPE 'escape_char']
-    Like(Box<Expression>, Box<Expression>, Option<String>),
-
-    Cast(Box<Expression>),
-
-    // TODO: add more here
+    // expr LIKE pat
+    Like(Box<Expression>, Option<String>),
+    // CAST(expr AS type)
+    Cast(Box<Expression>), // TODO: add more here
 }
 
 
@@ -197,17 +194,180 @@ impl TryFrom<Expr> for Expression {
 
     fn try_from(expr: Expr) -> ::std::result::Result<Expression, Self::Error> {
         match expr.get_tp() {
+            ExprType::Null => {
+                Ok(Expression {
+                    expr: ExprKind::Constant(Datum::Null),
+                    ret_type: TypeClass::Int, // FIXME: a NULL variant?
+                })
+            },
+            ExprType::Int64 => {
+                Ok(Expression {
+                    expr: ExprKind::Constant(Datum::I64(expr.get_val().decode_i64()?)),
+                    ret_type: TypeClass::Int,
+                })
+            },
+            ExprType::Uint64 => {
+                Ok(Expression {
+                    expr: ExprKind::Constant(Datum::U64(expr.get_val().decode_u64()?)),
+                    ret_type: TypeClass::Int,
+                })
+            },
+            ExprType::String | ExprType::Bytes => {
+                let mut expr = expr;
+                Ok(Expression {
+                    expr: ExprKind::Constant(Datum::Bytes(expr.take_val())),
+                    ret_type: TypeClass::String,
+                })
+            },
+            ExprType::Float32 | ExprType::Float64 => {
+                Ok(Expression {
+                    expr: ExprKind::Constant(Datum::F64(expr.get_val().decode_f64()?)),
+                    ret_type: TypeClass::Real,
+                })
+            },
+            ExprType::MysqlDuration => {
+                let n = try!(expr.get_val().decode_i64());
+                let dur = try!(Duration::from_nanos(n, MAX_FSP));
+                Ok(Expression {
+                    expr: ExprKind::Constant(Datum::Dur(dur)),
+                    ret_type: TypeClass::Real,
+                })
+            },
+            ExprType::MysqlDecimal => {
+                Ok(Expression {
+                    expr: ExprKind::Constant(Datum::Dec(expr.get_val().decode_decimal()?)),
+                    ret_type: TypeClass::Decimal,
+                })
+            },
+            ExprType::ScalarFunc => {
+                expr_scalar_fn_into_expression(expr)
+            },
             ExprType::ColumnRef => {
                 Ok(Expression {
-                    expr: ExprKind::ColumnRef(try!(expr.get_val().decode_i64()) as usize),
+                    expr: ExprKind::ColumnRef(expr.get_val().decode_i64()? as usize),
                     ret_type: expr.get_field_type().get_tp().type_class(),
                 })
-            }
+            },
+
             _ => unimplemented!(),
         }
     }
 }
 
+
+
+fn expr_scalar_fn_into_expression(mut expr: Expr) -> Result<Expression> {
+    match expr.get_sig() {
+        ScalarFuncSig::CastIntAsInt => {
+            let inner = expr.take_children().pop()
+                .ok_or(Error::Other("empty expr children"))
+                .and_then(Expression::try_from)?;
+            Ok(Expression {
+                expr: ExprKind::ScalarFn(BuiltinFn::Cast(box inner)),
+                ret_type: TypeClass::Int,
+            })
+        }
+        ScalarFuncSig::CastIntAsReal => {
+            let inner = expr.take_children().pop()
+                .ok_or(Error::Other("empty expr children"))
+                .and_then(Expression::try_from)?;
+            Ok(Expression {
+                expr: ExprKind::ScalarFn(BuiltinFn::Cast(box inner)),
+                ret_type: TypeClass::Real,
+            })
+        }
+        ScalarFuncSig::CastIntAsString => {
+            let inner = expr.take_children().pop()
+                .ok_or(Error::Other("empty expr children"))
+                .and_then(Expression::try_from)?;
+            Ok(Expression {
+                expr: ExprKind::ScalarFn(BuiltinFn::Cast(box inner)),
+                ret_type: TypeClass::String,
+            })
+        }
+        ScalarFuncSig::CastIntAsDecimal => {
+            let inner = expr.take_children().pop()
+                .ok_or(Error::Other("empty expr children"))
+                .and_then(Expression::try_from)?;
+            Ok(Expression {
+                expr: ExprKind::ScalarFn(BuiltinFn::Cast(box inner)),
+                ret_type: TypeClass::Decimal,
+            })
+        }
+        ScalarFuncSig::CastIntAsTime => {
+            let inner = expr.take_children().pop()
+                .ok_or(Error::Other("empty expr children"))
+                .and_then(Expression::try_from)?;
+            Ok(Expression {
+                expr: ExprKind::ScalarFn(BuiltinFn::Cast(box inner)),
+                ret_type: TypeClass::Time,
+            })
+        }
+        ScalarFuncSig::CastIntAsDuration => {
+            let inner = expr.take_children().pop()
+                .ok_or(Error::Other("empty expr children"))
+                .and_then(Expression::try_from)?;
+            Ok(Expression {
+                expr: ExprKind::ScalarFn(BuiltinFn::Cast(box inner)),
+                ret_type: TypeClass::Duration,
+            })
+        }
+
+        // TODO: CAST family
+        /*
+        CastRealAsInt ,
+	      CastRealAsReal ,
+	      CastRealAsString ,
+	      CastRealAsDecimal ,
+	      CastRealAsTime ,
+	      CastRealAsDuration ,
+
+	      CastDecimalAsInt ,
+	      CastDecimalAsReal ,
+	      CastDecimalAsString ,
+	      CastDecimalAsDecimal ,
+	      CastDecimalAsTime ,
+	      CastDecimalAsDuration ,
+
+	      CastStringAsInt ,
+	      CastStringAsReal ,
+	      CastStringAsString ,
+	      CastStringAsDecimal ,
+	      CastStringAsTime ,
+	      CastStringAsDuration ,
+
+	      CastTimeAsInt ,
+	      CastTimeAsReal ,
+	      CastTimeAsString ,
+	      CastTimeAsDecimal ,
+	      CastTimeAsTime ,
+	      CastTimeAsDuration ,
+
+	      CastDurationAsInt ,
+	      CastDurationAsReal ,
+	      CastDurationAsString ,
+	      CastDurationAsDecimal ,
+	      CastDurationAsTime ,
+	      CastDurationAsDuration ,
+         */
+
+        ScalarFuncSig::LTInt => {
+            let rhs = expr.take_children().pop()
+                .ok_or(Error::Other("empty expr children"))
+                .and_then(Expression::try_from)?;
+            let lhs = expr.take_children().pop()
+                .ok_or(Error::Other("non enough expr children"))
+                .and_then(Expression::try_from)?;
+            Ok(Expression {
+                expr: ExprKind::ScalarFn(
+                    BuiltinFn::Binary(BinOp::Lt, box lhs, box rhs)),
+                ret_type: TypeClass::Int,
+            })
+        }
+
+        _ => unimplemented!()
+    }
+}
 
 
 
@@ -284,9 +444,10 @@ impl DataTypeExt for DataType {
 fn test_smoke() {
     let mut pb = Expr::new();
     pb.set_tp(ExprType::ColumnRef);
-    pb.mut_val().encode_i64(1);
+    pb.mut_val().encode_i64(1).unwrap();
 
     let e: Result<Expression> = pb.try_into();
-    let _  = e.unwrap();
+    let _ = e.unwrap();
+
 }
 
