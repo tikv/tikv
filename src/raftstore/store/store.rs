@@ -1168,10 +1168,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // check again after split.
                 if right_derive {
                     self.region_peers.get_mut(&region_id).unwrap().size_diff_hint = self.cfg
-                        .region_check_size_diff
+                        .region_split_check_diff
                         .0;
                 } else {
-                    new_peer.size_diff_hint = self.cfg.region_check_size_diff.0;
+                    new_peer.size_diff_hint = self.cfg.region_split_check_diff.0;
                 }
                 self.apply_worker.schedule(ApplyTask::register(&new_peer)).unwrap();
                 self.region_peers.insert(new_region_id, new_peer);
@@ -1484,13 +1484,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
 
-            if peer.size_diff_hint < self.cfg.region_check_size_diff.0 {
+            if peer.size_diff_hint < self.cfg.region_split_check_diff.0 {
                 continue;
             }
             info!("{} region's size diff {} >= {}, need to check whether should split",
                   peer.tag,
                   peer.size_diff_hint,
-                  self.cfg.region_check_size_diff.0);
+                  self.cfg.region_split_check_diff.0);
             let task = SplitCheckTask::new(peer.region());
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);

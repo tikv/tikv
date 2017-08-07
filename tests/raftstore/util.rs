@@ -82,7 +82,7 @@ pub fn new_store_cfg() -> Config {
         raft_log_gc_tick_interval: ReadableDuration::millis(100),
         raft_log_gc_threshold: 1,
         pd_heartbeat_tick_interval: ReadableDuration::millis(20),
-        region_check_size_diff: ReadableSize(10000),
+        region_split_check_diff: ReadableSize(10000),
         // Use a value of 3 seconds as max_leader_missing_duration just for test.
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.

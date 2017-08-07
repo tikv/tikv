@@ -372,11 +372,11 @@ pub struct TiKvConfig {
     #[serde(with = "LogLevel")]
     pub log_level: LogLevelFilter,
     pub log_file: String,
-    #[serde(rename = "raftstore")]
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub pd: PdConfig,
     pub metric: MetricConfig,
+    #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
     pub rocksdb: DbConfig,
 }

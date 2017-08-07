@@ -337,7 +337,9 @@ impl Serialize for ReadableSize {
     {
         let size = self.0;
         let mut buffer = String::new();
-        if size % PB == 0 {
+        if size == 0 {
+            write!(buffer, "{}KB", size).unwrap();
+        } else if size % PB == 0 {
             write!(buffer, "{}PB", size / PB).unwrap();
         } else if size % TB == 0 {
             write!(buffer, "{}TB", size / TB).unwrap();
@@ -477,6 +479,9 @@ impl Serialize for ReadableDuration {
         }
         if dur > 0 {
             write!(buffer, "{}ms", dur).unwrap();
+        }
+        if buffer.is_empty() && dur == 0 {
+            write!(buffer, "0s").unwrap();
         }
         serializer.serialize_str(&buffer)
     }
@@ -751,6 +756,7 @@ mod test {
         }
 
         let legal_cases = vec![
+            (0, "0KB"),
             (2 * KB, "2KB"),
             (4 * MB, "4MB"),
             (5 * GB, "5GB"),
@@ -859,6 +865,7 @@ mod test {
         }
 
         let legal_cases = vec![
+            (0, 0, "0s"),
             (0, 1, "1ms"),
             (2, 0, "2s"),
             (4 * 60, 0, "4m"),

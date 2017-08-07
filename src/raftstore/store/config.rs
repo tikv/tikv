@@ -25,21 +25,14 @@ pub struct Config {
     // true for high reliability, prevent data loss when power failure.
     pub sync_log: bool,
 
-    // store capacity.
-    // TODO: if not set, we will use disk capacity instead.
-    // Now we will use a default capacity if not set.
+    // store capacity. 0 means no limit.
     pub capacity: ReadableSize,
 
     // raft_base_tick_interval is a base tick interval (ms).
-    #[serde(skip_serializing)]
     pub raft_base_tick_interval: ReadableDuration,
-    #[serde(skip_serializing)]
     pub raft_heartbeat_ticks: usize,
-    #[serde(skip_serializing)]
     pub raft_election_timeout_ticks: usize,
-    #[serde(skip_serializing)]
     pub raft_max_size_per_msg: ReadableSize,
-    #[serde(skip_serializing)]
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
@@ -63,7 +56,7 @@ pub struct Config {
     pub region_split_size: ReadableSize,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
-    pub region_check_size_diff: ReadableSize,
+    pub region_split_check_diff: ReadableSize,
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
     /// When delete keys of a region exceeds the size, a compaction will
@@ -111,7 +104,7 @@ impl Default for Config {
         let split_size = ReadableSize::mb(256);
         Config {
             sync_log: true,
-            capacity: ReadableSize(u64::MAX),
+            capacity: ReadableSize(0),
             raft_base_tick_interval: ReadableDuration::secs(1),
             raft_heartbeat_ticks: 2,
             raft_election_timeout_ticks: 10,
@@ -126,7 +119,7 @@ impl Default for Config {
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_max_size: split_size / 2 * 3,
             region_split_size: split_size,
-            region_check_size_diff: split_size / 8,
+            region_split_check_diff: split_size / 8,
             // Disable manual compaction by default.
             region_compact_check_interval: ReadableDuration::secs(0),
             region_compact_delete_keys_count: 1_000_000,
