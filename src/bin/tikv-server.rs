@@ -1185,20 +1185,18 @@ fn main() {
         exit_with_err(format!("{:?}", e));
     }
 
-    let pd_endpoints = matches.value_of("pd-endpoints")
-        .map(|s| s.to_owned())
-        .or_else(|| get_toml_string_opt(&config, "pd.endpoints"))
+    let pd_endpoints: Vec<_> = matches.values_of("pd-endpoints")
+        .map(|s| s.map(|s| s.to_owned()).collect())
+        .or_else(|| {
+            get_toml_string_opt(&config, "pd.endpoints").map(|s| {
+                s.split(',')
+                    .map(|s| s.to_owned())
+                    .collect()
+            })
+        })
         .expect("empty pd endpoints");
 
-    for addr in pd_endpoints.split(',')
-        .map(|s| s.trim())
-        .filter_map(|s| if s.is_empty() {
-            None
-        } else if s.starts_with("http://") {
-            Some(&s[7..])
-        } else {
-            Some(s)
-        }) {
+    for addr in &pd_endpoints {
         if let Err(e) = util::config::check_addr(addr) {
             panic!("{:?}", e);
         }
