@@ -15,7 +15,8 @@ use std::collections::{HashMap, BTreeMap};
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
-use protobuf::{RepeatedField, Message};
+use std::thread;
+use std::time::Duration;
 
 use tikv::coprocessor::*;
 use tikv::coprocessor;
@@ -30,8 +31,12 @@ use tipb::select::{SelectRequest, DAGRequest, SelectResponse, Chunk};
 use tipb::executor::{Executor, ExecType, TableScan, IndexScan, Selection, Aggregation, TopN, Limit};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{Expr, ExprType, ByItem};
-use storage::sync_storage::SyncStorage;
 use tikv::coprocessor::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
+use protobuf::{RepeatedField, Message};
+
+use raftstore::util::MAX_LEADER_LEASE;
+use storage::sync_storage::SyncStorage;
+use storage::util::new_raft_engine;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
@@ -581,6 +586,31 @@ fn init_with_data(tbl: &ProductTable,
     (store, end_point)
 }
 
+// This function will create a Product table and initialize with
+// the specified data in raftkv engine.
+fn init_data_with_raftkv(tbl: &ProductTable,
+                  vals: &[(i64, Option<&str>, i64)])
+                  -> (Store, Worker<EndPointTask>) {
+    let (_, raft_engine, _) = new_raft_engine(1, "");
+    let mut store = Store::new(raft_engine);
+
+    store.begin();
+    for &(id, name, count) in vals {
+        store.insert_into(&tbl.table)
+            .set(tbl.id, Datum::I64(id))
+            .set(tbl.name, name.map(|s| s.as_bytes()).into())
+            .set(tbl.count, Datum::I64(count))
+            .execute();
+    }
+    store.commit();
+
+    let mut end_point = Worker::new("test select worker");
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8);
+    end_point.start_batch(runner, 5).unwrap();
+
+    (store, end_point)
+}
+
 fn offset_for_column(cols: &[ColumnInfo], col_id: i64) -> i64 {
     for (offset, column) in cols.iter().enumerate() {
         if column.get_column_id() == col_id {
@@ -839,6 +869,47 @@ fn test_select() {
     assert_eq!(row_cnt(resp.get_chunks()), data.len());
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
     for (row, (id, name, cnt)) in spliter.zip(data) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()])
+            .unwrap();
+        assert_eq!(id, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_select_after_lease() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_data_with_raftkv(&product, &data);
+
+    let req = Select::from(&product.table).build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), data.len());
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()])
+            .unwrap();
+        assert_eq!(id, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
+    }
+
+    // Sleep until the leader lease is expired.
+    thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
+    let req = Select::from(&product.table).build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), data.len());
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()])
             .unwrap();
