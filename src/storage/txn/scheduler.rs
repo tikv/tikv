@@ -963,7 +963,6 @@ impl Scheduler {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(*cid), "snapshot"]).inc();
         }
         let cids1 = cids.clone();
-        let cids2 = cids.clone();
         let ch = self.schedch.clone();
         let cb = box move |(cb_ctx, snapshot)| {
             match ch.send(Msg::SnapshotFinished {
@@ -973,11 +972,7 @@ impl Scheduler {
             }) {
                 Ok(_) => {}
                 e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-                Err(e) => {
-                    panic!("send SnapshotFinish failed cmd ids {:?}, err {:?}",
-                           cids2,
-                           e)
-                }
+                Err(e) => panic!("send SnapshotFinish failed, err {:?}", e),
             }
         };
 
@@ -1000,7 +995,8 @@ impl Scheduler {
     /// `BatchSnapshotFinished` message back to the event loop when it finishes, also it posts a
     /// `BacklogSnapshot` message if there are any `None` responses.
     fn batch_get_snapshot(&mut self, batch: Vec<(Context, Vec<u64>)>) {
-        let mut all_cids = Vec::new();
+        let mut all_cids = Vec::with_capacity(batch.iter()
+            .fold(0, |acc, &(_, ref cids)| acc + cids.len()));
         for &(_, ref cids) in &batch {
             all_cids.extend(cids);
         }
