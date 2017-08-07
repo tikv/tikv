@@ -65,7 +65,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
-use tikv::util::properties::MvccPropertiesCollectorFactory;
+use tikv::util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config,
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -587,7 +587,10 @@ fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> Column
     default_values.whole_key_filtering = true;
     default_values.compaction_pri = 3;
 
-    get_rocksdb_cf_option(config, "defaultcf", default_values)
+    let mut cf_opts = get_rocksdb_cf_option(config, "defaultcf", default_values);
+    let f = Box::new(SizePropertiesCollectorFactory::default());
+    cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
+    cf_opts
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
@@ -608,6 +611,8 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFa
     // Collects user defined properties.
     let f = Box::new(MvccPropertiesCollectorFactory::default());
     cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+    let f = Box::new(SizePropertiesCollectorFactory::default());
+    cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
     cf_opts
 }
 
