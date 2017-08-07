@@ -70,9 +70,9 @@ fn test_node_bootstrap_with_prepared_data() {
 
     // now anthoer node at same time begin bootstrap node, but panic after prepared bootstrap
     // now rocksDB must have some prepare data
-    bootstrap_store(&raft_engine, 0, 1).unwrap();
+    bootstrap_store(&kv_engine, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&raft_engine, &kv_engine, 1).unwrap();
-    assert!(raft_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+    assert!(kv_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
         .unwrap()
         .is_some());
     let region_state_key = keys::region_state_key(region.get_id());
@@ -86,7 +86,7 @@ fn test_node_bootstrap_with_prepared_data() {
                snap_mgr,
                snapshot_status_receiver)
         .unwrap();
-    assert!(raft_engine.clone()
+    assert!(kv_engine.clone()
         .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
         .unwrap()
         .is_none());

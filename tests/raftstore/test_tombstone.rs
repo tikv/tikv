@@ -59,6 +59,26 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_2 = cluster.get_kv_engine(2);
     must_get_none(&engine_2, b"k1");
     must_get_none(&engine_2, b"k3");
+    let mut existing_kvs = vec![];
+    for cf in engine_2.cf_names() {
+        engine_2.scan_cf(cf,
+                     b"",
+                     &[0xFF],
+                     false,
+                     &mut |k, v| {
+                         existing_kvs.push((k.to_vec(), v.to_vec()));
+                         Ok(true)
+                     })
+            .unwrap();
+    }
+    // only tombstone key and store ident key exist.
+    assert_eq!(existing_kvs.len(), 1);
+    assert_eq!(existing_kvs[0].0, keys::store_ident_key());
+
+    let mut ident = StoreIdent::new();
+    ident.merge_from_bytes(&existing_kvs[0].1).unwrap();
+    assert_eq!(ident.get_store_id(), 2);
+    assert_eq!(ident.get_cluster_id(), cluster.id());
 
     let raft_engine_2 = cluster.get_raft_engine(2);
     let mut existing_kvs = vec![];
@@ -74,18 +94,11 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
             .unwrap();
     }
     // only tombstone key and store ident key exist.
-    assert_eq!(existing_kvs.len(), 2);
-    existing_kvs.sort();
-    assert_eq!(existing_kvs[0].0, keys::store_ident_key());
-    assert_eq!(existing_kvs[1].0, keys::region_state_key(r1));
-
-    let mut ident = StoreIdent::new();
-    ident.merge_from_bytes(&existing_kvs[0].1).unwrap();
-    assert_eq!(ident.get_store_id(), 2);
-    assert_eq!(ident.get_cluster_id(), cluster.id());
+    assert_eq!(existing_kvs.len(), 1);
+    assert_eq!(existing_kvs[0].0, keys::region_state_key(r1));
 
     let mut state = RegionLocalState::new();
-    state.merge_from_bytes(&existing_kvs[1].1).unwrap();
+    state.merge_from_bytes(&existing_kvs[0].1).unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // The peer 2 may be destroyed by:

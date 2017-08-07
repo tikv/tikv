@@ -1210,7 +1210,7 @@ mod test {
         let kv_db = Arc::new(kv_db);
         let raft_db = new_engine(raft_path.path().to_str().unwrap(), RAFT_CFS).unwrap();
         let raft_db = Arc::new(raft_db);
-        bootstrap::bootstrap_store(&raft_db, 1, 1).expect("");
+        bootstrap::bootstrap_store(&kv_db, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&raft_db, &kv_db, 1, 1, 1).expect("");
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
         PeerStorage::new(raft_db, kv_db, &region, sched, "".to_owned(), metrics).unwrap()

@@ -251,6 +251,10 @@ pub struct ApplyDelegate {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
+    // we write apply_state to kv rocksdb, in one writebatch together with kv data.
+    // because if we write it to raft rocksdb, apply_state and kv data (Put, Delete) are in
+    // separate WAL file. when power failure, for current raft log, apply_index may synced
+    // to file, but kv data may not synced to file, so we will lose data.
     apply_state: RaftApplyState,
     applied_index_term: u64,
     term: u64,

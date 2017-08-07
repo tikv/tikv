@@ -190,7 +190,7 @@ impl Simulator for NodeCluster {
                    snap_mgr.clone(),
                    snap_status_receiver)
             .unwrap();
-        assert!(raft_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+        assert!(kv_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
             .unwrap()
             .is_none());
         assert!(node_id == 0 || node_id == node.id());

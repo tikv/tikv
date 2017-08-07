@@ -119,9 +119,9 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         let bootstrapped = try!(self.check_cluster_bootstrapped());
-        let mut store_id = try!(self.check_store(&raft_engine));
+        let mut store_id = try!(self.check_store(&kv_engine));
         if store_id == INVALID_ID {
-            store_id = try!(self.bootstrap_store(&raft_engine));
+            store_id = try!(self.bootstrap_store(&kv_engine));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
             return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped, \
@@ -163,8 +163,8 @@ impl<C> Node<C>
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, raft_engine: &DB) -> Result<u64> {
-        let res = try!(raft_engine.get_msg::<StoreIdent>(&keys::store_ident_key()));
+    fn check_store(&self, kv_engine: &DB) -> Result<u64> {
+        let res = try!(kv_engine.get_msg::<StoreIdent>(&keys::store_ident_key()));
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -191,11 +191,11 @@ impl<C> Node<C>
         Ok(id)
     }
 
-    fn bootstrap_store(&self, raft_engine: &DB) -> Result<u64> {
+    fn bootstrap_store(&self, kv_engine: &DB) -> Result<u64> {
         let store_id = try!(self.alloc_id());
         info!("alloc store id {} ", store_id);
 
-        try!(store::bootstrap_store(raft_engine, self.cluster_id, store_id));
+        try!(store::bootstrap_store(kv_engine, self.cluster_id, store_id));
 
         Ok(store_id)
     }
@@ -221,7 +221,7 @@ impl<C> Node<C>
     }
 
     fn check_prepare_bootstrap_cluster(&self, raft_engine: &DB, kv_engine: &DB) -> Result<()> {
-        let res = try!(raft_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
+        let res = try!(kv_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
         if res.is_none() {
             return Ok(());
         }
@@ -232,7 +232,7 @@ impl<C> Node<C>
                 Ok(region) => {
                     if region.get_id() == first_region.get_id() {
                         try!(check_region_epoch(&region, &first_region));
-                        try!(store::clear_prepare_bootstrap_state(raft_engine));
+                        try!(store::clear_prepare_bootstrap_state(kv_engine));
                     } else {
                         try!(store::clear_prepare_bootstrap(raft_engine,
                                                             kv_engine,
@@ -265,7 +265,7 @@ impl<C> Node<C>
             // TODO: should we clean region for other errors too?
             Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
             Ok(_) => {
-                try!(store::clear_prepare_bootstrap_state(raft_engine));
+                try!(store::clear_prepare_bootstrap_state(kv_engine));
                 info!("bootstrap cluster {} ok", self.cluster_id);
                 Ok(())
             }

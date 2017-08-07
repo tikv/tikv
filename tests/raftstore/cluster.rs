@@ -367,10 +367,10 @@ impl<T: Simulator> Cluster<T> {
         region.mut_region_epoch().set_version(1);
         region.mut_region_epoch().set_conf_ver(1);
 
-        for (&id, &(ref _kv_engine, ref raft_engine)) in &self.engines {
+        for (&id, &(ref kv_engine, ref _raft_engine)) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(raft_engine, self.id(), id).unwrap();
+            bootstrap_store(kv_engine, self.id(), id).unwrap();
         }
 
         for &(ref kv_engine, ref raft_engine) in self.engines.values() {
@@ -389,8 +389,8 @@ impl<T: Simulator> Cluster<T> {
             self.engines.insert(id, engine.clone());
         }
 
-        for (&id, &(ref _kv_engine, ref raft_engine)) in &self.engines {
-            bootstrap_store(raft_engine, self.id(), id).unwrap();
+        for (&id, &(ref kv_engine, ref _raft_engine)) in &self.engines {
+            bootstrap_store(kv_engine, self.id(), id).unwrap();
         }
 
         let node_id = 1;
