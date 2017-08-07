@@ -788,10 +788,7 @@ impl PeerStorage {
     /// Delete all meta belong to the region. Results are stored in `wb`.
     pub fn clear_meta(&mut self, wb: &mut WriteBatch) -> Result<()> {
         let region_id = self.get_region_id();
-        try!(clear_meta(&self.engine,
-                        wb,
-                        region_id,
-                        &self.raft_state));
+        try!(clear_meta(&self.engine, wb, region_id, &self.raft_state));
         self.cache = EntryCache::default();
         Ok(())
     }
@@ -1293,7 +1290,8 @@ mod test {
                      &mut |_, _| {
                          count += 1;
                          Ok(true)
-                     }).unwrap();
+                     })
+            .unwrap();
         count
     }
 
