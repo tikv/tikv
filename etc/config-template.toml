@@ -326,178 +326,31 @@ stats-dump-period-sec = 600
 # compaction-pri = 0
 
 [raft-rocksdb]
-# RocksDB info log directory, if set, RocksDB will save the log in `info-log-dir/LOG`.
 # info-log-dir = ""
-# Maximal size of the info log, if new info log will be created if size is large than it.
 # info-log-max-size = 0
-# Time for the info log file to roll (in seconds).
 # info-log-roll-time = "0s"
 
-# Maximum number of concurrent background jobs (compactions and flushes)
-# max-background-jobs = 6
-
-# This value represents the maximum number of threads that will concurrently perform a
-# compaction job by breaking it into multiple, smaller ones that are run simultaneously.
-# Default: 1 (i.e. no subcompactions)
 # max-sub-compactions = 1
-
-# Number of open files that can be used by the DB.  You may need to
-# increase this if your database has a large working set. Value -1 means
-# files opened are always kept open. You can estimate number of files based
-# on target_file_size_base and target_file_size_multiplier for level-based
-# compaction.
-# If max-open-files = -1, RocksDB will prefetch index and filter blocks into
-# block cache at startup, so if your database has a large working set, it will
-# take several minutes to open the db.
 # max-open-files = 40960
-
-# Max size of rocksdb's MANIFEST file.
-# For detailed explanation please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
 max-manifest-file-size = "20MB"
-
-# If true, the database will be created if it is missing.
 create-if-missing = true
 
-# rocksdb wal recovery mode
-# 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
-# 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;
-# 2 : PointInTimeRecovery, Recover to point-in-time consistency;
-# 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 wal-recovery-mode = 2
-
-# rocksdb write-ahead logs dir path
-# This specifies the absolute dir path for write-ahead logs (WAL).
-# If it is empty, the log files will be in the same dir as data.
-# When you set the path to rocksdb directory in memory like in /dev/shm, you may want to set
-# wal-dir to a directory on a persistent storage.
-# See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database
 # wal-dir = "/tmp/tikv/store"
-
-# The following two fields affect how archived write-ahead logs will be deleted.
-# 1. If both set to 0, logs will be deleted asap and will not get into the archive.
-# 2. If wal-ttl-seconds is 0 and wal-size-limit is not 0,
-#    WAL files will be checked every 10 min and if total size is greater
-#    then wal-size-limit, they will be deleted starting with the
-#    earliest until size_limit is met. All empty files will be deleted.
-# 3. If wal-ttl-seconds is not 0 and wal-size-limit is 0, then
-#    WAL files will be checked every wal-ttl-seconds / 2 and those that
-#    are older than wal-ttl-seconds will be deleted.
-# 4. If both are not 0, WAL files will be checked every 10 min and both
-#    checks will be performed with ttl being first.
-# When you set the path to rocksdb directory in memory like in /dev/shm, you may want to set
-# wal-ttl-seconds to a value greater than 0 (like 86400) and backup your db on a regular basis.
-# See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database
 # wal-ttl-seconds = 0
 # wal-size-limit = 0
-
-# rocksdb max total wal size
 # max-total-wal-size = "4GB"
-
-# rocksdb writable file max buffer size
 # writable-file-max-buffer-size = "1MB"
 
-# Rocksdb Statistics provides cumulative stats over time.
-# Turn statistics on will introduce about 5%-10% overhead for RocksDB,
-# but it is worthy to know the internal status of RocksDB.
 # enable-statistics = true
-
-# Dump statistics periodically in information logs.
-# Same as rocksdb's default value (10 min).
 stats-dump-period-sec = 600
 
-# Due to Rocksdb FAQ: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ,
-# If you want to use rocksdb on multi disks or spinning disks, you should set value at
-# least 2MB;
 # compaction-readahead-size = 0
-
-# This is the maximum buffer size that is used by WritableFileWrite
 # writable-file-max-buffer-size = "1MB"
-
-# Use O_DIRECT for both reads and writes in background flush and compactions
 # use-direct-io-for-flush-and-compaction = false
-
-# Limit the disk IO of compaction and flush. Compaction and flush can cause
-# terrible spikes if they exceed a certain threshold. Consider setting this to
-# 50% ~ 80% of the disk throughput for a more stable result. However, in heavy
-# write workload, limiting compaction and flush speed can cause write stalls too.
 # rate-bytes-per-sec = 0
-
-# Enable or disable the pipelined write
 # enable-pipelined-write = true
-
-# If true, allow multi-writers to update mem tables in parallel.
 # allow-concurrent-memtable-write = false
-
-# Column Family default used to store actual data of the database.
-[raft-rocksdb.defaultcf]
-# compression method (if any) is used to compress a block.
-#   no:     kNoCompression
-#   snappy: kSnappyCompression
-#   zlib:   kZlibCompression
-#   bzip2:  kBZip2Compression
-#   lz4:    kLZ4Compression
-#   lz4hc:  kLZ4HCCompression
-#   zstd:   kZSTD
-
-# per level compression
-# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
-
-# Approximate size of user data packed per block.  Note that the
-# block size specified here corresponds to uncompressed data.
-# block-size = "64KB"
-
-# If you're doing point lookups you definitely want to turn bloom filters on, We use
-# bloom filters to avoid unnecessary disk reads. Default bits_per_key is 10, which
-# yields ~1% false positive rate. Larger bits_per_key values will reduce false positive
-# rate, but increase memory usage and space amplification.
-# bloom-filter-bits-per-key = 10
-
-# false means one sst file one bloom filter, true means evry block has a corresponding bloom filter
-# block-based-bloom-filter = false
-
-# level0-file-num-compaction-trigger = 4
-
-# Soft limit on number of level-0 files. We start slowing down writes at this point.
-# level0-slowdown-writes-trigger = 20
-
-# Maximum number of level-0 files.  We stop writes at this point.
-# level0-stop-writes-trigger = 36
-
-# Amount of data to build up in memory (backed by an unsorted log
-# on disk) before converting to a sorted on-disk file.
-# write-buffer-size = "128MB"
-
-# The maximum number of write buffers that are built up in memory.
-# max-write-buffer-number = 5
-
-# The minimum number of write buffers that will be merged together
-# before writing to storage.
-# min-write-buffer-number-to-merge = 1
-
-# Control maximum total data size for base level (level 1).
-# max-bytes-for-level-base = "512MB"
-
-# Target file size for compaction.
-# target-file-size-base = "32MB"
-
-# Max bytes for compaction.max_compaction_bytes
-# max-compaction-bytes = "2GB"
-
-# There are four different algorithms to pick files to compact.
-# 0 : ByCompensatedSize
-# 1 : OldestLargestSeqFirst
-# 2 : OldestSmallestSeqFirst
-# 3 : MinOverlappingRatio
-# compaction-pri = 0
-
-# block-cache used to cache uncompressed blocks, big block-cache can speed up read.
-# in normal cases should tune to 30%-50% system's total memory.
-# block-cache-size = "1GB"
-
-# Indicating if we'd put index/filter blocks to the block cache.
-# If not specified, each "table reader" object will pre-load index/filter block
-# during table initialization.
-# cache-index-and-filter-blocks = true
 
 # options for Column Family raft.
 # Column Family raft is used to store raft log and raft states.

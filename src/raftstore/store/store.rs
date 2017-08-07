@@ -44,7 +44,7 @@ use util::worker::{Worker, Scheduler, FutureWorker};
 use util::transport::SendCh;
 use util::{rocksdb, RingQueue};
 use util::collections::{HashMap, HashSet};
-use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE, KV_CFS};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -52,7 +52,7 @@ use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, 
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
                     ApplyTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
-use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter, CF_RAFT};
+use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter, CF_RAFT, RAFT_CFS};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
@@ -63,7 +63,6 @@ use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::engine_metrics::*;
-use super::raft_engine_metrics::*;
 use super::local_metrics::RaftMetrics;
 use prometheus::local::LocalHistogram;
 
@@ -1670,8 +1669,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         stats.set_capacity(capacity);
 
-        let mut used_size = flush_kv_engine_properties_and_get_used_size(self.kv_engine.clone());
-        used_size += flush_raft_engine_properties_and_get_used_size(self.raft_engine.clone());
+        let mut used_size =
+            flush_engine_properties_and_get_used_size(self.kv_engine.clone(), "kv", KV_CFS);
+        used_size +=
+            flush_engine_properties_and_get_used_size(self.raft_engine.clone(), "raft", RAFT_CFS);
         used_size += self.snap_mgr.get_total_snap_size();
 
         stats.set_used_size(used_size);
@@ -1748,18 +1749,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn flush_engine_statistics(&mut self) {
         for t in ENGINE_TICKER_TYPES {
             let v = self.kv_engine.get_statistics_ticker_count(*t);
-            flush_kv_engine_ticker_metrics(*t, v);
+            flush_engine_ticker_metrics(*t, v, "kv");
 
             let v = self.raft_engine.get_statistics_ticker_count(*t);
-            flush_raft_engine_ticker_metrics(*t, v);
+            flush_engine_ticker_metrics(*t, v, "raft");
         }
 
         for t in ENGINE_HIST_TYPES {
             if let Some(v) = self.kv_engine.get_statistics_histogram(*t) {
-                flush_kv_engine_histogram_metrics(*t, v);
+                flush_engine_histogram_metrics(*t, v, "kv");
             }
             if let Some(v) = self.raft_engine.get_statistics_histogram(*t) {
-                flush_raft_engine_histogram_metrics(*t, v);
+                flush_engine_histogram_metrics(*t, v, "raft");
             }
         }
     }
