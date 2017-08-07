@@ -1879,6 +1879,9 @@ fn verify_and_store_hash(region_id: u64,
                    escape(&expected_hash),
                    escape(&state.hash));
         }
+        info!("[region {}] consistency check at {} pass.",
+              region_id,
+              state.index);
         REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "matched"]).inc();
         state.hash = vec![];
         return false;
@@ -1894,6 +1897,9 @@ fn verify_and_store_hash(region_id: u64,
               expected_index);
     }
 
+    info!("[region {}] save hash of {} for consistency check later.",
+          region_id,
+          expected_index);
     state.index = expected_index;
     state.hash = expected_hash;
     true

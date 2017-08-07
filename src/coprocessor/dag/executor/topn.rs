@@ -19,11 +19,12 @@ use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
 
+use coprocessor::Result;
+use coprocessor::select::xeval::{Evaluator, EvalContext};
+use coprocessor::select::topn_heap::{SortRow, TopNHeap};
+use coprocessor::metrics::*;
+
 use super::{Executor, Row, ExprColumnRefVisitor, inflate_with_col_for_dag};
-use super::super::Result;
-use super::super::xeval::{Evaluator, EvalContext};
-use super::super::endpoint::{SortRow, TopNHeap};
-use super::super::metrics::*;
 
 pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
