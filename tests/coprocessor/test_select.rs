@@ -31,7 +31,7 @@ use tipb::executor::{Executor, ExecType, TableScan, IndexScan, Selection, Aggreg
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{Expr, ExprType, ByItem};
 use storage::sync_storage::SyncStorage;
-use tikv::coprocessor::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
+use tikv::coprocessor::select::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 

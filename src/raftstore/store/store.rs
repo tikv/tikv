@@ -58,8 +58,8 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, StaleState, ConsistencyState, ReadyContext};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::Callback;
-use super::cmd_resp::{bind_term, bind_error};
+use super::msg::{Callback, BatchCallback};
+use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::engine_metrics::*;
@@ -1251,26 +1251,30 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
-        let mut resp = RaftCmdResponse::new();
-
-        if let Err(e) = self.validate_store_id(&msg) {
-            bind_error(&mut resp, e);
-            return cb.call_box((resp,));
-        }
-
+    fn pre_propose_raft_command(&mut self,
+                                msg: &RaftCmdRequest)
+                                -> Result<Option<RaftCmdResponse>> {
+        try!(self.validate_store_id(msg));
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
-            match self.execute_status_command(msg) {
-                Err(e) => bind_error(&mut resp, e),
-                Ok(status_resp) => resp = status_resp,
-            };
-            return cb.call_box((resp,));
+            let resp = try!(self.execute_status_command(msg));
+            return Ok(Some(resp));
         }
+        try!(self.validate_region(msg));
+        Ok(None)
+    }
 
-        if let Err(e) = self.validate_region(&msg) {
-            bind_error(&mut resp, e);
-            return cb.call_box((resp,));
+    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
+        match self.pre_propose_raft_command(&msg) {
+            Ok(Some(resp)) => {
+                cb.call_box((resp,));
+                return;
+            }
+            Err(e) => {
+                cb.call_box((new_error(e),));
+                return;
+            }
+            _ => (),
         }
 
         // Note:
@@ -1278,6 +1282,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // doesn't matter whether the peer is a leader or not. If it's not a leader, the proposing
         // command log entry can't be committed.
 
+        let mut resp = RaftCmdResponse::new();
         let region_id = msg.get_header().get_region_id();
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
@@ -1288,6 +1293,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
+    }
+
+    fn propose_batch_raft_snapshot_command(&mut self,
+                                           batch: Vec<RaftCmdRequest>,
+                                           on_finished: BatchCallback) {
+        let size = batch.len();
+        BATCH_SNAPSHOT_COMMANDS.observe(size as f64);
+        let mut ret = Vec::with_capacity(size);
+        for msg in batch {
+            match self.pre_propose_raft_command(&msg) {
+                Ok(Some(resp)) => {
+                    ret.push(Some(resp));
+                    continue;
+                }
+                Err(e) => {
+                    ret.push(Some(new_error(e)));
+                    continue;
+                }
+                _ => (),
+            }
+
+            let region_id = msg.get_header().get_region_id();
+            let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+            ret.push(peer.propose_snapshot(msg, &mut self.raft_metrics.propose));
+        }
+        on_finished.call_box((ret,));
     }
 
     fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
@@ -1848,6 +1879,9 @@ fn verify_and_store_hash(region_id: u64,
                    escape(&expected_hash),
                    escape(&state.hash));
         }
+        info!("[region {}] consistency check at {} pass.",
+              region_id,
+              state.index);
         REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "matched"]).inc();
         state.hash = vec![];
         return false;
@@ -1863,6 +1897,9 @@ fn verify_and_store_hash(region_id: u64,
               expected_index);
     }
 
+    info!("[region {}] save hash of {} for consistency check later.",
+          region_id,
+          expected_index);
     state.index = expected_index;
     state.hash = expected_hash;
     true
@@ -2046,6 +2083,14 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
                 self.propose_raft_command(request, callback)
             }
+            // For now, it is only called by batch snapshot.
+            Msg::BatchRaftSnapCmds { send_time, batch, on_finished } => {
+                self.raft_metrics
+                    .propose
+                    .request_wait_time
+                    .observe(duration_to_sec(send_time.elapsed()) as f64);
+                self.propose_batch_raft_snapshot_command(batch, on_finished);
+            }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();
@@ -2113,7 +2158,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current
     // store status, so no need to handle it in raft group.
-    fn execute_status_command(&mut self, request: RaftCmdRequest) -> Result<RaftCmdResponse> {
+    fn execute_status_command(&mut self, request: &RaftCmdRequest) -> Result<RaftCmdResponse> {
         let cmd_type = request.get_status_request().get_cmd_type();
         let region_id = request.get_header().get_region_id();
 
@@ -2133,8 +2178,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(resp)
     }
 
-    fn execute_region_leader(&mut self, request: RaftCmdRequest) -> Result<StatusResponse> {
-        let peer = try!(self.mut_target_peer(&request));
+    fn execute_region_leader(&mut self, request: &RaftCmdRequest) -> Result<StatusResponse> {
+        let peer = try!(self.mut_target_peer(request));
 
         let mut resp = StatusResponse::new();
         if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
@@ -2144,8 +2189,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(resp)
     }
 
-    fn execute_region_detail(&mut self, request: RaftCmdRequest) -> Result<StatusResponse> {
-        let peer = try!(self.mut_target_peer(&request));
+    fn execute_region_detail(&mut self, request: &RaftCmdRequest) -> Result<StatusResponse> {
+        let peer = try!(self.mut_target_peer(request));
         if !peer.get_store().is_initialized() {
             let region_id = request.get_header().get_region_id();
             return Err(Error::RegionNotInitialized(region_id));
