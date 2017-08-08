@@ -17,13 +17,13 @@ use std::sync::mpsc::{self, Sender};
 
 const DEFAULT_WAIT_MS: u64 = 100;
 
-pub struct TimeMonitor {
+pub struct Monitor {
     tx: Sender<bool>,
     handle: Option<JoinHandle<()>>,
 }
 
-impl TimeMonitor {
-    pub fn new<D, N>(on_jumped: D, now: N) -> TimeMonitor
+impl Monitor {
+    pub fn new<D, N>(on_jumped: D, now: N) -> Monitor
         where D: Fn() + Send + 'static,
               N: Fn() -> SystemTime + Send + 'static
     {
@@ -47,20 +47,20 @@ impl TimeMonitor {
             })
             .unwrap();
 
-        TimeMonitor {
+        Monitor {
             tx: tx,
             handle: Some(h),
         }
     }
 }
 
-impl Default for TimeMonitor {
-    fn default() -> TimeMonitor {
-        TimeMonitor::new(|| {}, SystemTime::now)
+impl Default for Monitor {
+    fn default() -> Monitor {
+        Monitor::new(|| {}, SystemTime::now)
     }
 }
 
-impl Drop for TimeMonitor {
+impl Drop for Monitor {
     fn drop(&mut self) {
         let h = self.handle.take();
         if h.is_none() {
@@ -107,7 +107,7 @@ mod tests {
             jumped2.store(true, Ordering::SeqCst);
         };
 
-        let _m = TimeMonitor::new(on_jumped, now);
+        let _m = Monitor::new(on_jumped, now);
         thread::sleep(Duration::from_secs(1));
 
         assert_eq!(jumped.load(Ordering::SeqCst), true);
