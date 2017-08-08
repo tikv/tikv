@@ -37,7 +37,8 @@ use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{FutureWorker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
-use util::{clocktime, Either};
+use util::Either;
+use util::time::raw_now;
 use util::collections::{HashSet, FlatMap, FlatMapValues as Values};
 
 use pd::INVALID_ID;
@@ -489,7 +490,7 @@ impl Peer {
                     // For lease safty during leader transfer, mark `leader_lease_expired_time`
                     // to be unsafe until next_lease_expired_time from now
                     self.leader_lease_expired_time =
-                        Some(Either::Right(self.next_lease_expired_time(clocktime::raw_now())));
+                        Some(Either::Right(self.next_lease_expired_time(raw_now())));
 
                     metrics.timeout_now += 1;
                 }
@@ -609,7 +610,7 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    let next_expired_time = self.next_lease_expired_time(clocktime::raw_now());
+                    let next_expired_time = self.next_lease_expired_time(raw_now());
                     self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
@@ -1026,7 +1027,7 @@ impl Peer {
 
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(clocktime::raw_now());
+        meta.renew_lease_time = Some(raw_now());
 
         let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
         self.apply_proposals.push(p);
@@ -1050,8 +1051,8 @@ impl Peer {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap => is_read = true,
-                CmdType::Delete | CmdType::Put => is_write = true,
-                CmdType::Prewrite | CmdType::Invalid | CmdType::DeleteRange => {
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange => is_write = true,
+                CmdType::Prewrite | CmdType::Invalid => {
                     return Err(box_err!("invalid cmd type {:?}, message maybe currupted",
                                         r.get_cmd_type()));
                 }
@@ -1084,7 +1085,7 @@ impl Peer {
         }
 
         if let Some(Either::Left(safe_expired_time)) = self.leader_lease_expired_time {
-            if clocktime::raw_now() <= safe_expired_time {
+            if raw_now() <= safe_expired_time {
                 return Ok(RequestPolicy::ReadLocal);
             }
 
@@ -1217,7 +1218,7 @@ impl Peer {
                   -> bool {
         metrics.read_index += 1;
 
-        let renew_lease_time = clocktime::raw_now();
+        let renew_lease_time = raw_now();
         if let Some(read) = self.pending_reads.reads.back_mut() {
             if read.renew_lease_time + self.cfg.raft_store_max_leader_lease > renew_lease_time {
                 read.cmds.push((req, cb));
@@ -1563,8 +1564,8 @@ impl Peer {
                     try!(apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req))
                 }
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
-                CmdType::Prewrite | CmdType::Put | CmdType::Delete | CmdType::Invalid |
-                CmdType::DeleteRange => unreachable!(),
+                CmdType::Prewrite | CmdType::Put | CmdType::Delete | CmdType::DeleteRange |
+                CmdType::Invalid => unreachable!(),
             };
 
             resp.set_cmd_type(cmd_type);
