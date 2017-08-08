@@ -78,19 +78,19 @@ pub enum ProcessResult {
     Failed { err: StorageError },
 }
 
-type SnapshotJob = (Vec<u64>, CbContext, EngineResult<Box<Snapshot>>);
+type SnapshotResult = (Vec<u64>, CbContext, EngineResult<Box<Snapshot>>);
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
     Quit,
     RawCmd { cmd: Command, cb: StorageCb },
-    ReadIndexSnapshot(Vec<(Context, Vec<u64>)>),
+    GetSnapshot(Vec<(Context, Vec<u64>)>),
     SnapshotFinished {
         cids: Vec<u64>,
         cb_ctx: CbContext,
         snapshot: EngineResult<Box<Snapshot>>,
     },
-    BatchSnapshotFinished { batch: Vec<SnapshotJob> },
+    BatchSnapshotFinished { batch: Vec<SnapshotResult> },
     ReadFinished { cid: u64, pr: ProcessResult },
     WritePrepareFinished {
         cid: u64,
@@ -113,12 +113,12 @@ impl Debug for Msg {
         match *self {
             Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
-            Msg::ReadIndexSnapshot(ref backlog) => write!(f, "ReadIndexSnapshot {:?}", backlog),
+            Msg::GetSnapshot(ref tasks) => write!(f, "GetSnapshot {:?}", tasks),
             Msg::SnapshotFinished { ref cids, .. } => {
                 write!(f, "SnapshotFinished [cids={:?}]", cids)
             }
             Msg::BatchSnapshotFinished { ref batch } => {
-                let ids: Vec<Vec<_>> = batch.iter().map(|&(ref ids, _, _)| ids.clone()).collect();
+                let ids: Vec<&Vec<_>> = batch.iter().map(|&(ref ids, _, _)| ids).collect();
                 write!(f, "BatchSnapshotFinished cids: {:?}", ids)
             }
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
@@ -993,7 +993,7 @@ impl Scheduler {
 
     /// Initiates an async operation to batch get snapshot from the storage engine, then posts a
     /// `BatchSnapshotFinished` message back to the event loop when it finishes, also it posts a
-    /// `ReadIndexSnapshot` message if there are any `None` responses.
+    /// `GetSnapshot` message if there are any `None` responses.
     fn batch_get_snapshot(&mut self, batch: Vec<(Context, Vec<u64>)>) {
         let mut all_cids = Vec::with_capacity(batch.iter()
             .fold(0, |acc, &(_, ref cids)| acc + cids.len()));
@@ -1006,7 +1006,7 @@ impl Scheduler {
         let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
             let mut ready_ids: Vec<u64> = Vec::new();
-            let mut backlog = Vec::new();
+            let mut retry = Vec::new();
             for ((ctx, cids), snapshot) in batch.into_iter().zip(results) {
                 match snapshot {
                     Some((cb_ctx, snapshot)) => {
@@ -1014,7 +1014,7 @@ impl Scheduler {
                         ready.push((cids, cb_ctx, snapshot));
                     }
                     None => {
-                        backlog.push((ctx, cids));
+                        retry.push((ctx, cids));
                     }
                 }
             }
@@ -1029,8 +1029,8 @@ impl Scheduler {
                     }
                 }
             }
-            if !backlog.is_empty() {
-                match ch.send(Msg::ReadIndexSnapshot(backlog)) {
+            if !retry.is_empty() {
+                match ch.send(Msg::GetSnapshot(retry)) {
                     Ok(_) => {}
                     e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
                     Err(e) => {
@@ -1199,10 +1199,10 @@ impl Scheduler {
                 match msg {
                     Msg::Quit => return Ok(()),
                     Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-                    Msg::ReadIndexSnapshot(backlog) => {
-                        BATCH_COMMANDS.with_label_values(&["backlog"])
-                            .observe(backlog.len() as f64);
-                        for (ctx, cids) in backlog {
+                    Msg::GetSnapshot(tasks) => {
+                        BATCH_COMMANDS.with_label_values(&["retry"])
+                            .observe(tasks.len() as f64);
+                        for (ctx, cids) in tasks {
                             self.get_snapshot(&ctx, cids);
                         }
                     }
