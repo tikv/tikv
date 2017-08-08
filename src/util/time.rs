@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{SystemTime, Duration};
+use std::time::{SystemTime, Duration, Instant};
 use std::thread::{self, JoinHandle, Builder};
 use std::sync::mpsc::{self, Sender};
 
@@ -39,6 +39,47 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     d.as_secs() * 1_000_000_000 + nanos
 }
 
+pub struct SlowTimer {
+    slow_time: Duration,
+    t: Instant,
+}
+
+impl SlowTimer {
+    pub fn new() -> SlowTimer {
+        SlowTimer::default()
+    }
+
+    pub fn from(slow_time: Duration) -> SlowTimer {
+        SlowTimer {
+            slow_time: slow_time,
+            t: Instant::now(),
+        }
+    }
+
+    pub fn from_secs(secs: u64) -> SlowTimer {
+        SlowTimer::from(Duration::from_secs(secs))
+    }
+
+    pub fn from_millis(millis: u64) -> SlowTimer {
+        SlowTimer::from(Duration::from_millis(millis))
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        self.t.elapsed()
+    }
+
+    pub fn is_slow(&self) -> bool {
+        self.elapsed() >= self.slow_time
+    }
+}
+
+const DEFAULT_SLOW_SECS: u64 = 1;
+
+impl Default for SlowTimer {
+    fn default() -> SlowTimer {
+        SlowTimer::from_secs(DEFAULT_SLOW_SECS)
+    }
+}
 
 const DEFAULT_WAIT_MS: u64 = 100;
 
