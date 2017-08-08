@@ -244,10 +244,6 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
         let capacity = capacity_str.parse().unwrap_or_else(|e| exit_with_err(e));
         config.raft_store.capacity.0 = capacity;
     }
-
-    if let Some(data_dir) = matches.value_of("data-dir") {
-        config.storage.data_dir = data_dir.to_owned();
-    }
 }
 
 fn main() {
