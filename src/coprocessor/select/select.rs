@@ -29,7 +29,8 @@ use coprocessor::{Error, Result};
 use coprocessor::endpoint::{REQ_TYPE_SELECT, REQ_TYPE_INDEX, SINGLE_GROUP, BATCH_ROW_COUNT,
                             check_if_outdated, is_point, prefix_next, get_chunk, get_pk,
                             to_pb_error};
-use util::{escape, duration_to_ms, Either};
+use util::{escape, Either};
+use util::time::duration_to_ms;
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::codec::number::NumberDecoder;
 use storage::{SnapshotStore, Key, ScanMode, Statistics};

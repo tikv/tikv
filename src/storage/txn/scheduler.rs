@@ -49,7 +49,7 @@ use storage::{Key, Value, KvPair, MvccInfo, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
 use raftstore::store::engine::IterOption;
 use util::transport::{SyncSendCh, Error as TransportError};
-use util::SlowTimer;
+use util::time::SlowTimer;
 use util::collections::HashMap;
 
 use super::Result;
