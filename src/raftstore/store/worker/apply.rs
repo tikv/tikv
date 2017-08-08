@@ -27,7 +27,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse};
 
 use util::worker::Runnable;
-use util::{SlowTimer, rocksdb, escape};
+use util::{rocksdb, escape};
+use util::time::SlowTimer;
 use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{CF_LOCK, CF_RAFT, CF_DEFAULT, ALL_CFS};
 use raftstore::{Result, Error};
