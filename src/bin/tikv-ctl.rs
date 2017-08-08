@@ -423,7 +423,6 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
                     iter.next();
                     continue;
                 }
-
             }
             if !has_diff {
                 common_head_len += 1;
@@ -431,8 +430,7 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
             iter.next();
             iter2.next();
         }
-        println!("head have {} same keys",
-                 common_head_len);
+        println!("head have {} same keys", common_head_len);
 
         if !iter.valid() && iter2.valid() {
             println!("iter1 invalid but iter2 valid!");
