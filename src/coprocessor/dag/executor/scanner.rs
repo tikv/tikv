@@ -193,7 +193,7 @@ pub mod test {
 
             let value = table::encode_row(col_values, &col_ids).unwrap();
             let mut buf = vec![];
-            buf.encode_i64(handle as i64).unwrap();
+            buf.encode_comparable_var_int(handle as i64).unwrap();
             let key = table::encode_row_key(table_id, &buf);
             expect_rows.push(expect_row);
             kv_data.push((key, value));
@@ -279,9 +279,9 @@ pub mod test {
     #[inline]
     pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
         let mut start_buf = Vec::with_capacity(8);
-        start_buf.encode_i64(start).unwrap();
+        start_buf.encode_comparable_var_int(start).unwrap();
         let mut end_buf = Vec::with_capacity(8);
-        end_buf.encode_i64(end).unwrap();
+        end_buf.encode_comparable_var_int(end).unwrap();
         let mut key_range = KeyRange::new();
         key_range.set_start(table::encode_row_key(table_id, &start_buf));
         key_range.set_end(table::encode_row_key(table_id, &end_buf));
@@ -290,7 +290,7 @@ pub mod test {
 
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
         let mut start_buf = Vec::with_capacity(8);
-        start_buf.encode_i64(handle).unwrap();
+        start_buf.encode_comparable_var_int(handle).unwrap();
         let start_key = table::encode_row_key(table_id, &start_buf);
         let end = prefix_next(&start_key);
         let mut key_range = KeyRange::new();

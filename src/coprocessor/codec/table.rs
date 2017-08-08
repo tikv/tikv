@@ -27,9 +27,9 @@ use super::{Result, Datum, datum};
 use super::mysql::{types, Duration, Time};
 
 // handle or index id
-pub const ID_LEN: usize = 8;
-pub const PREFIX_LEN: usize = TABLE_PREFIX_LEN + ID_LEN /*table_id*/ + SEP_LEN;
-pub const RECORD_ROW_KEY_LEN: usize = PREFIX_LEN + ID_LEN;
+pub const MAX_ID_LEN: usize = 9;
+pub const MAX_PREFIX_LEN: usize = TABLE_PREFIX_LEN + MAX_ID_LEN /*table_id*/ + SEP_LEN;
+pub const MAX_RECORD_ROW_KEY_LEN: usize = MAX_PREFIX_LEN + MAX_ID_LEN;
 pub const TABLE_PREFIX: &'static [u8] = b"t";
 pub const RECORD_PREFIX_SEP: &'static [u8] = b"_r";
 pub const INDEX_PREFIX_SEP: &'static [u8] = b"_i";
@@ -40,13 +40,13 @@ pub const TABLE_PREFIX_LEN: usize = 1;
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
         try!(self.write_all(TABLE_PREFIX));
-        try!(self.encode_i64(table_id));
+        try!(self.encode_comparable_var_int(table_id));
         self.write_all(RECORD_PREFIX_SEP).map_err(From::from)
     }
 
     fn append_table_index_prefix(&mut self, table_id: i64) -> Result<()> {
         try!(self.write_all(TABLE_PREFIX));
-        try!(self.encode_i64(table_id));
+        try!(self.encode_comparable_var_int(table_id));
         self.write_all(INDEX_PREFIX_SEP).map_err(From::from)
     }
 }
@@ -83,7 +83,7 @@ pub fn encode_row(row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
 
 /// `encode_row_key` encodes the table id and record handle into a byte array.
 pub fn encode_row_key(table_id: i64, encoded_handle: &[u8]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN);
+    let mut key = Vec::with_capacity(MAX_RECORD_ROW_KEY_LEN);
     // can't panic
     key.append_table_record_prefix(table_id).unwrap();
     key.write_all(encoded_handle).unwrap();
@@ -92,9 +92,9 @@ pub fn encode_row_key(table_id: i64, encoded_handle: &[u8]) -> Vec<u8> {
 
 /// `encode_column_key` encodes the table id, row handle and column id into a byte array.
 pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN + ID_LEN);
+    let mut key = Vec::with_capacity(MAX_RECORD_ROW_KEY_LEN + MAX_ID_LEN);
     key.append_table_record_prefix(table_id).unwrap();
-    key.encode_i64(handle).unwrap();
+    key.encode_comparable_var_int(handle).unwrap();
     key.encode_i64(column_id).unwrap();
     key
 }
@@ -106,27 +106,46 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &encoded[TABLE_PREFIX.len()..];
-    try!(remaining.decode_i64());
+    try!(remaining.decode_comparable_var_int()); // table_id
 
     if !remaining.starts_with(RECORD_PREFIX_SEP) {
         return Err(invalid_type!("record key expected, but got {}", escape(encoded)));
     }
 
     remaining = &remaining[RECORD_PREFIX_SEP.len()..];
-    remaining.decode_i64()
+    remaining.decode_comparable_var_int() // handle_id
+}
+
+// return length:length of t_${tid}_r_${handle} or t_${tid}_i_${index_id}
+// return bool: true when is a record key
+pub fn get_id_prefix_info(encoded: &[u8]) -> Result<(usize, bool)> {
+    let start_len = encoded.len();
+    if !encoded.starts_with(TABLE_PREFIX) {
+        return Err(invalid_type!("record key expected, but got {}", escape(encoded)));
+    }
+
+    let mut remaining = &encoded[TABLE_PREFIX.len()..];
+    try!(remaining.decode_comparable_var_int()); // table_id
+    let is_record = remaining.starts_with(RECORD_PREFIX_SEP);
+    remaining = &remaining[SEP_LEN..];
+    try!(remaining.decode_comparable_var_int());
+    Ok((start_len - remaining.len(), is_record))
 }
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
 pub fn truncate_as_row_key(key: &[u8]) -> Result<&[u8]> {
-    try!(decode_handle(key));
-    Ok(&key[..RECORD_ROW_KEY_LEN])
+    let (len, is_record) = try!(get_id_prefix_info(key));
+    if !is_record {
+        return Err(invalid_type!("record key expected, but got {}", escape(key)));
+    }
+    Ok(&key[..len])
 }
 
 /// `encode_index_seek_key` encodes an index value to byte array.
 pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(PREFIX_LEN + ID_LEN + encoded.len());
+    let mut key = Vec::with_capacity(MAX_PREFIX_LEN + MAX_ID_LEN + encoded.len());
     key.append_table_index_prefix(table_id).unwrap();
-    key.encode_i64(idx_id).unwrap();
+    key.encode_comparable_var_int(idx_id).unwrap();
     key.write_all(encoded).unwrap();
     key
 }
@@ -136,7 +155,9 @@ pub fn decode_index_key(ctx: &EvalContext,
                         mut encoded: &[u8],
                         infos: &[ColumnInfo])
                         -> Result<Vec<Datum>> {
-    encoded = &encoded[PREFIX_LEN + ID_LEN..];
+    let (prefix_len, is_record) = try!(get_id_prefix_info(encoded));
+    assert_eq!(is_record, false);
+    encoded = &encoded[prefix_len..];
     let mut res = vec![];
 
     for info in infos {
@@ -314,7 +335,8 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
 pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option<i64>)> {
     let mut meta_map: HashMap<i64, RowColMeta> = HashMap::with_capacity(col_ids.len());
     let handle = {
-        let mut tmp_data: &[u8] = &key[PREFIX_LEN + ID_LEN..];
+        let (prefix_len, _) = try!(get_id_prefix_info(&key));
+        let mut tmp_data: &[u8] = &key[prefix_len..];
         let length = key.len();
         // parse cols from data
         for &id in col_ids {
@@ -351,7 +373,7 @@ mod test {
         let tests = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
         for &t in &tests {
             let mut buf = vec![];
-            buf.encode_i64(t).unwrap();
+            buf.encode_comparable_var_int(t).unwrap();
             let k = encode_row_key(1, &buf);
             assert_eq!(t, decode_handle(&k).unwrap());
         }

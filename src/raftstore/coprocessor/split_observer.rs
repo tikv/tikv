@@ -39,11 +39,11 @@ impl SplitObserver {
         // format of a key is TABLE_PREFIX + table_id + RECORD_PREFIX_SEP + handle + column_id
         // + version or TABLE_PREFIX + table_id + INDEX_PREFIX_SEP + index_id + values + version
         // or meta_key + version
-        let table_prefix_len = table::TABLE_PREFIX.len() + table::ID_LEN;
-        if key.starts_with(table::TABLE_PREFIX) && key.len() > table::PREFIX_LEN + table::ID_LEN &&
-           key[table_prefix_len..].starts_with(table::RECORD_PREFIX_SEP) {
+        if let Ok((record_prefix, is_record)) = table::get_id_prefix_info(&key) {
             // row key, truncate to handle
-            key.truncate(table::PREFIX_LEN + table::ID_LEN);
+            if is_record {
+                key.truncate(record_prefix);
+            }
         }
 
         let region_start_key = ctx.region().get_start_key();
@@ -100,8 +100,8 @@ mod test {
     }
 
     fn new_row_key(table_id: i64, row_id: i64, column_id: u64, version_id: u64) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(table::ID_LEN);
-        buf.encode_i64(row_id).unwrap();
+        let mut buf = Vec::with_capacity(table::MAX_ID_LEN);
+        buf.encode_comparable_var_int(row_id).unwrap();
         let mut key = table::encode_row_key(table_id, &buf);
         if column_id > 0 {
             key.write_u64::<BigEndian>(column_id).unwrap();

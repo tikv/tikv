@@ -235,7 +235,7 @@ pub mod test {
             let col_values: Vec<_> = cols.to_vec();
             let value = table::encode_row(col_values, &col_ids).unwrap();
             let mut buf = vec![];
-            buf.encode_i64(cols[0].i64()).unwrap();
+            buf.encode_comparable_var_int(cols[0].i64()).unwrap();
             let key = table::encode_row_key(tid, &buf);
             kv_data.push((key, value));
         }
