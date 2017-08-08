@@ -28,6 +28,7 @@ const INITIAL_BUFFER_CAP: usize = 1024;
 
 use util::collections::HashMap;
 use super::{Error, Result, Config};
+use super::metrics::*;
 
 struct Conn {
     stream: UnboundedSender<Vec<(RaftMessage, WriteFlags)>>,
@@ -66,7 +67,11 @@ impl Conn {
                     r
                 })
                 .map(|_| ())
-                .map_err(move |e| warn!("send raftmessage to {} failed: {:?}", addr, e)))
+                .map_err(move |e| {
+                    let store = store_id.to_string();
+                    REPORT_FAILURE_MSG_COUNTER.with_label_values(&["unreachable", &*store]).inc();
+                    warn!("send raftmessage to {} failed: {:?}", addr, e);
+                }))
             .map(|_| ())
             .map_err(|_| ()));
         Conn {
@@ -100,12 +105,12 @@ impl RaftClient {
     }
 
     fn get_conn(&mut self, addr: SocketAddr, region_id: u64, store_id: u64) -> &mut Conn {
-        let env = self.env.clone();
-        let cfg = self.cfg.clone();
-        let index = region_id as usize % cfg.grpc_raft_conn_num;
+        let index = region_id as usize % self.cfg.grpc_raft_conn_num;
+        let cfg = &self.cfg;
+        let env = &self.env;
         self.conns
             .entry((addr, index))
-            .or_insert_with(|| Conn::new(env, addr, &cfg, store_id))
+            .or_insert_with(|| Conn::new(env.clone(), addr, cfg, store_id))
     }
 
     pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {

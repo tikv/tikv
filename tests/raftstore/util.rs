@@ -33,6 +33,8 @@ use tikv::util::escape;
 
 pub use tikv::raftstore::store::util::find_peer;
 
+pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
+
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
@@ -87,7 +89,7 @@ pub fn new_store_cfg() -> Config {
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: Duration::from_secs(3),
         report_region_flow_interval: 100, // 100ms
-        raft_store_max_leader_lease: TimeDuration::milliseconds(25 * 10),
+        raft_store_max_leader_lease: TimeDuration::milliseconds(MAX_LEADER_LEASE as i64),
         use_sst_file_snapshot: true,
         allow_remove_leader: true,
         ..Config::default()
@@ -101,7 +103,7 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         cluster_id: cluster_id,
         addr: "127.0.0.1:0".to_owned(),
         raft_store: store_cfg,
-        storage: StorageConfig { sched_worker_pool_size: 1, ..StorageConfig::default() },
+        storage: StorageConfig { scheduler_worker_pool_size: 1, ..StorageConfig::default() },
         grpc_concurrency: 1,
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
@@ -159,6 +161,15 @@ pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
     cmd.set_cmd_type(CmdType::Delete);
     cmd.mut_delete().set_key(key.to_vec());
     cmd.mut_delete().set_cf(cf.to_string());
+    cmd
+}
+
+pub fn new_delete_range_cmd(cf: &str, start: &[u8], end: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::DeleteRange);
+    cmd.mut_delete_range().set_start_key(start.to_vec());
+    cmd.mut_delete_range().set_end_key(end.to_vec());
+    cmd.mut_delete_range().set_cf(cf.to_string());
     cmd
 }
 

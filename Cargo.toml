@@ -9,7 +9,7 @@ time = "0.1"
 
 [features]
 default = []
-dev = ["clippy", "mem-profiling"]
+dev = ["clippy"]
 static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
@@ -48,7 +48,7 @@ clippy = {version = "*", optional = true}
 protobuf = "1.4"
 nix = "0.6.0"
 utime = "0.1"
-chrono = "0.2"
+chrono = "0.4"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
 clap = "2"
@@ -64,6 +64,8 @@ tokio-core = "0.1"
 tokio-timer = "0.1"
 serde = "1.0"
 serde_json = "1.0"
+serde_derive = "1.0"
+grpcio = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
@@ -81,9 +83,6 @@ git = "https://github.com/pingcap/tipb.git"
 git = "https://github.com/pingcap/rust-prometheus.git"
 default-features = false
 features = ["nightly", "push", "process"]
-
-[dependencies.grpc]
-git = "https://github.com/pingcap/grpc-rs.git"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"

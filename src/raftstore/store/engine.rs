@@ -35,7 +35,7 @@ pub struct Snapshot {
 unsafe impl Send for Snapshot {}
 unsafe impl Sync for Snapshot {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SyncSnapshot(Arc<Snapshot>);
 
 impl Deref for SyncSnapshot {

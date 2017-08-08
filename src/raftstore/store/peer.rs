@@ -791,7 +791,7 @@ impl Peer {
                     // TODO: we should add test case that a split happens before pending
                     // read-index is handled. To do this we need to control async-apply
                     // procedure precisely.
-                    self.handle_read(req, cb);
+                    cb(self.handle_read(req));
                 }
                 propose_time = Some(read.renew_lease_time);
             }
@@ -856,7 +856,7 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 for (req, cb) in read.cmds.drain(..) {
-                    self.handle_read(req, cb);
+                    cb(self.handle_read(req));
                 }
             }
             self.pending_reads.ready_cnt = 0;
@@ -992,6 +992,38 @@ impl Peer {
         }
     }
 
+    /// Propose a snapshot request. Note that the `None` response means
+    /// it requires the peer to perform a read-index. The request never
+    /// be actual proposed to other nodes.
+    pub fn propose_snapshot(&mut self,
+                            req: RaftCmdRequest,
+                            metrics: &mut RaftProposeMetrics)
+                            -> Option<RaftCmdResponse> {
+        if self.pending_remove {
+            let mut resp = RaftCmdResponse::new();
+            cmd_resp::bind_error(&mut resp, box_err!("peer is pending remove"));
+            return Some(resp);
+        }
+        metrics.all += 1;
+
+        // TODO: deny non-snapshot request.
+
+        match self.get_handle_policy(&req) {
+            Ok(RequestPolicy::ReadLocal) => {
+                metrics.local_read += 1;
+                Some(self.handle_read(req))
+            }
+            // require to propose again, and use the `propose` above.
+            Ok(RequestPolicy::ReadIndex) => None,
+            Ok(_) => unreachable!(),
+            Err(e) => {
+                let mut resp = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut resp, self.term());
+                Some(resp)
+            }
+        }
+    }
+
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(clocktime::raw_now());
@@ -1018,7 +1050,7 @@ impl Peer {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap => is_read = true,
-                CmdType::Delete | CmdType::Put => is_write = true,
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange => is_write = true,
                 CmdType::Prewrite | CmdType::Invalid => {
                     return Err(box_err!("invalid cmd type {:?}, message maybe currupted",
                                         r.get_cmd_type()));
@@ -1155,7 +1187,7 @@ impl Peer {
         self.raft_group.transfer_leader(peer.get_id());
     }
 
-    fn is_tranfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
+    fn is_transfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
         let peer_id = peer.get_id();
         let status = self.raft_group.status();
 
@@ -1175,7 +1207,7 @@ impl Peer {
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
-        self.handle_read(req, cb);
+        cb(self.handle_read(req));
     }
 
     fn read_index(&mut self,
@@ -1278,7 +1310,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transfered = if self.is_tranfer_leader_allowed(peer) {
+        let transfered = if self.is_transfer_leader_allowed(peer) {
             self.transfer_leader(peer);
             true
         } else {
@@ -1336,7 +1368,7 @@ impl Peer {
         Ok(propose_index)
     }
 
-    fn handle_read(&mut self, req: RaftCmdRequest, cb: Callback) {
+    fn handle_read(&mut self, req: RaftCmdRequest) -> RaftCmdResponse {
         let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
@@ -1346,7 +1378,7 @@ impl Peer {
         });
 
         cmd_resp::bind_term(&mut resp, self.term());
-        cb(resp);
+        resp
     }
 
     pub fn term(&self) -> u64 {
@@ -1531,8 +1563,8 @@ impl Peer {
                     try!(apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req))
                 }
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
-                CmdType::Prewrite => unreachable!(),
-                CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
+                CmdType::Prewrite | CmdType::Put | CmdType::Delete | CmdType::DeleteRange |
+                CmdType::Invalid => unreachable!(),
             };
 
             resp.set_cmd_type(cmd_type);

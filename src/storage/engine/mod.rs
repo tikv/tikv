@@ -18,10 +18,10 @@ use std::boxed::FnBox;
 use std::time::Duration;
 
 use self::rocksdb::EngineRocksdb;
+use rocksdb::TablePropertiesCollection;
 use storage::{Key, Value, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
-use util::properties::{UserProperties, GetPropertiesOptions};
 
 mod rocksdb;
 pub mod raftkv;
@@ -44,7 +44,10 @@ const STAT_SEEK: &'static str = "seek";
 const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
+pub type BatchResults<T> = Vec<Option<(CbContext, Result<T>)>>;
+pub type BatchCallback<T> = Box<FnBox(BatchResults<T>) + Send>;
 
+#[derive(Clone)]
 pub struct CbContext {
     pub term: Option<u64>,
 }
@@ -59,11 +62,23 @@ impl CbContext {
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
+    DeleteRange(CfName, Key, Key),
 }
 
 pub trait Engine: Send + Debug {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
+    /// Snapshots are token by `Context`s, the results are send to the `on_finished` callback,
+    /// with the same order. If a read-index is occurred, a `None` is placed in the corresponding
+    /// slot, and the caller is responsible for reissuing it again, in `async_snapshot`.
+    // TODO:
+    //   - replace Option with Result and define an Error for requiring read-index.
+    //   - add a new method for force read-index, that may be done
+    //     by renaming the `async_snapshot`.
+    fn async_batch_snapshot(&self,
+                            batch: Vec<Context>,
+                            on_finished: BatchCallback<Box<Snapshot>>)
+                            -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -112,10 +127,10 @@ pub trait Snapshot: Send {
                    iter_opt: IterOption,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
-    fn get_properties(&self, opts: &GetPropertiesOptions) -> Result<UserProperties> {
-        self.get_properties_cf(CF_DEFAULT, opts)
+    fn get_properties(&self) -> Result<TablePropertiesCollection> {
+        self.get_properties_cf(CF_DEFAULT)
     }
-    fn get_properties_cf(&self, _: CfName, _: &GetPropertiesOptions) -> Result<UserProperties> {
+    fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
         Err(Error::RocksDb("no user properties".to_owned()))
     }
     fn clone(&self) -> Box<Snapshot>;

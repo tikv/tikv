@@ -13,6 +13,7 @@
 
 use std::sync::mpsc::channel;
 use std::time::Duration;
+
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, Storage, Mutation, make_key, ALL_CFS, Options, Engine};
 use tikv::storage::{txn, engine, mvcc};
@@ -65,7 +66,7 @@ fn test_raft_storage_rollback_before_prewrite() {
     assert!(ret.is_err());
     let err = ret.unwrap_err();
     match err {
-        storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict)) => {}
+        storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => {}
         _ => {
             panic!("expect WriteConflict error, but got {:?}", err);
         }
