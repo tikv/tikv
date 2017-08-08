@@ -11,10 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::{keys, CF_RAFT};
+use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
-use util::rocksdb;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use std::sync::Arc;
@@ -75,7 +74,7 @@ impl Runner {
         if first_idx == 0 {
             let start_key = keys::raft_log_key(region_id, 0);
             first_idx = end_idx;
-            if let Some((k, _)) = box_try!(raft_engine.seek_cf(CF_RAFT, &start_key)) {
+            if let Some((k, _)) = box_try!(raft_engine.seek(&start_key)) {
                 first_idx = box_try!(keys::raft_log_index(&k));
             }
         }
@@ -84,10 +83,9 @@ impl Runner {
             return Ok(0);
         }
         let wb = WriteBatch::new();
-        let handle = box_try!(rocksdb::get_cf_handle(&raft_engine, CF_RAFT));
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
-            box_try!(wb.delete_cf(handle, &key));
+            box_try!(wb.delete(&key));
         }
         // TODO: disable WAL here.
         raft_engine.write(wb).unwrap();
@@ -131,24 +129,22 @@ mod test {
     use tempdir::TempDir;
     use storage::CF_DEFAULT;
     use super::*;
-    use raftstore::store::CF_RAFT;
 
     #[test]
     fn test_gc_raft_log() {
         let path = TempDir::new("gc-raft-log-test").unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
         let db = Arc::new(db);
 
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner::new(Some(tx));
 
         // generate raft logs
-        let raft_handle = rocksdb::get_cf_handle(&db, CF_RAFT).unwrap();
         let region_id = 1;
         let wb = WriteBatch::new();
         for i in 0..100 {
             let k = keys::raft_log_key(region_id, i);
-            wb.put_cf(raft_handle, &k, b"entry").unwrap();
+            wb.put(&k, b"entry").unwrap();
         }
         db.write(wb).unwrap();
 
@@ -199,18 +195,16 @@ mod test {
     }
 
     fn raft_log_must_not_exist(raft_engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
-        let raft_handle = rocksdb::get_cf_handle(raft_engine, CF_RAFT).unwrap();
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
-            assert!(raft_engine.get_cf(raft_handle, &k).unwrap().is_none());
+            assert!(raft_engine.get(&k).unwrap().is_none());
         }
     }
 
     fn raft_log_must_exist(raft_engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
-        let raft_handle = rocksdb::get_cf_handle(raft_engine, CF_RAFT).unwrap();
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
-            assert!(raft_engine.get_cf(raft_handle, &k).unwrap().is_some());
+            assert!(raft_engine.get(&k).unwrap().is_some());
         }
     }
 }

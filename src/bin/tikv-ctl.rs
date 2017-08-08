@@ -33,7 +33,7 @@ use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
-use tikv::raftstore::store::{keys, CF_RAFT, RAFT_CFS};
+use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable, IterOption};
 use tikv::storage::{KV_CFS, CF_LOCK, CF_WRITE, CF_DEFAULT, CfName};
 use tikv::storage::mvcc::{Lock, Write};
@@ -148,7 +148,7 @@ fn main() {
     let db_path = matches.value_of("db").unwrap();
     let kv_db = util::rocksdb::open(db_path, KV_CFS).unwrap();
     let raft_db_path = matches.value_of("raft_db").unwrap();
-    let raft_db = util::rocksdb::open(raft_db_path, RAFT_CFS).unwrap();
+    let raft_db = util::rocksdb::open(raft_db_path, &[]).unwrap();
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
@@ -350,7 +350,7 @@ fn dump_raft_log_entry(raft_db: DB, idx_key: &[u8]) {
     println!("idx_key: {}", escape(idx_key));
     println!("region: {}", region_id);
     println!("log index: {}", idx);
-    let mut ent: Entry = raft_db.get_msg_cf(CF_RAFT, idx_key).unwrap().unwrap();
+    let mut ent: Entry = raft_db.get_msg(idx_key).unwrap().unwrap();
     let data = ent.take_data();
     println!("entry {:?}", ent);
     let mut msg = RaftCmdRequest::new();
@@ -371,7 +371,7 @@ fn dump_region_info(raft_db: &DB, kv_db: &DB, region_id: u64, skip_tombstone: bo
 
     let raft_state_key = keys::raft_state_key(region_id);
     println!("raft state key: {}", escape(&raft_state_key));
-    let raft_state: Option<RaftLocalState> = raft_db.get_msg_cf(CF_RAFT, &raft_state_key).unwrap();
+    let raft_state: Option<RaftLocalState> = raft_db.get_msg(&raft_state_key).unwrap();
     println!("raft state: {:?}", raft_state);
 
     let apply_state_key = keys::apply_state_key(region_id);

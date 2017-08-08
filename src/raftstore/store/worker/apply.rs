@@ -134,7 +134,8 @@ pub enum ExecResult {
     ComputeHash {
         region: Region,
         index: u64,
-        snap: Snapshot,
+        kv_snap: Snapshot,
+        raft_snap: Snapshot,
     },
     VerifyHash { index: u64, hash: Vec<u8> },
 }
@@ -820,12 +821,7 @@ impl ApplyDelegate {
         new_region.mut_region_epoch().set_version(region_ver);
         write_peer_state(raft_wb, &region, PeerState::Normal)
             .and_then(|_| write_peer_state(raft_wb, &new_region, PeerState::Normal))
-            .and_then(|_| {
-                write_initial_state(self.raft_engine.as_ref(),
-                                    raft_wb,
-                                    ctx.wb,
-                                    new_region.get_id())
-            })
+            .and_then(|_| write_initial_state(raft_wb, ctx.wb, new_region.get_id()))
             .unwrap_or_else(|e| {
                 panic!("{} failed to save split region {:?}: {:?}",
                        self.tag,
@@ -1073,7 +1069,8 @@ impl ApplyDelegate {
             // open files in rocksdb.
             // TODO: figure out another way to do consistency check without snapshot
             // or short life snapshot.
-            snap: Snapshot::new(self.engine.clone()),
+            kv_snap: Snapshot::new(self.engine.clone()),
+            raft_snap: Snapshot::new(self.raft_engine.clone()),
         })))
     }
 
@@ -1408,15 +1405,14 @@ mod tests {
 
     use super::*;
     use storage::{CF_WRITE, KV_CFS};
-    use raftstore::store::RAFT_CFS;
 
     use util::collections::HashMap;
 
     pub fn create_tmp_engine(path: &str) -> (Arc<DB>, Arc<DB>) {
         let path = TempDir::new(path).unwrap();
         let kv_db = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), KV_CFS).unwrap());
-        let raft_path = path.path().join(Path::new("raft_db"));
-        let raft_db = Arc::new(rocksdb::new_engine(raft_path.to_str().unwrap(), RAFT_CFS).unwrap());
+        let raft_path = path.path().join(Path::new("raft"));
+        let raft_db = Arc::new(rocksdb::new_engine(raft_path.to_str().unwrap(), &[]).unwrap());
         (kv_db, raft_db)
     }
 

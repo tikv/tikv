@@ -70,7 +70,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Con
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
-use tikv::raftstore::store::{self, SnapManager, CF_RAFT};
+use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::util::time_monitor::TimeMonitor;
@@ -735,26 +735,12 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFam
 }
 
 fn get_raft_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
-    let mut default_values = CfOptValues::default();
-    default_values.block_cache_size =
-        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64) as i64;
-    default_values.use_bloom_filter = true;
-    default_values.whole_key_filtering = true;
-    default_values.compaction_pri = 3;
-
-    let mut cf_opts = get_rocksdb_cf_option(config, "raft-rocksdb", "defaultcf", default_values);
-    let f = Box::new(SizePropertiesCollectorFactory::default());
-    cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
-    cf_opts
-}
-
-fn get_raft_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
     let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
     let block_cache_size = adjust_block_cache_size(cache_size, RAFTCF_MIN_MEM, RAFTCF_MAX_MEM);
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size = block_cache_size as i64;
 
-    let mut cf_opts = get_rocksdb_cf_option(config, "raft-rocksdb", "raftcf", default_values);
+    let mut cf_opts = get_rocksdb_cf_option(config, "raft-rocksdb", "defaultcf", default_values);
     cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
             Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
@@ -967,8 +953,9 @@ fn get_raft_rocksdb_data_dir(store_dir: &str, config: &toml::Value) -> String {
     let abs_data_dir = get_toml_string_opt(config, "server.raft-data-dir")
         .map(|s| canonicalize_path(&s))
         .unwrap_or_else(|| {
-            warn!("raft rocksdb dir not set, use default dir {}", store_dir);
-            store_dir.to_string()
+            let raft_dir = store_dir.to_string() + "/raft";
+            warn!("raft data dir not set, use default dir {}", raft_dir);
+            raft_dir
         });
     info!("server.raft-data-dir uses {:?}", abs_data_dir);
 
@@ -1041,12 +1028,10 @@ fn run_raft_server(pd_client: RpcClient,
 
     // Create raft_cf engine.
     let raft_rocksdb_dir = get_raft_rocksdb_data_dir(&cfg.storage.data_dir, config);
-    let raft_db_path = Path::new(&raft_rocksdb_dir).join(Path::new("raft_db"));
+    let raft_db_path = Path::new(&raft_rocksdb_dir);
     let raft_db_opts = get_raft_rocksdb_db_option(config);
     let raft_cf_opts = vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
-                                          get_raft_rocksdb_default_cf_option(config, total_mem)),
-             rocksdb_util::CFOptions::new(CF_RAFT,
-                                          get_raft_rocksdb_raftlog_cf_option(config, total_mem))];
+                                          get_raft_rocksdb_default_cf_option(config, total_mem))];
     let raft_engine = Arc::new(rocksdb_util::new_engine_opt(raft_db_path.to_str().unwrap(),
                                                             raft_db_opts,
                                                             raft_cf_opts)

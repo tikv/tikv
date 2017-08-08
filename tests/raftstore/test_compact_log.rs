@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tikv::raftstore::store::*;
-use tikv::util::rocksdb::get_cf_handle;
 use rocksdb::DB;
 use protobuf;
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
@@ -82,13 +81,12 @@ fn check_compacted(engines: &HashMap<u64, (Arc<DB>, Arc<DB>)>,
     sleep_ms(100);
 
     for (id, &(ref _kv_engine, ref raft_engine)) in engines {
-        let handle = get_cf_handle(raft_engine, CF_RAFT).unwrap();
         for i in 0..compacted_idx[id] {
             let key = keys::raft_log_key(1, i);
-            if raft_engine.get_cf(handle, &key).unwrap().is_none() {
+            if raft_engine.get(&key).unwrap().is_none() {
                 break;
             }
-            assert!(raft_engine.get_cf(handle, &key).unwrap().is_none());
+            assert!(raft_engine.get(&key).unwrap().is_none());
         }
     }
     true
@@ -275,10 +273,9 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         let idx = after_state.get_index();
         assert!(idx > before_state.get_index());
 
-        let handle = get_cf_handle(raft_engine, CF_RAFT).unwrap();
         for i in 0..idx {
             let key = keys::raft_log_key(1, i);
-            assert!(raft_engine.get_cf(handle, &key).unwrap().is_none());
+            assert!(raft_engine.get(&key).unwrap().is_none());
         }
     }
 }

@@ -15,10 +15,9 @@ use rocksdb::{DB, Writable, WriteBatch};
 use kvproto::raft_serverpb::{StoreIdent, RegionLocalState};
 use kvproto::metapb;
 use raftstore::Result;
-use super::{keys, CF_RAFT};
+use super::keys;
 use super::engine::{Iterable, Mutable};
 use super::peer_storage::write_initial_state;
-use util::rocksdb;
 use storage::CF_DEFAULT;
 
 const INIT_EPOCH_VER: u64 = 1;
@@ -64,7 +63,7 @@ pub fn write_prepare_bootstrap(raft_engine: &DB,
     let wb = WriteBatch::new();
     let kv_wb = WriteBatch::new();
     try!(wb.put_msg(&keys::region_state_key(region.get_id()), &state));
-    try!(write_initial_state(raft_engine, &wb, &kv_wb, region.get_id()));
+    try!(write_initial_state(&wb, &kv_wb, region.get_id()));
     try!(kv_wb.put_msg(&keys::prepare_bootstrap_key(), region));
     try!(raft_engine.write(wb));
     try!(kv_engine.write(kv_wb));
@@ -78,8 +77,7 @@ pub fn clear_prepare_bootstrap(raft_engine: &DB, kv_engine: &DB, region_id: u64)
 
     try!(wb.delete(&keys::region_state_key(region_id)));
     // should clear raft initial state too.
-    let raft_cf = try!(rocksdb::get_cf_handle(raft_engine, CF_RAFT));
-    try!(wb.delete_cf(raft_cf, &keys::raft_state_key(region_id)));
+    try!(wb.delete(&keys::raft_state_key(region_id)));
     try!(kv_wb.delete(&keys::prepare_bootstrap_key()));
     try!(kv_wb.delete(&keys::apply_state_key(region_id)));
 
@@ -128,15 +126,15 @@ mod tests {
     use super::*;
     use util::rocksdb;
     use raftstore::store::engine::Peekable;
-    use raftstore::store::{keys, CF_RAFT};
+    use raftstore::store::keys;
     use storage::CF_DEFAULT;
 
     #[test]
     fn test_bootstrap() {
         let path = TempDir::new("var").unwrap();
-        let raft_path = path.path().join(Path::new("raft_db"));
+        let raft_path = path.path().join(Path::new("raft"));
         let kv_engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
-        let raft_engine = rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_RAFT]).unwrap();
+        let raft_engine = rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap();
 
         assert!(bootstrap_store(&kv_engine, 1, 1).is_ok());
         assert!(bootstrap_store(&kv_engine, 1, 1).is_err());
@@ -144,7 +142,7 @@ mod tests {
         assert!(prepare_bootstrap(&raft_engine, &kv_engine, 1, 1, 1).is_ok());
         assert!(raft_engine.get_value(&keys::region_state_key(1)).unwrap().is_some());
         assert!(kv_engine.get_value(&keys::prepare_bootstrap_key()).unwrap().is_some());
-        assert!(raft_engine.get_value_cf(CF_RAFT, &keys::raft_state_key(1)).unwrap().is_some());
+        assert!(raft_engine.get_value(&keys::raft_state_key(1)).unwrap().is_some());
 
         assert!(kv_engine.get_value(&keys::apply_state_key(1)).unwrap().is_some());
 
@@ -156,7 +154,7 @@ mod tests {
                                &keys::region_meta_prefix(2))
             .unwrap());
         assert!(is_range_empty(&raft_engine,
-                               CF_RAFT,
+                               CF_DEFAULT,
                                &keys::region_raft_prefix(1),
                                &keys::region_raft_prefix(2))
             .unwrap());

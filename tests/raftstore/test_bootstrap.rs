@@ -13,8 +13,7 @@
 
 use std::sync::{Arc, mpsc};
 use std::path::Path;
-use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store,
-                             RAFT_CFS};
+use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store};
 use tikv::server::Node;
 use tikv::storage::KV_CFS;
 use tikv::util::rocksdb;
@@ -53,9 +52,8 @@ fn test_node_bootstrap_with_prepared_data() {
     let tmp_path = TempDir::new("test_cluster_kv").unwrap();
     let kv_engine = Arc::new(rocksdb::new_engine(tmp_path.path().to_str().unwrap(), KV_CFS)
         .unwrap());
-    let tmp_path_raft = tmp_path.path().join(Path::new("raft_db"));
-    let raft_engine = Arc::new(rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), RAFT_CFS)
-        .unwrap());
+    let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
+    let raft_engine = Arc::new(rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), &[]).unwrap());
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
     let mut node = Node::new(&mut event_loop, &cfg, pd_client.clone());

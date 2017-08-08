@@ -302,7 +302,7 @@ mod tests {
     use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
-    use raftstore::store::{PeerStorage, CacheQueryStats, RAFT_CFS};
+    use raftstore::store::{PeerStorage, CacheQueryStats};
     use storage::{Cursor, Key, KV_CFS, ScanMode, CFStatistics};
     use util::{worker, rocksdb, escape};
 
@@ -312,9 +312,9 @@ mod tests {
 
     fn new_temp_engine() -> (Arc<DB>, Arc<DB>) {
         let path = TempDir::new("test-raftstore-kv").unwrap();
-        let raft_path = path.path().join(Path::new("raft_db"));
+        let raft_path = path.path().join(Path::new("raft"));
         (Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), KV_CFS).unwrap()),
-         Arc::new(rocksdb::new_engine(raft_path.to_str().unwrap(), RAFT_CFS).unwrap()))
+         Arc::new(rocksdb::new_engine(raft_path.to_str().unwrap(), &[]).unwrap()))
     }
 
     fn new_peer_storage(kv_engine: Arc<DB>, raft_engine: Arc<DB>, r: &Region) -> PeerStorage {

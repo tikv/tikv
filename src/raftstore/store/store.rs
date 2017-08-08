@@ -52,7 +52,7 @@ use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, 
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
                     ApplyTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
-use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter, CF_RAFT, RAFT_CFS};
+use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
@@ -297,8 +297,7 @@ impl<T, C> Store<T, C> {
 
     fn clear_stale_meta(&mut self, wb: &mut WriteBatch, region: &metapb::Region) {
         let raft_key = keys::raft_state_key(region.get_id());
-        let handle = rocksdb::get_cf_handle(&self.raft_engine, CF_RAFT).unwrap();
-        if self.raft_engine.get_cf(handle, &raft_key).unwrap().is_none() {
+        if self.raft_engine.get(&raft_key).unwrap().is_none() {
             // it has been cleaned up.
             return;
         }
@@ -1257,8 +1256,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::SplitRegion { left, right, right_derive } => {
                     self.on_ready_split_region(region_id, left, right, right_derive)
                 }
-                ExecResult::ComputeHash { region, index, snap } => {
-                    self.on_ready_compute_hash(region, index, snap)
+                ExecResult::ComputeHash { region, index, kv_snap, raft_snap } => {
+                    self.on_ready_compute_hash(region, index, kv_snap, raft_snap)
                 }
                 ExecResult::VerifyHash { index, hash } => {
                     self.on_ready_verify_hash(region_id, index, hash)
@@ -1671,8 +1670,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut used_size =
             flush_engine_properties_and_get_used_size(self.kv_engine.clone(), "kv", KV_CFS);
-        used_size +=
-            flush_engine_properties_and_get_used_size(self.raft_engine.clone(), "raft", RAFT_CFS);
+        used_size += flush_engine_properties_and_get_used_size(self.raft_engine.clone(),
+                                                               "raft",
+                                                               &[CF_DEFAULT]);
         used_size += self.snap_mgr.get_total_snap_size();
 
         stats.set_used_size(used_size);
@@ -1972,11 +1972,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_consistency_check_tick(event_loop);
     }
 
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+    fn on_ready_compute_hash(&mut self,
+                             region: metapb::Region,
+                             index: u64,
+                             kv_snap: EngineSnapshot,
+                             raft_snap: EngineSnapshot) {
         let region_id = region.get_id();
         self.region_peers.get_mut(&region_id).unwrap().consistency_state.last_check_time =
             Instant::now();
-        let task = ConsistencyCheckTask::compute_hash(region, index, snap);
+        let task = ConsistencyCheckTask::compute_hash(region, index, kv_snap, raft_snap);
         info!("[region {}] schedule {}", region_id, task);
         if let Err(e) = self.consistency_check_worker.schedule(task) {
             error!("[region {}] schedule failed: {:?}", region_id, e);
