@@ -36,7 +36,6 @@ pub mod rocksdb;
 pub mod config;
 pub mod buf;
 pub mod transport;
-pub mod time_monitor;
 pub mod file;
 pub mod file_log;
 pub mod clocktime;
@@ -316,30 +315,6 @@ impl<'a, T: 'a, V: 'a, E> TryInsertWith<'a, V, E> for Entry<'a, T, V> {
     }
 }
 
-/// Convert Duration to milliseconds.
-#[inline]
-pub fn duration_to_ms(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() * 1_000 + (nanos / 1_000_000)
-}
-
-/// Convert Duration to seconds.
-#[inline]
-pub fn duration_to_sec(d: Duration) -> f64 {
-    let nanos = d.subsec_nanos() as f64;
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() as f64 + (nanos / 1_000_000_000.0)
-}
-
-/// Convert Duration to nanoseconds.
-#[inline]
-pub fn duration_to_nanos(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() * 1_000_000_000 + nanos
-}
-
 pub fn get_tag_from_thread_name() -> Option<String> {
     thread::current().name().and_then(|name| name.split("::").skip(1).last()).map(From::from)
 }
@@ -510,9 +485,8 @@ pub fn is_even(n: usize) -> bool {
 mod tests {
     use std::collections::*;
     use std::net::{SocketAddr, AddrParseError};
-    use std::time::Duration;
     use std::rc::Rc;
-    use std::{f64, cmp};
+    use std::cmp;
     use std::sync::atomic::{AtomicBool, Ordering};
     use kvproto::eraftpb::Entry;
     use protobuf::Message;
@@ -562,19 +536,6 @@ mod tests {
             queue.swap_remove_front(|_| true).unwrap();
         }
         assert_eq!(None, queue.swap_remove_front(|_| true));
-    }
-
-    #[test]
-    fn test_duration_to() {
-        let tbl = vec![0, 100, 1_000, 5_000, 9999, 1_000_000, 1_000_000_000];
-        for ms in tbl {
-            let d = Duration::from_millis(ms);
-            assert_eq!(ms, duration_to_ms(d));
-            let exp_sec = ms as f64 / 1000.0;
-            let act_sec = duration_to_sec(d);
-            assert!((act_sec - exp_sec).abs() < f64::EPSILON);
-            assert_eq!(ms * 1_000_000, duration_to_nanos(d));
-        }
     }
 
     #[test]
