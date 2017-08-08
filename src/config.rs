@@ -34,7 +34,7 @@ const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFTCF_MIN_MEM: usize = 256 * MB as usize;
 const RAFTCF_MAX_MEM: usize = 2 * GB as usize;
 
-fn memory_for_cf(cf: &str) -> usize {
+fn memory_mb_for_cf(cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
     let (radio, min, max) = match cf {
         CF_DEFAULT => (0.25, 0, usize::MAX),
@@ -85,7 +85,7 @@ impl Default for CfConfig {
         CfConfig {
             cf: CF_DEFAULT.to_owned(),
             block_size: ReadableSize::kb(64),
-            block_cache_size: ReadableSize::mb(memory_for_cf(CF_DEFAULT) as u64),
+            block_cache_size: ReadableSize::mb(memory_mb_for_cf(CF_DEFAULT) as u64),
             cache_index_and_filter_blocks: true,
             use_bloom_filter: true,
             whole_key_filtering: true,
@@ -116,7 +116,7 @@ impl CfConfig {
     fn write_config() -> CfConfig {
         let mut cfg = CfConfig::default();
         cfg.cf = CF_WRITE.to_owned();
-        cfg.block_cache_size = ReadableSize::mb(memory_for_cf(CF_WRITE) as u64);
+        cfg.block_cache_size = ReadableSize::mb(memory_mb_for_cf(CF_WRITE) as u64);
         cfg.whole_key_filtering = false;
         cfg
     }
@@ -125,7 +125,7 @@ impl CfConfig {
         let mut cfg = CfConfig::default();
         cfg.cf = CF_RAFT.to_owned();
         cfg.use_bloom_filter = false;
-        cfg.block_cache_size = ReadableSize::mb(memory_for_cf(CF_RAFT) as u64);
+        cfg.block_cache_size = ReadableSize::mb(memory_mb_for_cf(CF_RAFT) as u64);
         cfg.compaction_pri = CompactionPriority::ByCompensatedSize;
         cfg
     }
@@ -133,7 +133,7 @@ impl CfConfig {
     fn lock_config() -> CfConfig {
         let mut cfg = CfConfig::default();
         cfg.cf = CF_LOCK.to_owned();
-        cfg.block_cache_size = ReadableSize::mb(memory_for_cf(CF_LOCK) as u64);
+        cfg.block_cache_size = ReadableSize::mb(memory_mb_for_cf(CF_LOCK) as u64);
         cfg.block_size = ReadableSize::kb(16);
         cfg.whole_key_filtering = true;
         cfg.compression_per_level = [DBCompressionType::No; 7];
