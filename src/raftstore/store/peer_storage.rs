@@ -1021,10 +1021,9 @@ pub fn clear_meta(engine: &DB,
     try!(wb.delete_cf(handle, &keys::raft_state_key(region_id)));
     try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
 
-    info!("[region {}] clear peer {} meta keys and {} raft keys, takes {:?}",
+    info!("[region {}] clear peer 1 meta key, 2 raft keys and {} raft logs, takes {:?}",
           region_id,
-          1,
-          2 + last_index + 1 - first_index,
+          last_index + 1 - first_index,
           t.elapsed());
     Ok(())
 }
