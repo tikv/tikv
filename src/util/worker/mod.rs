@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender, Receiver, SendError};
 use std::error::Error;
 
-use util::SlowTimer;
+use util::time::SlowTimer;
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
