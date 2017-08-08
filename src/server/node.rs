@@ -26,7 +26,7 @@ use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
 use raftstore::store::{self, Msg, SnapshotStatusMsg, StoreChannel, Store, Config as StoreConfig,
-                       keys, Peekable, Transport, SnapManager};
+                       keys, Peekable, Transport, SnapManager, Engines};
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
@@ -110,8 +110,7 @@ impl<C> Node<C>
 
     pub fn start<T>(&mut self,
                     event_loop: EventLoop<Store<T, C>>,
-                    raft_engine: Arc<DB>,
-                    kv_engine: Arc<DB>,
+                    engines: Engines,
                     trans: T,
                     snap_mgr: SnapManager,
                     snap_status_receiver: Receiver<SnapshotStatusMsg>)
@@ -119,9 +118,9 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         let bootstrapped = try!(self.check_cluster_bootstrapped());
-        let mut store_id = try!(self.check_store(&kv_engine));
+        let mut store_id = try!(self.check_store(&engines.kv_engine));
         if store_id == INVALID_ID {
-            store_id = try!(self.bootstrap_store(&kv_engine));
+            store_id = try!(self.bootstrap_store(&engines.kv_engine));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
             return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped, \
@@ -132,12 +131,14 @@ impl<C> Node<C>
         }
 
         self.store.set_id(store_id);
-        try!(self.check_prepare_bootstrap_cluster(&raft_engine, &kv_engine));
+        try!(self.check_prepare_bootstrap_cluster(&engines.raft_engine, &engines.kv_engine));
         if !bootstrapped {
             // cluster is not bootstrapped, and we choose first store to bootstrap
             // prepare bootstrap.
-            let region = try!(self.prepare_bootstrap_cluster(&raft_engine, &kv_engine, store_id));
-            try!(self.bootstrap_cluster(&raft_engine, &kv_engine, region));
+            let region = try!(self.prepare_bootstrap_cluster(&engines.raft_engine,
+                                                             &engines.kv_engine,
+                                                             store_id));
+            try!(self.bootstrap_cluster(&engines.raft_engine, &engines.kv_engine, region));
         }
 
         // inform pd.
@@ -145,8 +146,7 @@ impl<C> Node<C>
             .put_store(self.store.clone()));
         try!(self.start_store(event_loop,
                               store_id,
-                              raft_engine,
-                              kv_engine,
+                              engines,
                               trans,
                               snap_mgr,
                               snap_status_receiver));
@@ -288,8 +288,7 @@ impl<C> Node<C>
     fn start_store<T>(&mut self,
                       mut event_loop: EventLoop<Store<T, C>>,
                       store_id: u64,
-                      raft_db: Arc<DB>,
-                      kv_db: Arc<DB>,
+                      engines: Engines,
                       trans: T,
                       snap_mgr: SnapManager,
                       snapshot_status_receiver: Receiver<SnapshotStatusMsg>)
@@ -314,11 +313,10 @@ impl<C> Node<C>
                 sender: sender,
                 snapshot_status_receiver: snapshot_status_receiver,
             };
-            let mut store =
-                match Store::new(ch, store, cfg, raft_db, kv_db, trans, pd_client, snap_mgr) {
-                    Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                    Ok(s) => s,
-                };
+            let mut store = match Store::new(ch, store, cfg, engines, trans, pd_client, snap_mgr) {
+                Err(e) => panic!("construct store {} err {:?}", store_id, e),
+                Ok(s) => s,
+            };
             tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);

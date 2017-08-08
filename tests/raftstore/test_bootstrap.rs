@@ -13,7 +13,8 @@
 
 use std::sync::{Arc, mpsc};
 use std::path::Path;
-use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store};
+use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store,
+                             Engines};
 use tikv::server::Node;
 use tikv::storage::KV_CFS;
 use tikv::util::rocksdb;
@@ -77,9 +78,9 @@ fn test_node_bootstrap_with_prepared_data() {
     assert!(raft_engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_some());
 
     // try to restart this node, will clear the prepare data
+    let engines = Engines::new(raft_engine.clone(), kv_engine.clone());
     node.start(event_loop,
-               raft_engine.clone(),
-               kv_engine.clone(),
+               engines,
                simulate_trans,
                snap_mgr,
                snapshot_status_receiver)

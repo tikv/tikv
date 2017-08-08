@@ -28,7 +28,7 @@ use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
-use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
+use tikv::raftstore::store::{Msg as StoreMsg, SnapManager, Engines};
 use tikv::util::transport::SendCh;
 use tikv::util::worker::Worker;
 use tikv::storage::{Engine, CfName};
@@ -128,10 +128,10 @@ impl Simulator for ServerCluster {
         let simulate_trans = SimulateTransport::new(trans.clone());
 
         // Create node.
+        let engines = Engines::new(raft_engine.clone(), kv_engine.clone());
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
         node.start(event_loop,
-                   raft_engine.clone(),
-                   kv_engine.clone(),
+                   engines,
                    simulate_trans.clone(),
                    snap_mgr.clone(),
                    snap_status_receiver)

@@ -71,6 +71,20 @@ type Key = Vec<u8>;
 const MIO_TICK_RATIO: u64 = 10;
 const PENDING_VOTES_CAP: usize = 20;
 
+pub struct Engines {
+    pub raft_engine: Arc<DB>,
+    pub kv_engine: Arc<DB>,
+}
+
+impl Engines {
+    pub fn new(raft_engine: Arc<DB>, kv_engine: Arc<DB>) -> Engines {
+        Engines {
+            raft_engine: raft_engine,
+            kv_engine: kv_engine,
+        }
+    }
+}
+
 // A helper structure to bundle all channels for messages to `Store`.
 pub struct StoreChannel {
     pub sender: Sender<Msg>,
@@ -174,8 +188,7 @@ impl<T, C> Store<T, C> {
     pub fn new(ch: StoreChannel,
                meta: metapb::Store,
                cfg: Config,
-               raft_engine: Arc<DB>,
-               kv_engine: Arc<DB>,
+               engines: Engines,
                trans: T,
                pd_client: Arc<C>,
                mgr: SnapManager)
@@ -193,8 +206,8 @@ impl<T, C> Store<T, C> {
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
-            raft_engine: raft_engine,
-            kv_engine: kv_engine,
+            raft_engine: engines.raft_engine.clone(),
+            kv_engine: engines.kv_engine.clone(),
             sendch: sendch,
             sent_snapshot_count: 0,
             snapshot_status_receiver: ch.snapshot_status_receiver,
@@ -1649,11 +1662,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
-        let disk_stats = match fs2::statvfs(self.raft_engine.path()) {
+        let disk_stats = match fs2::statvfs(self.kv_engine.path()) {
             Err(e) => {
-                error!("{} get disk stat for rocksdb {} failed: {}",
+                error!("{} get disk stat for kv rocksdb {} failed: {}",
                        self.tag,
-                       self.raft_engine.path(),
+                       self.kv_engine.path(),
                        e);
                 return;
             }
@@ -1668,11 +1681,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         stats.set_capacity(capacity);
 
+        flush_engine_properties_and_get_used_size(self.raft_engine.clone(), "raft", &[CF_DEFAULT]);
         let mut used_size =
             flush_engine_properties_and_get_used_size(self.kv_engine.clone(), "kv", KV_CFS);
-        used_size += flush_engine_properties_and_get_used_size(self.raft_engine.clone(),
-                                                               "raft",
-                                                               &[CF_DEFAULT]);
         used_size += self.snap_mgr.get_total_snap_size();
 
         stats.set_used_size(used_size);

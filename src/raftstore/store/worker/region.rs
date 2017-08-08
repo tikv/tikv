@@ -126,49 +126,8 @@ impl SnapContext {
                            end_key: &[u8],
                            abort: &AtomicUsize)
                            -> Result<()> {
-        // raft_cf
         let mut wb = WriteBatch::new();
         let mut size_cnt = 0;
-        for cf in self.raft_db.cf_names() {
-            try!(check_abort(abort));
-            let handle = box_try!(rocksdb::get_cf_handle(&self.raft_db, cf));
-
-            let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
-            let mut it = box_try!(self.raft_db.new_iterator_cf(cf, iter_opt));
-
-            try!(check_abort(abort));
-            it.seek(start_key.into());
-            while it.valid() {
-                {
-                    let key = it.key();
-                    if key >= end_key {
-                        break;
-                    }
-
-                    box_try!(wb.delete_cf(handle, key));
-                    size_cnt += key.len();
-                    if size_cnt >= self.batch_size {
-                        // Can't use write_without_wal here.
-                        // Otherwise it may cause dirty data when applying snapshot.
-                        box_try!(self.raft_db.write(wb));
-                        wb = WriteBatch::new();
-                        size_cnt = 0;
-                    }
-                };
-                try!(check_abort(abort));
-                if !it.next() {
-                    break;
-                }
-            }
-        }
-
-        if wb.count() > 0 {
-            box_try!(self.raft_db.write(wb));
-        }
-
-        // other cf
-        wb = WriteBatch::new();
-        size_cnt = 0;
         for cf in self.kv_db.cf_names() {
             try!(check_abort(abort));
             let handle = box_try!(rocksdb::get_cf_handle(&self.kv_db, cf));

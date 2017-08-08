@@ -384,7 +384,12 @@ impl PeerStorage {
                region);
         let raft_state = try!(init_raft_state(&raft_engine, region));
         let apply_state = try!(init_apply_state(&kv_engine, region));
-        assert!(raft_state.get_last_index() >= apply_state.get_applied_index());
+        if raft_state.get_last_index() < apply_state.get_applied_index() {
+            panic!("{} unexpected raft log index: last_index {} < applied_index {}",
+                   tag,
+                   raft_state.get_last_index(),
+                   apply_state.get_applied_index());
+        }
         let last_term = try!(init_last_term(&raft_engine, region, &raft_state, &apply_state));
 
         Ok(PeerStorage {

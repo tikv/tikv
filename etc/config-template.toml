@@ -336,7 +336,7 @@ max-manifest-file-size = "20MB"
 create-if-missing = true
 
 wal-recovery-mode = 2
-# wal-dir = "/tmp/tikv/store"
+# wal-dir = "/tmp/tikv/store/raft"
 # wal-ttl-seconds = 0
 # wal-size-limit = 0
 # max-total-wal-size = "4GB"

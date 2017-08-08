@@ -154,7 +154,7 @@ impl<'a> ApplyContext<'a> {
         ApplyContext {
             host: host,
             wb: Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE)),
-            raft_wb: Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE)),
+            raft_wb: Some(WriteBatch::new()),
             cbs: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
@@ -395,7 +395,7 @@ impl ApplyDelegate {
                     cb(resp);
                 }
                 apply_ctx.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
-                apply_ctx.raft_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                apply_ctx.raft_wb = Some(WriteBatch::new());
                 apply_ctx.mark_last_bytes_and_keys();
             }
 

@@ -183,9 +183,9 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
+        let engines = Engines::new(raft_engine.clone(), kv_engine.clone());
         node.start(event_loop,
-                   raft_engine.clone(),
-                   kv_engine.clone(),
+                   engines,
                    simulate_trans.clone(),
                    snap_mgr.clone(),
                    snap_status_receiver)

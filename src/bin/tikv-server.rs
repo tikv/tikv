@@ -70,7 +70,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Con
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
-use tikv::raftstore::store::{self, SnapManager};
+use tikv::raftstore::store::{self, SnapManager, Engines};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::util::time_monitor::TimeMonitor;
@@ -1039,12 +1039,8 @@ fn run_raft_server(pd_client: RpcClient,
 
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
-    node.start(event_loop,
-               raft_engine.clone(),
-               kv_engine.clone(),
-               trans,
-               snap_mgr,
-               snap_status_receiver)
+    let engines = Engines::new(raft_engine.clone(), kv_engine.clone());
+    node.start(event_loop, engines, trans, snap_mgr, snap_status_receiver)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     initial_metric(config, Some(node.id()));
 
