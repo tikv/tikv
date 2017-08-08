@@ -246,7 +246,7 @@ impl IndexHandles {
         Ok(IndexHandles(res))
     }
 
-    fn get_approximate_diff_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
+    fn get_approximate_distance_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
         let mut range = self.range::<[u8], _>((Included(start), Unbounded));
         let start_offset = match range.next() {
             Some((_, v)) => v.offset,
@@ -281,7 +281,7 @@ impl RowsProperties {
     }
 
     pub fn get_approximate_rows_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.index_handles.get_approximate_diff_in_range(start, end)
+        self.index_handles.get_approximate_distance_in_range(start, end)
     }
 }
 
@@ -307,7 +307,7 @@ impl SizeProperties {
     }
 
     pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.index_handles.get_approximate_diff_in_range(start, end)
+        self.index_handles.get_approximate_distance_in_range(start, end)
     }
 }
 
