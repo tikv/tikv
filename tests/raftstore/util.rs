@@ -164,6 +164,15 @@ pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
     cmd
 }
 
+pub fn new_delete_range_cmd(cf: &str, start: &[u8], end: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::DeleteRange);
+    cmd.mut_delete_range().set_start_key(start.to_vec());
+    cmd.mut_delete_range().set_end_key(end.to_vec());
+    cmd.mut_delete_range().set_cf(cf.to_string());
+    cmd
+}
+
 pub fn new_status_request(region_id: u64,
                           peer: metapb::Peer,
                           request: StatusRequest)
