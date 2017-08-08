@@ -238,10 +238,10 @@ fn main() {
             }
         }
     } else if let Some(matches) = matches.subcommand_matches("diff") {
-        let region = String::from(matches.value_of("region").unwrap());
+        let region_id: u64 = matches.value_of("region").unwrap().parse().unwrap();
         let db_path2 = matches.value_of("to").unwrap();
         let db2 = util::rocksdb::open(db_path2, ALL_CFS).unwrap();
-        dump_diff(&db, &db2, str::parse::<u64>(&region).unwrap());
+        dump_diff(&db, &db2, region_id);
     } else {
         let _ = app.print_help();
     }
@@ -409,7 +409,6 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
         iter2.seek(SeekKey::Key(start_key));
         let mut has_diff = false;
         let mut common_head_len = 0;
-        let mut common_tail_len = 0;
         while iter.valid() && iter2.valid() {
             if iter.key() != iter2.key() {
                 if iter.key() > iter2.key() {
@@ -426,17 +425,14 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
                 }
 
             }
-            if has_diff {
-                common_tail_len += 1;
-            } else {
+            if !has_diff {
                 common_head_len += 1;
             }
             iter.next();
             iter2.next();
         }
-        println!("head have {} same keys, tail have {} same keys",
-                 common_head_len,
-                 common_tail_len);
+        println!("head have {} same keys",
+                 common_head_len);
 
         if !iter.valid() && iter2.valid() {
             println!("iter1 invalid but iter2 valid!");
