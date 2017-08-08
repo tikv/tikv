@@ -84,7 +84,7 @@ type SnapshotJob = (Vec<u64>, CbContext, EngineResult<Box<Snapshot>>);
 pub enum Msg {
     Quit,
     RawCmd { cmd: Command, cb: StorageCb },
-    BacklogSnapshot(Vec<(Context, Vec<u64>)>),
+    ReadIndexSnapshot(Vec<(Context, Vec<u64>)>),
     SnapshotFinished {
         cids: Vec<u64>,
         cb_ctx: CbContext,
@@ -113,7 +113,7 @@ impl Debug for Msg {
         match *self {
             Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
-            Msg::BacklogSnapshot(ref backlog) => write!(f, "BacklogSnapshot {:?}", backlog),
+            Msg::ReadIndexSnapshot(ref backlog) => write!(f, "ReadIndexSnapshot {:?}", backlog),
             Msg::SnapshotFinished { ref cids, .. } => {
                 write!(f, "SnapshotFinished [cids={:?}]", cids)
             }
@@ -993,7 +993,7 @@ impl Scheduler {
 
     /// Initiates an async operation to batch get snapshot from the storage engine, then posts a
     /// `BatchSnapshotFinished` message back to the event loop when it finishes, also it posts a
-    /// `BacklogSnapshot` message if there are any `None` responses.
+    /// `ReadIndexSnapshot` message if there are any `None` responses.
     fn batch_get_snapshot(&mut self, batch: Vec<(Context, Vec<u64>)>) {
         let mut all_cids = Vec::with_capacity(batch.iter()
             .fold(0, |acc, &(_, ref cids)| acc + cids.len()));
@@ -1030,7 +1030,7 @@ impl Scheduler {
                 }
             }
             if !backlog.is_empty() {
-                match ch.send(Msg::BacklogSnapshot(backlog)) {
+                match ch.send(Msg::ReadIndexSnapshot(backlog)) {
                     Ok(_) => {}
                     e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
                     Err(e) => {
@@ -1199,7 +1199,7 @@ impl Scheduler {
                 match msg {
                     Msg::Quit => return Ok(()),
                     Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-                    Msg::BacklogSnapshot(backlog) => {
+                    Msg::ReadIndexSnapshot(backlog) => {
                         BATCH_COMMANDS.with_label_values(&["backlog"])
                             .observe(backlog.len() as f64);
                         for (ctx, cids) in backlog {
