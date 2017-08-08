@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::io;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 
 use super::super::codec::mysql::{Duration, Time, Decimal};
 use super::super::codec::Datum;
@@ -46,6 +46,10 @@ quick_error! {
             description("codec error")
             display("codec error: {}", err)
             cause(err)
+        }
+        ColumnOffset(offset: usize) {
+            description("column offset not found")
+            display("illegal column offset: {}", offset)
         }
         Other(desc: &'static str) {
             description(desc)
@@ -83,6 +87,7 @@ pub enum Expression {
     ScalarFn(FnCall),
 }
 
+/// A single scalar function call
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnCall {
     sig: ScalarFuncSig,
@@ -109,7 +114,9 @@ impl Expression {
     fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref datum) => Ok(datum.to_i64()),
-            Expression::ColumnRef(offset) => row.get(offset).map(Datum::to_i64).ok_or_else(|| Error::Other("offset not fount")),
+            Expression::ColumnRef(offset) => {
+                row.get(offset).map(Datum::to_i64).ok_or_else(|| Error::ColumnOffset(offset))
+            }
             Expression::ScalarFn(ref fun) => {
                 match fun.sig {
                     ScalarFuncSig::CastIntAsInt => fun.children[0].eval_int(row, ctx),
@@ -120,9 +127,8 @@ impl Expression {
                         let lhs = try!(fun.children[0].eval_int(row, ctx));
                         let rhs = try!(fun.children[1].eval_int(row, ctx));
                         match (lhs, rhs) {
-                            (None, _) => Ok(None),
-                            (_, None) => Ok(None),
-                            (Some(l), Some(r)) => Ok(Some((l < r) as i64))
+                            (Some(l), Some(r)) => Ok(Some((l < r) as i64)),
+                            (_, _) => Ok(None),
                         }
                     },
                     _ => unimplemented!()
@@ -134,15 +140,19 @@ impl Expression {
     fn eval_real(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<f64>> {
         unimplemented!()
     }
+
     fn eval_decimal(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<Decimal>> {
         unimplemented!()
     }
+
     fn eval_string(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<String>> {
         unimplemented!()
     }
+
     fn eval_time(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<Time>> {
         unimplemented!()
     }
+    
     fn eval_duration(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<Duration>> {
         unimplemented!()
     }
@@ -210,7 +220,7 @@ impl TryFrom<Expr> for Expression {
                     .map(|i| Expression::ColumnRef(i as usize))
                     .map_err(Error::from)
             }
-            _ => unreachable!("can't handle in DAG mode")
+            unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled)
         }
     }
 }
