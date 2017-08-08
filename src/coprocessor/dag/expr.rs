@@ -14,19 +14,17 @@
 use std::io;
 use std::convert::{TryFrom, TryInto};
 
-use super::super::codec::mysql::{Duration, Time, Decimal};
-use super::super::codec::Datum;
-use super::super::super::util;
-
 use chrono::FixedOffset;
 
 use tipb::expression::{ExprType, ScalarFuncSig};
 use tipb::expression::Expr;
 use tipb::select::DAGRequest;
 
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use coprocessor::codec::mysql::{Duration, Time, Decimal, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
-use coprocessor::codec::mysql::MAX_FSP;
+use coprocessor::codec::Datum;
+use util;
+use util::codec::number::{NumberDecoder, NumberEncoder};
 
 quick_error! {
     #[derive(Debug)]
@@ -152,7 +150,7 @@ impl Expression {
     fn eval_time(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<Time>> {
         unimplemented!()
     }
-    
+
     fn eval_duration(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<Duration>> {
         unimplemented!()
     }
