@@ -414,12 +414,16 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
                 if iter.key() > iter2.key() {
                     has_diff = true;
                     println!("only db2 has : {:?}", escape(iter2.key()));
+                    println!("timestamp: {}",
+                             Key::from_encoded(iter2.key().to_vec()).decode_ts().unwrap());
                     iter2.next();
                     continue;
                 }
                 if iter.key() < iter2.key() {
                     has_diff = true;
                     println!("only db1 has : {:?}", escape(iter.key()));
+                    println!("timestamp: {}",
+                             Key::from_encoded(iter.key().to_vec()).decode_ts().unwrap());
                     iter.next();
                     continue;
                 }
