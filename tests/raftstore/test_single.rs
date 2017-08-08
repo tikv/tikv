@@ -64,6 +64,27 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
+fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+
+    for i in 1..1000 {
+        let (k, v) = (format!("key{}", i), format!("value{}", i));
+        let key = k.as_bytes();
+        let value = v.as_bytes();
+        cluster.must_put(key, value);
+        let v = cluster.get(key);
+        assert_eq!(v, Some(value.to_vec()));
+    }
+
+    cluster.must_delete_range(b"key1", b"key9999");
+
+    for i in 1..1000 {
+        let k = format!("key{}", i);
+        let key = k.as_bytes();
+        assert!(cluster.get(key).is_none());
+    }
+}
+
 fn test_wrong_store_id<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
@@ -105,6 +126,12 @@ fn test_node_delete() {
 }
 
 #[test]
+fn test_node_delete_range() {
+    let mut cluster = new_node_cluster(0, 1);
+    test_delete_range(&mut cluster);
+}
+
+#[test]
 fn test_node_wrong_store_id() {
     let mut cluster = new_node_cluster(0, 1);
     test_wrong_store_id(&mut cluster);
@@ -120,6 +147,12 @@ fn test_server_put() {
 fn test_server_delete() {
     let mut cluster = new_server_cluster(0, 1);
     test_delete(&mut cluster);
+}
+
+#[test]
+fn test_server_delete_range() {
+    let mut cluster = new_server_cluster(0, 1);
+    test_delete_range(&mut cluster);
 }
 
 #[test]

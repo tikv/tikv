@@ -25,7 +25,7 @@ use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, DEFAULT_DATA_DIR};
 use util::config::{self, ReadableDuration, ReadableSize, KB, MB, GB, compression_type_level_serde};
-use util::properties::MvccPropertiesCollectorFactory;
+use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
 use util::rocksdb::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
                     CFOptions};
 
@@ -168,7 +168,10 @@ impl CfConfig {
         cf_opts.compaction_priority(self.compaction_pri);
 
         match self.cf.as_str() {
-            CF_DEFAULT => {}
+            CF_DEFAULT => {
+                let f = Box::new(SizePropertiesCollectorFactory::default());
+                cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
+            }
             CF_WRITE => {
                 // Prefix extractor(trim the timestamp at tail) for write cf.
                 let e = Box::new(FixedSuffixSliceTransform::new(8));
@@ -178,6 +181,8 @@ impl CfConfig {
                 // Collects user defined properties.
                 let f = Box::new(MvccPropertiesCollectorFactory::default());
                 cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+                let f = Box::new(SizePropertiesCollectorFactory::default());
+                cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
             }
             CF_RAFT => {
                 let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));

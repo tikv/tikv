@@ -34,6 +34,8 @@ use tikv::config::TiKvConfig;
 
 pub use tikv::raftstore::store::util::find_peer;
 
+pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
+
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
@@ -88,7 +90,7 @@ pub fn new_store_cfg() -> Config {
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: ReadableDuration::secs(3),
         report_region_flow_interval: ReadableDuration::millis(100),
-        raft_store_max_leader_lease: ReadableDuration::millis(25 * 10),
+        raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
         use_sst_file_snapshot: true,
         allow_remove_leader: true,
         ..Config::default()
@@ -165,6 +167,15 @@ pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
     cmd.set_cmd_type(CmdType::Delete);
     cmd.mut_delete().set_key(key.to_vec());
     cmd.mut_delete().set_cf(cf.to_string());
+    cmd
+}
+
+pub fn new_delete_range_cmd(cf: &str, start: &[u8], end: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::DeleteRange);
+    cmd.mut_delete_range().set_start_key(start.to_vec());
+    cmd.mut_delete_range().set_end_key(end.to_vec());
+    cmd.mut_delete_range().set_cf(cf.to_string());
     cmd
 }
 

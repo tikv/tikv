@@ -22,7 +22,7 @@ use util::HandyRwLock;
 use util::worker::{Stopped, Scheduler};
 use util::collections::HashSet;
 use raft::SnapshotStatus;
-use raftstore::store::{Msg as StoreMsg, SnapshotStatusMsg, Transport, Callback};
+use raftstore::store::{Msg as StoreMsg, SnapshotStatusMsg, Transport, Callback, BatchCallback};
 use raftstore::Result as RaftStoreResult;
 use server::raft_client::RaftClient;
 use server::Result;
@@ -45,6 +45,14 @@ pub trait RaftStoreRouter: Send + Clone {
     // Send RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
+    }
+
+    // Send a batch of RaftCmdRequests to local store.
+    fn send_batch_commands(&self,
+                           batch: Vec<RaftCmdRequest>,
+                           on_finished: BatchCallback)
+                           -> RaftStoreResult<()> {
+        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64, _: u64) -> RaftStoreResult<()> {
@@ -83,6 +91,13 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
+    }
+
+    fn send_batch_commands(&self,
+                           batch: Vec<RaftCmdRequest>,
+                           on_finished: BatchCallback)
+                           -> RaftStoreResult<()> {
+        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
 
     fn report_unreachable(&self,

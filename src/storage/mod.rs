@@ -18,6 +18,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::error;
 use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
+use std::u64;
 use kvproto::kvrpcpb::{LockInfo, CommandPri};
 use kvproto::errorpb;
 use self::metrics::*;
@@ -45,6 +46,7 @@ pub const CF_RAFT: CfName = "raft";
 // Cfs that should be very large generally.
 pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
+pub const DATA_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -146,6 +148,11 @@ pub enum Command {
         start_key: Key,
         limit: usize,
     },
+    DeleteRange {
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+    },
     Pause { ctx: Context, duration: u64 },
     MvccByKey { ctx: Context, key: Key },
     MvccByStartTs { ctx: Context, start_ts: u64 },
@@ -224,6 +231,13 @@ impl Display for Command {
                        limit,
                        ctx)
             }
+            Command::DeleteRange { ref ctx, ref start_key, ref end_key } => {
+                write!(f,
+                       "kv::command::delete range [{:?}, {:?}) | {:?}",
+                       start_key,
+                       end_key,
+                       ctx)
+            }
             Command::Pause { ref ctx, duration } => {
                 write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
             }
@@ -254,6 +268,10 @@ impl Command {
             Command::ScanLock { .. } |
             Command::RawGet { .. } |
             Command::RawScan { .. } |
+            // DeleteRange only called by DDL bg thread after table is dropped and
+            // must guarantee that there is no other read or write on these keys, so
+            // we can treat DeleteRange as readonly Command.
+            Command::DeleteRange { .. } |
             Command::Pause { .. } |
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
@@ -293,6 +311,7 @@ impl Command {
             Command::Gc { .. } => CMD_TAG_GC,
             Command::RawGet { .. } => "raw_get",
             Command::RawScan { .. } => "raw_scan",
+            Command::DeleteRange { .. } => "delete_range",
             Command::Pause { .. } => "pause",
             Command::MvccByKey { .. } => "key_mvcc",
             Command::MvccByStartTs { .. } => "start_ts_mvcc",
@@ -314,6 +333,7 @@ impl Command {
             Command::Gc { safe_point, .. } => safe_point,
             Command::RawGet { .. } |
             Command::RawScan { .. } |
+            Command::DeleteRange { .. } |
             Command::Pause { .. } |
             Command::MvccByKey { .. } => 0,
         }
@@ -333,6 +353,7 @@ impl Command {
             Command::Gc { ref ctx, .. } |
             Command::RawGet { ref ctx, .. } |
             Command::RawScan { ref ctx, .. } |
+            Command::DeleteRange { ref ctx, .. } |
             Command::Pause { ref ctx, .. } |
             Command::MvccByKey { ref ctx, .. } |
             Command::MvccByStartTs { ref ctx, .. } => ctx,
@@ -353,6 +374,7 @@ impl Command {
             Command::Gc { ref mut ctx, .. } |
             Command::RawGet { ref mut ctx, .. } |
             Command::RawScan { ref mut ctx, .. } |
+            Command::DeleteRange { ref mut ctx, .. } |
             Command::Pause { ref mut ctx, .. } |
             Command::MvccByKey { ref mut ctx, .. } |
             Command::MvccByStartTs { ref mut ctx, .. } => ctx,
@@ -574,6 +596,36 @@ impl Storage {
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        Ok(())
+    }
+
+    pub fn async_delete_range(&self,
+                              ctx: Context,
+                              start_key: Key,
+                              end_key: Key,
+                              callback: Callback<()>)
+                              -> Result<()> {
+        let mut modifies = Vec::with_capacity(DATA_CFS.len());
+        for cf in DATA_CFS {
+            // We enable memtable prefix bloom for CF_WRITE column family, for delete_range
+            // operation, RocksDB will add start key to the prefix bloom, and the start key
+            // will go through function prefix_extractor. In our case the prefix_extractor
+            // is FixedSuffixSliceTransform, which will trim the timestamp at the tail. If the
+            // length of start key is less than 8, we will encounter index out of range error.
+            let s = if *cf == CF_WRITE {
+                start_key.append_ts(u64::MAX)
+            } else {
+                start_key.clone()
+            };
+            modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
+        }
+
+        try!(self.engine.async_write(&ctx,
+                                     modifies,
+                                     box |(_, res): (_, engine::Result<_>)| {
+                                         callback(res.map_err(Error::from))
+                                     }));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&["delete_range"]).inc();
         Ok(())
     }
 
@@ -1252,6 +1304,91 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 4);
         assert_eq!(rx.recv().unwrap(), 3);
 
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_delete_range() {
+        let config = Config::default();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        // Write x and y.
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec())),
+                                 Mutation::Put((make_key(b"y"), b"100".to_vec())),
+                                 Mutation::Put((make_key(b"z"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            Options::default(),
+                            expect_ok(tx.clone(), 0))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_commit(Context::new(),
+                          vec![make_key(b"x"), make_key(b"y"), make_key(b"z")],
+                          100,
+                          101,
+                          expect_ok(tx.clone(), 1))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 2))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"y"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 3))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"z"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 4))
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Delete range [x, z)
+        storage.async_delete_range(Context::new(),
+                                make_key(b"x"),
+                                make_key(b"z"),
+                                expect_ok(tx.clone(), 5))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       101,
+                       expect_get_none(tx.clone(), 6))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"y"),
+                       101,
+                       expect_get_none(tx.clone(), 7))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"z"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 8))
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Delete range ["", ""), it means delete all
+        storage.async_delete_range(Context::new(),
+                                make_key(b""),
+                                make_key(b""),
+                                expect_ok(tx.clone(), 9))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"z"),
+                       101,
+                       expect_get_none(tx.clone(), 10))
+            .unwrap();
+        rx.recv().unwrap();
         storage.stop().unwrap();
     }
 }
