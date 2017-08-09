@@ -995,22 +995,19 @@ impl Scheduler {
     /// `BatchSnapshotFinished` message back to the event loop when it finishes, also it posts a
     /// `GetSnapshot` message if there are any `None` responses.
     fn batch_get_snapshot(&mut self, batch: Vec<(Context, Vec<u64>)>) {
-        let mut all_cids = Vec::with_capacity(batch.iter()
-            .fold(0, |acc, &(_, ref cids)| acc + cids.len()));
+        let mut all_cids = Vec::with_capacity(batch.iter().map(|&(_, ref cids)| cids.len()).sum());
         for &(_, ref cids) in &batch {
             all_cids.extend(cids);
         }
 
-        let batch1 = batch.clone();
+        let batch1 = batch.iter().map(|&(ref ctx, _)| ctx.clone()).collect();
         let ch = self.schedch.clone();
         let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
-            let mut ready_ids: Vec<u64> = Vec::new();
             let mut retry = Vec::new();
             for ((ctx, cids), snapshot) in batch.into_iter().zip(results) {
                 match snapshot {
                     Some((cb_ctx, snapshot)) => {
-                        ready_ids.extend(&cids);
                         ready.push((cids, cb_ctx, snapshot));
                     }
                     None => {
@@ -1023,28 +1020,24 @@ impl Scheduler {
                     Ok(_) => {}
                     e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
                     Err(e) => {
-                        panic!("send SnapshotFinish failed cmd ids err cmd ids {:?}, {:?}",
-                               ready_ids,
-                               e);
+                        panic!("send BatchSnapshotFinish failed err {:?}", e);
                     }
                 }
             }
             if !retry.is_empty() {
+                BATCH_COMMANDS.with_label_values(&["retry"]).observe(retry.len() as f64);
                 match ch.send(Msg::GetSnapshot(retry)) {
                     Ok(_) => {}
                     e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
                     Err(e) => {
-                        panic!("send SnapshotFinish failed cmd ids err cmd ids {:?}, {:?}",
-                               ready_ids,
-                               e);
+                        panic!("send GetSnapshot failed err {:?}", e);
                     }
                 }
             }
         };
 
         if let Err(e) = self.engine
-            .async_batch_snapshot(batch1.into_iter().map(|(ctx, _)| ctx).collect(),
-                                  on_finished) {
+            .async_batch_snapshot(batch1, on_finished) {
             for cid in all_cids {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
@@ -1200,8 +1193,6 @@ impl Scheduler {
                     Msg::Quit => return Ok(()),
                     Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
                     Msg::GetSnapshot(tasks) => {
-                        BATCH_COMMANDS.with_label_values(&["retry"])
-                            .observe(tasks.len() as f64);
                         for (ctx, cids) in tasks {
                             self.get_snapshot(&ctx, cids);
                         }
