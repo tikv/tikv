@@ -17,6 +17,11 @@ use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Result, Error};
+use raftstore::store::keys;
+use rocksdb::{DB, Range, TablePropertiesCollection};
+use storage::LARGE_CFS;
+use util::properties::SizeProperties;
+use util::rocksdb as rocksdb_util;
 
 use super::peer_storage;
 
@@ -89,6 +94,42 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
     epoch.get_conf_ver() < check_epoch.get_conf_ver()
 }
 
+pub fn get_region_properties_cf(db: &DB,
+                                cfname: &str,
+                                region: &metapb::Region)
+                                -> Result<TablePropertiesCollection> {
+    let cf = try!(rocksdb_util::get_cf_handle(db, cfname));
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    db.get_properties_of_tables_in_range(cf, &[range]).map_err(|e| e.into())
+}
+
+pub fn get_region_approximate_size_cf(db: &DB,
+                                      cfname: &str,
+                                      region: &metapb::Region)
+                                      -> Result<u64> {
+    let cf = try!(rocksdb_util::get_cf_handle(db, cfname));
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
+    let collection = try!(db.get_properties_of_tables_in_range(cf, &[range]));
+    for (_, v) in &*collection {
+        let props = try!(SizeProperties::decode(v.user_collected_properties()));
+        size += props.get_approximate_size_in_range(&start, &end);
+    }
+    Ok(size)
+}
+
+pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
+    let mut size = 0;
+    for cfname in LARGE_CFS {
+        size += try!(get_region_approximate_size_cf(db, cfname, region))
+    }
+    Ok(size)
+}
+
 #[cfg(test)]
 mod tests {
     use kvproto::metapb;
@@ -96,7 +137,11 @@ mod tests {
     use kvproto::eraftpb::{Message, ConfChangeType, MessageType};
 
     use super::*;
+    use tempdir::TempDir;
     use raftstore::store::peer_storage;
+    use rocksdb::{DBOptions, ColumnFamilyOptions, Writable};
+    use util::rocksdb::CFOptions;
+    use util::properties::SizePropertiesCollectorFactory;
 
     // Tests the util function `check_key_in_region`.
     #[test]
@@ -174,6 +219,55 @@ mod tests {
             check_epoch.set_version(version);
             check_epoch.set_conf_ver(conf_version);
             assert_eq!(is_epoch_stale(&epoch, &check_epoch), is_stale);
+        }
+    }
+
+    fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> metapb::Region {
+        let mut peer = metapb::Peer::new();
+        peer.set_id(id);
+        peer.set_store_id(id);
+        let mut region = metapb::Region::new();
+        region.set_id(id);
+        region.set_start_key(start_key);
+        region.set_end_key(end_key);
+        region.mut_peers().push(peer);
+        region
+    }
+
+    #[test]
+    fn test_region_approximate_size() {
+        let path = TempDir::new("_test_raftstore_region_approximate_size").expect("");
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(SizePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let cfs_opts = LARGE_CFS.iter().map(|cf| CFOptions::new(cf, cf_opts.clone())).collect();
+        let db = rocksdb_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
+        let cf_size = 2 + 1024 + 2 + 2048 + 2 + 4096;
+        for &(key, vlen) in &cases {
+            for cfname in LARGE_CFS {
+                let k1 = keys::data_key(b" ");
+                let v1 = vec![];
+                let k2 = keys::data_key(key.as_bytes());
+                let v2 = vec![0; vlen as usize];
+                assert_eq!(k2.len(), 2);
+                let cf = db.cf_handle(cfname).unwrap();
+                db.put_cf(cf, &k1, &v1).unwrap();
+                db.put_cf(cf, &k2, &v2).unwrap();
+                db.flush_cf(cf, true).unwrap();
+            }
+        }
+
+        let region = make_region(1, vec![], vec![]);
+        let size = get_region_approximate_size(&db, &region).unwrap();
+        assert_eq!(size, cf_size * LARGE_CFS.len() as u64);
+        for cfname in LARGE_CFS {
+            let size = get_region_approximate_size_cf(&db, cfname, &region).unwrap();
+            assert_eq!(size, cf_size);
         }
     }
 }
