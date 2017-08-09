@@ -56,26 +56,15 @@ quick_error! {
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
-/// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
-/// truncate error.
-/// `FLAG_IGNORE_TRUNCATE` indicates if truncate error should be ignored.
-/// Read-only statements should ignore truncate error, write statements should not ignore
-/// truncate error.
 pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
-/// `FLAG_TRUNCATE_AS_WARNING` indicates if truncate error should be returned as warning.
-/// This flag only matters if `FLAG_IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
-/// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
 pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
-/// StatementContext contains variables for a statement
-/// It should be reset before executing a statement
 pub struct StatementContext {
     ignore_truncate: bool,
     truncate_as_warning: bool,
     timezone: FixedOffset,
 }
 
-/// Expression represents all scalar expression in SQL.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expression {
     expr: ExprKind,
@@ -152,54 +141,71 @@ impl TryFrom<Expr> for Expression {
                 })
             }
             ExprType::Int64 => {
-                expr.get_val().decode_i64()
+                expr.get_val()
+                    .decode_i64()
                     .map(Datum::I64)
-                    .map(|e| Expression {
-                        expr: ExprKind::Constant(e),
-                        ret_type: ret_type,
+                    .map(|e| {
+                        Expression {
+                            expr: ExprKind::Constant(e),
+                            ret_type: ret_type,
+                        }
                     })
                     .map_err(Error::from)
             }
             ExprType::Uint64 => {
-                expr.get_val().decode_u64()
+                expr.get_val()
+                    .decode_u64()
                     .map(Datum::U64)
-                    .map(|e| Expression {
-                        expr: ExprKind::Constant(e),
-                        ret_type: ret_type,
+                    .map(|e| {
+                        Expression {
+                            expr: ExprKind::Constant(e),
+                            ret_type: ret_type,
+                        }
                     })
                     .map_err(Error::from)
             }
-            ExprType::String | ExprType::Bytes => {
+            ExprType::String |
+            ExprType::Bytes => {
                 Ok(Expression {
                     expr: ExprKind::Constant(Datum::Bytes(expr.take_val())),
                     ret_type: ret_type,
                 })
             }
-            ExprType::Float32 | ExprType::Float64 => {
-                expr.get_val().decode_f64()
+            ExprType::Float32 |
+            ExprType::Float64 => {
+                expr.get_val()
+                    .decode_f64()
                     .map(Datum::F64)
-                    .map(|e| Expression {
-                        expr: ExprKind::Constant(e),
-                        ret_type: ret_type,
+                    .map(|e| {
+                        Expression {
+                            expr: ExprKind::Constant(e),
+                            ret_type: ret_type,
+                        }
                     })
                     .map_err(Error::from)
             }
             ExprType::MysqlDuration => {
-                expr.get_val().decode_i64()
+                expr.get_val()
+                    .decode_i64()
                     .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                     .map(Datum::Dur)
-                    .map(|e| Expression {
-                        expr: ExprKind::Constant(e),
-                        ret_type: ret_type,
+                    .map(|e| {
+                        Expression {
+                            expr: ExprKind::Constant(e),
+                            ret_type: ret_type,
+                        }
                     })
                     .map_err(Error::from)
             }
             ExprType::MysqlDecimal => {
-                expr.get_val().decode_decimal()
+                expr.get_val()
+                    .decode_decimal()
                     .map(Datum::Dec)
-                    .map(|e| Expression {
-                        expr: ExprKind::Constant(e),
-                        ret_type: ret_type,
+                    .map(|e| {
+                        Expression {
+                            expr: ExprKind::Constant(e),
+                            ret_type: ret_type,
+                        }
                     })
                     .map_err(Error::from)
             }
@@ -207,7 +213,8 @@ impl TryFrom<Expr> for Expression {
             ExprType::ScalarFunc => {
                 let sig = expr.get_sig();
                 let mut expr = expr;
-                expr.take_children().into_iter()
+                expr.take_children()
+                    .into_iter()
                     .map(Expression::try_from)
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
@@ -221,7 +228,8 @@ impl TryFrom<Expr> for Expression {
                     })
             }
             ExprType::ColumnRef => {
-                expr.get_val().decode_i64()
+                expr.get_val()
+                    .decode_i64()
                     .map(|i| {
                         Expression {
                             expr: ExprKind::ColumnRef(i as usize),
@@ -230,7 +238,7 @@ impl TryFrom<Expr> for Expression {
                     })
                     .map_err(Error::from)
             }
-            unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled)
+            unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
         }
     }
 }
