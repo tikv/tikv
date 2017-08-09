@@ -261,7 +261,8 @@ impl PartialEq for HashableContext {
         // k1 == k2 ⇒ hash(k1) == hash(k2)
         self.0.get_region_id() == other.0.get_region_id() &&
         self.0.get_region_epoch().get_version() == other.0.get_region_epoch().get_version() &&
-        self.0.get_peer().get_id() == other.0.get_peer().get_id()
+        self.0.get_peer().get_id() == other.0.get_peer().get_id() &&
+        self.0.get_term() == other.0.get_term()
     }
 }
 
@@ -269,7 +270,10 @@ impl Hash for HashableContext {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let key = {
             let ctx = &self.0;
-            (ctx.get_region_id(), ctx.get_region_epoch().get_version(), ctx.get_peer().get_id())
+            (ctx.get_region_id(),
+             ctx.get_region_epoch().get_version(),
+             ctx.get_peer().get_id(),
+             ctx.get_term())
         };
         Hash::hash(&key, state);
     }
