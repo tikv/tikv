@@ -20,6 +20,7 @@ use std::cmp::Ordering;
 
 use byteorder::ReadBytesExt;
 
+use coprocessor::select::xeval::EvalContext;
 use util::codec::bytes::BytesDecoder;
 use super::super::{Result, Error, TEN_POW, convert};
 
@@ -389,6 +390,14 @@ fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
         }
     }
     res
+}
+
+/// `max_or_min_dec`(`NewMaxOrMinDec` in tidb) returns the max or min
+/// value decimal for given precision and fraction.
+pub fn max_or_min_dec(negative: bool, prec: u8, frac: u8) -> Decimal {
+    let mut ret = max_decimal(prec, frac);
+    ret.negative = negative;
+    ret
 }
 
 /// add lhs to rhs.
@@ -772,11 +781,20 @@ pub struct Decimal {
     /// The number of calculated or printed result fraction digits.
     result_frac_cnt: u8,
 
-    negative: bool,
+    pub negative: bool,
 
     /// An array of u32 words.
     /// A word is an u32 value can hold 9 digits.(0 <= word < wordBase)
     word_buf: Box<[u32]>,
+}
+
+pub enum RoundMode {
+    // ModeHalfEven rounds normally.
+    HafEven,
+    // Truncate just truncates the decimal.
+    Truncate,
+    // Ceiling is not supported now.
+    Ceiling,
 }
 
 impl Decimal {
@@ -980,16 +998,49 @@ impl Decimal {
         self.word_buf[buf_from] /= TEN_POW[shift];
     }
 
+    /// convert_to(ProduceDecWithSpecifiedTp in tidb)
+    /// produces a new decimal according to `flen` and `decimal`.
+    pub fn convert_to(self, ctx: &EvalContext, flen: i32, decimal: i32) -> Result<Decimal> {
+        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+            return Ok(self);
+        }
+
+        let decimal = decimal as u8;
+        let flen = flen as u8;
+        let (prec, frac) = self.prec_and_frac();
+        if !self.is_zero() && prec - frac > (flen - decimal) as u8 {
+            return Ok(max_or_min_dec(self.negative, flen as u8, decimal));
+            // TODO:select (cast 111 as decimal(1)) causes a warning in MySQL.
+        }
+
+        if frac == decimal {
+            return Ok(self);
+        }
+
+        let tmp = self.clone();
+        let ret = self.round(frac as i8, RoundMode::HafEven).unwrap();
+        // TODO: process over_flow
+        if !ret.is_zero() && frac > decimal && !ret.eq(&tmp) {
+            // TODO handle InInsertStmt in ctx
+            try!(convert::handle_truncate(ctx, true));
+        }
+        Ok(ret)
+    }
+
     /// Round rounds the decimal to "frac" digits.
     ///
     /// NOTES
     ///  scale can be negative !
     ///  one TRUNCATED error (line XXX below) isn't treated very logical :(
-    pub fn round(self, frac: i8) -> Res<Decimal> {
-        self.round_with_word_buf_len(frac, WORD_BUF_LEN)
+    pub fn round(self, frac: i8, round_mode: RoundMode) -> Res<Decimal> {
+        self.round_with_word_buf_len(frac, WORD_BUF_LEN, round_mode)
     }
 
-    pub fn round_with_word_buf_len(mut self, mut frac: i8, word_buf_len: u8) -> Res<Decimal> {
+    pub fn round_with_word_buf_len(mut self,
+                                   mut frac: i8,
+                                   word_buf_len: u8,
+                                   round_mode: RoundMode)
+                                   -> Res<Decimal> {
         if frac > MAX_FRACTION as i8 {
             frac = MAX_FRACTION as i8;
         }
@@ -1028,7 +1079,8 @@ impl Decimal {
                              frac_words_to,
                              frac,
                              frac_word_cnt,
-                             word_buf_len)
+                             word_buf_len,
+                             round_mode)
     }
 
     fn handle_incr(mut res: Res<Decimal>,
@@ -1036,13 +1088,35 @@ impl Decimal {
                    frac_words_to: i8,
                    frac: i8,
                    frac_word_cnt: u8,
-                   word_buf_len: u8)
+                   word_buf_len: u8,
+                   round_mode: RoundMode)
                    -> Res<Decimal> {
         // Do increment
         let mut to_idx = int_word_cnt as i8 + frac_words_to - 1;
         if frac == frac_words_to * DIGITS_PER_WORD as i8 {
-            // only support haftup currently
-            if res.word_buf[(to_idx + 1) as usize] / DIG_MASK >= 5 {
+            let do_inc = match round_mode {
+                // Notice: No support for ceiling mode now.
+                RoundMode::Ceiling => {
+                    // If any word after scale is not zero, do increment.
+                    // e.g ceiling 3.0001 to scale 1, gets 3.1
+                    let mut idx = to_idx + (frac_word_cnt as i8) + frac_words_to;
+                    // TODO:res.word_buf.iter().skip(to_idx)
+                    while idx > to_idx {
+                        if res.word_buf[idx as usize] != 0 {
+                            break;
+                        }
+                        idx -= 1;
+                    }
+                    idx > to_idx
+                }
+                RoundMode::HafEven => {
+                    // If first digit after scale is 5 and round even,
+                    // do increment if digit at scale is odd.
+                    res.word_buf[(to_idx + 1) as usize] / DIG_MASK >= 5
+                }
+                RoundMode::Truncate => false,
+            };
+            if do_inc {
                 if to_idx >= 0 {
                     res.word_buf[to_idx as usize] += 1;
                 } else {
@@ -1190,7 +1264,9 @@ impl Decimal {
                 return Res::Truncated(self);
             }
             end = (end as isize - diff) as u8;
-            Res::Truncated(self.round_with_word_buf_len(end as i8 - point as i8, word_buf_len)
+            Res::Truncated(self.round_with_word_buf_len(end as i8 - point as i8,
+                                                        word_buf_len,
+                                                        RoundMode::HafEven)
                 .unwrap())
         } else {
             Res::Ok(self)
@@ -1463,6 +1539,10 @@ impl Decimal {
         }
         res
     }
+
+    pub fn is_zero(&self) -> bool {
+        !self.word_buf.iter().any(|&x| x != 0)
+    }
 }
 
 macro_rules! enable_conv_for_int {
@@ -1537,7 +1617,7 @@ impl FromStr for Decimal {
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
         let mut dec = self.clone();
-        dec = dec.round(self.result_frac_cnt as i8).unwrap();
+        dec = dec.round(self.result_frac_cnt as i8, RoundMode::HafEven).unwrap();
         fmt.write_str(&dec.to_string())
     }
 }
@@ -2147,7 +2227,7 @@ mod test {
 
         for (dec_str, scale, exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec.round(scale).map(|d| d.to_string());
+            let res = dec.round(scale, RoundMode::HafEven).map(|d| d.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
     }

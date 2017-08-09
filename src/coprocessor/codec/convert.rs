@@ -16,6 +16,41 @@ use std::borrow::Cow;
 
 use coprocessor::select::xeval::EvalContext;
 use super::Result;
+// `UNSPECIFIED_LENGTH` is unspecified length from FieldType
+pub const UNSPECIFIED_LENGTH: i32 = -1;
+
+pub fn truncate_str(mut s: String, flen: isize) -> String {
+    if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
+        s.truncate(flen as usize);
+        s
+    } else {
+        s
+    }
+}
+
+// `overflow` returns an overflowed error.
+#[macro_export]
+macro_rules! overflow {
+    ($val:ident, $bound:ident) => ({
+        Err(box_err!("constant {} overflows {}", $val, $bound))
+    });
+}
+
+// `convert_int_to_uint` converts an int value to an uint value.
+pub fn convert_int_to_uint(val: i64, upper_bound: u64) -> Result<u64> {
+    if val as u64 > upper_bound {
+        return overflow!(val, upper_bound);
+    }
+    Ok(val as u64)
+}
+
+// `convert_uint_to_int` converts an uint value to an int value.
+pub fn convert_uint_to_int(val: u64, upper_bound: i64) -> Result<i64> {
+    if val > upper_bound as u64 {
+        return overflow!(val, upper_bound);
+    }
+    Ok(val as i64)
+}
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
@@ -80,7 +115,7 @@ pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
 }
 
 #[inline]
-fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
+pub fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
     if is_truncated && !(ctx.ignore_truncate || ctx.truncate_as_warning) {
         Err(box_err!("[1265] Data Truncated"))
     } else {
