@@ -52,6 +52,30 @@ pub fn convert_uint_to_int(val: u64, upper_bound: i64) -> Result<i64> {
     Ok(val as i64)
 }
 
+pub fn convert_float_to_int(fval: f64, lower_bound: i64, upper_bound: i64, tp: u8) -> Result<i64> {
+    let val = fval.round(); // TODO
+    if val < lower_bound as f64 {
+        return overflow!(val, tp);
+    }
+
+    if val > upper_bound as f64 {
+        return overflow!(val, tp);
+    }
+    Ok(val as i64)
+}
+
+pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64> {
+    let val = fval.round(); // TODO
+    if val < 0 as f64 {
+        return overflow!(val, tp);
+    }
+
+    if val > upper_bound as f64 {
+        return overflow!(val, tp);
+    }
+    Ok(val as u64)
+}
+
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
 /// Note that it does NOT handle overflow.
