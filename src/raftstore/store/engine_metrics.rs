@@ -24,24 +24,52 @@ pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &'static str = "rocksdb.cur-size-all-
 pub const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
 pub const ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES: &'static str = "rocksdb.\
                                                          estimate-pending-compaction-bytes";
-pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[TickerType::BlockCacheMiss,
-                                                         TickerType::BlockCacheHit,
-                                                         TickerType::MemtableHit,
-                                                         TickerType::MemtableMiss,
-                                                         TickerType::GetHitL0,
-                                                         TickerType::GetHitL1,
-                                                         TickerType::GetHitL2AndUp,
-                                                         TickerType::BloomFilterUseful,
-                                                         TickerType::BloomFilterPrefixChecked,
-                                                         TickerType::BloomFilterPrefixUseful,
-                                                         TickerType::NumberKeysWritten,
-                                                         TickerType::NumberKeysRead,
-                                                         TickerType::BytesWritten,
-                                                         TickerType::BytesRead,
-                                                         TickerType::IterBytesRead,
-                                                         TickerType::StallMicros,
-                                                         TickerType::CompactReadBytes,
-                                                         TickerType::CompactWriteBytes];
+pub const ENGINE_TICKER_TYPES: &'static [TickerType] =
+    &[TickerType::BlockCacheMiss,
+      TickerType::BlockCacheHit,
+      TickerType::BlockCacheIndexMiss,
+      TickerType::BlockCacheIndexHit,
+      TickerType::BlockCacheFilterMiss,
+      TickerType::BlockCacheFilterHit,
+      TickerType::BlockCacheDataMiss,
+      TickerType::BlockCacheDataHit,
+      TickerType::BlockCacheByteRead,
+      TickerType::BlockCacheByteWrite,
+      TickerType::BloomFilterUseful,
+      TickerType::MemtableHit,
+      TickerType::MemtableMiss,
+      TickerType::GetHitL0,
+      TickerType::GetHitL1,
+      TickerType::GetHitL2AndUp,
+      TickerType::CompactionKeyDropNewerEntry,
+      TickerType::CompactionKeyDropObsolete,
+      TickerType::CompactionKeyDropRangeDel,
+      TickerType::CompactionRangeDelDropObsolete,
+      TickerType::NumberKeysWritten,
+      TickerType::NumberKeysRead,
+      TickerType::BytesWritten,
+      TickerType::BytesRead,
+      TickerType::NumberDbSeek,
+      TickerType::NumberDbNext,
+      TickerType::NumberDbPrev,
+      TickerType::NumberDbSeekFound,
+      TickerType::NumberDbNextFound,
+      TickerType::NumberDbPrevFound,
+      TickerType::IterBytesRead,
+      TickerType::NoFileCloses,
+      TickerType::NoFileOpens,
+      TickerType::NoFileErrors,
+      TickerType::StallMicros,
+      TickerType::NoIterators,
+      TickerType::BloomFilterPrefixChecked,
+      TickerType::BloomFilterPrefixUseful,
+      TickerType::WalFileSynced,
+      TickerType::WalFileBytes,
+      TickerType::CompactReadBytes,
+      TickerType::CompactWriteBytes,
+      TickerType::FlushWriteBytes,
+      TickerType::ReadAmpEstimateUsefulBytes,
+      TickerType::ReadAmpTotalReadBytes];
 pub const ENGINE_HIST_TYPES: &'static [HistType] =
     &[HistType::GetMicros, HistType::WriteMicros, HistType::SeekMicros];
 
@@ -53,6 +81,40 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
         }
         TickerType::BlockCacheHit => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_hit"])
+                .set(value as f64);
+        }
+        TickerType::BlockCacheIndexMiss => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_index_miss"])
+                .set(value as f64);
+        }
+        TickerType::BlockCacheIndexHit => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_index_hit"])
+                .set(value as f64);
+        }
+        TickerType::BlockCacheFilterMiss => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_filter_miss"])
+                .set(value as f64);
+        }
+        TickerType::BlockCacheFilterHit => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_filter_hit"])
+                .set(value as f64);
+        }
+        TickerType::BlockCacheDataMiss => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_data_miss"])
+                .set(value as f64);
+        }
+        TickerType::BlockCacheDataHit => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_data_hit"])
+                .set(value as f64);
+        }
+        TickerType::BlockCacheByteRead => {
+            STORE_ENGINE_FLOW_VEC.with_label_values(&["block_cache_byte_read"]).set(value as f64);
+        }
+        TickerType::BlockCacheByteWrite => {
+            STORE_ENGINE_FLOW_VEC.with_label_values(&["block_cache_byte_write"]).set(value as f64);
+        }
+        TickerType::BloomFilterUseful => {
+            STORE_ENGINE_BLOOM_EFFICIENCY_VEC.with_label_values(&["bloom_useful"])
                 .set(value as f64);
         }
         TickerType::MemtableHit => {
@@ -73,16 +135,20 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
             STORE_ENGINE_READ_SURVED_VEC.with_label_values(&["get_hit_l2_and_up"])
                 .set(value as f64);
         }
-        TickerType::BloomFilterUseful => {
-            STORE_ENGINE_BLOOM_EFFICIENCY_VEC.with_label_values(&["bloom_useful"])
+        TickerType::CompactionKeyDropNewerEntry => {
+            STORE_ENGINE_COMPACTION_DROP_VEC.with_label_values(&["compaction_key_drop_newer_entry"])
                 .set(value as f64);
         }
-        TickerType::BloomFilterPrefixChecked => {
-            STORE_ENGINE_BLOOM_EFFICIENCY_VEC.with_label_values(&["bloom_prefix_checked"])
+        TickerType::CompactionKeyDropObsolete => {
+            STORE_ENGINE_COMPACTION_DROP_VEC.with_label_values(&["compaction_key_drop_obsolete"])
                 .set(value as f64);
         }
-        TickerType::BloomFilterPrefixUseful => {
-            STORE_ENGINE_BLOOM_EFFICIENCY_VEC.with_label_values(&["bloom_prefix_useful"])
+        TickerType::CompactionKeyDropRangeDel => {
+            STORE_ENGINE_COMPACTION_DROP_VEC.with_label_values(&["compaction_key_drop_range_del"])
+                .set(value as f64);
+        }
+        TickerType::CompactionRangeDelDropObsolete => {
+            STORE_ENGINE_COMPACTION_DROP_VEC.with_label_values(&["range_del_drop_obsolete"])
                 .set(value as f64);
         }
         TickerType::NumberKeysWritten => {
@@ -97,11 +163,55 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
         TickerType::BytesRead => {
             STORE_ENGINE_FLOW_VEC.with_label_values(&["bytes_read"]).set(value as f64);
         }
+        TickerType::NumberDbSeek => {
+            STORE_ENGINE_LOCATE_VEC.with_label_values(&["number_db_seek"]).set(value as f64);
+        }
+        TickerType::NumberDbNext => {
+            STORE_ENGINE_LOCATE_VEC.with_label_values(&["number_db_next"]).set(value as f64);
+        }
+        TickerType::NumberDbPrev => {
+            STORE_ENGINE_LOCATE_VEC.with_label_values(&["number_db_prev"]).set(value as f64);
+        }
+        TickerType::NumberDbSeekFound => {
+            STORE_ENGINE_LOCATE_VEC.with_label_values(&["number_db_seek_found"]).set(value as f64);
+        }
+        TickerType::NumberDbNextFound => {
+            STORE_ENGINE_LOCATE_VEC.with_label_values(&["number_db_next_found"]).set(value as f64);
+        }
+        TickerType::NumberDbPrevFound => {
+            STORE_ENGINE_LOCATE_VEC.with_label_values(&["number_db_prev_found"]).set(value as f64);
+        }
         TickerType::IterBytesRead => {
             STORE_ENGINE_FLOW_VEC.with_label_values(&["iter_bytes_read"]).set(value as f64);
         }
+        TickerType::NoFileCloses => {
+            STORE_ENGINE_FILE_STATUS_VEC.with_label_values(&["no_file_closes"]).set(value as f64);
+        }
+        TickerType::NoFileOpens => {
+            STORE_ENGINE_FILE_STATUS_VEC.with_label_values(&["no_file_opens"]).set(value as f64);
+        }
+        TickerType::NoFileErrors => {
+            STORE_ENGINE_FILE_STATUS_VEC.with_label_values(&["no_file_errors"]).set(value as f64);
+        }
         TickerType::StallMicros => {
             STORE_ENGINE_STALL_MICROS.set(value as f64);
+        }
+        TickerType::NoIterators => {
+            STORE_ENGINE_NO_ITERATORS.set(value as f64);
+        }
+        TickerType::BloomFilterPrefixChecked => {
+            STORE_ENGINE_BLOOM_EFFICIENCY_VEC.with_label_values(&["bloom_prefix_checked"])
+                .set(value as f64);
+        }
+        TickerType::BloomFilterPrefixUseful => {
+            STORE_ENGINE_BLOOM_EFFICIENCY_VEC.with_label_values(&["bloom_prefix_useful"])
+                .set(value as f64);
+        }
+        TickerType::WalFileSynced => {
+            STORE_ENGINE_WAL_FILE_SYNCED.set(value as f64);
+        }
+        TickerType::WalFileBytes => {
+            STORE_ENGINE_FLOW_VEC.with_label_values(&["wal_file_bytes"]).set(value as f64);
         }
         TickerType::CompactReadBytes => {
             STORE_ENGINE_COMPACTION_FLOW_VEC.with_label_values(&["bytes_read"]).set(value as f64);
@@ -110,7 +220,17 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
             STORE_ENGINE_COMPACTION_FLOW_VEC.with_label_values(&["bytes_written"])
                 .set(value as f64);
         }
-        _ => {}
+        TickerType::FlushWriteBytes => {
+            STORE_ENGINE_FLOW_VEC.with_label_values(&["flush_write_bytes"]).set(value as f64);
+        }
+        TickerType::ReadAmpEstimateUsefulBytes => {
+            STORE_ENGINE_READ_AMP_FLOW_VEC.with_label_values(&["read_amp_estimate_useful_bytes"])
+                .set(value as f64);
+        }
+        TickerType::ReadAmpTotalReadBytes => {
+            STORE_ENGINE_READ_AMP_FLOW_VEC.with_label_values(&["read_amp_total_read_bytes"])
+                .set(value as f64);
+        }
     }
 }
 
@@ -304,4 +424,45 @@ lazy_static!{
             "Bytes of read/written during compaction.",
             &["type"]
         ).unwrap();
+
+    pub static ref STORE_ENGINE_COMPACTION_DROP_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_compaction_key_drop",
+            "Count the reasons for key drop during compaction",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_LOCATE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_locate",
+            "Number of calls to seek/next/prev",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_FILE_STATUS_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_file_status",
+            "Number of different status of files.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_READ_AMP_FLOW_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_read_amp_flow_bytes",
+            "Bytes of read amplification.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_NO_ITERATORS: Gauge =
+        register_gauge!(
+            "tikv_engine_no_iterator",
+            "Number of iterators currently open."
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_WAL_FILE_SYNCED: Gauge =
+        register_gauge!(
+            "tikv_engine_wal_file_synced",
+            "Number of times WAL sync is done."
+        ).unwrap();
+
 }

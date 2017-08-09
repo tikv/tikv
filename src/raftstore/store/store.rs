@@ -51,7 +51,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
-                    ApplyTaskRes};
+                    ApplyTaskRes, MetricsFlusher};
 use super::worker::apply::{ExecResult, ChangePeer};
 use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
@@ -120,7 +120,7 @@ pub struct Store<T, C: 'static> {
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
-
+    metrics_flusher: MetricsFlusher,
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
@@ -192,7 +192,7 @@ impl<T, C> Store<T, C> {
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
-            engine: engine,
+            engine: engine.clone(),
             sendch: sendch,
             sent_snapshot_count: 0,
             snapshot_status_receiver: ch.snapshot_status_receiver,
@@ -205,6 +205,7 @@ impl<T, C> Store<T, C> {
             pd_worker: FutureWorker::new("pd worker"),
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
+            metrics_flusher: MetricsFlusher::new(engine.clone()),
             apply_res_receiver: None,
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
@@ -452,6 +453,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
+        box_try!(self.metrics_flusher.start());
+
         try!(event_loop.run(self));
         Ok(())
     }
@@ -473,12 +476,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.apply_worker.stop());
+        handles.push(self.metrics_flusher.stop());
+
 
         for h in handles {
             if let Some(h) = h {
                 h.join().unwrap();
             }
         }
+
 
         self.coprocessor_host.shutdown();
 
@@ -1733,21 +1739,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         self.store_heartbeat_pd();
-        self.flush_engine_statistics();
         self.register_pd_store_heartbeat_tick(event_loop);
-    }
-
-    fn flush_engine_statistics(&mut self) {
-        for t in ENGINE_TICKER_TYPES {
-            let v = self.engine.get_statistics_ticker_count(*t);
-            flush_engine_ticker_metrics(*t, v);
-        }
-
-        for t in ENGINE_HIST_TYPES {
-            if let Some(v) = self.engine.get_statistics_histogram(*t) {
-                flush_engine_histogram_metrics(*t, v);
-            }
-        }
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
