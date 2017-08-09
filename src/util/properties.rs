@@ -98,8 +98,8 @@ pub struct MvccPropertiesCollector {
     last_row: Vec<u8>,
     num_errors: u64,
     row_versions: u64,
-    index_handle: IndexHandle,
-    index_handles: IndexHandles,
+    cur_index_handle: IndexHandle,
+    row_index_handles: IndexHandles,
 }
 
 impl MvccPropertiesCollector {
@@ -109,8 +109,8 @@ impl MvccPropertiesCollector {
             last_row: Vec::new(),
             num_errors: 0,
             row_versions: 0,
-            index_handle: IndexHandle::default(),
-            index_handles: IndexHandles::new(),
+            cur_index_handle: IndexHandle::default(),
+            row_index_handles: IndexHandles::new(),
         }
     }
 }
@@ -163,23 +163,24 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 
         // Add new row.
         if self.row_versions == 1 {
-            self.index_handle.size += 1;
-            self.index_handle.offset += 1;
-            if self.index_handle.offset == 1 || self.index_handle.size >= PROP_ROWS_INDEX_DISTANCE {
-                self.index_handles.insert(self.last_row.clone(), self.index_handle.clone());
-                self.index_handle.size = 0;
+            self.cur_index_handle.size += 1;
+            self.cur_index_handle.offset += 1;
+            if self.cur_index_handle.offset == 1 ||
+               self.cur_index_handle.size >= PROP_ROWS_INDEX_DISTANCE {
+                self.row_index_handles.insert(self.last_row.clone(), self.cur_index_handle.clone());
+                self.cur_index_handle.size = 0;
             }
         }
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
         // Insert last handle.
-        if self.index_handle.size > 0 {
-            self.index_handles.insert(self.last_row.clone(), self.index_handle.clone());
+        if self.cur_index_handle.size > 0 {
+            self.row_index_handles.insert(self.last_row.clone(), self.cur_index_handle.clone());
         }
         let mut res = self.props.encode();
         res.encode_u64(PROP_NUM_ERRORS, self.num_errors);
-        res.encode_handles(PROP_ROWS_INDEX, &self.index_handles);
+        res.encode_handles(PROP_ROWS_INDEX, &self.row_index_handles);
         res.0
     }
 }
