@@ -23,7 +23,7 @@ use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::CommandPri;
 
-use util::duration_to_sec;
+use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{ThreadPool, FifoQueue};

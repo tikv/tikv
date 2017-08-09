@@ -564,7 +564,7 @@ impl ReadableDuration {
     }
 
     pub fn as_millis(&self) -> u64 {
-        util::duration_to_ms(self.0)
+        util::time::duration_to_ms(self.0)
     }
 }
 
@@ -572,7 +572,7 @@ impl Serialize for ReadableDuration {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where S: Serializer
     {
-        let mut dur = util::duration_to_ms(self.0);
+        let mut dur = util::time::duration_to_ms(self.0);
         let mut buffer = String::new();
         if dur >= HOUR {
             write!(buffer, "{}h", dur / HOUR).unwrap();

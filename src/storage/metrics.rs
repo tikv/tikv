@@ -111,6 +111,7 @@ lazy_static! {
             "tikv_storage_batch_commands_total",
             "Bucketed histogram of total number of a batch of commands",
             &["type"],
-            linear_buckets(0.0, 2.0, 20).unwrap()
+            vec![1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0,
+            20.0, 24.0, 28.0, 32.0, 48.0, 64.0, 96.0, 128.0, 192.0, 256.0]
         ).unwrap();
 }
