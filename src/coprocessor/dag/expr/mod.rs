@@ -170,7 +170,8 @@ impl TryFrom<Expr> for Expression {
                     ret_type: ret_type,
                 })
             }
-            ExprType::Float32 | ExprType::Float64 => {
+            ExprType::Float32 |
+            ExprType::Float64 => {
                 expr.get_val()
                     .decode_f64()
                     .map(Datum::F64)
