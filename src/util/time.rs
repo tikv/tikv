@@ -11,9 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{SystemTime, Duration, Instant};
+use std::time::{SystemTime, Duration};
 use std::thread::{self, JoinHandle, Builder};
 use std::sync::mpsc::{self, Sender};
+use std::ops::{Add, Sub};
+use std::cmp::Ordering;
+
+use time::{Timespec, Duration as TimeDuration};
 
 /// Convert Duration to milliseconds.
 #[inline]
@@ -52,7 +56,7 @@ impl SlowTimer {
     pub fn from(slow_time: Duration) -> SlowTimer {
         SlowTimer {
             slow_time: slow_time,
-            t: Instant::now(),
+            t: Instant::now_coarse(),
         }
     }
 
@@ -145,22 +149,47 @@ impl Drop for Monitor {
     }
 }
 
-/// `raw_now` returns the monotonic time since some unspecified starting point.
-pub use self::inner::raw_now;
+#[inline]
+fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
+    if later >= earlier {
+        Duration::new((later.sec - earlier.sec) as u64,
+                      (later.nsec - earlier.nsec) as u32)
+    } else {
+        panic!("system time jumped back, {:.9} -> {:.9}",
+               earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
+               later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64);
+    }
+}
+
+/// `monotonic_raw_now` returns the monotonic raw time since some unspecified starting point.
+pub use self::inner::monotonic_raw_now;
+use self::inner::monotonic_now;
+use self::inner::monotonic_coarse_now;
+
+const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
     use time::{self, Timespec};
+    use super::NANOSECONDS_PER_SECOND;
 
-    const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
-
-    pub fn raw_now() -> Timespec {
+    pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
         // Currently use `time::get_precise_ns()` instead.
         let ns = time::precise_time_ns();
         let s = ns / NANOSECONDS_PER_SECOND;
         let ns = ns % NANOSECONDS_PER_SECOND;
         Timespec::new(s as i64, ns as i32)
+    }
+
+    pub fn monotonic_now() -> Timespec {
+        // TODO Add monotonic clock time impl for macos and windows
+        monotonic_raw_now()
+    }
+
+    pub fn monotonic_coarse_now() -> Timespec {
+        // TODO Add monotonic coarse clock time impl for macos and windows
+        monotonic_raw_now()
     }
 }
 
@@ -170,17 +199,126 @@ mod inner {
     use time::Timespec;
     use libc;
 
-    pub fn raw_now() -> Timespec {
+    pub fn monotonic_raw_now() -> Timespec {
+        get_time(libc::CLOCK_MONOTONIC_RAW)
+    }
+
+    pub fn monotonic_now() -> Timespec {
+        get_time(libc::CLOCK_MONOTONIC)
+    }
+
+    pub fn monotonic_coarse_now() -> Timespec {
+        get_time(libc::CLOCK_MONOTONIC_COARSE)
+    }
+
+    fn get_time(clock: libc::clockid_t) -> Timespec {
         let mut t = libc::timespec {
             tv_sec: 0,
             tv_nsec: 0,
         };
-        let res = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut t) };
-        if res != 0 {
+        let errno = unsafe { libc::clock_gettime(clock, &mut t) };
+        if errno != 0 {
             panic!("failed to get monotonic raw locktime, err {}",
                    io::Error::last_os_error());
         }
-        Timespec::new(t.tv_sec, t.tv_nsec as i32)
+        Timespec::new(t.tv_sec, t.tv_nsec as _)
+    }
+}
+
+/// A measurement of a monotonically increasing clock.
+/// It's similar and meat to replace `std::time::Instant`,
+/// for providing extra features.
+#[derive(Copy, Clone, Debug, Eq)]
+pub enum Instant {
+    Monotonic(Timespec),
+    MonotonicCoarse(Timespec),
+}
+
+impl Instant {
+    pub fn now() -> Instant {
+        Instant::Monotonic(monotonic_now())
+    }
+
+    pub fn now_coarse() -> Instant {
+        Instant::MonotonicCoarse(monotonic_coarse_now())
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        match *self {
+            Instant::Monotonic(t) => {
+                let now = monotonic_now();
+                elapsed_duration(now, t)
+            }
+            Instant::MonotonicCoarse(t) => {
+                let now = monotonic_coarse_now();
+                elapsed_duration(now, t)
+            }
+        }
+    }
+
+    pub fn duration_since(&self, earlier: Instant) -> Duration {
+        let later = self.get_timespec();
+        let earlier = earlier.get_timespec();
+        elapsed_duration(later, earlier)
+    }
+
+    fn get_timespec(&self) -> Timespec {
+        match *self {
+            Instant::Monotonic(t) |
+            Instant::MonotonicCoarse(t) => t,
+        }
+    }
+}
+
+impl PartialEq for Instant {
+    fn eq(&self, other: &Instant) -> bool {
+        self.get_timespec().eq(&other.get_timespec())
+    }
+}
+
+impl Ord for Instant {
+    fn cmp(&self, other: &Instant) -> Ordering {
+        self.get_timespec().cmp(&other.get_timespec())
+    }
+}
+
+impl PartialOrd for Instant {
+    fn partial_cmp(&self, other: &Instant) -> Option<Ordering> {
+        self.get_timespec().partial_cmp(&other.get_timespec())
+    }
+}
+
+impl Add<Duration> for Instant {
+    type Output = Instant;
+
+    fn add(self, other: Duration) -> Instant {
+        match self {
+            Instant::Monotonic(t) => Instant::Monotonic(t + TimeDuration::from_std(other).unwrap()),
+            Instant::MonotonicCoarse(t) => {
+                Instant::MonotonicCoarse(t + TimeDuration::from_std(other).unwrap())
+            }
+        }
+    }
+}
+
+impl Sub<Duration> for Instant {
+    type Output = Instant;
+
+    fn sub(self, other: Duration) -> Instant {
+        match self {
+            Instant::Monotonic(t) => Instant::Monotonic(t - TimeDuration::from_std(other).unwrap()),
+            Instant::MonotonicCoarse(t) => {
+                Instant::MonotonicCoarse(t - TimeDuration::from_std(other).unwrap())
+            }
+        }
+    }
+}
+
+impl Sub<Instant> for Instant {
+    type Output = Duration;
+
+    fn sub(self, other: Instant) -> Duration {
+        self.duration_since(other)
     }
 }
 
@@ -233,13 +371,57 @@ mod tests {
     }
 
     #[test]
-    fn test_now_monotonic_raw() {
-        let early_time = raw_now();
-        let late_time = raw_now();
-        // The monotonic raw clocktime must be strictly monotonic increasing.
-        assert!(late_time >= early_time,
-                "expect late time {:?} >= early time {:?}",
-                late_time,
-                early_time);
+    fn test_now() {
+        let pairs = vec![
+            (monotonic_raw_now(), monotonic_raw_now()),
+            (monotonic_now(), monotonic_now()),
+            (monotonic_coarse_now(), monotonic_coarse_now()),
+        ];
+        for (early_time, late_time) in pairs {
+            // The monotonic clocktime must be strictly monotonic increasing.
+            assert!(late_time >= early_time,
+                    "expect late time {:?} >= early time {:?}",
+                    late_time,
+                    early_time);
+        }
+    }
+
+    #[test]
+    #[allow(eq_op)]
+    fn test_instant() {
+        Instant::now().elapsed();
+        Instant::now_coarse().elapsed();
+
+        // Ordering.
+        let early_raw = Instant::now();
+        let late_raw = Instant::now();
+        assert!(early_raw <= late_raw);
+        assert!(late_raw >= early_raw);
+
+        assert_eq!(early_raw, early_raw);
+        assert!(early_raw >= early_raw);
+        assert!(early_raw <= early_raw);
+
+        let early_coarse = Instant::now_coarse();
+        let late_coarse = Instant::now_coarse();
+        assert!(late_coarse >= early_coarse);
+        assert!(early_coarse <= late_coarse);
+
+        assert_eq!(early_coarse, early_coarse);
+        assert!(early_coarse >= early_coarse);
+        assert!(early_coarse <= early_coarse);
+
+        let zero = Duration::new(0, 0);
+        // Sub Instant.
+        assert!(late_raw - early_raw > zero);
+        assert!(late_coarse - early_coarse >= zero);
+
+        // Sub Duration.
+        assert_eq!(late_raw - zero, late_raw);
+        assert_eq!(late_coarse - zero, late_coarse);
+
+        // Add Duration.
+        assert_eq!(late_raw + zero, late_raw);
+        assert_eq!(late_coarse + zero, late_coarse);
     }
 }
