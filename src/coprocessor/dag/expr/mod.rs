@@ -85,25 +85,8 @@ pub struct FnCall {
     children: Vec<Expression>,
 }
 
-impl Datum {
-    fn to_i64(&self, field_type: &FieldType) -> Option<i64> {
-        match *self {
-            Datum::Null => None,
-            _ => Some(self.i64()),
-        }
-    }
-
-    fn to_f64(&self, field_type: &FieldType) -> Option<f64> {
-        match *self {
-            Datum::Null => None,
-            _ => Some(self.f64()),
-        }
-    }
-}
-
 impl Expression {
     fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<i64>> {
-        unimplemented!()
     }
 
     fn eval_real(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<f64>> {
