@@ -208,7 +208,8 @@ mod v1 {
     use rocksdb::{Writable, WriteBatch, CFHandle};
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use util::{HandyRwLock, rocksdb, duration_to_sec};
+    use util::{HandyRwLock, rocksdb};
+    use util::time::duration_to_sec;
     use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
     use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
 
@@ -718,7 +719,8 @@ mod v2 {
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
     use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, DBCompressionType};
     use storage::{CfName, CF_LOCK};
-    use util::{HandyRwLock, rocksdb, duration_to_sec};
+    use util::{HandyRwLock, rocksdb};
+    use util::time::duration_to_sec;
     use util::file::{get_file_size, file_exists, delete_file_if_exist};
     use util::rocksdb::get_fastest_supported_compression_type;
     use raftstore::Result as RaftStoreResult;

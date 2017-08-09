@@ -51,7 +51,7 @@ use storage::engine::{self, CbContext, Result as EngineResult, Error as EngineEr
                       Callback as EngineCallback, Modify};
 use raftstore::store::engine::IterOption;
 use util::transport::{SyncSendCh, Error as TransportError};
-use util::SlowTimer;
+use util::time::SlowTimer;
 use util::collections::HashMap;
 
 use super::Result;
