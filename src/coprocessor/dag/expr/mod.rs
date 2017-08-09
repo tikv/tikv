@@ -12,19 +12,17 @@
 // limitations under the License.
 
 use std::io;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 
 use chrono::FixedOffset;
 
-use tipb::expression::{ExprType, ScalarFuncSig};
-use tipb::expression::Expr;
-use tipb::select::DAGRequest;
+use tipb::expression::{Expr, ExprType, ScalarFuncSig, FieldType};
 
 use coprocessor::codec::mysql::{Duration, Time, Decimal, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::Datum;
 use util;
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::number::NumberDecoder;
 
 quick_error! {
     #[derive(Debug)]
@@ -79,7 +77,13 @@ pub struct StatementContext {
 
 /// Expression represents all scalar expression in SQL.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expression {
+pub struct Expression {
+    expr: ExprKind,
+    ret_type: FieldType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
     Constant(Datum),
     ColumnRef(usize),
     ScalarFn(FnCall),
@@ -93,14 +97,14 @@ pub struct FnCall {
 }
 
 impl Datum {
-    fn to_i64(&self) -> Option<i64> {
+    fn to_i64(&self, field_type: &FieldType) -> Option<i64> {
         match *self {
             Datum::Null => None,
             _ => Some(self.i64()),
         }
     }
 
-    fn to_f64(&self) -> Option<f64> {
+    fn to_f64(&self, field_type: &FieldType) -> Option<f64> {
         match *self {
             Datum::Null => None,
             _ => Some(self.f64()),
@@ -110,29 +114,7 @@ impl Datum {
 
 impl Expression {
     fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<i64>> {
-        match *self {
-            Expression::Constant(ref datum) => Ok(datum.to_i64()),
-            Expression::ColumnRef(offset) => {
-                row.get(offset).map(Datum::to_i64).ok_or_else(|| Error::ColumnOffset(offset))
-            }
-            Expression::ScalarFn(ref fun) => {
-                match fun.sig {
-                    ScalarFuncSig::CastIntAsInt => fun.children[0].eval_int(row, ctx),
-                    ScalarFuncSig::CastRealAsInt =>
-                        fun.children[0].eval_real(row, ctx).map(|v| v.map(|v| v as i64)),
-                    //
-                    ScalarFuncSig::LTInt => {
-                        let lhs = try!(fun.children[0].eval_int(row, ctx));
-                        let rhs = try!(fun.children[1].eval_int(row, ctx));
-                        match (lhs, rhs) {
-                            (Some(l), Some(r)) => Ok(Some((l < r) as i64)),
-                            (_, _) => Ok(None),
-                        }
-                    },
-                    _ => unimplemented!()
-                }
-            }
-        }
+        unimplemented!()
     }
 
     fn eval_real(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<f64>> {
@@ -160,43 +142,65 @@ impl TryFrom<Expr> for Expression {
     type Error = Error;
 
     fn try_from(expr: Expr) -> ::std::result::Result<Expression, Self::Error> {
+        let mut expr = expr;
+        let ret_type = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => {
-                Ok(Expression::Constant(Datum::Null))
+                Ok(Expression {
+                    expr: ExprKind::Constant(Datum::Null),
+                    ret_type: ret_type,
+                })
             }
             ExprType::Int64 => {
                 expr.get_val().decode_i64()
                     .map(Datum::I64)
-                    .map(Expression::Constant)
+                    .map(|e| Expression {
+                        expr: ExprKind::Constant(e),
+                        ret_type: ret_type,
+                    })
                     .map_err(Error::from)
             }
             ExprType::Uint64 => {
                 expr.get_val().decode_u64()
                     .map(Datum::U64)
-                    .map(Expression::Constant)
+                    .map(|e| Expression {
+                        expr: ExprKind::Constant(e),
+                        ret_type: ret_type,
+                    })
                     .map_err(Error::from)
             }
             ExprType::String | ExprType::Bytes => {
-                let mut expr = expr;
-                Ok(Expression::Constant(Datum::Bytes(expr.take_val())))
+                Ok(Expression {
+                    expr: ExprKind::Constant(Datum::Bytes(expr.take_val())),
+                    ret_type: ret_type,
+                })
             }
             ExprType::Float32 | ExprType::Float64 => {
                 expr.get_val().decode_f64()
                     .map(Datum::F64)
-                    .map(Expression::Constant)
+                    .map(|e| Expression {
+                        expr: ExprKind::Constant(e),
+                        ret_type: ret_type,
+                    })
                     .map_err(Error::from)
             }
             ExprType::MysqlDuration => {
                 expr.get_val().decode_i64()
                     .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                     .map(Datum::Dur)
-                    .map(Expression::Constant)
+                    .map(|e| Expression {
+                        expr: ExprKind::Constant(e),
+                        ret_type: ret_type,
+                    })
                     .map_err(Error::from)
             }
             ExprType::MysqlDecimal => {
                 expr.get_val().decode_decimal()
                     .map(Datum::Dec)
-                    .map(Expression::Constant)
+                    .map(|e| Expression {
+                        expr: ExprKind::Constant(e),
+                        ret_type: ret_type,
+                    })
                     .map_err(Error::from)
             }
             // TODO(andelf): fn sig verification
@@ -207,15 +211,23 @@ impl TryFrom<Expr> for Expression {
                     .map(Expression::try_from)
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
-                        Expression::ScalarFn(FnCall {
-                            sig: sig,
-                            children: children,
-                        })
+                        Expression {
+                            expr: ExprKind::ScalarFn(FnCall {
+                                sig: sig,
+                                children: children,
+                            }),
+                            ret_type: ret_type,
+                        }
                     })
             }
             ExprType::ColumnRef => {
                 expr.get_val().decode_i64()
-                    .map(|i| Expression::ColumnRef(i as usize))
+                    .map(|i| {
+                        Expression {
+                            expr: ExprKind::ColumnRef(i as usize),
+                            ret_type: ret_type,
+                        }
+                    })
                     .map_err(Error::from)
             }
             unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled)
@@ -226,6 +238,9 @@ impl TryFrom<Expr> for Expression {
 
 #[test]
 fn test_smoke() {
+    use std::convert::TryInto;
+    use util::codec::number::NumberEncoder;
+
     let mut pb = Expr::new();
     pb.set_tp(ExprType::ColumnRef);
     pb.mut_val().encode_i64(1).unwrap();

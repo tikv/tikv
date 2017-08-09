@@ -14,6 +14,7 @@
 
 pub mod executor;
 pub mod dag;
+#[allow(dead_code, unused_variables)]
 pub mod expr;
 
 pub use self::dag::DAGContext;
