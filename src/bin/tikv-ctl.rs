@@ -379,14 +379,14 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
     println!("region id: {}", region_id);
     let region_state_key = keys::region_state_key(region_id);
     let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
-    println!("db region state: {:?}", region_state);
+    println!("db1 region state: {:?}", region_state);
     let region_state2: RegionLocalState = db2.get_msg(&region_state_key).unwrap().unwrap();
     println!("db2 region state: {:?}", region_state2);
 
     let raft_state_key = keys::apply_state_key(region_id);
 
     let apply_state: RaftApplyState = db.get_msg_cf("raft", &raft_state_key).unwrap().unwrap();
-    println!("db apply state: {:?}", apply_state);
+    println!("db1 apply state: {:?}", apply_state);
 
     let apply_state: RaftApplyState = db2.get_msg_cf("raft", &raft_state_key).unwrap().unwrap();
     println!("db2 apply state: {:?}", apply_state);
@@ -446,7 +446,7 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
         if iter.valid() && !iter2.valid() {
             println!("iter2 invalid but iter valid!");
             while iter.valid() {
-                println!("only db2 has : {:?}", escape(iter.key()));
+                println!("only db1 has : {:?}", escape(iter.key()));
                 iter.next();
             }
         }
