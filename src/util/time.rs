@@ -14,7 +14,8 @@
 use std::time::{SystemTime, Duration};
 use std::thread::{self, JoinHandle, Builder};
 use std::sync::mpsc::{self, Sender};
-use std::ops::{Add, Sub, AddAssign, SubAssign};
+use std::ops::{Add, Sub};
+use std::cmp::Ordering;
 
 use time::{Timespec, Duration as TimeDuration};
 
@@ -55,7 +56,7 @@ impl SlowTimer {
     pub fn from(slow_time: Duration) -> SlowTimer {
         SlowTimer {
             slow_time: slow_time,
-            t: Instant::now(),
+            t: Instant::now_coarse(),
         }
     }
 
@@ -148,6 +149,7 @@ impl Drop for Monitor {
     }
 }
 
+#[inline]
 fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
     if later >= earlier {
         Duration::new((later.sec - earlier.sec) as u64,
@@ -159,17 +161,19 @@ fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
     }
 }
 
-/// `raw_now` returns the monotonic time since some unspecified starting point.
-pub use self::inner::raw_now;
-use self::inner::coarse_now;
+/// `monotonic_raw_now` returns the monotonic raw time since some unspecified starting point.
+pub use self::inner::monotonic_raw_now;
+use self::inner::monotonic_now;
+use self::inner::monotonic_coarse_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
     use time::{self, Timespec};
+    use super::NANOSECONDS_PER_SECOND;
 
-    pub fn raw_now() -> Timespec {
+    pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
         // Currently use `time::get_precise_ns()` instead.
         let ns = time::precise_time_ns();
@@ -178,9 +182,14 @@ mod inner {
         Timespec::new(s as i64, ns as i32)
     }
 
-    pub fn coarse_now() -> Timespec {
+    pub fn monotonic_now() -> Timespec {
+        // TODO Add monotonic clock time impl for macos and windows
+        monotonic_raw_now()
+    }
+
+    pub fn monotonic_coarse_now() -> Timespec {
         // TODO Add monotonic coarse clock time impl for macos and windows
-        raw_now()
+        monotonic_raw_now()
     }
 }
 
@@ -190,11 +199,15 @@ mod inner {
     use time::Timespec;
     use libc;
 
-    pub fn raw_now() -> Timespec {
+    pub fn monotonic_raw_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_RAW as _)
     }
 
-    pub fn coarse_now() -> Timespec {
+    pub fn monotonic_now() -> Timespec {
+        get_time(libc::CLOCK_MONOTONIC as _)
+    }
+
+    pub fn monotonic_coarse_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_COARSE as _)
     }
 
@@ -215,7 +228,7 @@ mod inner {
 /// A measurement of a monotonically increasing clock.
 /// It's similar and meat to replace `std::time::Instant`,
 /// for providing extra features.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Copy, Clone, Debug, Eq)]
 pub enum Instant {
     Monotonic(Timespec),
     MonotonicCoarse(Timespec),
@@ -223,36 +236,55 @@ pub enum Instant {
 
 impl Instant {
     pub fn now() -> Instant {
-        Instant::Monotonic(raw_now())
+        Instant::Monotonic(monotonic_now())
     }
 
     pub fn now_coarse() -> Instant {
-        Instant::MonotonicCoarse(coarse_now())
+        Instant::MonotonicCoarse(monotonic_coarse_now())
     }
 
     pub fn elapsed(&self) -> Duration {
         match *self {
             Instant::Monotonic(t) => {
-                let now = raw_now();
+                let now = monotonic_now();
                 elapsed_duration(now, t)
             }
             Instant::MonotonicCoarse(t) => {
-                let now = coarse_now();
+                let now = monotonic_coarse_now();
                 elapsed_duration(now, t)
             }
         }
     }
 
     pub fn duration_since(&self, earlier: Instant) -> Duration {
-        let later = match *self {
-            Instant::Monotonic(t) |
-            Instant::MonotonicCoarse(t) => t,
-        };
-        let earlier = match earlier {
-            Instant::Monotonic(t) |
-            Instant::MonotonicCoarse(t) => t,
-        };
+        let later = self.get_timespec();
+        let earlier = earlier.get_timespec();
         elapsed_duration(later, earlier)
+    }
+
+    fn get_timespec(&self) -> Timespec {
+        match *self {
+            Instant::Monotonic(t) |
+            Instant::MonotonicCoarse(t) => t,
+        }
+    }
+}
+
+impl PartialEq for Instant {
+    fn eq(&self, other: &Instant) -> bool {
+        self.get_timespec().eq(&other.get_timespec())
+    }
+}
+
+impl Ord for Instant {
+    fn cmp(&self, other: &Instant) -> Ordering {
+        self.get_timespec().cmp(&other.get_timespec())
+    }
+}
+
+impl PartialOrd for Instant {
+    fn partial_cmp(&self, other: &Instant) -> Option<Ordering> {
+        self.get_timespec().partial_cmp(&other.get_timespec())
     }
 }
 
@@ -269,12 +301,6 @@ impl Add<Duration> for Instant {
     }
 }
 
-impl AddAssign<Duration> for Instant {
-    fn add_assign(&mut self, other: Duration) {
-        *self = *self + other;
-    }
-}
-
 impl Sub<Duration> for Instant {
     type Output = Instant;
 
@@ -285,12 +311,6 @@ impl Sub<Duration> for Instant {
                 Instant::MonotonicCoarse(t - TimeDuration::from_std(other).unwrap())
             }
         }
-    }
-}
-
-impl SubAssign<Duration> for Instant {
-    fn sub_assign(&mut self, other: Duration) {
-        *self = *self - other;
     }
 }
 
@@ -352,52 +372,49 @@ mod tests {
 
     #[test]
     fn test_now() {
-        let early_time = raw_now();
-        let late_time = raw_now();
-        // The monotonic raw clocktime must be strictly monotonic increasing.
-        assert!(late_time >= early_time,
-                "expect late time {:?} >= early time {:?}",
-                late_time,
-                early_time);
-
-        let early_time = coarse_now();
-        let late_time = coarse_now();
-        // The monotonic coarse clocktime must be strictly monotonic increasing.
-        assert!(late_time >= early_time,
-                "expect late time {:?} >= early time {:?}",
-                late_time,
-                early_time);
+        let pairs = vec![
+            (monotonic_raw_now(), monotonic_raw_now()),
+            (monotonic_now(), monotonic_now()),
+            (monotonic_coarse_now(), monotonic_coarse_now()),
+        ];
+        for (early_time, late_time) in pairs {
+            // The monotonic clocktime must be strictly monotonic increasing.
+            assert!(late_time >= early_time,
+                    "expect late time {:?} >= early time {:?}",
+                    late_time,
+                    early_time);
+        }
     }
 
     #[test]
+    #[allow(eq_op)]
     fn test_instant() {
         Instant::now().elapsed();
+        Instant::now_coarse().elapsed();
+
+        // Ordering.
         let early_raw = Instant::now();
         let late_raw = Instant::now();
-        assert!(late_raw >= early_raw,
-                "expect late time {:?} >= early time {:?}",
-                late_raw,
-                early_raw);
-        assert_eq!(early_raw, early_raw);
         assert!(early_raw <= late_raw);
+        assert!(late_raw >= early_raw);
 
-        Instant::now_coarse().elapsed();
+        assert_eq!(early_raw, early_raw);
+        assert!(early_raw >= early_raw);
+        assert!(early_raw <= early_raw);
+
         let early_coarse = Instant::now_coarse();
         let late_coarse = Instant::now_coarse();
-        assert!(late_coarse >= early_coarse,
-                "expect late time {:?} >= early time {:?}",
-                late_coarse,
-                early_coarse);
-        assert_eq!(early_coarse, early_coarse);
+        assert!(late_coarse >= early_coarse);
         assert!(early_coarse <= late_coarse);
 
-        assert!(early_raw <= late_coarse);
+        assert_eq!(early_coarse, early_coarse);
+        assert!(early_coarse >= early_coarse);
+        assert!(early_coarse <= early_coarse);
 
         let zero = Duration::new(0, 0);
         // Sub Instant.
         assert!(late_raw - early_raw > zero);
         assert!(late_coarse - early_coarse >= zero);
-        assert!(late_coarse - early_raw >= zero);
 
         // Sub Duration.
         assert_eq!(late_raw - zero, late_raw);
@@ -406,14 +423,5 @@ mod tests {
         // Add Duration.
         assert_eq!(late_raw + zero, late_raw);
         assert_eq!(late_coarse + zero, late_coarse);
-
-        // SubAssign Duration
-        let mut early_raw_ = early_raw;
-        early_raw_ -= zero;
-
-        // AddAssign Duration
-        let mut late_raw_ = late_raw;
-        late_raw_ += zero;
-        assert!(late_raw_ > early_raw_);
     }
 }
