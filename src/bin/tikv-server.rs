@@ -338,185 +338,130 @@ fn check_advertise_address(addr: &str) {
     }
 }
 
-fn get_rocksdb_db_option(config: &toml::Value) -> DBOptions {
+fn get_rocksdb_db_option(config: &toml::Value, db: &str) -> DBOptions {
+    let prefix = db.to_string() + ".";
     let mut opts = DBOptions::new();
-    let rmode = get_toml_int(config, "rocksdb.wal-recovery-mode", Some(2));
+    let rmode = get_toml_int(config,
+                             (prefix.clone() + "wal-recovery-mode").as_str(),
+                             Some(2));
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
-    let wal_dir = get_toml_string(config, "rocksdb.wal-dir", Some("".to_owned()));
+    let wal_dir = get_toml_string(config,
+                                  (prefix.clone() + "wal-dir").as_str(),
+                                  Some("".to_owned()));
     if !wal_dir.is_empty() {
         opts.set_wal_dir(&wal_dir)
     };
 
-    let wal_ttl_seconds = get_toml_int(config, "rocksdb.wal-ttl-seconds", Some(0));
+    let wal_ttl_seconds = get_toml_int(config,
+                                       (prefix.clone() + "wal-ttl-seconds").as_str(),
+                                       Some(0));
     opts.set_wal_ttl_seconds(wal_ttl_seconds as u64);
 
-    let wal_size_limit = get_toml_int(config, "rocksdb.wal-size-limit", Some(0));
+    let wal_size_limit = get_toml_int(config,
+                                      (prefix.clone() + "wal-size-limit").as_str(),
+                                      Some(0));
     // return size in MB
     let wal_size_limit_mb = align_to_mb(wal_size_limit as u64) / MB;
     opts.set_wal_size_limit_mb(wal_size_limit_mb as u64);
 
     let max_total_wal_size = get_toml_int(config,
-                                          "rocksdb.max-total-wal-size",
+                                          (prefix.clone() + "max-total-wal-size").as_str(),
                                           Some(4 * 1024 * 1024 * 1024));
     opts.set_max_total_wal_size(max_total_wal_size as u64);
 
-    let max_background_jobs = get_toml_int(config, "rocksdb.max-background-jobs", Some(6));
+    let max_background_jobs = get_toml_int(config,
+                                           (prefix.clone() + "max-background-jobs").as_str(),
+                                           Some(6));
     opts.set_max_background_jobs(max_background_jobs as i32);
 
     let max_manifest_file_size = get_toml_int(config,
-                                              "rocksdb.max-manifest-file-size",
+                                              (prefix.clone() + "max-manifest-file-size").as_str(),
                                               Some(20 * 1024 * 1024));
     opts.set_max_manifest_file_size(max_manifest_file_size as u64);
 
-    let create_if_missing = get_toml_boolean(config, "rocksdb.create-if-missing", Some(true));
+    let create_if_missing = get_toml_boolean(config,
+                                             (prefix.clone() + "create-if-missing").as_str(),
+                                             Some(true));
     opts.create_if_missing(create_if_missing);
 
-    let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
+    let max_open_files = get_toml_int(config,
+                                      (prefix.clone() + "max-open-files").as_str(),
+                                      Some(40960));
     opts.set_max_open_files(max_open_files as i32);
 
-    let enable_statistics = get_toml_boolean(config, "rocksdb.enable-statistics", Some(true));
+    let enable_statistics = get_toml_boolean(config,
+                                             (prefix.clone() + "enable-statistics").as_str(),
+                                             Some(true));
     if enable_statistics {
         opts.enable_statistics();
-        let stats_dump_period_sec =
-            get_toml_int(config, "rocksdb.stats-dump-period-sec", Some(600));
+        let stats_dump_period_sec = get_toml_int(config,
+                                                 (prefix.clone() + "stats-dump-period-sec")
+                                                     .as_str(),
+                                                 Some(600));
         opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
     }
 
-    let compaction_readahead_size =
-        get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
+    let compaction_readahead_size = get_toml_int(config,
+                                                 (prefix.clone() + "compaction-readahead-size")
+                                                     .as_str(),
+                                                 Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
-    let max_file_size = get_toml_int(config, "rocksdb.info-log-max-size", Some(0));
+    let max_file_size = get_toml_int(config,
+                                     (prefix.clone() + "info-log-max-size").as_str(),
+                                     Some(0));
     opts.set_max_log_file_size(max_file_size as u64);
 
     // RocksDB needs seconds, but here we will get milliseconds.
-    let roll_time_secs = get_toml_int(config, "rocksdb.info-log-roll-time", Some(0)) / SEC_TO_MS;
+    let roll_time_secs = get_toml_int(config,
+                                      (prefix.clone() + "info-log-roll-time").as_str(),
+                                      Some(0)) / SEC_TO_MS;
     opts.set_log_file_time_to_roll(roll_time_secs as u64);
 
-    let info_log_dir = get_toml_string(config, "rocksdb.info-log-dir", Some("".to_owned()));
+    let info_log_dir = get_toml_string(config,
+                                       (prefix.clone() + "info-log-dir").as_str(),
+                                       Some("".to_owned()));
     if !info_log_dir.is_empty() {
         opts.create_info_log(&info_log_dir).unwrap_or_else(|e| {
             panic!("create RocksDB info log {} error {:?}", info_log_dir, e);
         })
     }
 
-    let rate_bytes_per_sec = get_toml_int(config, "rocksdb.rate-bytes-per-sec", Some(0));
+    let rate_bytes_per_sec = get_toml_int(config,
+                                          (prefix.clone() + "rate-bytes-per-sec").as_str(),
+                                          Some(0));
     if rate_bytes_per_sec > 0 {
         opts.set_ratelimiter(rate_bytes_per_sec as i64);
     }
 
-    let max_sub_compactions = get_toml_int(config, "rocksdb.max-sub-compactions", Some(1));
+    let max_sub_compactions = get_toml_int(config,
+                                           (prefix.clone() + "max-sub-compactions").as_str(),
+                                           Some(1));
     opts.set_max_subcompactions(max_sub_compactions as u32);
 
-    let writable_file_max_buffer_size = get_toml_int(config,
-                                                     "rocksdb.writable-file-max-buffer-size",
-                                                     Some(1024 * 1024));
+    let writable_file_max_buffer_size =
+        get_toml_int(config,
+                     (prefix.clone() + "writable-file-max-buffer-size").as_str(),
+                     Some(1024 * 1024));
     opts.set_writable_file_max_buffer_size(writable_file_max_buffer_size as i32);
 
     let direct_io = get_toml_boolean(config,
-                                     "rocksdb.use-direct-io-for-flush-and-compaction",
+                                     (prefix.clone() + "use-direct-io-for-flush-and-compaction")
+                                         .as_str(),
                                      Some(false));
     opts.set_use_direct_io_for_flush_and_compaction(direct_io);
 
-    let pipelined_write = get_toml_boolean(config, "rocksdb.enable-pipelined-write", Some(true));
-    opts.enable_pipelined_write(pipelined_write);
-
-    opts
-}
-
-fn get_raft_rocksdb_db_option(config: &toml::Value) -> DBOptions {
-    let mut opts = DBOptions::new();
-    let rmode = get_toml_int(config, "raft-rocksdb.wal-recovery-mode", Some(2));
-    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    opts.set_wal_recovery_mode(wal_recovery_mode);
-
-    let wal_dir = get_toml_string(config, "raft-rocksdb.wal-dir", Some("".to_owned()));
-    if !wal_dir.is_empty() {
-        opts.set_wal_dir(&wal_dir)
-    };
-
-    let wal_ttl_seconds = get_toml_int(config, "raft-rocksdb.wal-ttl-seconds", Some(0));
-    opts.set_wal_ttl_seconds(wal_ttl_seconds as u64);
-
-    let wal_size_limit = get_toml_int(config, "raft-rocksdb.wal-size-limit", Some(0));
-    // return size in MB
-    let wal_size_limit_mb = align_to_mb(wal_size_limit as u64) / MB;
-    opts.set_wal_size_limit_mb(wal_size_limit_mb as u64);
-
-    let max_total_wal_size = get_toml_int(config,
-                                          "raft-rocksdb.max-total-wal-size",
-                                          Some(4 * 1024 * 1024 * 1024));
-    opts.set_max_total_wal_size(max_total_wal_size as u64);
-
-    let max_background_jobs = get_toml_int(config, "raft-rocksdb.max-background-jobs", Some(6));
-    opts.set_max_background_jobs(max_background_jobs as i32);
-
-    let max_manifest_file_size = get_toml_int(config,
-                                              "raft-rocksdb.max-manifest-file-size",
-                                              Some(20 * 1024 * 1024));
-    opts.set_max_manifest_file_size(max_manifest_file_size as u64);
-
-    let create_if_missing = get_toml_boolean(config, "raft-rocksdb.create-if-missing", Some(true));
-    opts.create_if_missing(create_if_missing);
-
-    let max_open_files = get_toml_int(config, "raft-rocksdb.max-open-files", Some(40960));
-    opts.set_max_open_files(max_open_files as i32);
-
-    let enable_statistics = get_toml_boolean(config, "raft-rocksdb.enable-statistics", Some(true));
-    if enable_statistics {
-        opts.enable_statistics();
-        let stats_dump_period_sec =
-            get_toml_int(config, "raft-rocksdb.stats-dump-period-sec", Some(600));
-        opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
-    }
-
-    let compaction_readahead_size =
-        get_toml_int(config, "raft-rocksdb.compaction-readahead-size", Some(0));
-    opts.set_compaction_readahead_size(compaction_readahead_size as u64);
-
-    let max_file_size = get_toml_int(config, "raft-rocksdb.info-log-max-size", Some(0));
-    opts.set_max_log_file_size(max_file_size as u64);
-
-    // RocksDB needs seconds, but here we will get milliseconds.
-    let roll_time_secs = get_toml_int(config, "raft-rocksdb.info-log-roll-time", Some(0)) /
-                         SEC_TO_MS;
-    opts.set_log_file_time_to_roll(roll_time_secs as u64);
-
-    let info_log_dir = get_toml_string(config, "raft-rocksdb.info-log-dir", Some("".to_owned()));
-    if !info_log_dir.is_empty() {
-        opts.create_info_log(&info_log_dir).unwrap_or_else(|e| {
-            panic!("create RocksDB info log {} error {:?}", info_log_dir, e);
-        })
-    }
-
-    let rate_bytes_per_sec = get_toml_int(config, "raft-rocksdb.rate-bytes-per-sec", Some(0));
-    if rate_bytes_per_sec > 0 {
-        opts.set_ratelimiter(rate_bytes_per_sec as i64);
-    }
-
-    let max_sub_compactions = get_toml_int(config, "raft-rocksdb.max-sub-compactions", Some(1));
-    opts.set_max_subcompactions(max_sub_compactions as u32);
-
-    let writable_file_max_buffer_size = get_toml_int(config,
-                                                     "raft-rocksdb.writable-file-max-buffer-size",
-                                                     Some(1024 * 1024));
-    opts.set_writable_file_max_buffer_size(writable_file_max_buffer_size as i32);
-
-    let direct_io = get_toml_boolean(config,
-                                     "raft-rocksdb.use-direct-io-for-flush-and-compaction",
-                                     Some(false));
-    opts.set_use_direct_io_for_flush_and_compaction(direct_io);
-
-    let pipelined_write =
-        get_toml_boolean(config, "raft-rocksdb.enable-pipelined-write", Some(true));
+    let pipelined_write = get_toml_boolean(config,
+                                           (prefix.clone() + "enable-pipelined-write").as_str(),
+                                           Some(true));
     opts.enable_pipelined_write(pipelined_write);
 
     let concurrent_write = get_toml_boolean(config,
-                                            "raft-rocksdb.allow-concurrent-memtable-write",
+                                            (prefix.clone() + "allow-concurrent-memtable-write")
+                                                .as_str(),
                                             Some(false));
     opts.allow_concurrent_memtable_write(concurrent_write);
 
@@ -997,7 +942,7 @@ fn run_raft_server(pd_client: RpcClient,
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
     // Create engine, storage.
-    let kv_db_opts = get_rocksdb_db_option(config);
+    let kv_db_opts = get_rocksdb_db_option(config, "rocksdb");
     let kv_cfs_opts =
         vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
                                           get_rocksdb_default_cf_option(config, total_mem)),
@@ -1029,7 +974,7 @@ fn run_raft_server(pd_client: RpcClient,
     // Create raft_cf engine.
     let raft_rocksdb_dir = get_raft_rocksdb_data_dir(&cfg.storage.data_dir, config);
     let raft_db_path = Path::new(&raft_rocksdb_dir);
-    let raft_db_opts = get_raft_rocksdb_db_option(config);
+    let raft_db_opts = get_rocksdb_db_option(config, "raftdb");
     let raft_cf_opts = vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
                                           get_raft_rocksdb_default_cf_option(config, total_mem))];
     let raft_engine = Arc::new(rocksdb_util::new_engine_opt(raft_db_path.to_str().unwrap(),

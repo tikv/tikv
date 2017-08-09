@@ -325,7 +325,7 @@ stats-dump-period-sec = 600
 # cache-index-and-filter-blocks = true
 # compaction-pri = 0
 
-[raft-rocksdb]
+[raftdb]
 # info-log-dir = ""
 # info-log-max-size = 0
 # info-log-roll-time = "0s"
@@ -352,7 +352,7 @@ stats-dump-period-sec = 600
 enable-pipelined-write = false
 allow-concurrent-memtable-write = false
 
-[raft-rocksdb.defaultcf]
+[raftdb.defaultcf]
 # compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
 # block-size = "64KB"
 # write-buffer-size = "128MB"
