@@ -87,6 +87,7 @@ pub struct FnCall {
 
 impl Expression {
     fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<i64>> {
+        unimplemented!()
     }
 
     fn eval_real(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<f64>> {
