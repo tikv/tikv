@@ -723,7 +723,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
-        let is_vote_msg = msg.get_message().get_msg_type() == MessageType::MsgRequestVote;
+        let msg_type = msg.get_message().get_msg_type();
+        let is_vote_msg = msg_type == MessageType::MsgRequestVote;
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -780,7 +781,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("[region {}] tombstone peer [epoch: {:?}] \
                     receive a stale message {:?}", region_id,
                     region_epoch,
-                        msg,
+                        msg_type,
                         );
 
                 let not_exist = util::find_peer(region, from_store_id).is_none();
@@ -793,7 +794,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Err(box_err!("tombstone peer [epoch: {:?}] receive an invalid \
                                         message {:?}, ignore it",
                                     region_epoch,
-                                    msg));
+                                    msg_type));
             }
         }
 
@@ -804,18 +805,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
+        let msg_type = msg.get_message().get_msg_type();
 
         if !need_gc {
             info!("[region {}] raft message {:?} is stale, current {:?}, ignore it",
                   region_id,
-                  msg,
+                  msg_type,
                   cur_epoch);
             return;
         }
 
         info!("[region {}] raft message {:?} is stale, current {:?}, tell to gc",
               region_id,
-              msg,
+              msg_type,
               cur_epoch);
 
         let mut gc_msg = RaftMessage::new();
