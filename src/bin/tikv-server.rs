@@ -16,6 +16,9 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 
 #![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
+// TODO: remove this once rust-lang/rust#43268 is resolved.
+#![allow(logic_bug)]
 
 #[macro_use]
 extern crate clap;

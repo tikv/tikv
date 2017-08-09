@@ -22,6 +22,7 @@
 #![feature(btree_range, collections_bound)]
 #![allow(new_without_default)]
 #![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
 
 #[macro_use]
 extern crate log;
