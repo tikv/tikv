@@ -501,7 +501,13 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    put_till_size(cluster, region_max_size * 10, &mut range);
+    // Approximate size of memtable is inaccurate for small data,
+    // we flush it to SST so we can use the size properties here.
+    for _ in 0..10 {
+        put_till_size(cluster, region_max_size, &mut range);
+        cluster.must_flush(true);
+    }
+
     // Peer will split when size of region meet region_max_size,
     // so assume the last region_max_size of data is not involved in split,
     // there will be at least (region_max_size * 10 - region_max_size) / region_split_size regions.
