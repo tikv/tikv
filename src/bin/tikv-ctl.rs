@@ -313,7 +313,12 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
 }
 
 
-fn dump_mvcc_default(db: &DB, key: &str, encoded: bool, is_hex: bool, out_hex: bool, start_ts: Option<u64>) {
+fn dump_mvcc_default(db: &DB,
+                     key: &str,
+                     encoded: bool,
+                     is_hex: bool,
+                     out_hex: bool,
+                     start_ts: Option<u64>) {
     let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, encoded, is_hex, CF_DEFAULT);
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
@@ -331,7 +336,12 @@ fn dump_mvcc_default(db: &DB, key: &str, encoded: bool, is_hex: bool, out_hex: b
     }
 }
 
-fn dump_mvcc_lock(db: &DB, key: &str, encoded: bool, is_hex: bool, out_hex: bool, start_ts: Option<u64>) {
+fn dump_mvcc_lock(db: &DB,
+                  key: &str,
+                  encoded: bool,
+                  is_hex: bool,
+                  out_hex: bool,
+                  start_ts: Option<u64>) {
     let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, encoded, is_hex, CF_LOCK);
     for kv in kvs {
         let lock = &kv.value;
@@ -639,9 +649,12 @@ mod tests {
                     test_data.2 == lock.primary.as_slice() &&
                     test_data.3 == lock.ts);
         }
-        assert_iter(&gen_mvcc_iter(&db, "kv", false, false, CF_LOCK), test_data_lock[0]);
-        assert_iter(&gen_mvcc_iter(&db, "kx", false, false, CF_LOCK), test_data_lock[1]);
-        assert_iter(&gen_mvcc_iter(&db, "kz", false, false, CF_LOCK), test_data_lock[2]);
+        assert_iter(&gen_mvcc_iter(&db, "kv", false, false, CF_LOCK),
+                    test_data_lock[0]);
+        assert_iter(&gen_mvcc_iter(&db, "kx", false, false, CF_LOCK),
+                    test_data_lock[1]);
+        assert_iter(&gen_mvcc_iter(&db, "kz", false, false, CF_LOCK),
+                    test_data_lock[2]);
 
         // Test MVCC Write
         let test_data_write = vec![(PREFIX, WriteType::Delete, 5, 10),
