@@ -1877,8 +1877,13 @@ fn verify_and_store_hash(region_id: u64,
     }
 
     if state.index == expected_index {
+        if state.hash.is_empty() {
+            warn!("[region {}] duplicated consistency check detected, skip.",
+                  region_id);
+            return false;
+        }
         if state.hash != expected_hash {
-            panic!("[region {}] hash at {} not correct, want {}, got {}!!!",
+            panic!("[region {}] hash at {} not correct, want \"{}\", got \"{}\"!!!",
                    region_id,
                    state.index,
                    escape(&expected_hash),
