@@ -275,10 +275,14 @@ const MAX_ZERO_COUNT: i64 = 20;
 #[cfg(test)]
 mod test {
     use std::f64::EPSILON;
+    use std::{f64, i64, u64, isize};
 
     use chrono::FixedOffset;
 
     use coprocessor::select::xeval::EvalContext;
+    use coprocessor::codec::mysql::types;
+
+    use super::*;
 
     #[test]
     fn test_bytes_to_i64() {
@@ -414,5 +418,51 @@ mod test {
             let o = super::float_str_to_int_string(i);
             assert_eq!(o.unwrap(), *e);
         }
+    }
+
+    #[test]
+    fn test_convert_int_to_uint() {
+        assert!(convert_int_to_uint(i64::MIN, 0, types::LONG_LONG).is_err());
+        let v = convert_int_to_uint(i64::MAX, u64::MAX, types::LONG_LONG).unwrap();
+        assert_eq!(v, i64::MAX as u64);
+        // TODO port tests from tidb(tidb haven't implemented now)
+    }
+
+    #[test]
+    fn test_convert_uint_into_int() {
+        assert!(convert_uint_to_int(u64::MAX, i64::MAX, types::LONG_LONG).is_err());
+        let v = convert_uint_to_int(u64::MIN, i64::MAX, types::LONG_LONG).unwrap();
+        assert_eq!(v, u64::MIN as i64);
+        // TODO port tests from tidb(tidb haven't implemented now)
+    }
+
+    #[test]
+    fn test_convert_float_to_int() {
+        assert!(convert_float_to_int(f64::MIN, i64::MIN, i64::MAX, types::DOUBLE).is_err());
+        assert!(convert_float_to_int(f64::MAX, i64::MIN, i64::MAX, types::DOUBLE).is_err());
+        let v = convert_float_to_int(0.1, i64::MIN, i64::MAX, types::DOUBLE).unwrap();
+        assert_eq!(v, 0);
+        // TODO port tests from tidb(tidb haven't implemented now)
+    }
+
+    #[test]
+    fn test_convert_float_to_uint() {
+        assert!(convert_float_to_uint(f64::MIN, u64::MAX, types::DOUBLE).is_err());
+        assert!(convert_float_to_uint(f64::MAX, u64::MAX, types::DOUBLE).is_err());
+        let v = convert_float_to_uint(0.1, u64::MAX, types::DOUBLE).unwrap();
+        assert_eq!(v, 0);
+        // TODO port tests from tidb(tidb haven't implemented now)
+    }
+
+    #[test]
+    fn test_truncate_str() {
+        let s = String::from("123456789");
+        let s1 = truncate_str(s.clone(), UNSPECIFIED_LENGTH as isize);
+        assert_eq!(s1, s);
+        let s2 = truncate_str(s.clone(), isize::MAX);
+        assert_eq!(s2, s);
+        let s3 = truncate_str(s, 0);
+        assert!(s3.is_empty());
+        // TODO port tests from tidb(tidb haven't implemented now)
     }
 }
