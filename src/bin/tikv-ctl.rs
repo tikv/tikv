@@ -23,9 +23,11 @@ extern crate protobuf;
 extern crate kvproto;
 extern crate rocksdb;
 extern crate tempdir;
+extern crate rustc_serialize;
 
 use std::{str, u64};
 use clap::{Arg, App, SubCommand};
+use rustc_serialize::hex::{FromHex, ToHex};
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState, PeerState};
@@ -46,7 +48,15 @@ fn main() {
         .arg(Arg::with_name("db")
             .short("d")
             .takes_value(true)
-            .help("set rocksdb path, required"))
+            .help("set rocksdb path"))
+        .arg(Arg::with_name("hex-to-escaped")
+            .short("h")
+            .takes_value(true)
+            .help("convert hex key to escaped key"))
+        .arg(Arg::with_name("escaped-to-hex")
+            .short("e")
+            .takes_value(true)
+            .help("convert escaped key to hex key"))
         .subcommand(SubCommand::with_name("raft")
             .about("print raft log entry")
             .subcommand(SubCommand::with_name("log")
@@ -151,6 +161,20 @@ fn main() {
                 .help("specify region id")));
     let matches = app.clone().get_matches();
 
+    let hex_key = matches.value_of("hex-to-escaped");
+    let escaped_key = matches.value_of("escaped-to-hex");
+    match (hex_key, escaped_key) {
+        (None, None) => {}
+        (Some(_), Some(_)) => panic!("hex and escaped can not be passed together!"),
+        (Some(hex), None) => {
+            println!("{}", escape(&from_hex(hex)));
+            return;
+        }
+        (None, Some(escaped)) => {
+            println!("{}", &unescape(escaped).to_hex().to_uppercase());
+            return;
+        }
+    };
     let db_path = matches.value_of("db").unwrap();
     let db = util::rocksdb::open(db_path, ALL_CFS).unwrap();
     if let Some(matches) = matches.subcommand_matches("print") {
@@ -268,6 +292,17 @@ pub struct MvccKv<T> {
     value: T,
 }
 
+fn from_hex(key: &str) -> Vec<u8> {
+    const HEX_PREFIX: &str = "0x";
+    let mut s = String::from(key);
+    if s.starts_with(HEX_PREFIX) {
+        let len = s.len();
+        let new_len = len.saturating_sub(HEX_PREFIX.len());
+        s.truncate(new_len);
+    }
+    s.as_str().from_hex().unwrap()
+}
+
 pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
                                             key_prefix: &str,
                                             prefix_is_encoded: bool,
@@ -303,7 +338,8 @@ fn dump_mvcc_default(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
         if start_ts.is_none() || start_ts.unwrap() == ts {
-            println!("Key: {:?}", escape(key.encoded()));
+            let v = key.encoded();
+            println!("Key: {:?}", escape(v));
             println!("Value: {:?}", escape(kv.value.as_slice()));
             println!("Start_ts: {:?}", ts);
             println!("");
