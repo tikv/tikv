@@ -316,8 +316,6 @@ impl BatchRunnable<Task> for Host {
                     }
                 }
                 Task::RetryRequests(retry) => {
-                    BATCH_REQUEST_TASKS.with_label_values(&["retry"])
-                        .observe(retry.len() as f64);
                     for id in retry {
                         let reqs = self.reqs.remove(&id).unwrap();
                         let sched = self.sched.clone();
@@ -373,6 +371,7 @@ impl BatchRunnable<Task> for Host {
                 sched.schedule(Task::BatchSnapRes(ready)).unwrap();
             }
             if !retry.is_empty() {
+                BATCH_REQUEST_TASKS.with_label_values(&["retry"]).observe(retry.len() as f64);
                 sched.schedule(Task::RetryRequests(retry)).unwrap();
             }
         };
