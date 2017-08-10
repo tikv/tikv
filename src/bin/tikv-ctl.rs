@@ -48,7 +48,15 @@ fn main() {
         .arg(Arg::with_name("db")
             .short("d")
             .takes_value(true)
-            .help("set rocksdb path, required"))
+            .help("set rocksdb path"))
+        .arg(Arg::with_name("hex")
+            .short("h")
+            .takes_value(true)
+            .help("convert hex key to escaped key"))
+        .arg(Arg::with_name("escaped")
+            .short("e")
+            .takes_value(true)
+            .help("convert escaped key to hex key"))
         .subcommand(SubCommand::with_name("raft")
             .about("print raft log entry")
             .subcommand(SubCommand::with_name("log")
@@ -151,6 +159,20 @@ fn main() {
                 .help("set commit_ts as filter")));
     let matches = app.clone().get_matches();
 
+    let hex_key = matches.value_of("hex");
+    let escaped_key = matches.value_of("escaped");
+    match (hex_key, escaped_key) {
+        (None, None) => {},
+        (Some(_), Some(_)) => panic!("hex and escaped can not be passed together!"),
+        (Some(hex), None) => {
+            println!("{}", escape(&str_to_hex(hex)));
+            return
+        },
+        (None, Some(escaped)) => {
+            println!("{}", &unescape(escaped).to_hex());
+            return
+        }
+    };
     let db_path = matches.value_of("db").unwrap();
     let db = util::rocksdb::open(db_path, ALL_CFS).unwrap();
     if let Some(matches) = matches.subcommand_matches("print") {
