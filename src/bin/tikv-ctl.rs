@@ -406,16 +406,20 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
                 if iter.key() > iter2.key() {
                     has_diff = true;
                     println!("only db2 has : {}", escape(iter2.key()));
-                    println!("timestamp: {}",
-                             Key::from_encoded(iter2.key().to_vec()).decode_ts().unwrap());
+                    if cf == CF_DEFAULT || cf == CF_WRITE {
+                        println!("timestamp: {}",
+                                 Key::from_encoded(iter2.key().to_vec()).decode_ts().unwrap());
+                    }
                     iter2.next();
                     continue;
                 }
                 if iter.key() < iter2.key() {
                     has_diff = true;
                     println!("only db1 has : {}", escape(iter.key()));
-                    println!("timestamp: {}",
-                             Key::from_encoded(iter.key().to_vec()).decode_ts().unwrap());
+                    if cf == CF_DEFAULT || cf == CF_WRITE {
+                        println!("timestamp: {}",
+                                 Key::from_encoded(iter.key().to_vec()).decode_ts().unwrap());
+                    }
                     iter.next();
                     continue;
                 }
@@ -436,7 +440,7 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
             }
         }
         if iter.valid() && !iter2.valid() {
-            println!("iter2 invalid but iter valid!");
+            println!("iter2 invalid but iter1 valid!");
             while iter.valid() {
                 println!("only db1 has : {:?}", escape(iter.key()));
                 iter.next();
