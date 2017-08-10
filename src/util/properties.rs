@@ -334,7 +334,7 @@ impl TablePropertiesCollector for SizePropertiesCollector {
         self.index_handle.size += size as u64;
         self.index_handle.offset += size as u64;
         // Add the start key for convenience.
-        if self.index_handle.offset == 1 || self.index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
+        if self.last_key.is_empty() || self.index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
             self.props.index_handles.insert(key.to_owned(), self.index_handle.clone());
             self.index_handle.size = 0;
         }
