@@ -142,14 +142,6 @@ fn main() {
                 .short("e")
                 .takes_value(false)
                 .help("set it when the key is already encoded."))
-            .arg(Arg::with_name("hex")
-                .short("h")
-                .takes_value(false)
-                .help("use hex represented key"))
-            .arg(Arg::with_name("outhex")
-                .short("o")
-                .takes_value(false)
-                .help("use hex represented output"))
             .arg(Arg::with_name("start_ts")
                 .short("s")
                 .takes_value(true)
@@ -169,7 +161,7 @@ fn main() {
             return;
         }
         (None, Some(escaped)) => {
-            println!("{}", &unescape(escaped).to_hex());
+            println!("{}", &unescape(escaped).to_hex().to_uppercase());
             return;
         }
     };
@@ -228,28 +220,23 @@ fn main() {
         let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
         let key = matches.value_of("key").unwrap();
         let key_encoded = matches.is_present("encoded");
-        let is_hex = matches.is_present("hex");
-        if !key_encoded && is_hex {
-            panic!("-e and -h must be set together");
-        }
-        let out_hex = matches.is_present("outhex");
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         println!("You are searching Key {}: ", key);
         match cf_name {
             CF_DEFAULT => {
-                dump_mvcc_default(&db, key, key_encoded, is_hex, out_hex, start_ts);
+                dump_mvcc_default(&db, key, key_encoded, start_ts);
             }
             CF_LOCK => {
-                dump_mvcc_lock(&db, key, key_encoded, is_hex, out_hex, start_ts);
+                dump_mvcc_lock(&db, key, key_encoded, start_ts);
             }
             CF_WRITE => {
-                dump_mvcc_write(&db, key, key_encoded, is_hex, out_hex, start_ts, commit_ts);
+                dump_mvcc_write(&db, key, key_encoded, start_ts, commit_ts);
             }
             "all" => {
-                dump_mvcc_default(&db, key, key_encoded, is_hex, out_hex, start_ts);
-                dump_mvcc_lock(&db, key, key_encoded, is_hex, out_hex, start_ts);
-                dump_mvcc_write(&db, key, key_encoded, is_hex, out_hex, start_ts, commit_ts);
+                dump_mvcc_default(&db, key, key_encoded, start_ts);
+                dump_mvcc_lock(&db, key, key_encoded, start_ts);
+                dump_mvcc_write(&db, key, key_encoded, start_ts, commit_ts);
             }
             _ => {
                 println!("The cf: {} cannot be dumped", cf_name);
@@ -304,15 +291,10 @@ fn str_to_hex(key_prefix: &str) -> Vec<u8> {
 pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
                                             key_prefix: &str,
                                             prefix_is_encoded: bool,
-                                            prefix_is_hex: bool,
                                             mvcc_type: CfName)
                                             -> Vec<MvccKv<T>> {
     let encoded_prefix = if prefix_is_encoded {
-        if prefix_is_hex {
-            str_to_hex(key_prefix)
-        } else {
-            unescape(key_prefix)
-        }
+        unescape(key_prefix)
     } else {
         encode_bytes(unescape(key_prefix).as_slice())
     };
@@ -335,22 +317,14 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
 }
 
 
-fn dump_mvcc_default(db: &DB,
-                     key: &str,
-                     encoded: bool,
-                     is_hex: bool,
-                     out_hex: bool,
-                     start_ts: Option<u64>) {
-    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, encoded, is_hex, CF_DEFAULT);
+fn dump_mvcc_default(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
+    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, encoded, CF_DEFAULT);
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
         if start_ts.is_none() || start_ts.unwrap() == ts {
             let v = key.encoded();
             println!("Key: {:?}", escape(v));
-            if out_hex {
-                println!("Key(hex): {}", &v.to_hex());
-            }
             println!("Value: {:?}", escape(kv.value.as_slice()));
             println!("Start_ts: {:?}", ts);
             println!("");
@@ -358,21 +332,12 @@ fn dump_mvcc_default(db: &DB,
     }
 }
 
-fn dump_mvcc_lock(db: &DB,
-                  key: &str,
-                  encoded: bool,
-                  is_hex: bool,
-                  out_hex: bool,
-                  start_ts: Option<u64>) {
-    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, encoded, is_hex, CF_LOCK);
+fn dump_mvcc_lock(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
+    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, encoded, CF_LOCK);
     for kv in kvs {
         let lock = &kv.value;
         if start_ts.is_none() || start_ts.unwrap() == lock.ts {
-            let v = kv.key.encoded();
             println!("Key: {:?}", escape(kv.key.encoded()));
-            if out_hex {
-                println!("Key(hex): {}", &v.to_hex());
-            }
             println!("Primary: {:?}", escape(lock.primary.as_slice()));
             println!("Type: {:?}", lock.lock_type);
             println!("Start_ts: {:?}", lock.ts);
@@ -384,22 +349,16 @@ fn dump_mvcc_lock(db: &DB,
 fn dump_mvcc_write(db: &DB,
                    key: &str,
                    encoded: bool,
-                   is_hex: bool,
-                   out_hex: bool,
                    start_ts: Option<u64>,
                    commit_ts: Option<u64>) {
-    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, encoded, is_hex, CF_WRITE);
+    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, encoded, CF_WRITE);
     for kv in kvs {
         let write = &kv.value;
         let cmt_ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
         if (start_ts.is_none() || start_ts.unwrap() == write.start_ts) &&
            (commit_ts.is_none() || commit_ts.unwrap() == cmt_ts) {
-            let v = key.encoded();
             println!("Key: {:?}", escape(key.encoded()));
-            if out_hex {
-                println!("Key(hex): {}", &v.to_hex());
-            }
             println!("Type: {:?}", write.write_type);
             println!("Start_ts: {:?}", write.start_ts);
             println!("Commit_ts: {:?}", cmt_ts);
@@ -631,9 +590,9 @@ mod tests {
             let key = keys::data_key(Key::from_raw(k).append_ts(ts).encoded().as_slice());
             db.put(key.as_slice(), v).unwrap();
         }
-        let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", false, false, CF_DEFAULT);
+        let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", false, CF_DEFAULT);
         assert_eq!(kvs_gen,
-                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, false, CF_DEFAULT));
+                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_DEFAULT));
         let mut test_iter = test_data.clone();
         assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {
@@ -671,12 +630,9 @@ mod tests {
                     test_data.2 == lock.primary.as_slice() &&
                     test_data.3 == lock.ts);
         }
-        assert_iter(&gen_mvcc_iter(&db, "kv", false, false, CF_LOCK),
-                    test_data_lock[0]);
-        assert_iter(&gen_mvcc_iter(&db, "kx", false, false, CF_LOCK),
-                    test_data_lock[1]);
-        assert_iter(&gen_mvcc_iter(&db, "kz", false, false, CF_LOCK),
-                    test_data_lock[2]);
+        assert_iter(&gen_mvcc_iter(&db, "kv", false, CF_LOCK), test_data_lock[0]);
+        assert_iter(&gen_mvcc_iter(&db, "kx", false, CF_LOCK), test_data_lock[1]);
+        assert_iter(&gen_mvcc_iter(&db, "kz", false, CF_LOCK), test_data_lock[2]);
 
         // Test MVCC Write
         let test_data_write = vec![(PREFIX, WriteType::Delete, 5, 10),
@@ -699,9 +655,9 @@ mod tests {
         for (k, v) in kvs {
             db.put_cf(write_cf, k.as_slice(), v.as_slice()).unwrap();
         }
-        let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", false, false, CF_WRITE);
+        let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", false, CF_WRITE);
         assert_eq!(kvs_gen,
-                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, false, CF_WRITE));
+                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_WRITE));
         let mut test_iter = test_data_write.clone();
         assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {
