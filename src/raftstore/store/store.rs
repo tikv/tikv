@@ -29,10 +29,11 @@ use fs2;
 use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
-                             PeerState};
+                             PeerState, RaftLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{SlowTimer, duration_to_sec, escape};
+use util::escape;
+use util::time::{SlowTimer, duration_to_sec};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -294,13 +295,14 @@ impl<T, C> Store<T, C> {
 
     fn clear_stale_meta(&mut self, wb: &mut WriteBatch, region: &metapb::Region) {
         let raft_key = keys::raft_state_key(region.get_id());
-        let handle = rocksdb::get_cf_handle(&self.engine, CF_RAFT).unwrap();
-        if self.engine.get_cf(handle, &raft_key).unwrap().is_none() {
-            // it has been cleaned up.
-            return;
-        }
+        let raft_state: RaftLocalState =
+            match self.engine.get_msg_cf(CF_RAFT, &raft_key).unwrap() {
+                // it has been cleaned up.
+                None => return,
+                Some(value) => value,
+            };
 
-        peer_storage::clear_meta(&self.engine, wb, region.get_id()).unwrap();
+        peer_storage::clear_meta(&self.engine, wb, region.get_id(), &raft_state).unwrap();
         peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
     }
 
@@ -721,7 +723,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
-        let is_vote_msg = msg.get_message().get_msg_type() == MessageType::MsgRequestVote;
+        let msg_type = msg.get_message().get_msg_type();
+        let is_vote_msg = msg_type == MessageType::MsgRequestVote;
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -778,7 +781,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("[region {}] tombstone peer [epoch: {:?}] \
                     receive a stale message {:?}", region_id,
                     region_epoch,
-                        msg,
+                        msg_type,
                         );
 
                 let not_exist = util::find_peer(region, from_store_id).is_none();
@@ -791,7 +794,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Err(box_err!("tombstone peer [epoch: {:?}] receive an invalid \
                                         message {:?}, ignore it",
                                     region_epoch,
-                                    msg));
+                                    msg_type));
             }
         }
 
@@ -802,18 +805,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
+        let msg_type = msg.get_message().get_msg_type();
 
         if !need_gc {
             info!("[region {}] raft message {:?} is stale, current {:?}, ignore it",
                   region_id,
-                  msg,
+                  msg_type,
                   cur_epoch);
             return;
         }
 
         info!("[region {}] raft message {:?} is stale, current {:?}, tell to gc",
               region_id,
-              msg,
+              msg_type,
               cur_epoch);
 
         let mut gc_msg = RaftMessage::new();
@@ -1246,6 +1250,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 ExecResult::VerifyHash { index, hash } => {
                     self.on_ready_verify_hash(region_id, index, hash)
+                }
+                ExecResult::DeleteRange { .. } => {
+                    // TODO: clean user properties?
                 }
             }
         }
@@ -1872,8 +1879,13 @@ fn verify_and_store_hash(region_id: u64,
     }
 
     if state.index == expected_index {
+        if state.hash.is_empty() {
+            warn!("[region {}] duplicated consistency check detected, skip.",
+                  region_id);
+            return false;
+        }
         if state.hash != expected_hash {
-            panic!("[region {}] hash at {} not correct, want {}, got {}!!!",
+            panic!("[region {}] hash at {} not correct, want \"{}\", got \"{}\"!!!",
                    region_id,
                    state.index,
                    escape(&expected_hash),
