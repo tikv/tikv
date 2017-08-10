@@ -58,19 +58,19 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
-    Constant(ExConstant),
-    ColumnRef(ExColumn),
+    Constant(Constant),
+    ColumnRef(Column),
     ScalarFn(FnCall),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ExColumn {
+pub struct Column {
     offset: usize,
     tp: FieldType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ExConstant {
+pub struct Constant {
     val: Datum,
     tp: FieldType,
 }
@@ -85,7 +85,7 @@ pub struct FnCall {
 
 impl Expression {
     fn new_const(v: Datum, field_type: FieldType) -> Expression {
-        Expression::Constant(ExConstant {
+        Expression::Constant(Constant {
             val: v,
             tp: field_type,
         })
@@ -192,7 +192,7 @@ impl TryFrom<Expr> for Expression {
                 expr.get_val()
                     .decode_i64()
                     .map(|i| {
-                        Expression::ColumnRef(ExColumn {
+                        Expression::ColumnRef(Column {
                             offset: i as usize,
                             tp: tp,
                         })
