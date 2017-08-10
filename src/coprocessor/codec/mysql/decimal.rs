@@ -788,9 +788,10 @@ pub struct Decimal {
     word_buf: Box<[u32]>,
 }
 
+#[derive(Debug)]
 pub enum RoundMode {
-    // ModeHalfEven rounds normally.
-    HafEven,
+    // HalfEven rounds normally.
+    HalfEven,
     // Truncate just truncates the decimal.
     Truncate,
     // Ceiling is not supported now.
@@ -1018,7 +1019,7 @@ impl Decimal {
         }
 
         let tmp = self.clone();
-        let ret = self.round(frac as i8, RoundMode::HafEven).unwrap();
+        let ret = self.round(frac as i8, RoundMode::HalfEven).unwrap();
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && !ret.eq(&tmp) {
             // TODO handle InInsertStmt in ctx
@@ -1100,7 +1101,6 @@ impl Decimal {
                     // If any word after scale is not zero, do increment.
                     // e.g ceiling 3.0001 to scale 1, gets 3.1
                     let mut idx = to_idx + (frac_word_cnt as i8) + frac_words_to;
-                    // TODO:res.word_buf.iter().skip(to_idx)
                     while idx > to_idx {
                         if res.word_buf[idx as usize] != 0 {
                             break;
@@ -1109,7 +1109,7 @@ impl Decimal {
                     }
                     idx > to_idx
                 }
-                RoundMode::HafEven => {
+                RoundMode::HalfEven => {
                     // If first digit after scale is 5 and round even,
                     // do increment if digit at scale is odd.
                     res.word_buf[(to_idx + 1) as usize] / DIG_MASK >= 5
@@ -1132,7 +1132,12 @@ impl Decimal {
             let pos = (frac_words_to * DIGITS_PER_WORD as i8 - frac - 1) as usize;
             let mut shifted_number = res.word_buf[to_idx as usize] / TEN_POW[pos];
             let dig_after_scale = shifted_number % 10;
-            if dig_after_scale >= 5 {
+            let round_digit = match round_mode {
+                RoundMode::Ceiling => 0,
+                RoundMode::HalfEven => 5,
+                RoundMode::Truncate => 10,
+            };
+            if dig_after_scale > round_digit || (round_digit == 5 && dig_after_scale == 5) {
                 shifted_number += 10;
             }
             res.word_buf[to_idx as usize] = TEN_POW[pos] * (shifted_number - dig_after_scale);
@@ -1265,8 +1270,8 @@ impl Decimal {
             }
             end = (end as isize - diff) as u8;
             Res::Truncated(self.round_with_word_buf_len(end as i8 - point as i8,
-                                                        word_buf_len,
-                                                        RoundMode::HafEven)
+                                         word_buf_len,
+                                         RoundMode::HalfEven)
                 .unwrap())
         } else {
             Res::Ok(self)
@@ -1617,7 +1622,7 @@ impl FromStr for Decimal {
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
         let mut dec = self.clone();
-        dec = dec.round(self.result_frac_cnt as i8, RoundMode::HafEven).unwrap();
+        dec = dec.round(self.result_frac_cnt as i8, RoundMode::HalfEven).unwrap();
         fmt.write_str(&dec.to_string())
     }
 }
@@ -2208,27 +2213,32 @@ mod test {
     #[test]
     fn test_round() {
         let cases = vec![
-            ("123456789.987654321", 1, Res::Ok("123456790.0")),
-            ("15.1", 0, Res::Ok("15")),
-            ("15.5", 0, Res::Ok("16")),
-            ("15.9", 0, Res::Ok("16")),
-            ("-15.1", 0, Res::Ok("-15")),
-            ("-15.5", 0, Res::Ok("-16")),
-            ("-15.9", 0, Res::Ok("-16")),
-            ("15.1", 1, Res::Ok("15.1")),
-            ("-15.1", 1, Res::Ok("-15.1")),
-            ("15.17", 1, Res::Ok("15.2")),
-            ("15.4", -1, Res::Ok("20")),
-            ("-15.4", -1, Res::Ok("-20")),
-            ("5.4", -1, Res::Ok("10")),
-            (".999", 0, Res::Ok("1")),
-            ("999999999", -9, Res::Ok("1000000000")),
+            ("123456789.987654321", 1,
+             Res::Ok("123456790.0"), Res::Ok("123456789.9"), Res::Ok("123456790.0")),
+            ("15.1", 0, Res::Ok("15"), Res::Ok("15"), Res::Ok("16")),
+            ("15.5", 0, Res::Ok("16"), Res::Ok("15"), Res::Ok("16")),
+            ("15.9", 0, Res::Ok("16"), Res::Ok("15"), Res::Ok("16")),
+            ("-15.1", 0, Res::Ok("-15"),Res::Ok("-15"), Res::Ok("-16")),
+            ("-15.5", 0, Res::Ok("-16"), Res::Ok("-15"), Res::Ok("-16")),
+            ("-15.9", 0, Res::Ok("-16"), Res::Ok("-15"), Res::Ok("-16")),
+            ("15.1", 1, Res::Ok("15.1"), Res::Ok("15.1"), Res::Ok("15.1")),
+            ("-15.1", 1, Res::Ok("-15.1"), Res::Ok("-15.1"), Res::Ok("-15.1")),
+            ("15.17", 1, Res::Ok("15.2"), Res::Ok("15.1"), Res::Ok("15.2")),
+            ("15.4", -1, Res::Ok("20"), Res::Ok("10"), Res::Ok("20")),
+            ("-15.4", -1, Res::Ok("-20"), Res::Ok("-10"), Res::Ok("-20")),
+            ("5.4", -1, Res::Ok("10"), Res::Ok("0"), Res::Ok("10")),
+            (".999", 0, Res::Ok("1"), Res::Ok("0"), Res::Ok("1")),
+            ("999999999", -9, Res::Ok("1000000000"), Res::Ok("0"),Res::Ok("1000000000")),
         ];
 
-        for (dec_str, scale, exp) in cases {
+        for (dec_str, scale, half_exp, trunc_exp, ceil_exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec.round(scale, RoundMode::HafEven).map(|d| d.to_string());
-            assert_eq!(res, exp.map(|s| s.to_owned()));
+            let res = dec.clone().round(scale, RoundMode::HalfEven).map(|d| d.to_string());
+            assert_eq!(res, half_exp.map(|s| s.to_owned()));
+            let res = dec.clone().round(scale, RoundMode::Truncate).map(|d| d.to_string());
+            assert_eq!(res, trunc_exp.map(|s| s.to_owned()));
+            let res = dec.round(scale, RoundMode::Ceiling).map(|d| d.to_string());
+            assert_eq!(res, ceil_exp.map(|s| s.to_owned()));
         }
     }
 
@@ -2507,6 +2517,38 @@ mod test {
 
             let res = super::do_div_mod(lhs, rhs, frac_incr, true).map(|d| d.unwrap().to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()));
+        }
+    }
+
+    #[test]
+    fn test_max_or_min_decimal() {
+        let cases = vec![
+            (1, 1, "0.9"),
+            (1, 0, "9"),
+            (2, 1, "9.9"),
+            (4, 2, "99.99"),
+            (6, 3, "999.999"),
+            (8, 4, "9999.9999"),
+            (10, 5, "99999.99999"),
+            (12, 6, "999999.999999"),
+            (14, 7, "9999999.9999999"),
+            (16, 8, "99999999.99999999"),
+            (18, 9, "999999999.999999999"),
+            (20, 10, "9999999999.9999999999"),
+            (20, 20, "0.99999999999999999999"),
+            (20, 0, "99999999999999999999"),
+            (40, 20, "99999999999999999999.99999999999999999999"),
+        ];
+
+        for (prec, frac, exp) in cases {
+            let positive = super::max_or_min_dec(false, prec, frac);
+            let res = positive.to_string();
+            assert_eq!(&res, exp);
+            let negative = super::max_or_min_dec(true, prec, frac);
+            let mut negative_exp = String::from("-");
+            negative_exp.push_str(exp);
+            let res = negative.to_string();
+            assert_eq!(res, negative_exp);
         }
     }
 }
