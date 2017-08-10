@@ -162,15 +162,15 @@ fn main() {
     let hex_key = matches.value_of("hex");
     let escaped_key = matches.value_of("escaped");
     match (hex_key, escaped_key) {
-        (None, None) => {},
+        (None, None) => {}
         (Some(_), Some(_)) => panic!("hex and escaped can not be passed together!"),
         (Some(hex), None) => {
             println!("{}", escape(&str_to_hex(hex)));
-            return
-        },
+            return;
+        }
         (None, Some(escaped)) => {
             println!("{}", &unescape(escaped).to_hex());
-            return
+            return;
         }
     };
     let db_path = matches.value_of("db").unwrap();
