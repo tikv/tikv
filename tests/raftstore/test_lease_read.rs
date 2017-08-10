@@ -151,7 +151,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = cluster.get_region(key);
     let region_id = region.get_id();
     cluster.must_transfer_leader(region_id, peer.clone());
-    let engine = cluster.get_raft_engine(store_id);
+    let engine = cluster.get_engine(store_id);
     let state_key = keys::raft_state_key(region_id);
     let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
     let last_index = state.get_last_index();
@@ -295,7 +295,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     // Issue a read request and check the value on response.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
 
-    let engine = cluster.get_raft_engine(store_id);
+    let engine = cluster.get_engine(store_id);
     let state_key = keys::raft_state_key(region_id);
     let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
     let last_index = state.get_last_index();

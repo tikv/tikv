@@ -19,13 +19,13 @@ use std::thread;
 use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{self, Mutation, Key, make_key, KV_CFS, Storage};
+use tikv::storage::{self, Mutation, Key, make_key, ALL_CFS, Storage};
 use tikv::storage::engine::{self, TEMP_DIR, Engine};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::config::Config;
 
-use super::util::new_kv_engine;
+use super::util::new_raft_engine;
 use super::assert_storage::AssertionStorage;
 use storage::util;
 use std::u64;
@@ -346,9 +346,9 @@ fn test_store_resolve_with_illegal_tso() {
 fn test_txn_store_gc() {
     let key = "k";
     let store = AssertionStorage::default();
-    let (_cluster, kv_store) = AssertionStorage::new_kv_storage_with_store_count(3, key);
+    let (_cluster, raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
     store.test_txn_store_gc(key);
-    kv_store.test_txn_store_gc(key);
+    raft_store.test_txn_store_gc(key);
 }
 
 fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
@@ -372,7 +372,7 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
 
 pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String) {
     let (mut cluster, mut store) =
-        AssertionStorage::new_kv_storage_with_store_count(3, prefix.clone().as_str());
+        AssertionStorage::new_raft_storage_with_store_count(3, prefix.clone().as_str());
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     for k in &keys {
         store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v1", 5, 10);
@@ -414,8 +414,8 @@ fn test_txn_store_gc3() {
     let key = "k";
     let store = AssertionStorage::default();
     store.test_txn_store_gc3(key.as_bytes()[0]);
-    let (mut cluster, mut kv_store) = AssertionStorage::new_kv_storage_with_store_count(3, key);
-    kv_store.test_txn_store_gc3_for_cluster(&mut cluster, key.as_bytes()[0]);
+    let (mut cluster, mut raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
+    raft_store.test_txn_store_gc3_for_cluster(&mut cluster, key.as_bytes()[0]);
 }
 
 #[test]
@@ -690,8 +690,8 @@ fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
 }
 #[test]
 fn test_storage_1gc() {
-    let engine = engine::new_local_engine(TEMP_DIR, KV_CFS).unwrap();
+    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     test_storage_1gc_with_engine(engine, Context::new());
-    let (_cluster, kv_engine, ctx) = new_kv_engine(3, "");
-    test_storage_1gc_with_engine(kv_engine, ctx);
+    let (_cluster, raft_engine, ctx) = new_raft_engine(3, "");
+    test_storage_1gc_with_engine(raft_engine, ctx);
 }

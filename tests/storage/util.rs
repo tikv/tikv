@@ -144,7 +144,7 @@ impl Engine for BlockEngine {
     }
 }
 
-pub fn new_kv_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
+pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
     // make sure leader has been elected.
@@ -159,9 +159,9 @@ pub fn new_kv_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<En
     (cluster, engine, ctx)
 }
 
-pub fn new_kv_storage_with_store_count(count: usize,
-                                       key: &str)
-                                       -> (Cluster<ServerCluster>, SyncStorage, Context) {
-    let (cluster, engine, ctx) = new_kv_engine(count, key);
+pub fn new_raft_storage_with_store_count(count: usize,
+                                         key: &str)
+                                         -> (Cluster<ServerCluster>, SyncStorage, Context) {
+    let (cluster, engine, ctx) = new_raft_engine(count, key);
     (cluster, SyncStorage::from_engine(engine, &Config::default()), ctx)
 }

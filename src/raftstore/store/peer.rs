@@ -141,7 +141,7 @@ impl ProposalQueue {
 
 pub struct ReadyContext<'a, T: 'a> {
     pub wb: WriteBatch,
-    pub kv_wb: WriteBatch,
+    pub raft_wb: WriteBatch,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
     pub ready_res: Vec<(Ready, InvokeContext)>,
@@ -150,8 +150,8 @@ pub struct ReadyContext<'a, T: 'a> {
 impl<'a, T> ReadyContext<'a, T> {
     pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
-            wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
-            kv_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
+            wb: WriteBatch::new(),
+            raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             metrics: metrics,
             trans: t,
             ready_res: Vec::with_capacity(cap),
@@ -194,8 +194,8 @@ pub struct PeerStat {
 }
 
 pub struct Peer {
+    engine: Arc<DB>,
     raft_engine: Arc<DB>,
-    kv_engine: Arc<DB>,
     cfg: Rc<Config>,
     peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
@@ -296,8 +296,8 @@ impl Peer {
         let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
-        let ps = try!(PeerStorage::new(store.raft_engine(),
-                                       store.kv_engine(),
+        let ps = try!(PeerStorage::new(store.engine(),
+                                       store.raft_engine(),
                                        region,
                                        sched,
                                        tag.clone(),
@@ -322,8 +322,8 @@ impl Peer {
         let raft_group = try!(RawNode::new(&raft_cfg, ps, &[]));
 
         let mut peer = Peer {
+            engine: store.engine(),
             raft_engine: store.raft_engine(),
-            kv_engine: store.kv_engine(),
             peer: util::new_peer(store_id, peer_id),
             region_id: region.get_id(),
             raft_group: raft_group,
@@ -381,10 +381,12 @@ impl Peer {
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
-        let mut wb = WriteBatch::new();
-        try!(self.mut_store().clear_meta(&mut wb));
+        let wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
+        try!(self.mut_store().clear_meta(&wb, &raft_wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
-        try!(self.raft_engine.write(wb));
+        try!(self.engine.write(wb));
+        try!(self.raft_engine.write(raft_wb));
 
         if self.get_store().is_initialized() {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -413,12 +415,12 @@ impl Peer {
         self.get_store().is_initialized()
     }
 
-    pub fn raft_engine(&self) -> Arc<DB> {
-        self.raft_engine.clone()
+    pub fn engine(&self) -> Arc<DB> {
+        self.engine.clone()
     }
 
-    pub fn kv_engine(&self) -> Arc<DB> {
-        self.kv_engine.clone()
+    pub fn raft_engine(&self) -> Arc<DB> {
+        self.raft_engine.clone()
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -1567,7 +1569,7 @@ impl Peer {
             let mut resp = match cmd_type {
                 CmdType::Get => {
                     if snap.is_none() {
-                        snap = Some(Snapshot::new(self.kv_engine.clone()));
+                        snap = Some(Snapshot::new(self.engine.clone()));
                     }
                     try!(apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req))
                 }

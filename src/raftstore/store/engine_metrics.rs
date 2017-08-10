@@ -155,59 +155,56 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
     }
 }
 
-fn get_cf_size(engine: &Arc<DB>, name: &str, cf: &str, used_size: &mut u64) {
-    let handle = rocksdb::get_cf_handle(engine, cf).unwrap();
-    let cf_used_size = engine.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
-        .expect("rocksdb is too old, missing total-sst-files-size property");
-
-    // For block cache usage
-    let block_cache_usage = engine.get_block_cache_usage_cf(handle);
-    STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC.with_label_values(&[name, cf])
-        .set(block_cache_usage as f64);
-
-    // It is important to monitor each cf's size, especially the "raft" and "lock" column
-    // families.
-    STORE_ENGINE_SIZE_GAUGE_VEC.with_label_values(&[name, cf]).set(cf_used_size as f64);
-
-    *used_size += cf_used_size;
-
-    // TODO: find a better place to record these metrics.
-    // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
-    // For index and filter blocks memory
-    if let Some(readers_mem) = engine.get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM) {
-        STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[name, cf, "readers-mem"])
-            .set(readers_mem as f64);
-    }
-
-    // For memtable
-    if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
-        STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[name, cf, "mem-tables"])
-            .set(mem_table as f64);
-        *used_size += mem_table;
-    }
-
-    // TODO: add cache usage and pinned usage.
-
-    if let Some(num_keys) = engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
-        STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC.with_label_values(&[name, cf])
-            .set(num_keys as f64);
-    }
-
-    // Pending compaction bytes
-    if let Some(pending_compaction_bytes) =
-           engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES) {
-        STORE_ENGINE_PENDING_COMACTION_BYTES_VEC.with_label_values(&[name, cf])
-            .set(pending_compaction_bytes as f64);
-    }
-}
-
 pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>,
                                                  name: &str,
                                                  cfs: &[CfName])
                                                  -> u64 {
     let mut used_size: u64 = 0;
     for cf in cfs {
-        get_cf_size(&engine, name, cf, &mut used_size);
+        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+        let cf_used_size = engine.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+            .expect("rocksdb is too old, missing total-sst-files-size property");
+
+        // For block cache usage
+        let block_cache_usage = engine.get_block_cache_usage_cf(handle);
+        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC.with_label_values(&[name, cf])
+            .set(block_cache_usage as f64);
+
+        // It is important to monitor each cf's size, especially the "raft" and "lock" column
+        // families.
+        STORE_ENGINE_SIZE_GAUGE_VEC.with_label_values(&[name, cf]).set(cf_used_size as f64);
+
+        used_size += cf_used_size;
+
+        // TODO: find a better place to record these metrics.
+        // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
+        // For index and filter blocks memory
+        if let Some(readers_mem) = engine.get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM) {
+            STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[name, cf, "readers-mem"])
+                .set(readers_mem as f64);
+        }
+
+        // For memtable
+        if let Some(mem_table) =
+               engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
+            STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[name, cf, "mem-tables"])
+                .set(mem_table as f64);
+            used_size += mem_table;
+        }
+
+        // TODO: add cache usage and pinned usage.
+
+        if let Some(num_keys) = engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
+            STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC.with_label_values(&[name, cf])
+                .set(num_keys as f64);
+        }
+
+        // Pending compaction bytes
+        if let Some(pending_compaction_bytes) =
+               engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES) {
+            STORE_ENGINE_PENDING_COMACTION_BYTES_VEC.with_label_values(&[name, cf])
+                .set(pending_compaction_bytes as f64);
+        }
     }
     used_size
 }

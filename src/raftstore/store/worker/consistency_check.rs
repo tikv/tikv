@@ -31,22 +31,16 @@ pub enum Task {
     ComputeHash {
         index: u64,
         region: Region,
-        kv_snap: Snapshot,
-        raft_snap: Snapshot,
+        snap: Snapshot,
     },
 }
 
 impl Task {
-    pub fn compute_hash(region: Region,
-                        index: u64,
-                        kv_snap: Snapshot,
-                        raft_snap: Snapshot)
-                        -> Task {
+    pub fn compute_hash(region: Region, index: u64, snap: Snapshot) -> Task {
         Task::ComputeHash {
             region: region,
             index: index,
-            kv_snap: kv_snap,
-            raft_snap: raft_snap,
+            snap: snap,
         }
     }
 }
@@ -70,31 +64,27 @@ impl<C: MsgSender> Runner<C> {
         Runner { ch: ch }
     }
 
-    fn compute_hash(&mut self,
-                    region: Region,
-                    index: u64,
-                    kv_snap: Snapshot,
-                    raft_snap: Snapshot) {
+    fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
         let region_id = region.get_id();
         info!("[region {}] computing hash at {}", region_id, index);
         REGION_HASH_COUNTER_VEC.with_label_values(&["compute", "all"]).inc();
 
         let timer = REGION_HASH_HISTOGRAM.start_timer();
         let mut digest = Digest::new(crc32::IEEE);
-        let mut cf_names = kv_snap.cf_names();
+        let mut cf_names = snap.cf_names();
         cf_names.sort();
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         for cf in cf_names {
-            let res = kv_snap.scan_cf(cf,
-                                      &start_key,
-                                      &end_key,
-                                      false,
-                                      &mut |k, v| {
-                                          digest.write(k);
-                                          digest.write(v);
-                                          Ok(true)
-                                      });
+            let res = snap.scan_cf(cf,
+                                   &start_key,
+                                   &end_key,
+                                   false,
+                                   &mut |k, v| {
+                                       digest.write(k);
+                                       digest.write(v);
+                                       Ok(true)
+                                   });
             if let Err(e) = res {
                 REGION_HASH_COUNTER_VEC.with_label_values(&["compute", "failed"]).inc();
                 error!("[region {}] failed to calculate hash: {:?}", region_id, e);
@@ -103,7 +93,7 @@ impl<C: MsgSender> Runner<C> {
         }
         let region_state_key = keys::region_state_key(region_id);
         digest.write(&region_state_key);
-        match raft_snap.get_value(&region_state_key) {
+        match snap.get_value(&region_state_key) {
             Err(e) => {
                 REGION_HASH_COUNTER_VEC.with_label_values(&["compute", "failed"]).inc();
                 error!("[region {}] failed to get region state: {:?}", region_id, e);
@@ -133,9 +123,7 @@ impl<C: MsgSender> Runner<C> {
 impl<C: MsgSender> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
         match task {
-            Task::ComputeHash { region, index, kv_snap, raft_snap } => {
-                self.compute_hash(region, index, kv_snap, raft_snap)
-            }
+            Task::ComputeHash { region, index, snap } => self.compute_hash(region, index, snap),
         }
     }
 }
@@ -187,8 +175,7 @@ mod test {
         runner.run(Task::ComputeHash {
             index: 10,
             region: region.clone(),
-            kv_snap: Snapshot::new(db.clone()),
-            raft_snap: Snapshot::new(db.clone()),
+            snap: Snapshot::new(db.clone()),
         });
         let mut checksum_bytes = vec![];
         checksum_bytes.write_u32::<BigEndian>(sum).unwrap();

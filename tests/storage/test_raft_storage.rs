@@ -25,10 +25,10 @@ use raftstore::server::ServerCluster;
 use raftstore::util::*;
 use storage::util;
 use super::sync_storage::SyncStorage;
-use super::util::new_kv_storage_with_store_count;
+use super::util::new_raft_storage_with_store_count;
 
 fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
-    new_kv_storage_with_store_count(1, "")
+    new_raft_storage_with_store_count(1, "")
 }
 
 #[test]

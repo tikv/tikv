@@ -158,7 +158,7 @@ mod test {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use super::SnapshotStore;
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, KV_CFS, Options, Statistics, ScanMode, KvPair, Value};
+    use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, ScanMode, KvPair, Value};
     use storage::engine::{self, Engine, TEMP_DIR, Snapshot};
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -175,7 +175,7 @@ mod test {
 
     impl TestStore {
         fn new(key_num: u64) -> TestStore {
-            let engine = engine::new_local_engine(TEMP_DIR, KV_CFS).unwrap();
+            let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
             let keys: Vec<String> =
                 (START_ID..START_ID + key_num).map(|i| format!("{}{}", KEY_PREFIX, i)).collect();
             let ctx = Context::new();

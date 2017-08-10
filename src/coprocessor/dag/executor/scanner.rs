@@ -129,7 +129,7 @@ pub mod test {
     use util::collections::HashMap;
     use util::codec::number::NumberEncoder;
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, KV_CFS, Options, Statistics, Snapshot, SnapshotStore};
+    use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, Snapshot, SnapshotStore};
     use storage::engine::{self, Engine, TEMP_DIR, Modify};
 
     use super::*;
@@ -216,7 +216,7 @@ pub mod test {
 
     impl TestStore {
         pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
-            let engine = engine::new_local_engine(TEMP_DIR, KV_CFS).unwrap();
+            let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
             let ctx = Context::new();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {

@@ -38,13 +38,13 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let engine_2 = cluster.get_kv_engine(2);
+    let engine_2 = cluster.get_engine(2);
     must_get_equal(&engine_2, b"k1", b"v1");
 
     // add peer (3, 3) to region 1.
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
-    let engine_3 = cluster.get_kv_engine(3);
+    let engine_3 = cluster.get_engine(3);
     must_get_equal(&engine_3, b"k1", b"v1");
 
     // Remove peer (2, 2) from region 1.
@@ -56,7 +56,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let engine_2 = cluster.get_kv_engine(2);
+    let engine_2 = cluster.get_engine(2);
     must_get_none(&engine_2, b"k1");
     must_get_none(&engine_2, b"k3");
     let mut existing_kvs = vec![];
@@ -72,33 +72,18 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
             .unwrap();
     }
     // only tombstone key and store ident key exist.
-    assert_eq!(existing_kvs.len(), 1);
+    assert_eq!(existing_kvs.len(), 2);
+    existing_kvs.sort();
     assert_eq!(existing_kvs[0].0, keys::store_ident_key());
+    assert_eq!(existing_kvs[1].0, keys::region_state_key(r1));
 
     let mut ident = StoreIdent::new();
     ident.merge_from_bytes(&existing_kvs[0].1).unwrap();
     assert_eq!(ident.get_store_id(), 2);
     assert_eq!(ident.get_cluster_id(), cluster.id());
 
-    let raft_engine_2 = cluster.get_raft_engine(2);
-    let mut existing_kvs = vec![];
-    for cf in raft_engine_2.cf_names() {
-        raft_engine_2.scan_cf(cf,
-                     b"",
-                     &[0xFF],
-                     false,
-                     &mut |k, v| {
-                         existing_kvs.push((k.to_vec(), v.to_vec()));
-                         Ok(true)
-                     })
-            .unwrap();
-    }
-    // only tombstone key and store ident key exist.
-    assert_eq!(existing_kvs.len(), 1);
-    assert_eq!(existing_kvs[0].0, keys::region_state_key(r1));
-
     let mut state = RegionLocalState::new();
-    state.merge_from_bytes(&existing_kvs[0].1).unwrap();
+    state.merge_from_bytes(&existing_kvs[1].1).unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // The peer 2 may be destroyed by:
@@ -150,7 +135,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
     cluster.must_put(b"k1", b"v1");
 
-    let engine_3 = cluster.get_kv_engine(3);
+    let engine_3 = cluster.get_engine(3);
     must_get_equal(&engine_3, b"k1", b"v1");
     // remove peer (3, 3)
     pd_client.must_remove_peer(1, new_peer(3, 3));
@@ -160,8 +145,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.stop_node(3);
 
     let key = keys::region_state_key(1);
-    let raft_engine_3 = cluster.get_raft_engine(3);
-    let state: RegionLocalState = raft_engine_3.get_msg(&key).unwrap().unwrap();
+    let state: RegionLocalState = engine_3.get_msg(&key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // Force add some dirty data.
@@ -208,13 +192,13 @@ fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let engine_2 = cluster.get_kv_engine(2);
+    let engine_2 = cluster.get_engine(2);
     must_get_equal(&engine_2, b"k1", b"v1");
 
     // add peer (3, 3) to region 1.
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
-    let engine_3 = cluster.get_kv_engine(3);
+    let engine_3 = cluster.get_engine(3);
     must_get_equal(&engine_3, b"k1", b"v1");
 
     cluster.add_send_filter(IsolationFilterFactory::new(2));
@@ -231,7 +215,7 @@ fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.clear_send_filters();
     cluster.must_put(b"k4", b"v4");
-    let engine = cluster.get_kv_engine(2);
+    let engine = cluster.get_engine(2);
     must_get_equal(&engine, b"k4", b"v4");
 }
 
@@ -264,7 +248,7 @@ fn test_server_stale_meta() {
     pd_client.must_add_peer(1, new_peer(3, 4));
     cluster.shutdown();
 
-    let engine_3 = cluster.get_raft_engine(3);
+    let engine_3 = cluster.get_engine(3);
     let mut state: RegionLocalState =
         engine_3.get_msg(&keys::region_state_key(1)).unwrap().unwrap();
     state.set_state(PeerState::Tombstone);
@@ -276,6 +260,5 @@ fn test_server_stale_meta() {
     cluster.start();
 
     cluster.must_put(b"k1", b"v1");
-    let engine_3 = cluster.get_kv_engine(3);
     must_get_equal(&engine_3, b"k1", b"v1");
 }

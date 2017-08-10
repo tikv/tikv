@@ -43,7 +43,7 @@ pub const CF_LOCK: CfName = "lock";
 pub const CF_WRITE: CfName = "write";
 // Cfs that should be very large generally.
 pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
-pub const KV_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -410,7 +410,7 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let engine = try!(engine::new_local_engine(&config.data_dir, KV_CFS));
+        let engine = try!(engine::new_local_engine(&config.data_dir, ALL_CFS));
         Storage::from_engine(engine, config)
     }
 

@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -134,8 +135,7 @@ pub enum ExecResult {
     ComputeHash {
         region: Region,
         index: u64,
-        kv_snap: Snapshot,
-        raft_snap: Snapshot,
+        snap: Snapshot,
     },
     VerifyHash { index: u64, hash: Vec<u8> },
 }
@@ -143,7 +143,6 @@ pub enum ExecResult {
 struct ApplyContext<'a> {
     pub host: &'a CoprocessorHost,
     pub wb: Option<WriteBatch>,
-    pub raft_wb: Option<WriteBatch>,
     pub cbs: Vec<(Callback, RaftCmdResponse)>,
     pub wb_last_bytes: u64,
     pub wb_last_keys: u64,
@@ -154,7 +153,6 @@ impl<'a> ApplyContext<'a> {
         ApplyContext {
             host: host,
             wb: Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE)),
-            raft_wb: Some(WriteBatch::new()),
             cbs: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
@@ -167,10 +165,6 @@ impl<'a> ApplyContext<'a> {
 
     pub fn wb_ref(&self) -> &WriteBatch {
         self.wb.as_ref().unwrap()
-    }
-
-    pub fn raft_wb_ref(&self) -> &WriteBatch {
-        self.raft_wb.as_ref().unwrap()
     }
 
     pub fn mark_last_bytes_and_keys(&mut self) {
@@ -247,7 +241,6 @@ pub struct ApplyDelegate {
     // peer_tag, "[region region_id] peer_id"
     tag: String,
     engine: Arc<DB>,
-    raft_engine: Arc<DB>,
     region: Region,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
@@ -274,15 +267,14 @@ impl ApplyDelegate {
 
     fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), peer.raft_engine(), reg)
+        ApplyDelegate::from_registration(peer.engine(), reg)
     }
 
-    fn from_registration(db: Arc<DB>, raft_db: Arc<DB>, reg: Registration) -> ApplyDelegate {
+    fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             engine: db,
-            raft_engine: raft_db,
             region: reg.region,
             pending_remove: false,
             apply_state: reg.apply_state,
@@ -382,20 +374,11 @@ impl ApplyDelegate {
                         panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                     });
 
-                if !apply_ctx.raft_wb_ref().is_empty() {
-                    self.raft_engine
-                        .write(apply_ctx.raft_wb.take().unwrap())
-                        .unwrap_or_else(|e| {
-                            panic!("{} failed to write to engine, error: {:?}", self.tag, e)
-                        });
-                }
-
                 // call callback
                 for (cb, resp) in apply_ctx.cbs.drain(..) {
                     cb(resp);
                 }
                 apply_ctx.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
-                apply_ctx.raft_wb = Some(WriteBatch::new());
                 apply_ctx.mark_last_bytes_and_keys();
             }
 
@@ -478,16 +461,7 @@ impl ApplyDelegate {
 
         let cmd_cb = self.find_cb(index, term, &cmd);
         apply_ctx.host.pre_apply(&self.region, &mut cmd);
-
-        apply_ctx.wb_mut().set_save_point();
-        let (mut resp, exec_result, is_ok) = self.apply_raft_cmd(apply_ctx.wb_ref(),
-                                                                 apply_ctx.raft_wb_ref(),
-                                                                 index,
-                                                                 term,
-                                                                 &cmd);
-        if !is_ok {
-            apply_ctx.wb_mut().rollback_to_save_point().unwrap();
-        }
+        let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
 
         debug!("{} applied command at log index {}", self.tag, index);
 
@@ -512,20 +486,19 @@ impl ApplyDelegate {
     // we should try to apply the entry again or panic. Considering that this
     // usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(&mut self,
-                      wb: &WriteBatch,
-                      raft_wb: &WriteBatch,
+                      wb: &mut WriteBatch,
                       index: u64,
                       term: u64,
                       req: &RaftCmdRequest)
-                      -> (RaftCmdResponse, Option<ExecResult>, bool) {
+                      -> (RaftCmdResponse, Option<ExecResult>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
-        let mut is_ok = true;
         let mut ctx = self.new_ctx(wb, index, term, req);
-        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx, raft_wb).unwrap_or_else(|e| {
+        ctx.wb.set_save_point();
+        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             // clear dirty values.
-            is_ok = false;
+            ctx.wb.rollback_to_save_point().unwrap();
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
@@ -558,7 +531,7 @@ impl ApplyDelegate {
             }
         }
 
-        (resp, exec_result, is_ok)
+        (resp, exec_result)
     }
 
     /// Clear all the pending commands.
@@ -599,7 +572,7 @@ impl ApplyDelegate {
     }
 
     fn new_ctx<'a>(&self,
-                   wb: &'a WriteBatch,
+                   wb: &'a mut WriteBatch,
                    index: u64,
                    term: u64,
                    req: &'a RaftCmdRequest)
@@ -616,7 +589,7 @@ impl ApplyDelegate {
 
 struct ExecContext<'a> {
     apply_state: RaftApplyState,
-    wb: &'a WriteBatch,
+    wb: &'a mut WriteBatch,
     req: &'a RaftCmdRequest,
     index: u64,
     term: u64,
@@ -626,12 +599,11 @@ struct ExecContext<'a> {
 impl ApplyDelegate {
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd(&mut self,
-                     ctx: &mut ExecContext,
-                     raft_wb: &WriteBatch)
+                     ctx: &mut ExecContext)
                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         try!(check_epoch(&self.region, ctx.req));
         if ctx.req.has_admin_request() {
-            self.exec_admin_cmd(ctx, raft_wb)
+            self.exec_admin_cmd(ctx)
         } else {
             // Now we don't care write command outer, so use None.
             self.exec_write_cmd(ctx).and_then(|v| Ok((v, None)))
@@ -639,8 +611,7 @@ impl ApplyDelegate {
     }
 
     fn exec_admin_cmd(&mut self,
-                      ctx: &mut ExecContext,
-                      raft_wb: &WriteBatch)
+                      ctx: &mut ExecContext)
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let request = ctx.req.get_admin_request();
         let cmd_type = request.get_cmd_type();
@@ -651,8 +622,8 @@ impl ApplyDelegate {
               ctx.index);
 
         let (mut response, exec_result) = try!(match cmd_type {
-            AdminCmdType::ChangePeer => self.exec_change_peer(raft_wb, request),
-            AdminCmdType::Split => self.exec_split(ctx, raft_wb, request),
+            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
+            AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
@@ -667,7 +638,7 @@ impl ApplyDelegate {
     }
 
     fn exec_change_peer(&mut self,
-                        raft_wb: &WriteBatch,
+                        ctx: &ExecContext,
                         request: &AdminRequest)
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
@@ -747,7 +718,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(raft_wb, &region, state) {
+        if let Err(e) = write_peer_state(ctx.wb, &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -764,7 +735,6 @@ impl ApplyDelegate {
 
     fn exec_split(&mut self,
                   ctx: &ExecContext,
-                  raft_wb: &WriteBatch,
                   req: &AdminRequest)
                   -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
@@ -819,9 +789,9 @@ impl ApplyDelegate {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        write_peer_state(raft_wb, &region, PeerState::Normal)
-            .and_then(|_| write_peer_state(raft_wb, &new_region, PeerState::Normal))
-            .and_then(|_| write_initial_state(raft_wb, ctx.wb, new_region.get_id()))
+        write_peer_state(ctx.wb, &region, PeerState::Normal)
+            .and_then(|_| write_peer_state(ctx.wb, &new_region, PeerState::Normal))
+            .and_then(|_| write_initial_state(ctx.wb, new_region.get_id()))
             .unwrap_or_else(|e| {
                 panic!("{} failed to save split region {:?}: {:?}",
                        self.tag,
@@ -1069,8 +1039,7 @@ impl ApplyDelegate {
             // open files in rocksdb.
             // TODO: figure out another way to do consistency check without snapshot
             // or short life snapshot.
-            kv_snap: Snapshot::new(self.engine.clone()),
-            raft_snap: Snapshot::new(self.raft_engine.clone()),
+            snap: Snapshot::new(self.engine.clone()),
         })))
     }
 
@@ -1230,7 +1199,6 @@ pub enum TaskRes {
 // TODO: use threadpool to do task concurrently
 pub struct Runner {
     db: Arc<DB>,
-    raft_db: Arc<DB>,
     host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
@@ -1243,8 +1211,7 @@ impl Runner {
             delegates.insert(region_id, ApplyDelegate::from_peer(p));
         }
         Runner {
-            db: store.kv_engine(),
-            raft_db: store.raft_engine(),
+            db: store.engine(),
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
@@ -1293,13 +1260,7 @@ impl Runner {
         // Write to engine
         self.db
             .write(apply_ctx.wb.take().unwrap())
-            .unwrap_or_else(|e| panic!("failed to write to kv engine, error: {:?}", e));
-
-        if !apply_ctx.raft_wb_ref().is_empty() {
-            self.raft_db
-                .write(apply_ctx.raft_wb.take().unwrap())
-                .unwrap_or_else(|e| panic!("failed to write to raft engine, error: {:?}", e));
-        }
+            .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
 
         // Call callbacks
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1349,7 +1310,7 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(self.db.clone(), self.raft_db.clone(), s);
+        let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
         info!("{} register to apply delegates at term {}",
               delegate.tag,
               delegate.term);
@@ -1397,33 +1358,24 @@ mod tests {
     use std::sync::*;
 
     use tempdir::TempDir;
-    use std::path::Path;
     use rocksdb::{DB, WriteBatch, Writable};
     use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::CmdType;
 
     use super::*;
-    use storage::{CF_WRITE, KV_CFS};
-
+    use storage::{CF_WRITE, ALL_CFS};
     use util::collections::HashMap;
 
-    pub fn create_tmp_engine(path: &str) -> (Arc<DB>, Arc<DB>) {
+    pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
         let path = TempDir::new(path).unwrap();
-        let kv_db = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), KV_CFS).unwrap());
-        let raft_path = path.path().join(Path::new("raft"));
-        let raft_db = Arc::new(rocksdb::new_engine(raft_path.to_str().unwrap(), &[]).unwrap());
-        (kv_db, raft_db)
+        let db = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
+        (path, db)
     }
 
-    fn new_runner(db: Arc<DB>,
-                  raft_db: Arc<DB>,
-                  host: Arc<CoprocessorHost>,
-                  tx: Sender<TaskRes>)
-                  -> Runner {
+    fn new_runner(db: Arc<DB>, host: Arc<CoprocessorHost>, tx: Sender<TaskRes>) -> Runner {
         Runner {
             db: db,
-            raft_db: raft_db,
             host: host,
             delegates: HashMap::new(),
             notifier: tx,
@@ -1468,9 +1420,9 @@ mod tests {
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
-        let (db, raft_db) = create_tmp_engine("apply-basic");
+        let (_tmp, db) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::new());
-        let mut runner = new_runner(db.clone(), raft_db.clone(), host, tx);
+        let mut runner = new_runner(db.clone(), host, tx);
 
         let mut reg = Registration::default();
         reg.id = 1;
@@ -1662,11 +1614,11 @@ mod tests {
 
     #[test]
     fn test_handle_raft_committed_entries() {
-        let (db, raft_db) = create_tmp_engine("test-delegate");
+        let (_path, db) = create_tmp_engine("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(db.clone(), raft_db.clone(), reg);
+        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
         let (tx, rx) = mpsc::channel();
 
         let put_entry = EntryBuilder::new(1, 1)

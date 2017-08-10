@@ -143,20 +143,20 @@ impl Display for Task {
 }
 
 pub struct Runner<C> {
-    kv_engine: Arc<DB>,
+    engine: Arc<DB>,
     ch: RetryableSendCh<Msg, C>,
     region_max_size: u64,
     split_size: u64,
 }
 
 impl<C> Runner<C> {
-    pub fn new(kv_engine: Arc<DB>,
+    pub fn new(engine: Arc<DB>,
                ch: RetryableSendCh<Msg, C>,
                region_max_size: u64,
                split_size: u64)
                -> Runner<C> {
         Runner {
-            kv_engine: kv_engine,
+            engine: engine,
             ch: ch,
             region_max_size: region_max_size,
             split_size: split_size,
@@ -175,7 +175,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
         let mut size = 0;
         let mut split_key = vec![];
         let timer = CHECK_SPILT_HISTOGRAM.start_timer();
-        let res = MergedIterator::new(self.kv_engine.as_ref(),
+        let res = MergedIterator::new(self.engine.as_ref(),
                                       LARGE_CFS,
                                       &task.start_key,
                                       &task.end_key,
@@ -238,14 +238,14 @@ mod tests {
     use rocksdb::Writable;
     use kvproto::metapb::Peer;
 
-    use storage::KV_CFS;
+    use storage::ALL_CFS;
     use util::rocksdb;
     use super::*;
 
     #[test]
     fn test_split_check() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), KV_CFS).unwrap());
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
 
         let mut region = Region::new();
         region.set_id(1);
@@ -290,7 +290,7 @@ mod tests {
         // So split key will be z0003
         for i in 0..6 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            for cf in KV_CFS {
+            for cf in ALL_CFS {
                 let handle = engine.cf_handle(cf).unwrap();
                 engine.put_cf(handle, &s, &s).unwrap();
             }

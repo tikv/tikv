@@ -942,17 +942,17 @@ fn run_raft_server(pd_client: RpcClient,
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
     // Create engine, storage.
-    let kv_db_opts = get_rocksdb_db_option(config, "rocksdb");
-    let kv_cfs_opts =
+    let db_opts = get_rocksdb_db_option(config, "rocksdb");
+    let cfs_opts =
         vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
                                           get_rocksdb_default_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_WRITE,
                                           get_rocksdb_write_cf_option(config, total_mem))];
-    let kv_engine =
-        Arc::new(rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
+    let engine =
+        Arc::new(rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), db_opts, cfs_opts)
             .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
-    let mut storage = create_raft_storage(raft_router.clone(), kv_engine.clone(), &cfg)
+    let mut storage = create_raft_storage(raft_router.clone(), engine.clone(), &cfg)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     // Create pd client, snapshot manager, server.
@@ -984,7 +984,7 @@ fn run_raft_server(pd_client: RpcClient,
 
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
-    let engines = Engines::new(raft_engine.clone(), kv_engine.clone());
+    let engines = Engines::new(engine.clone(), raft_engine.clone());
     node.start(event_loop, engines, trans, snap_mgr, snap_status_receiver)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     initial_metric(config, Some(node.id()));
@@ -997,7 +997,7 @@ fn run_raft_server(pd_client: RpcClient,
 
     // Run server.
     server.start(&cfg).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    signal_handler::handle_signal(kv_engine, backup_path);
+    signal_handler::handle_signal(engine, backup_path);
 
     // Stop.
     server.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));

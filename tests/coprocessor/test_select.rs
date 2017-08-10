@@ -22,7 +22,7 @@ use tikv::coprocessor;
 use kvproto::kvrpcpb::Context;
 use tikv::coprocessor::codec::{table, Datum, datum};
 use tikv::util::codec::number::*;
-use tikv::storage::{Mutation, Key, KV_CFS};
+use tikv::storage::{Mutation, Key, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::Worker;
 use kvproto::coprocessor::{Request, KeyRange};
@@ -561,7 +561,7 @@ impl ProductTable {
 fn init_with_data(tbl: &ProductTable,
                   vals: &[(i64, Option<&str>, i64)])
                   -> (Store, Worker<EndPointTask>) {
-    let engine = engine::new_local_engine(TEMP_DIR, KV_CFS).unwrap();
+    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     let mut store = Store::new(engine);
 
     store.begin();

@@ -51,7 +51,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let engine_2 = cluster.get_kv_engine(2);
+    let engine_2 = cluster.get_engine(2);
     must_get_equal(&engine_2, key, value);
 
     // Isolate peer 2 from other part of the cluster.
@@ -86,8 +86,6 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // Check whether peer(2, 2) and its data are destroyed.
     must_get_none(&engine_2, key);
     must_get_none(&engine_2, key2);
-
-    let engine_2 = cluster.get_raft_engine(2);
     let state_key = keys::region_state_key(1);
     let state: RegionLocalState = engine_2.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
@@ -134,7 +132,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
     cluster.must_split(&region, b"k2");
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
-    let engine3 = cluster.get_kv_engine(3);
+    let engine3 = cluster.get_engine(3);
     if right_derive {
         must_get_none(&engine3, b"k1");
         must_get_equal(&engine3, b"k3", b"v3");
@@ -175,9 +173,8 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
     // Check whether peer(3, 4) is destroyed.
     // Before peer 4 is destroyed, a tombstone mark will be written into the engine.
     // So we could check the tombstone mark to make sure peer 4 is destroyed.
-    let raft_engine3 = cluster.get_raft_engine(3);
     let state_key = keys::region_state_key(new_region_id);
-    let state: RegionLocalState = raft_engine3.get_msg(&state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine3.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // other region should not be affected.

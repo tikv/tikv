@@ -79,7 +79,7 @@ impl Simulator for ServerCluster {
     fn run_node(&mut self,
                 node_id: u64,
                 mut cfg: Config,
-                kv_engine: Arc<DB>,
+                engine: Arc<DB>,
                 raft_engine: Arc<DB>)
                 -> u64 {
         assert!(node_id == 0 || !self.metas.contains_key(&node_id));
@@ -106,7 +106,7 @@ impl Simulator for ServerCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
         // Create storage.
-        let mut store = create_raft_storage(sim_router.clone(), kv_engine.clone(), &cfg).unwrap();
+        let mut store = create_raft_storage(sim_router.clone(), engine.clone(), &cfg).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
@@ -128,7 +128,7 @@ impl Simulator for ServerCluster {
         let simulate_trans = SimulateTransport::new(trans.clone());
 
         // Create node.
-        let engines = Engines::new(raft_engine.clone(), kv_engine.clone());
+        let engines = Engines::new(engine.clone(), raft_engine.clone());
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
         node.start(event_loop,
                    engines,

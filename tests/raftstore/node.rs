@@ -159,7 +159,7 @@ impl Simulator for NodeCluster {
     fn run_node(&mut self,
                 node_id: u64,
                 cfg: ServerConfig,
-                kv_engine: Arc<DB>,
+                engine: Arc<DB>,
                 raft_engine: Arc<DB>)
                 -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
@@ -183,14 +183,14 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        let engines = Engines::new(raft_engine.clone(), kv_engine.clone());
+        let engines = Engines::new(engine.clone(), raft_engine.clone());
         node.start(event_loop,
                    engines,
                    simulate_trans.clone(),
                    snap_mgr.clone(),
                    snap_status_receiver)
             .unwrap();
-        assert!(kv_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+        assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
             .unwrap()
             .is_none());
         assert!(node_id == 0 || node_id == node.id());
