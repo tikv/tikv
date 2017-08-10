@@ -151,13 +151,13 @@ fn main() {
                 .help("set commit_ts as filter")));
     let matches = app.clone().get_matches();
 
-    let hex_key = matches.value_of("hex");
-    let escaped_key = matches.value_of("escaped");
+    let hex_key = matches.value_of("hex-to-escaped");
+    let escaped_key = matches.value_of("escaped-to-hex");
     match (hex_key, escaped_key) {
         (None, None) => {}
         (Some(_), Some(_)) => panic!("hex and escaped can not be passed together!"),
         (Some(hex), None) => {
-            println!("{}", escape(&str_to_hex(hex)));
+            println!("{}", escape(&hex_str_to_hex_vec(hex)));
             return;
         }
         (None, Some(escaped)) => {
@@ -277,7 +277,7 @@ pub struct MvccKv<T> {
     value: T,
 }
 
-fn str_to_hex(key_prefix: &str) -> Vec<u8> {
+fn hex_str_to_hex_vec(key_prefix: &str) -> Vec<u8> {
     const HEX_PREFIX: &str = "0x";
     let mut s = String::from(key_prefix);
     if s.starts_with(HEX_PREFIX) {
