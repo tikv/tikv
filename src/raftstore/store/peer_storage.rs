@@ -1004,6 +1004,18 @@ pub fn clear_meta(wb: &WriteBatch,
     try!(wb.delete(&keys::apply_state_key(region_id)));
     try!(wb.delete(&keys::raft_state_key(region_id)));
 
+    let raft_count = try!(clear_raft_entries(raft_wb, raft_engine, region_id));
+
+    info!("[region {}] clear peer 1 meta key, 2 raft keys and {} raft logs, takes {:?}",
+          region_id,
+          raft_count,
+          t.elapsed());
+    Ok(())
+}
+
+/// Delete all raft log entries belong to the region. Results are stored in `raft_wb`.
+pub fn clear_raft_entries(raft_wb: &WriteBatch, raft_engine: &DB, region_id: u64) -> Result<(i32)> {
+    // TODO: use delete range directly
     let mut raft_count = 0;
     let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
                                   keys::region_raft_prefix(region_id + 1));
@@ -1015,11 +1027,7 @@ pub fn clear_meta(wb: &WriteBatch,
                               raft_count += 1;
                               Ok(true)
                           }));
-    info!("[region {}] clear peer 1 meta key, 2 raft keys and {} raft logs, takes {:?}",
-          region_id,
-          raft_count,
-          t.elapsed());
-    Ok(())
+    Ok(raft_count)
 }
 
 pub fn do_snapshot(mgr: SnapManager,

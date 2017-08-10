@@ -28,7 +28,8 @@ use util::worker::Runnable;
 use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
-                                     JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
+                                     JOB_STATUS_CANCELLING, JOB_STATUS_PENDING,
+                                     JOB_STATUS_RUNNING, clear_raft_entries};
 use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyOptions, keys,
                        Peekable};
 use raftstore::store::snap::{Error, Result};
@@ -181,6 +182,14 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
+
+        // clear raft log. in case of reboot happen when we just put region state to Applying,
+        // but not clear raft log in time.
+        let raft_wb = WriteBatch::new();
+        box_try!(clear_raft_entries(&raft_wb, &self.raft_db, region_id));
+        if !raft_wb.is_empty() {
+            box_try!(self.raft_db.write(raft_wb));
+        }
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match box_try!(self.db.get_msg(&state_key)) {
