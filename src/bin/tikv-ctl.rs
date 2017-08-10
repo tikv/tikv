@@ -157,7 +157,7 @@ fn main() {
         (None, None) => {}
         (Some(_), Some(_)) => panic!("hex and escaped can not be passed together!"),
         (Some(hex), None) => {
-            println!("{}", escape(&hex_str_to_hex_vec(hex)));
+            println!("{}", escape(&from_hex(hex)));
             return;
         }
         (None, Some(escaped)) => {
@@ -277,9 +277,9 @@ pub struct MvccKv<T> {
     value: T,
 }
 
-fn hex_str_to_hex_vec(key_prefix: &str) -> Vec<u8> {
+fn from_hex(key: &str) -> Vec<u8> {
     const HEX_PREFIX: &str = "0x";
-    let mut s = String::from(key_prefix);
+    let mut s = String::from(key);
     if s.starts_with(HEX_PREFIX) {
         let len = s.len();
         let new_len = len.saturating_sub(HEX_PREFIX.len());
