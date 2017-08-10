@@ -146,7 +146,7 @@ pub enum Task {
     Request(RequestTask),
     SnapRes(u64, engine::Result<Box<Snapshot>>),
     BatchSnapRes(Vec<(u64, engine::Result<Box<Snapshot>>)>),
-    BacklogRequests(Vec<u64>),
+    RetryRequests(Vec<u64>),
 }
 
 impl Display for Task {
@@ -158,7 +158,7 @@ impl Display for Task {
                 let ids: Vec<u64> = batch.iter().map(|&(id, _)| id).collect();
                 write!(f, "batch snapres {:?}", ids)
             }
-            Task::BacklogRequests(ref backlog) => write!(f, "backlog RequestTasks: {:?}", backlog),
+            Task::RetryRequests(ref retry) => write!(f, "retry on task ids: {:?}", retry),
         }
     }
 }
@@ -315,10 +315,10 @@ impl BatchRunnable<Task> for Host {
                         self.handle_snapshot_result(q_id, snap_res);
                     }
                 }
-                Task::BacklogRequests(backlog) => {
-                    BATCH_REQUEST_TASKS.with_label_values(&["backlog"])
-                        .observe(backlog.len() as f64);
-                    for id in backlog {
+                Task::RetryRequests(retry) => {
+                    BATCH_REQUEST_TASKS.with_label_values(&["retry"])
+                        .observe(retry.len() as f64);
+                    for id in retry {
                         let reqs = self.reqs.remove(&id).unwrap();
                         let sched = self.sched.clone();
                         if let Err(e) =
@@ -340,7 +340,7 @@ impl BatchRunnable<Task> for Host {
             return;
         }
 
-        let mut req_ids = Vec::new();
+        let mut req_ids = Vec::with_capacity(grouped_reqs.len());
         let mut batch = Vec::with_capacity(grouped_reqs.len());
         for (_, reqs) in grouped_reqs {
             self.last_req_id += 1;
@@ -357,14 +357,14 @@ impl BatchRunnable<Task> for Host {
         let sched = self.sched.clone();
         let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
-            let mut backlog = Vec::new();
+            let mut retry = Vec::new();
             for (id, res) in req_ids1.into_iter().zip(results) {
                 match res {
                     Some((_, res)) => {
                         ready.push((id, res));
                     }
                     None => {
-                        backlog.push(id);
+                        retry.push(id);
                     }
                 }
             }
@@ -372,8 +372,8 @@ impl BatchRunnable<Task> for Host {
             if !ready.is_empty() {
                 sched.schedule(Task::BatchSnapRes(ready)).unwrap();
             }
-            if !backlog.is_empty() {
-                sched.schedule(Task::BacklogRequests(backlog)).unwrap();
+            if !retry.is_empty() {
+                sched.schedule(Task::RetryRequests(retry)).unwrap();
             }
         };
 
