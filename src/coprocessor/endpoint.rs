@@ -316,7 +316,8 @@ impl BatchRunnable<Task> for Host {
                     }
                 }
                 Task::BacklogRequests(backlog) => {
-                    BATCH_REQUEST_TASKS.with_label_values(&["backlog"]).observe(backlog.len() as f64);
+                    BATCH_REQUEST_TASKS.with_label_values(&["backlog"])
+                        .observe(backlog.len() as f64);
                     for id in backlog {
                         let reqs = self.reqs.remove(&id).unwrap();
                         let sched = self.sched.clone();
