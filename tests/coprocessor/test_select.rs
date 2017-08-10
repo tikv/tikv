@@ -281,7 +281,11 @@ impl<'a> Insert<'a> {
         self
     }
 
-    fn execute(mut self) -> i64 {
+    fn execute(self) -> i64 {
+        self.execute_with_ctx(Context::new())
+    }
+
+    fn execute_with_ctx(mut self, ctx: Context) -> i64 {
         let handle = self.values
             .get(&self.table.handle_id)
             .cloned()
@@ -299,7 +303,7 @@ impl<'a> Insert<'a> {
             let idx_key = table::encode_index_seek_key(self.table.id, id, &encoded);
             kvs.push((idx_key, vec![0]));
         }
-        self.store.put(kvs);
+        self.store.put(ctx, kvs);
         handle.i64()
     }
 }
@@ -412,9 +416,14 @@ impl<'a> Select<'a> {
         self.build_with(&[0])
     }
 
-    fn build_with(mut self, flags: &[u64]) -> Request {
+    fn build_with(self, flags: &[u64]) -> Request {
+        self.build_with_ctx_and_flags(Context::new(), flags)
+    }
+
+    fn build_with_ctx_and_flags(mut self, ctx: Context, flags: &[u64]) -> Request {
         let mut req = Request::new();
 
+        req.set_context(ctx);
         if self.idx < 0 {
             self.sel.set_table_info(self.table.get_table_info());
             req.set_tp(REQ_TYPE_SELECT);
@@ -504,11 +513,11 @@ impl Store {
         Insert::new(self, table)
     }
 
-    fn put(&mut self, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
+    fn put(&mut self, ctx: Context, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
         self.handles.extend(kv.iter().map(|&(ref k, _)| k.clone()));
         let pk = kv[0].0.clone();
         let kv = kv.drain(..).map(|(k, v)| Mutation::Put((Key::from_raw(&k), v))).collect();
-        self.store.prewrite(Context::new(), kv, pk, self.current_ts).unwrap();
+        self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
 
     fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a> {
@@ -523,9 +532,13 @@ impl Store {
     }
 
     fn commit(&mut self) {
+        self.commit_with_ctx(Context::new());
+    }
+
+    fn commit_with_ctx(&mut self, ctx: Context) {
         let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
         self.store
-            .commit(Context::new(), handles, self.current_ts, next_id() as u64)
+            .commit(ctx, handles, self.current_ts, next_id() as u64)
             .unwrap();
     }
 }
@@ -562,11 +575,12 @@ impl ProductTable {
     }
 }
 
-fn init_data_with_commit(tbl: &ProductTable,
-                         vals: &[(i64, Option<&str>, i64)],
-                         commit: bool)
-                         -> (Store, Worker<EndPointTask>) {
-    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+fn init_data_with_engine_and_commit(ctx: Context,
+                                    engine: Box<Engine>,
+                                    tbl: &ProductTable,
+                                    vals: &[(i64, Option<&str>, i64)],
+                                    commit: bool)
+                                    -> (Store, Worker<EndPointTask>) {
     let mut store = Store::new(engine);
 
     store.begin();
@@ -575,16 +589,24 @@ fn init_data_with_commit(tbl: &ProductTable,
             .set(tbl.id, Datum::I64(id))
             .set(tbl.name, name.map(|s| s.as_bytes()).into())
             .set(tbl.count, Datum::I64(count))
-            .execute();
+            .execute_with_ctx(ctx.clone());
     }
     if commit {
-        store.commit();
+        store.commit_with_ctx(ctx);
     }
     let mut end_point = Worker::new("test select worker");
     let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8);
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)
+}
+
+fn init_data_with_commit(tbl: &ProductTable,
+                         vals: &[(i64, Option<&str>, i64)],
+                         commit: bool)
+                         -> (Store, Worker<EndPointTask>) {
+    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+    init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
 }
 
 // This function will create a Product table and initialize with the specified data.
@@ -601,31 +623,6 @@ fn offset_for_column(cols: &[ColumnInfo], col_id: i64) -> i64 {
         }
     }
     0 as i64
-}
-
-// This function will create a Product table and initialize with
-// the specified data in raftkv engine.
-fn init_data_with_raftkv(tbl: &ProductTable,
-                  vals: &[(i64, Option<&str>, i64)])
-                  -> (Store, Worker<EndPointTask>) {
-    let (_, raft_engine, _) = new_raft_engine(1, "");
-    let mut store = Store::new(raft_engine);
-
-    store.begin();
-    for &(id, name, count) in vals {
-        store.insert_into(&tbl.table)
-            .set(tbl.id, Datum::I64(id))
-            .set(tbl.name, name.map(|s| s.as_bytes()).into())
-            .set(tbl.count, Datum::I64(count))
-            .execute();
-    }
-    store.commit();
-
-    let mut end_point = Worker::new("test select worker");
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8);
-    end_point.start_batch(runner, 5).unwrap();
-
-    (store, end_point)
 }
 
 struct DAGSelect {
@@ -897,9 +894,11 @@ fn test_select_after_lease() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_data_with_raftkv(&product, &data);
+    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
+    let (_, mut end_point) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
-    let req = Select::from(&product.table).build();
+    let req = Select::from(&product.table).build_with_ctx_and_flags(ctx.clone(), &[0]);
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), data.len());
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
@@ -913,7 +912,7 @@ fn test_select_after_lease() {
 
     // Sleep until the leader lease is expired.
     thread::sleep(Duration::from_millis(MAX_LEADER_LEASE));
-    let req = Select::from(&product.table).build();
+    let req = Select::from(&product.table).build_with_ctx_and_flags(ctx.clone(), &[0]);
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), data.len());
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
