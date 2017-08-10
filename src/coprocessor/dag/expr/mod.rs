@@ -112,27 +112,27 @@ impl Expression {
         })
     }
 
-    fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<i64>> {
+    fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         unimplemented!()
     }
 
-    fn eval_real(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<f64>> {
+    fn eval_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
         unimplemented!()
     }
 
-    fn eval_decimal(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<Decimal>> {
+    fn eval_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Decimal>> {
         unimplemented!()
     }
 
-    fn eval_string(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<String>> {
+    fn eval_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<String>> {
         unimplemented!()
     }
 
-    fn eval_time(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<Time>> {
+    fn eval_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
         unimplemented!()
     }
 
-    fn eval_duration(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<Duration>> {
+    fn eval_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Duration>> {
         unimplemented!()
     }
 

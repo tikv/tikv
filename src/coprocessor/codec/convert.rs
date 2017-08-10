@@ -37,17 +37,17 @@ macro_rules! overflow {
 }
 
 // `convert_int_to_uint` converts an int value to an uint value.
-pub fn convert_int_to_uint(val: i64, upper_bound: u64) -> Result<u64> {
+pub fn convert_int_to_uint(val: i64, upper_bound: u64, tp: u8) -> Result<u64> {
     if val as u64 > upper_bound {
-        return overflow!(val, upper_bound);
+        return overflow!(val, tp);
     }
     Ok(val as u64)
 }
 
 // `convert_uint_to_int` converts an uint value to an int value.
-pub fn convert_uint_to_int(val: u64, upper_bound: i64) -> Result<i64> {
+pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: u8) -> Result<i64> {
     if val > upper_bound as u64 {
-        return overflow!(val, upper_bound);
+        return overflow!(val, tp);
     }
     Ok(val as i64)
 }
