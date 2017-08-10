@@ -32,7 +32,7 @@ use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState, PeerState};
 use kvproto::eraftpb::Entry;
-use rocksdb::DB;
+use rocksdb::{DB, SeekKey, ReadOptions};
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
@@ -148,7 +148,17 @@ fn main() {
                 .help("set start_ts as filter"))
             .arg(Arg::with_name("commit_ts")
                 .takes_value(true)
-                .help("set commit_ts as filter")));
+                .help("set commit_ts as filter")))
+        .subcommand(SubCommand::with_name("diff")
+            .about("diff two region keys")
+            .arg(Arg::with_name("to")
+                .short("t")
+                .takes_value(true)
+                .help("to which db"))
+            .arg(Arg::with_name("region")
+                .short("r")
+                .takes_value(true)
+                .help("specify region id")));
     let matches = app.clone().get_matches();
 
     let hex_key = matches.value_of("hex-to-escaped");
@@ -243,6 +253,11 @@ fn main() {
                 let _ = app.print_help();
             }
         }
+    } else if let Some(matches) = matches.subcommand_matches("diff") {
+        let region_id: u64 = matches.value_of("region").unwrap().parse().unwrap();
+        let db_path2 = matches.value_of("to").unwrap();
+        let db2 = util::rocksdb::open(db_path2, ALL_CFS).unwrap();
+        dump_diff(&db, &db2, region_id);
     } else {
         let _ = app.print_help();
     }
@@ -386,6 +401,88 @@ fn dump_raft_log_entry(db: DB, idx_key: &[u8]) {
     msg.merge_from_bytes(&data).unwrap();
     println!("msg len: {}", data.len());
     println!("{:?}", msg);
+}
+
+fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
+    println!("region id: {}", region_id);
+    let region_state_key = keys::region_state_key(region_id);
+    let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
+    println!("db1 region state: {:?}", region_state);
+    let region_state2: RegionLocalState = db2.get_msg(&region_state_key).unwrap().unwrap();
+    println!("db2 region state: {:?}", region_state2);
+
+    let raft_state_key = keys::apply_state_key(region_id);
+
+    let apply_state: RaftApplyState = db.get_msg_cf("raft", &raft_state_key).unwrap().unwrap();
+    println!("db1 apply state: {:?}", apply_state);
+
+    let apply_state: RaftApplyState = db2.get_msg_cf("raft", &raft_state_key).unwrap().unwrap();
+    println!("db2 apply state: {:?}", apply_state);
+
+
+    let region = region_state.get_region();
+    let start_key = &keys::data_key(region.get_start_key());
+    let end_key = &keys::data_end_key(region.get_end_key());
+    for cf in ALL_CFS {
+        let handle = db.cf_handle(cf).unwrap();
+        let handle2 = db2.cf_handle(cf).unwrap();
+        println!("cf: {}", cf);
+        let mut ropt = ReadOptions::new();
+        ropt.set_iterate_upper_bound(end_key);
+        let mut iter = db.iter_cf_opt(handle, ropt);
+        let mut ropt = ReadOptions::new();
+        ropt.set_iterate_upper_bound(end_key);
+        let mut iter2 = db2.iter_cf_opt(handle2, ropt);
+        iter.seek(SeekKey::Key(start_key));
+        iter2.seek(SeekKey::Key(start_key));
+        let mut has_diff = false;
+        let mut common_head_len = 0;
+        while iter.valid() && iter2.valid() {
+            if iter.key() != iter2.key() {
+                if iter.key() > iter2.key() {
+                    has_diff = true;
+                    println!("only db2 has : {}", escape(iter2.key()));
+                    if cf == &CF_DEFAULT || cf == &CF_WRITE {
+                        println!("timestamp: {}",
+                                 Key::from_encoded(iter2.key().to_vec()).decode_ts().unwrap());
+                    }
+                    iter2.next();
+                    continue;
+                }
+                if iter.key() < iter2.key() {
+                    has_diff = true;
+                    println!("only db1 has : {}", escape(iter.key()));
+                    if cf == &CF_DEFAULT || cf == &CF_WRITE {
+                        println!("timestamp: {}",
+                                 Key::from_encoded(iter.key().to_vec()).decode_ts().unwrap());
+                    }
+                    iter.next();
+                    continue;
+                }
+            }
+            if !has_diff {
+                common_head_len += 1;
+            }
+            iter.next();
+            iter2.next();
+        }
+        println!("head have {} same keys", common_head_len);
+
+        if !iter.valid() && iter2.valid() {
+            println!("iter1 invalid but iter2 valid!");
+            while iter2.valid() {
+                println!("only db2 has : {:?}", escape(iter2.key()));
+                iter2.next();
+            }
+        }
+        if iter.valid() && !iter2.valid() {
+            println!("iter2 invalid but iter1 valid!");
+            while iter.valid() {
+                println!("only db1 has : {:?}", escape(iter.key()));
+                iter.next();
+            }
+        }
+    }
 }
 
 fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
