@@ -338,25 +338,22 @@ impl BatchRunnable<Task> for Host {
             return;
         }
 
-        let mut req_ids = Vec::with_capacity(grouped_reqs.len());
         let mut batch = Vec::with_capacity(grouped_reqs.len());
+        let start_id = self.last_req_id + 1;
         for (_, reqs) in grouped_reqs {
             self.last_req_id += 1;
             let id = self.last_req_id;
-            req_ids.push(id);
-
             let ctx = reqs[0].req.get_context().clone();
             batch.push(ctx);
-
             self.reqs.insert(id, reqs);
         }
+        let end_id = self.last_req_id;
 
-        let req_ids1 = req_ids.clone();
         let sched = self.sched.clone();
         let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
             let mut ready = Vec::with_capacity(results.len());
             let mut retry = Vec::new();
-            for (id, res) in req_ids1.into_iter().zip(results) {
+            for (id, res) in (start_id..end_id + 1).zip(results) {
                 match res {
                     Some((_, res)) => {
                         ready.push((id, res));
@@ -378,7 +375,7 @@ impl BatchRunnable<Task> for Host {
 
         BATCH_REQUEST_TASKS.with_label_values(&["all"]).observe(batch.len() as f64);
         if let Err(e) = self.engine.async_batch_snapshot(batch, on_finished) {
-            for id in req_ids {
+            for id in start_id..end_id + 1 {
                 let reqs = self.reqs.remove(&id).unwrap();
                 let err = e.maybe_clone().unwrap_or_else(|| {
                     error!("async snapshot batch failed error {:?}", e);
