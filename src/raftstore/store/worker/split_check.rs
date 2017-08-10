@@ -23,6 +23,7 @@ use kvproto::metapb::Region;
 
 use raftstore::store::{keys, Msg};
 use raftstore::store::engine::{Iterable, IterOption};
+use raftstore::store::util;
 use raftstore::Result;
 use rocksdb::DBIterator;
 use util::escape;
@@ -119,26 +120,18 @@ impl<'a> MergedIterator<'a> {
 
 /// Split checking task.
 pub struct Task {
-    region_id: u64,
-    epoch: RegionEpoch,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
+    region: Region,
 }
 
 impl Task {
     pub fn new(region: &Region) -> Task {
-        Task {
-            region_id: region.get_id(),
-            epoch: region.get_region_epoch().clone(),
-            start_key: keys::enc_start_key(region),
-            end_key: keys::enc_end_key(region),
-        }
+        Task { region: region.clone() }
     }
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Split Check Task for {}", self.region_id)
+        write!(f, "Split Check Task for {}", self.region.get_id())
     }
 }
 
@@ -166,20 +159,39 @@ impl<C> Runner<C> {
 
 impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
+        let region = &task.region;
+        let region_id = region.get_id();
+
+        // Check approximate size before scanning region.
+        match util::get_region_approximate_size(&self.engine, region) {
+            Ok(size) => {
+                if size < self.region_max_size {
+                    return;
+                }
+                info!("[region {}] approximate size {} >= {}, need to scan region",
+                      region_id,
+                      size,
+                      self.region_max_size);
+            }
+            Err(e) => {
+                error!("[region {}] failed to get approximate size: {}",
+                       region_id,
+                       e)
+            }
+        }
+
+        let start_key = keys::enc_start_key(region);
+        let end_key = keys::enc_end_key(region);
         debug!("[region {}] executing task {} {}",
-               task.region_id,
-               escape(&task.start_key),
-               escape(&task.end_key));
+               region_id,
+               escape(&start_key),
+               escape(&end_key));
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
         let mut size = 0;
         let mut split_key = vec![];
         let timer = CHECK_SPILT_HISTOGRAM.start_timer();
-        let res = MergedIterator::new(self.engine.as_ref(),
-                                      LARGE_CFS,
-                                      &task.start_key,
-                                      &task.end_key,
-                                      false)
+        let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
             .map(|mut iter| {
                 while let Some(e) = iter.next() {
                     size += e.len() as u64;
@@ -193,9 +205,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
             });
 
         if let Err(e) = res {
-            error!("failed to scan split key of region {}: {:?}",
-                   task.region_id,
-                   e);
+            error!("[region {}] failed to scan split key: {}", region_id, e);
             return;
         }
 
@@ -203,18 +213,18 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
 
         if size < self.region_max_size {
             debug!("[region {}] no need to send for {} < {}",
-                   task.region_id,
+                   region_id,
                    size,
                    self.region_max_size);
 
             CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
             return;
         }
-        let res = self.ch.try_send(new_split_check_result(task.region_id, task.epoch, split_key));
+
+        let region_epoch = region.get_region_epoch().clone();
+        let res = self.ch.try_send(new_split_check_result(region_id, region_epoch, split_key));
         if let Err(e) = res {
-            warn!("[region {}] failed to send check result, err {:?}",
-                  task.region_id,
-                  e);
+            warn!("[region {}] failed to send check result: {}", region_id, e);
         }
 
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["success"]).inc();
