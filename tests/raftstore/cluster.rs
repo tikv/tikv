@@ -611,6 +611,22 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
+    pub fn must_delete_range(&mut self, start: &[u8], end: &[u8]) {
+        self.must_delete_range_cf("default", start, end)
+    }
+
+    pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
+        let resp = self.request(start,
+                                vec![new_delete_range_cmd(cf, start, end)],
+                                false,
+                                Duration::from_secs(5));
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
+    }
+
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         self.pd_client
             .get_region_by_id(region_id)

@@ -73,7 +73,7 @@ use tikv::server::resolve;
 use tikv::raftstore::store::{self, SnapManager, Engines};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
-use tikv::util::time_monitor::TimeMonitor;
+use tikv::util::time::Monitor;
 
 const KB: u64 = 1024;
 const MB: u64 = 1024 * KB;
@@ -1159,7 +1159,7 @@ fn main() {
     if cluster_id == DEFAULT_CLUSTER_ID {
         panic!("in raftkv, cluster_id must greater than 0");
     }
-    let _m = TimeMonitor::default();
+    let _m = Monitor::default();
     run_raft_server(pd_client, cfg, &backup_path, &config, total_mem);
 }
 

@@ -27,9 +27,10 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse};
 
 use util::worker::Runnable;
-use util::{SlowTimer, rocksdb, escape};
+use util::{rocksdb, escape};
+use util::time::SlowTimer;
 use util::collections::{HashMap, HashMapEntry as MapEntry};
-use storage::CF_LOCK;
+use storage::{CF_LOCK, CF_DEFAULT, ALL_CFS};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Store, cmd_resp, keys, util};
@@ -121,6 +122,23 @@ pub struct ChangePeer {
 }
 
 #[derive(Debug)]
+pub struct Range {
+    pub cf: String,
+    pub start_key: Vec<u8>,
+    pub end_key: Vec<u8>,
+}
+
+impl Range {
+    fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Range {
+        Range {
+            cf: cf,
+            start_key: start_key,
+            end_key: end_key,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum ExecResult {
     ChangePeer(ChangePeer),
     CompactLog {
@@ -138,6 +156,7 @@ pub enum ExecResult {
         snap: Snapshot,
     },
     VerifyHash { index: u64, hash: Vec<u8> },
+    DeleteRange { ranges: Vec<Range> },
 }
 
 struct ApplyContext<'a> {
@@ -518,7 +537,8 @@ impl ApplyDelegate {
                 }
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
-                ExecResult::CompactLog { .. } => {}
+                ExecResult::CompactLog { .. } |
+                ExecResult::DeleteRange { .. } => {}
                 ExecResult::SplitRegion { ref left, ref right, right_derive } => {
                     if right_derive {
                         self.region = right.clone();
@@ -605,8 +625,7 @@ impl ApplyDelegate {
         if ctx.req.has_admin_request() {
             self.exec_admin_cmd(ctx)
         } else {
-            // Now we don't care write command outer, so use None.
-            self.exec_write_cmd(ctx).and_then(|v| Ok((v, None)))
+            self.exec_write_cmd(ctx)
         }
     }
 
@@ -867,15 +886,19 @@ impl ApplyDelegate {
         })))
     }
 
-    fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
+    fn exec_write_cmd(&mut self,
+                      ctx: &ExecContext)
+                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let requests = ctx.req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
+        let mut ranges = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
+                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut ranges),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -884,7 +907,6 @@ impl ApplyDelegate {
                     warn!("{} skip readonly command: {:?}", self.tag, req);
                     continue;
                 }
-                CmdType::DeleteRange => unimplemented!(),
                 CmdType::Prewrite | CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
@@ -897,7 +919,14 @@ impl ApplyDelegate {
 
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(RepeatedField::from_vec(responses));
-        Ok(resp)
+
+        let exec_res = if ranges.is_empty() {
+            None
+        } else {
+            Some(ExecResult::DeleteRange { ranges: ranges })
+        };
+
+        Ok((resp, exec_res))
     }
 
     fn handle_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
@@ -967,6 +996,60 @@ impl ApplyDelegate {
             });
             self.metrics.delete_keys_hint += 1;
         }
+
+        Ok(resp)
+    }
+
+    fn handle_delete_range(&mut self,
+                           ctx: &ExecContext,
+                           req: &Request,
+                           ranges: &mut Vec<Range>)
+                           -> Result<Response> {
+        let s_key = req.get_delete_range().get_start_key();
+        let e_key = req.get_delete_range().get_end_key();
+        if !e_key.is_empty() && s_key >= e_key {
+            return Err(box_err!("invalid delete range command, start_key: {:?}, end_key: {:?}",
+                                s_key,
+                                e_key));
+        }
+        try!(check_data_key(s_key, &self.region));
+        let end_key = keys::data_end_key(e_key);
+        let region_end_key = keys::data_end_key(self.region.get_end_key());
+        if end_key > region_end_key {
+            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
+        }
+
+        let resp = Response::new();
+        let mut cf = req.get_delete_range().get_cf();
+        if cf.is_empty() {
+            cf = CF_DEFAULT;
+        }
+        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
+            return Err(box_err!("invalid delete range command, cf: {:?}", cf));
+        }
+        let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+
+        let start_key = keys::data_key(s_key);
+        // Use delete_file_in_range to drop as many sst files as possible, this is
+        // a way to reclaim disk space quickly after drop a table/index.
+        self.engine.delete_file_in_range_cf(handle, &start_key, &end_key).unwrap_or_else(|e| {
+            panic!("{} failed to delete files in range [{}, {}): {:?}",
+                   self.tag,
+                   escape(&start_key),
+                   escape(&end_key),
+                   e)
+        });
+
+        // Use delete_range to mark all the contents in this range is deleted.
+        ctx.wb.delete_range_cf(handle, &start_key, &end_key).unwrap_or_else(|e| {
+            panic!("{} failed to delete range [{}, {}): {:?}",
+                   self.tag,
+                   escape(&start_key),
+                   escape(&end_key),
+                   e)
+        });
+
+        ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
     }
@@ -1595,6 +1678,14 @@ mod tests {
             self.add_delete_req(Some(cf), key)
         }
 
+        fn delete_range(self, start_key: &[u8], end_key: &[u8]) -> EntryBuilder {
+            self.add_delete_range_req(None, start_key, end_key)
+        }
+
+        fn delete_range_cf(self, cf: &str, start_key: &[u8], end_key: &[u8]) -> EntryBuilder {
+            self.add_delete_range_req(Some(cf), start_key, end_key)
+        }
+
         fn add_delete_req(mut self, cf: Option<&str>, key: &[u8]) -> EntryBuilder {
             let mut cmd = Request::new();
             cmd.set_cmd_type(CmdType::Delete);
@@ -1602,6 +1693,22 @@ mod tests {
                 cmd.mut_delete().set_cf(cf.to_owned());
             }
             cmd.mut_delete().set_key(key.to_vec());
+            self.req.mut_requests().push(cmd);
+            self
+        }
+
+        fn add_delete_range_req(mut self,
+                                cf: Option<&str>,
+                                start_key: &[u8],
+                                end_key: &[u8])
+                                -> EntryBuilder {
+            let mut cmd = Request::new();
+            cmd.set_cmd_type(CmdType::DeleteRange);
+            if let Some(cf) = cf {
+                cmd.mut_delete_range().set_cf(cf.to_owned());
+            }
+            cmd.mut_delete_range().set_start_key(start_key.to_vec());
+            cmd.mut_delete_range().set_end_key(end_key.to_vec());
             self.req.mut_requests().push(cmd);
             self
         }
@@ -1623,6 +1730,8 @@ mod tests {
 
         let put_entry = EntryBuilder::new(1, 1)
             .put(b"k1", b"v1")
+            .put(b"k2", b"v1")
+            .put(b"k3", b"v1")
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
@@ -1636,9 +1745,13 @@ mod tests {
         assert!(res.is_empty());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses().len(), 3);
         let dk_k1 = keys::data_key(b"k1");
+        let dk_k2 = keys::data_key(b"k2");
+        let dk_k3 = keys::data_key(b"k3");
         assert_eq!(db.get(&dk_k1).unwrap().unwrap(), b"v1");
+        assert_eq!(db.get(&dk_k2).unwrap().unwrap(), b"v1");
+        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
         assert_eq!(delegate.applied_index_term, 1);
         assert_eq!(delegate.apply_state.get_applied_index(), 1);
 
@@ -1695,9 +1808,8 @@ mod tests {
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(delegate.applied_index_term, 2);
         assert_eq!(delegate.apply_state.get_applied_index(), 4);
-        let dk_k3 = keys::data_key(b"k3");
         // a writebatch should be atomic.
-        assert!(db.get(&dk_k3).unwrap().is_none());
+        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
 
         EntryBuilder::new(5, 2).capture_resp(&mut delegate, tx.clone()).build();
         let put_entry = EntryBuilder::new(5, 3)
@@ -1741,9 +1853,43 @@ mod tests {
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
 
+        let delete_range_entry = EntryBuilder::new(7, 3)
+            .delete_range(b"", b"")
+            .epoch(1, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .build();
+        let mut apply_ctx = ApplyContext::new(&host);
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
+        let resp = rx.try_recv().unwrap();
+        assert!(resp.get_header().get_error().has_key_not_in_region());
+        assert_eq!(db.get(&dk_k3).unwrap().unwrap(), b"v1");
+
+        let delete_range_entry = EntryBuilder::new(8, 3)
+            .delete_range_cf(CF_DEFAULT, b"", b"k5")
+            .delete_range_cf(CF_LOCK, b"", b"k5")
+            .delete_range_cf(CF_WRITE, b"", b"k5")
+            .epoch(1, 3)
+            .capture_resp(&mut delegate, tx.clone())
+            .build();
+        let mut apply_ctx = ApplyContext::new(&host);
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
+        let resp = rx.try_recv().unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        assert!(db.get(&dk_k1).unwrap().is_none());
+        assert!(db.get(&dk_k2).unwrap().is_none());
+        assert!(db.get(&dk_k3).unwrap().is_none());
+
         let mut entries = vec![];
         for i in 0..WRITE_BATCH_MAX_KEYS {
-            let put_entry = EntryBuilder::new(i as u64 + 7, 2)
+            let put_entry = EntryBuilder::new(i as u64 + 9, 2)
                 .put(b"k", b"v")
                 .epoch(1, 3)
                 .capture_resp(&mut delegate, tx.clone())
@@ -1760,6 +1906,6 @@ mod tests {
             rx.try_recv().unwrap();
         }
         assert_eq!(delegate.apply_state.get_applied_index(),
-                   WRITE_BATCH_MAX_KEYS as u64 + 6);
+                   WRITE_BATCH_MAX_KEYS as u64 + 8);
     }
 }
