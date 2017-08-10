@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod compare;
+
 use std::io;
 use std::convert::TryFrom;
 
@@ -87,7 +89,32 @@ pub struct FnCall {
 
 impl Expression {
     fn eval_int(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<i64>> {
-        unimplemented!()
+        match self.expr {
+            ExprKind::ScalarFn(ref f) => {
+                match f.sig {
+                    ScalarFuncSig::LTInt => {
+                        compare::lt_int_eval_int(&f.children[0], &f.children[1], row, ctx)
+                    }
+                    ScalarFuncSig::LTReal => {
+                        compare::lt_real_eval_int(&f.children[0], &f.children[1], row, ctx)
+                    }
+                    ScalarFuncSig::LTDecimal => {
+                        compare::lt_decimal_eval_int(&f.children[0], &f.children[1], row, ctx)
+                    }
+                    ScalarFuncSig::LTString => {
+                        compare::lt_string_eval_int(&f.children[0], &f.children[1], row, ctx)
+                    }
+                    ScalarFuncSig::LTTime => {
+                        compare::lt_time_eval_int(&f.children[0], &f.children[1], row, ctx)
+                    }
+                    ScalarFuncSig::LTDuration => {
+                        compare::lt_duration_eval_int(&f.children[0], &f.children[1], row, ctx)
+                    }
+                    _ => unimplemented!(),
+                }
+            }
+            _ => unimplemented!(),
+        }
     }
 
     fn eval_real(&self, row: &[Datum], ctx: &StatementContext) -> Result<Option<f64>> {
@@ -224,6 +251,12 @@ impl TryFrom<Expr> for Expression {
             unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
         }
     }
+}
+
+const FLAG_UNSIGNED: u32 = 32;
+
+fn field_type_unsigned(ft: &FieldType) -> bool {
+    ft.get_flag() & FLAG_UNSIGNED > 0
 }
 
 
