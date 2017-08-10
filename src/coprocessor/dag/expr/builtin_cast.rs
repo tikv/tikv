@@ -15,11 +15,14 @@
 #![allow(dead_code)]
 
 use std::{i64, u64};
-use super::{FnCall, StatementContext, Result};
+
 use coprocessor::codec::{Datum, mysql};
 use coprocessor::codec::mysql::{Decimal, Time, Duration};
+use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{convert_int_to_uint, convert_float_to_int, convert_float_to_uint};
 use coprocessor::codec::mysql::types;
+
+use super::{FnCall, StatementContext, Result};
 
 impl FnCall {
     pub fn cast_int_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -45,7 +48,20 @@ impl FnCall {
                                ctx: &StatementContext,
                                row: &[Datum])
                                -> Result<Option<i64>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_decimal(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let val = val.unwrap().round(0, RoundMode::HalfEven).unwrap();
+        if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
+            let uint = val.as_u64().unwrap();
+            // TODO:handle overflow
+            Ok(Some(uint as i64))
+        } else {
+            let val = val.as_i64().unwrap();
+            // TODO:handle overflow
+            Ok(Some(val))
+        }
     }
 
     pub fn cast_str_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
