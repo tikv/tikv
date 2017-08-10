@@ -14,12 +14,13 @@
 // FIXME(shirly): remove following later
 #![allow(dead_code)]
 
-use std::{i64, u64};
+use std::{i64, u64, str};
 
 use coprocessor::codec::{Datum, mysql};
 use coprocessor::codec::mysql::{Decimal, Time, Duration};
 use coprocessor::codec::mysql::decimal::RoundMode;
-use coprocessor::codec::convert::{convert_int_to_uint, convert_float_to_int, convert_float_to_uint};
+use coprocessor::codec::convert::{self, convert_int_to_uint, convert_float_to_int,
+                                  convert_float_to_uint};
 use coprocessor::codec::mysql::types;
 
 use super::{FnCall, StatementContext, Result};
@@ -65,7 +66,25 @@ impl FnCall {
     }
 
     pub fn cast_str_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+        if self.children[0].is_hybrid_type() {
+            return self.children[0].eval_int(ctx, row);
+        }
+        let val = try!(self.children[0].eval_string(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let val = val.unwrap();
+
+        if !val.is_empty() && val[0] == b"-"[0] {
+            // negative
+            let v = try!(convert::bytes_to_int(ctx, &val));
+            // TODO: if overflow, don't append this warning
+            Ok(Some(v))
+        } else {
+            let urs = try!(convert::bytes_to_uint(ctx, &val));
+            // TODO: process overflow
+            Ok(Some(urs as i64))
+        }
     }
 
     pub fn cast_time_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {

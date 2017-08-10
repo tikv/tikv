@@ -17,7 +17,7 @@ mod builtin_cast;
 use std::io;
 use std::convert::TryFrom;
 
-use tipb::expression::{Expr, ExprType, ScalarFuncSig, FieldType};
+use tipb::expression::{Expr, ExprType, ScalarFuncSig, FieldType, DataType};
 
 use coprocessor::codec::mysql::{Duration, Time, Decimal, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
@@ -106,7 +106,7 @@ impl Expression {
         unimplemented!()
     }
 
-    fn eval_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<String>> {
+    fn eval_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
@@ -124,6 +124,25 @@ impl Expression {
             Expression::ColumnRef(ref c) => &c.tp,
             Expression::ScalarFn(ref c) => &c.tp,
         }
+    }
+
+    /// IsHybridType checks whether a ClassString expression is a hybrid type value which will
+    /// return different types of value in different context.
+    /// For ENUM/SET which is consist of a string attribute `Name` and an int attribute `Value`,
+    /// it will cause an error if we convert ENUM/SET to int as a string value.
+    /// For Bit/Hex, we will get a wrong result if we convert it to int as a string value.
+    /// For example, when convert `0b101` to int, the result should be 5, but we will get
+    /// 101 if we regard it as a string.
+    fn is_hybrid_type(&self) -> bool {
+        match self.get_tp().get_tp() {
+            DataType::TypeEnum | DataType::TypeBit | DataType::TypeSet => {
+                return true;
+            }
+            _ => {}
+        }
+        // TODO:For a constant, the field type will be inferred as `VARCHAR`
+        // when the kind of it is `HEX` or `BIT`.
+        false
     }
 }
 

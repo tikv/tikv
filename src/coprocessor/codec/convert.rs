@@ -102,13 +102,40 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
     Ok(r)
 }
 
+/// `bytes_to_uint_without_context` converts a byte arrays to an iu64
+/// in best effort, but without context.
+/// Note that it does NOT handle overflow.
+pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
+    // trim
+    let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
+    let mut r = 0u64;
+    if let Some(&c) = trimed.next() {
+        if c >= b'0' && c <= b'9' {
+            r = c as u64 - b'0' as u64;
+        } else if c != b'+' {
+            return Ok(0);
+        }
+
+        r = trimed.take_while(|&&c| c >= b'0' && c <= b'9')
+            .fold(r, |l, &r| l * 10 + (r - b'0') as u64);
+    }
+    Ok(r)
+}
+
 /// `bytes_to_int` converts a byte arrays to an i64 in best effort.
 /// TODO: handle overflow properly.
 pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = try!(str::from_utf8(bytes)).trim();
     let vs = try!(get_valid_int_prefix(ctx, s));
-
     bytes_to_int_without_context(vs.as_bytes())
+}
+
+/// `bytes_to_uint` converts a byte arrays to an u64 in best effort.
+/// TODO: handle overflow properly.
+pub fn bytes_to_uint(ctx: &EvalContext, bytes: &[u8]) -> Result<u64> {
+    let s = try!(str::from_utf8(bytes)).trim();
+    let vs = try!(get_valid_int_prefix(ctx, s));
+    bytes_to_uint_without_context(vs.as_bytes())
 }
 
 fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
@@ -303,6 +330,31 @@ mod test {
 
         for (bs, n) in tests {
             let t = super::bytes_to_int_without_context(bs).unwrap();
+            if t != n {
+                panic!("expect convert {:?} to {}, but got {}", bs, n, t);
+            }
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_u64() {
+        let tests: Vec<(&'static [u8], u64)> = vec![
+            (b"0", 0),
+            (b" 23a", 23),
+            (b"\t 23a", 23),
+            (b"\r23a", 0),
+            (b"1", 1),
+            (b"2.1", 2),
+            (b"23e10", 23),
+            (b"ab", 0),
+            (b"4a", 4),
+            (b"+1024", 1024),
+            (b"231", 231),
+            (b"18446744073709551615", u64::MAX),
+        ];
+
+        for (bs, n) in tests {
+            let t = super::bytes_to_uint_without_context(bs).unwrap();
             if t != n {
                 panic!("expect convert {:?} to {}, but got {}", bs, n, t);
             }
