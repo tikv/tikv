@@ -166,6 +166,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
         match util::get_region_approximate_size(&self.engine, region) {
             Ok(size) => {
                 if size < self.region_max_size {
+                    CHECK_SPILT_COUNTER_VEC.with_label_values(&["skip"]).inc();
                     return;
                 }
                 info!("[region {}] approximate size {} >= {}, need to scan region",
