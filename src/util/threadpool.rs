@@ -346,7 +346,7 @@ mod test {
 
     impl Context for DummyContext {
         fn get(&self, _: &str) -> u64 {
-            1
+            0
         }
         fn set(&mut self, _: &str, _: u64) {}
         fn on_start(&self) {}

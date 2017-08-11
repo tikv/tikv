@@ -77,7 +77,7 @@ pub struct Host {
     max_running_task_count: usize,
 }
 
-// TODO(Cholerae): remove these dummy structures.
+// TODO: remove these dummy structures.
 #[derive(Clone)]
 struct DummyContext {}
 
@@ -85,7 +85,7 @@ unsafe impl Send for DummyContext {}
 
 impl Context for DummyContext {
     fn get(&self, _: &str) -> u64 {
-        1
+        0
     }
     fn set(&mut self, _: &str, _: u64) {}
     fn on_start(&self) {}
@@ -102,7 +102,7 @@ impl ContextFactory<DummyContext> for DummyContextFactory {
 
 impl Host {
     pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, concurrency: usize) -> Host {
-        // TODO(Cholerae): use true ContextFactory instead of DummyContextFactory
+        // TODO: use true ContextFactory instead of DummyContextFactory
         Host {
             engine: engine,
             sched: scheduler,
