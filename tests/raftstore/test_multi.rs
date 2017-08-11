@@ -13,6 +13,7 @@
 
 use tikv::raftstore::store::*;
 use tikv::util::HandyRwLock;
+use tikv::util::config::*;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::Result;
 use kvproto::eraftpb::MessageType;
@@ -673,7 +674,7 @@ fn test_consistency_check<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
     // disable compact log to make test more stable.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.consistency_check_tick_interval = 1;
+    cluster.cfg.raft_store.consistency_check_interval = ReadableDuration::secs(1);
     // We use three peers([1, 2, 3]) for this test.
     cluster.run();
 

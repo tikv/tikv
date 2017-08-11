@@ -15,6 +15,7 @@ use std::time::Duration;
 use std::thread;
 
 use kvproto::eraftpb::MessageType;
+use tikv::util::config::*;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
@@ -24,8 +25,9 @@ use super::server::new_server_cluster;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
-    let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval *
-                                              cluster.cfg.raft_store.raft_heartbeat_ticks as u64);
+    let reserved_time =
+        Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval.as_millis() *
+                              cluster.cfg.raft_store.raft_heartbeat_ticks as u64);
     cluster.run();
 
     // transfer leader to (2, 2)
@@ -133,7 +135,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
 
     let r1 = cluster.run_conf_change();
