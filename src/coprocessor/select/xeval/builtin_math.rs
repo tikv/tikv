@@ -235,5 +235,5 @@ mod test {
                     (build_expr_with_sig(vec![Datum::Null],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::FloorReal),
-                     Datum::Null)]);   
+                     Datum::Null)]);
 }
