@@ -29,8 +29,11 @@ use util::transport::SendCh;
 use pd::{PdClient, RegionStat};
 use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
-
+use raftstore::store::metrics::*;
+use fs2;
 use super::metrics::*;
+use raftstore::store::store::StoreInfo;
+use super::super::engine_metrics::*;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
@@ -50,7 +53,10 @@ pub enum Task {
         written_keys: u64,
         approximate_size: u64,
     },
-    StoreHeartbeat { stats: pdpb::StoreStats },
+    StoreHeartbeat {
+        stats: pdpb::StoreStats,
+        store_info: StoreInfo,
+    },
     ReportSplit {
         left: metapb::Region,
         right: metapb::Region,
@@ -181,7 +187,61 @@ impl<T: PdClient> Runner<T> {
         handle.spawn(f);
     }
 
-    fn handle_store_heartbeat(&self, handle: &Handle, stats: pdpb::StoreStats) {
+    fn handle_store_heartbeat(
+        &self,
+        handle: &Handle,
+        mut stats: pdpb::StoreStats,
+        store_info: StoreInfo,
+    ) {
+        let disk_stats = match fs2::statvfs(store_info.engine.path()) {
+            Err(e) => {
+                error!(
+                    "get disk stat for rocksdb {} failed: {}",
+                    store_info.engine.path(),
+                    e
+                );
+                return;
+            }
+            Ok(stats) => stats,
+        };
+
+        let disk_cap = disk_stats.total_space();
+        let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
+            disk_cap
+        } else {
+            store_info.capacity
+        };
+        stats.set_capacity(capacity);
+
+        stats.used_size += flush_engine_properties_and_get_used_size(store_info.engine.clone());
+
+
+        let mut available = if store_info.capacity > stats.used_size {
+            store_info.capacity - stats.used_size
+        } else {
+            warn!("{} no available space", store_info.tag);
+            0
+        };
+
+        // We only care rocksdb SST file size, so we should
+        // check disk available here.
+        if available > disk_stats.free_space() {
+            available = disk_stats.free_space();
+        }
+
+        stats.set_store_id(self.store_id);
+        stats.set_available(available);
+
+        STORE_SIZE_GAUGE_VEC
+            .with_label_values(&["capacity"])
+            .set(capacity as f64);
+        STORE_SIZE_GAUGE_VEC
+            .with_label_values(&["available"])
+            .set(available as f64);
+
+        stats.set_start_time(store_info.start_time.sec as u32);
+        stats.set_is_busy(store_info.is_busy);
+
         let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
             error!("store heartbeat failed {:?}", e);
         });
@@ -364,7 +424,9 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     approximate_size,
                 ),
             ),
-            Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(handle, stats),
+            Task::StoreHeartbeat { stats, store_info } => {
+                self.handle_store_heartbeat(handle, stats, store_info)
+            }
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
         };
