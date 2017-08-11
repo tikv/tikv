@@ -109,7 +109,7 @@ impl SnapContext {
     fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
         SNAP_COUNTER_VEC.with_label_values(&["generate", "all"]).inc();
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
-        let timer = gen_histogram.start_timer();
+        let timer = gen_histogram.start_coarse_timer();
 
         if let Err(e) = self.generate_snap(region_id, notifier) {
             error!("[region {}] failed to generate snap: {:?}!!!", region_id, e);
@@ -218,7 +218,7 @@ impl SnapContext {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
-        let timer = apply_histogram.start_timer();
+        let timer = apply_histogram.start_coarse_timer();
 
         match self.apply_snap(region_id, status.clone()) {
             Ok(()) => {

@@ -311,7 +311,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         }
 
         ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "all"]).inc();
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["write"]).start_timer();
+        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["write"])
+            .start_coarse_timer();
 
         self.exec_requests(ctx,
                            reqs,
@@ -345,7 +346,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         req.set_cmd_type(CmdType::Snap);
 
         ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "all"]).inc();
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["snapshot"]).start_timer();
+        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["snapshot"])
+            .start_coarse_timer();
 
         self.exec_requests(ctx,
                            vec![req],
@@ -384,7 +386,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             .inc_by(batch_size as f64)
             .unwrap();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["snapshot"])
-            .start_timer();
+            .start_coarse_timer();
 
         let on_finished: BatchCallback<CmdRes> = box move |cmd_resps: super::BatchResults<_>| {
             req_timer.observe_duration();

@@ -70,7 +70,7 @@ impl<C: MsgSender> Runner<C> {
         info!("[region {}] computing hash at {}", region_id, index);
         REGION_HASH_COUNTER_VEC.with_label_values(&["compute", "all"]).inc();
 
-        let timer = REGION_HASH_HISTOGRAM.start_timer();
+        let timer = REGION_HASH_HISTOGRAM.start_coarse_timer();
         let mut digest = Digest::new(crc32::IEEE);
         let mut cf_names = snap.cf_names();
         cf_names.sort();

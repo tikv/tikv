@@ -174,7 +174,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
 
         let mut size = 0;
         let mut split_key = vec![];
-        let timer = CHECK_SPILT_HISTOGRAM.start_timer();
+        let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let res = MergedIterator::new(self.engine.as_ref(),
                                       LARGE_CFS,
                                       &task.start_key,

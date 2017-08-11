@@ -233,7 +233,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
 
         ok(self)
             .and_then(|mut ctx| {
-                ctx.timer = Some(PD_SEND_MSG_HISTOGRAM.start_timer());
+                ctx.timer = Some(PD_SEND_MSG_HISTOGRAM.start_coarse_timer());
                 let req = (ctx.func)(&ctx.client.inner, r);
                 req.then(|resp| {
                     // Observe on dropping, schedule time will be recorded too.
@@ -290,7 +290,7 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
 {
     for _ in 0..retry {
         let r = {
-            let _timer = PD_SEND_MSG_HISTOGRAM.start_timer(); // observe on dropping.
+            let _timer = PD_SEND_MSG_HISTOGRAM.start_coarse_timer(); // observe on dropping.
             func(&client.inner.rl().client).map_err(Error::Grpc)
         };
 

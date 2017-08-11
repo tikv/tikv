@@ -112,7 +112,7 @@ fn send_snap(env: Arc<Environment>,
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
 
-    let send_timer = SEND_SNAP_HISTOGRAM.start_timer();
+    let send_timer = SEND_SNAP_HISTOGRAM.start_coarse_timer();
 
     let key = {
         let snap = msg.get_message().get_snapshot();
