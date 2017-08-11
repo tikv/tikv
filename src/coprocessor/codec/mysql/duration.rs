@@ -197,6 +197,20 @@ impl Duration {
         let d = unsafe { try!(str::from_utf8_unchecked(&buf).parse()) };
         Ok(d)
     }
+
+    pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
+        let fsp = try!(check_fsp(fsp));
+        if fsp >= self.fsp {
+            self.fsp = fsp;
+            return Ok(());
+        }
+        self.fsp = fsp;
+        let nanos = self.dur.subsec_nanos() as f64 /
+                    (10u32.pow(NANO_WIDTH - self.fsp as u32) as f64);
+        let nanos = (nanos.round() as u32) * (10u32.pow(NANO_WIDTH - self.fsp as u32));
+        self.dur = StdDuration::new(self.dur.as_secs(), nanos);
+        Ok(())
+    }
 }
 
 impl Display for Duration {
@@ -247,6 +261,7 @@ impl Ord for Duration {
 mod test {
     use util::escape;
     use super::*;
+    use super::super::MAX_FSP;
 
     #[test]
     fn test_parse() {
@@ -328,6 +343,24 @@ mod test {
         for (input, fsp, exp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let res = format!("{}", t.to_decimal().unwrap());
+            assert_eq!(exp, res);
+        }
+    }
+
+    #[test]
+    fn test_round_frac() {
+        let cases = vec![
+        ("11:30:45.123456", 4, "11:30:45.1235"),
+		("11:30:45.123456", 6, "11:30:45.123456"),
+		("11:30:45.123456", 0, "11:30:45"),
+		("1 11:30:45.123456", 1, "35:30:45.1"),
+		("1 11:30:45.999999", 4, "35:30:46.0000"),
+		("-1 11:30:45.999999", 0, "-35:30:46"),
+        ];
+        for (input, fsp, exp) in cases {
+            let mut t = Duration::parse(input.as_bytes(), MAX_FSP).unwrap();
+            t.round_frac(fsp).unwrap();
+            let res = format!("{}", t);
             assert_eq!(exp, res);
         }
     }
