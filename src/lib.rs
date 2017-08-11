@@ -28,6 +28,9 @@
 #![allow(should_implement_trait)]
 #![allow(large_enum_variant)]
 #![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
+#![allow(new_without_default_derive)]
+#![allow(verbose_bit_mask)]
 
 #[macro_use]
 extern crate log;
