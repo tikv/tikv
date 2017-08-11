@@ -335,8 +335,9 @@ impl<Q, T, C> Worker<Q, T, C>
 mod test {
     use super::{ThreadPool, Task, ScheduleQueue, FifoQueue, Context, ContextFactory};
     use std::time::Duration;
-    use std::sync::mpsc::channel;
+    use std::sync::mpsc::{Sender, channel};
     use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicIsize, Ordering};
 
     #[derive(Clone)]
     struct DummyContext {}
@@ -462,5 +463,72 @@ mod test {
             let task = queue.pop().unwrap();
             assert_eq!(id, task.id);
         }
+    }
+
+    #[test]
+    fn test_task_context() {
+        struct TestContext {
+            counter: Arc<AtomicIsize>,
+            tx: Sender<isize>,
+        }
+
+        unsafe impl Send for TestContext {}
+
+        impl Context for TestContext {
+            fn get(&self, s: &str) -> u64 {
+                s.len() as u64
+            }
+            fn set(&mut self, _: &str, _: u64) {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+            fn on_start(&self) {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+            fn on_complete(&self) {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+                self.tx.send(self.counter.load(Ordering::SeqCst)).unwrap();
+            }
+        }
+
+        struct TestContextFactory {
+            counter: Arc<AtomicIsize>,
+            tx: Sender<isize>,
+        }
+
+        impl ContextFactory<TestContext> for TestContextFactory {
+            fn create_context(&self) -> TestContext {
+                TestContext {
+                    counter: self.counter.clone(),
+                    tx: self.tx.clone(),
+                }
+            }
+        }
+
+        let (tx, rx) = channel();
+
+        let f = TestContextFactory {
+            counter: Arc::new(AtomicIsize::new(0)),
+            tx: tx,
+        };
+
+        let name = thd_name!("test_tasks_with_different_cost");
+        let concurrency = 5;
+        let mut task_pool = ThreadPool::new(name, concurrency, FifoQueue::new(), f);
+
+        for gid in 0..10 {
+            task_pool.execute(gid, move |mut d: TestContext| -> TestContext {
+                assert_eq!(d.get("dummy"), 5);
+                d.set("dummy", 0);
+                d
+            });
+        }
+        let mut fin: isize = -1;
+        let mut count = 0;
+        while count != 10 {
+            fin = rx.recv_timeout(Duration::from_millis(20)).unwrap();
+            count += 1;
+        }
+        task_pool.stop().unwrap();
+        assert_eq!(fin, 30);
     }
 }
