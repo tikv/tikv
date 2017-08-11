@@ -150,7 +150,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 {
     let mut config = EventLoopConfig::new();
     // To make raft base tick more accurate, timer tick should be small enough.
-    config.timer_tick_ms(cfg.raft_base_tick_interval / MIO_TICK_RATIO);
+    config.timer_tick_ms(cfg.raft_base_tick_interval.as_millis() / MIO_TICK_RATIO);
     config.notify_capacity(cfg.notify_capacity);
     config.messages_per_tick(cfg.messages_per_tick);
     let event_loop = try!(EventLoop::configured(config));
@@ -426,13 +426,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let split_check_runner = SplitCheckRunner::new(self.engine.clone(),
                                                        self.sendch.clone(),
-                                                       self.cfg.region_max_size,
-                                                       self.cfg.region_split_size);
+                                                       self.cfg.region_max_size.0,
+                                                       self.cfg.region_split_size.0);
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(self.engine.clone(),
                                        self.snap_mgr.clone(),
-                                       self.cfg.snap_apply_batch_size);
+                                       self.cfg.snap_apply_batch_size.0 as usize);
         box_try!(self.region_worker.start(runner));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
@@ -488,7 +488,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        if let Err(e) = register_timer(event_loop, Tick::Raft, self.cfg.raft_base_tick_interval) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::Raft,
+                                       self.cfg.raft_base_tick_interval.as_millis()) {
             error!("{} register raft base tick err: {:?}", self.tag, e);
         };
     }
@@ -527,7 +529,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // In this case, peer B would notice that the leader is missing for a long time,
             // and it would check with pd to confirm whether it's still a member of the cluster.
             // If not, it destroys itself as a stale peer which is removed out already.
-            let max_missing_duration = self.cfg.max_leader_missing_duration;
+            let max_missing_duration = self.cfg.max_leader_missing_duration.0;
             if let StaleState::ToValidate = peer.check_stale_state(max_missing_duration) {
                 // for peer B in case 1 above
                 info!("{} detects leader missing for a long time. To check with pd \
@@ -982,7 +984,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let dur = t.elapsed();
         if !self.is_busy {
             let election_timeout =
-                Duration::from_millis(self.cfg.raft_base_tick_interval *
+                Duration::from_millis(self.cfg.raft_base_tick_interval.as_millis() *
                                       self.cfg.raft_election_timeout_ticks as u64);
             if dur >= election_timeout {
                 self.is_busy = true;
@@ -1170,9 +1172,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // check again after split.
                 if right_derive {
                     self.region_peers.get_mut(&region_id).unwrap().size_diff_hint = self.cfg
-                        .region_check_size_diff;
+                        .region_split_check_diff
+                        .0;
                 } else {
-                    new_peer.size_diff_hint = self.cfg.region_check_size_diff;
+                    new_peer.size_diff_hint = self.cfg.region_split_check_diff.0;
                 }
                 self.apply_worker.schedule(ApplyTask::register(&new_peer)).unwrap();
                 self.region_peers.insert(new_region_id, new_peer);
@@ -1385,7 +1388,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::RaftLogGc,
-                                       self.cfg.raft_log_gc_tick_interval) {
+                                       self.cfg.raft_log_gc_tick_interval.as_millis()) {
             // If failed, we can't cleanup the raft log regularly.
             // Although the log size will grow larger and larger, it doesn't affect
             // whole raft logic, and we can send truncate log command to compact it.
@@ -1396,7 +1399,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_report_region_flow_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::ReportRegionFlow,
-                                       self.cfg.report_region_flow_interval) {
+                                       self.cfg.report_region_flow_interval.as_millis()) {
             error!("{} register raft gc log tick err: {:?}", self.tag, e);
         };
     }
@@ -1465,7 +1468,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if applied_idx > first_idx &&
                applied_idx - first_idx >= self.cfg.raft_log_gc_count_limit {
                 compact_idx = applied_idx;
-            } else if peer.raft_log_size_hint >= self.cfg.raft_log_gc_size_limit {
+            } else if peer.raft_log_size_hint >= self.cfg.raft_log_gc_size_limit.0 {
                 compact_idx = applied_idx;
             } else if replicated_idx < first_idx ||
                       replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {
@@ -1501,7 +1504,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_split_region_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::SplitRegionCheck,
-                                       self.cfg.split_region_check_tick_interval) {
+                                       self.cfg.split_region_check_tick_interval.as_millis()) {
             error!("{} register split region check tick err: {:?}", self.tag, e);
         };
     }
@@ -1519,13 +1522,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
 
-            if peer.size_diff_hint < self.cfg.region_check_size_diff {
+            if peer.size_diff_hint < self.cfg.region_split_check_diff.0 {
                 continue;
             }
             info!("{} region's size diff {} >= {}, need to check whether should split",
                   peer.tag,
                   peer.size_diff_hint,
-                  self.cfg.region_check_size_diff);
+                  self.cfg.region_split_check_diff.0);
             let task = SplitCheckTask::new(peer.region());
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
@@ -1539,7 +1542,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_compact_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactCheck,
-                                       self.cfg.region_compact_check_interval) {
+                                       self.cfg.region_compact_check_interval.as_millis()) {
             error!("{} register compact check tick err: {:?}", self.tag, e);
         }
     }
@@ -1634,7 +1637,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_pd_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::PdHeartbeat,
-                                       self.cfg.pd_heartbeat_tick_interval) {
+                                       self.cfg.pd_heartbeat_tick_interval.as_millis()) {
             error!("{} register pd heartbeat tick err: {:?}", self.tag, e);
         };
     }
@@ -1653,10 +1656,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         let disk_cap = disk_stats.total_space();
-        let capacity = if self.cfg.capacity == 0 || disk_cap < self.cfg.capacity {
+        let capacity = if self.cfg.capacity.0 == 0 || disk_cap < self.cfg.capacity.0 {
             disk_cap
         } else {
-            self.cfg.capacity
+            self.cfg.capacity.0
         };
         stats.set_capacity(capacity);
 
@@ -1784,7 +1787,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 } else if let Ok(meta) = s.meta() {
                     let modified = box_try!(meta.modified());
                     if let Ok(elapsed) = modified.elapsed() {
-                        if elapsed > Duration::from_secs(self.cfg.snap_gc_timeout) {
+                        if elapsed > self.cfg.snap_gc_timeout.0 {
                             info!("[region {}] snap file {} has been expired, delete.",
                                   key.region_id,
                                   key);
@@ -1813,7 +1816,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
-        if self.store_stat.lock_cf_bytes_written > self.cfg.lock_cf_compact_bytes_threshold {
+        if self.store_stat.lock_cf_bytes_written > self.cfg.lock_cf_compact_bytes_threshold.0 {
             self.store_stat.lock_cf_bytes_written = 0;
             let task = CompactTask {
                 cf_name: String::from(CF_LOCK),
@@ -1833,7 +1836,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_pd_store_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::PdStoreHeartbeat,
-                                       self.cfg.pd_store_heartbeat_tick_interval) {
+                                       self.cfg.pd_store_heartbeat_tick_interval.as_millis()) {
             error!("{} register pd store heartbeat tick err: {:?}", self.tag, e);
         };
     }
@@ -1841,7 +1844,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_snap_mgr_gc_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::SnapGc,
-                                       self.cfg.snap_mgr_gc_tick_interval) {
+                                       self.cfg.snap_mgr_gc_tick_interval.as_millis()) {
             error!("{} register snap mgr gc tick err: {:?}", self.tag, e);
         }
     }
@@ -1849,7 +1852,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_compact_lock_cf_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactLockCf,
-                                       self.cfg.lock_cf_compact_interval) {
+                                       self.cfg.lock_cf_compact_interval.as_millis()) {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
@@ -1921,7 +1924,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_consistency_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::ConsistencyCheck,
-                                       self.cfg.consistency_check_tick_interval * 1000) {
+                                       self.cfg.consistency_check_interval.as_millis()) {
             error!("{} register consistency check tick err: {:?}", self.tag, e);
         };
     }

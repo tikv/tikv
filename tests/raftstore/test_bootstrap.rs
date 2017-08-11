@@ -44,7 +44,7 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_node_bootstrap_with_prepared_data() {
     // create a node
     let pd_client = Arc::new(TestPdClient::new(0));
-    let cfg = new_server_config(0);
+    let cfg = new_tikv_config(0);
 
     let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
@@ -53,7 +53,10 @@ fn test_node_bootstrap_with_prepared_data() {
         .unwrap());
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
-    let mut node = Node::new(&mut event_loop, &cfg, pd_client.clone());
+    let mut node = Node::new(&mut event_loop,
+                             &cfg.server,
+                             &cfg.raft_store,
+                             pd_client.clone());
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(),
                                     Some(node.get_sendch()),
                                     cfg.raft_store.use_sst_file_snapshot);
