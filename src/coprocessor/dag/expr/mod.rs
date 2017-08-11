@@ -18,7 +18,7 @@ use std::convert::TryFrom;
 
 use tipb::expression::{Expr, ExprType, ScalarFuncSig, FieldType};
 
-use coprocessor::codec::mysql::{Duration, Time, Decimal, MAX_FSP};
+use coprocessor::codec::mysql::{Duration, Time, Decimal, Json, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::Datum;
 use util;
@@ -105,12 +105,33 @@ impl Expression {
         match *self {
             Expression::ScalarFn(ref f) => {
                 match f.sig {
-                    ScalarFuncSig::LTInt => f.lt_int(ctx, row),
-                    ScalarFuncSig::LTReal => f.lt_real(ctx, row),
-                    ScalarFuncSig::LTDecimal => f.lt_decimal(ctx, row),
-                    ScalarFuncSig::LTString => f.lt_string(ctx, row),
-                    ScalarFuncSig::LTTime => f.lt_time(ctx, row),
-                    ScalarFuncSig::LTDuration => f.lt_duration(ctx, row),
+                    ScalarFuncSig::LTInt | ScalarFuncSig::LEInt | ScalarFuncSig::GTInt |
+                    ScalarFuncSig::GEInt | ScalarFuncSig::EQInt | ScalarFuncSig::NEInt |
+                    ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, f.sig),
+
+                    ScalarFuncSig::LTReal | ScalarFuncSig::LEReal | ScalarFuncSig::GTReal |
+                    ScalarFuncSig::GEReal | ScalarFuncSig::EQReal | ScalarFuncSig::NEReal |
+                    ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, f.sig),
+
+                    ScalarFuncSig::LTDecimal | ScalarFuncSig::LEDecimal | ScalarFuncSig::GTDecimal |
+                    ScalarFuncSig::GEDecimal | ScalarFuncSig::EQDecimal | ScalarFuncSig::NEDecimal |
+                    ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, f.sig),
+
+                    ScalarFuncSig::LTString | ScalarFuncSig::LEString | ScalarFuncSig::GTString |
+                    ScalarFuncSig::GEString | ScalarFuncSig::EQString | ScalarFuncSig::NEString |
+                    ScalarFuncSig::NullEQString => f.compare_string(ctx, row, f.sig),
+
+                    ScalarFuncSig::LTTime | ScalarFuncSig::LETime | ScalarFuncSig::GTTime |
+                    ScalarFuncSig::GETime | ScalarFuncSig::EQTime | ScalarFuncSig::NETime |
+                    ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, f.sig),
+
+                    ScalarFuncSig::LTDuration | ScalarFuncSig::LEDuration | ScalarFuncSig::GTDuration |
+                    ScalarFuncSig::GEDuration | ScalarFuncSig::EQDuration | ScalarFuncSig::NEDuration |
+                    ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, f.sig),
+
+                    ScalarFuncSig::LTJson | ScalarFuncSig::LEJson | ScalarFuncSig::GTJson |
+                    ScalarFuncSig::GEJson | ScalarFuncSig::EQJson | ScalarFuncSig::NEJson |
+                    ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, f.sig),
                     _ => Err(Error::Other("Unknown signature")),
                 }
             }
@@ -135,6 +156,10 @@ impl Expression {
     }
 
     fn eval_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Duration>> {
+        unimplemented!()
+    }
+
+    fn eval_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
         unimplemented!()
     }
 }
@@ -218,13 +243,6 @@ impl TryFrom<Expr> for Expression {
         }
     }
 }
-
-const FLAG_UNSIGNED: u32 = 32;
-
-fn field_type_unsigned(ft: &FieldType) -> bool {
-    ft.get_flag() & FLAG_UNSIGNED > 0
-}
-
 
 #[test]
 fn test_smoke() {
