@@ -84,6 +84,7 @@ pub trait ScheduleQueue<T: Debug, C> {
 }
 
 // First in first out queue.
+#[derive(Default)]
 pub struct FifoQueue<T, C> {
     queue: VecDeque<Task<T, C>>,
 }
@@ -183,12 +184,14 @@ pub trait ContextFactory<Ctx: Context> {
     fn create_context(&self) -> Ctx;
 }
 
+type TTaskPool<Q, T, C> = Arc<(Mutex<TaskPool<Q, T, C>>, Condvar)>;
+
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
 pub struct ThreadPool<Q, T, C, Ctx> {
-    task_pool: Arc<(Mutex<TaskPool<Q, T, Ctx>>, Condvar)>,
+    task_pool: TTaskPool<Q, T, Ctx>,
     threads: Vec<JoinHandle<()>>,
     task_count: Arc<AtomicUsize>,
     sender: Sender<Task<T, Ctx>>,
@@ -270,7 +273,7 @@ impl<Q, T, C, Ctx> ThreadPool<Q, T, C, Ctx>
 
 // Each thread has a worker.
 struct Worker<Q, T, C> {
-    task_pool: Arc<(Mutex<TaskPool<Q, T, C>>, Condvar)>,
+    task_pool: TTaskPool<Q, T, C>,
     task_count: Arc<AtomicUsize>,
 }
 
@@ -279,9 +282,7 @@ impl<Q, T, C> Worker<Q, T, C>
           T: Debug,
           C: Context
 {
-    fn new(task_pool: Arc<(Mutex<TaskPool<Q, T, C>>, Condvar)>,
-           task_count: Arc<AtomicUsize>)
-           -> Worker<Q, T, C> {
+    fn new(task_pool: TTaskPool<Q, T, C>, task_count: Arc<AtomicUsize>) -> Worker<Q, T, C> {
         Worker {
             task_pool: task_pool,
             task_count: task_count,
