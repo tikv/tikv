@@ -325,25 +325,24 @@ impl BatchRunnable<Task> for Host {
                         let txn_id = req.start_ts.unwrap_or_default();
 
                         if pri == CommandPri::Low {
-                            self.low_priority_pool.execute(txn_id, move |_: DummyContext| {
-                                end_point.handle_request(req);
-                                COPR_PENDING_REQS
-                                    .with_label_values(&[type_str, pri_str])
-                                    .dec();
-                            });
+                            self.low_priority_pool
+                                .execute(txn_id, move |d: DummyContext| -> DummyContext {
+                                    end_point.handle_request(req);
+                                    COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
+                                    d
+                                });
                         } else if pri == CommandPri::High {
-                            self.high_priority_pool.execute(txn_id, move |_: DummyContext| {
-                                end_point.handle_request(req);
-                                COPR_PENDING_REQS
-                                    .with_label_values(&[type_str, pri_str])
-                                    .dec();
-                            });
+                            self.high_priority_pool
+                                .execute(txn_id, move |d: DummyContext| -> DummyContext {
+                                    end_point.handle_request(req);
+                                    COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
+                                    d
+                                });
                         } else {
-                            self.pool.execute(txn_id, move |_: DummyContext| {
+                            self.pool.execute(txn_id, move |d: DummyContext| -> DummyContext {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS
-                                    .with_label_values(&[type_str, pri_str])
-                                    .dec();
+                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
+                                d
                             });
                         }
                     }

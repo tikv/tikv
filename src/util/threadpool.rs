@@ -33,7 +33,7 @@ pub struct Task<T, C> {
 
     // which group the task belongs to.
     gid: T,
-    task: Box<FnBox(C) + Send>,
+    task: Box<FnBox(C) -> C + Send>,
     ctx: C,
 }
 
@@ -45,7 +45,7 @@ impl<T: Debug, C> Debug for Task<T, C> {
 
 impl<T, C: Context> Task<T, C> {
     fn new<F>(gid: T, job: F, ctx: C) -> Task<T, C>
-        where F: FnOnce(C) + Send + 'static
+        where F: FnOnce(C) -> C + Send + 'static
     {
         Task {
             id: 0,
@@ -173,9 +173,11 @@ impl<Q, T, C> TaskPool<Q, T, C>
     }
 }
 
-pub trait Context: Send + Clone {
+pub trait Context: Send {
+    // following two method will only be used in one worker thread.
     fn set(&mut self, key: &str, value: u64);
     fn get(&self, key: &str) -> u64;
+    // following two method must be concurrent safe.
     fn on_start(&self);
     fn on_complete(&self);
 }
@@ -235,7 +237,7 @@ impl<Q, T, C, Ctx> ThreadPool<Q, T, C, Ctx>
     }
 
     pub fn execute<F>(&mut self, gid: T, job: F)
-        where F: FnOnce(Ctx) + Send + 'static,
+        where F: FnOnce(Ctx) -> Ctx + Send + 'static,
               Ctx: Context
     {
         let ctx = self.ctx_factory.create_context();
@@ -317,11 +319,11 @@ impl<Q, T, C> Worker<Q, T, C>
     fn run(&mut self) {
         let mut task = self.get_next_task(None);
         // Start the worker. Loop breaks when receive stop message.
-        while let Some(t) = task {
+        while let Some(mut t) = task {
             t.ctx.on_start();
             // Since tikv would be down when any panic happens,
             // we don't need to process panic case here.
-            (t.task)(t.ctx.clone());
+            t.ctx = (t.task)(t.ctx);
             t.ctx.on_complete();
             self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
             task = self.get_next_task(Some(&t.gid));
@@ -369,7 +371,8 @@ mod test {
         let timeout = Duration::from_secs(2);
         let (ftx, frx) = channel();
         // Push a big task into pool.
-        task_pool.execute(group_with_big_task, move |_: DummyContext| {
+        task_pool.execute(group_with_big_task,
+                          move |d: DummyContext| -> DummyContext {
             // Since a long task of `group_with_big_task` is running,
             // the other threads shouldn't run any task of `group_with_big_task`.
             for _ in 0..10 {
@@ -381,20 +384,24 @@ mod test {
                 assert_eq!(gid, group_with_big_task);
             }
             ftx.send(true).unwrap();
+            d
         });
 
         for gid in 0..10 {
             let sender = jtx.clone();
-            task_pool.execute(gid, move |_: DummyContext| {
+            task_pool.execute(gid, move |d: DummyContext| -> DummyContext {
                 sender.send(gid).unwrap();
+                d
             });
         }
 
         for _ in 0..10 {
             let sender = jtx.clone();
-            task_pool.execute(group_with_big_task, move |_: DummyContext| {
-                sender.send(group_with_big_task).unwrap();
-            });
+            task_pool.execute(group_with_big_task,
+                              move |d: DummyContext| -> DummyContext {
+                                  sender.send(group_with_big_task).unwrap();
+                                  d
+                              });
         }
         frx.recv_timeout(timeout).unwrap();
         task_pool.stop().unwrap();
@@ -415,11 +422,12 @@ mod test {
         for gid in 0..group_num {
             let rxer = receiver.clone();
             let ftx = ftx.clone();
-            task_pool.execute(gid, move |_: DummyContext| {
+            task_pool.execute(gid, move |d: DummyContext| -> DummyContext {
                 let rx = rxer.lock().unwrap();
                 let id = rx.recv_timeout(timeout).unwrap();
                 assert_eq!(id, gid);
                 ftx.send(true).unwrap();
+                d
             });
             task_num += 1;
             assert_eq!(task_pool.get_task_count(), task_num);
@@ -444,7 +452,9 @@ mod test {
         let mut queue = FifoQueue::new();
         let f = DummyContextFactory {};
         for id in 0..10 {
-            let mut task = Task::new(0, move |_: DummyContext| {}, f.create_context());
+            let mut task = Task::new(0,
+                                     move |d: DummyContext| -> DummyContext { d },
+                                     f.create_context());
             task.id = id;
             queue.push(task);
         }
