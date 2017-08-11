@@ -100,9 +100,6 @@ impl Default for StoreStat {
 pub struct StoreInfo {
     pub engine: Arc<DB>,
     pub capacity: u64,
-    pub tag: String,
-    pub start_time: Timespec,
-    pub is_busy: bool,
 }
 
 pub struct Store<T, C: 'static> {
@@ -1837,7 +1834,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let used_size = self.snap_mgr.get_total_snap_size();
         stats.set_used_size(used_size);
-
+        stats.set_store_id(self.store_id());
         stats.set_region_count(self.region_peers.len() as u32);
 
         let snap_stats = self.snap_mgr.stats();
@@ -1857,6 +1854,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
+        stats.set_start_time(self.start_time.sec as u32);
+
         stats.set_applying_snap_count(apply_snapshot_count as u32);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["applying"])
@@ -1875,19 +1874,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.store_stat.engine_total_keys_written = engine_total_keys_written;
         stats.set_keys_written(delta);
 
+        stats.set_is_busy(self.is_busy);
+        self.is_busy = false;
+
         let store_info = StoreInfo {
             engine: self.engine.clone(),
             capacity: self.cfg.capacity,
-            tag: self.tag.clone(),
-            start_time: self.start_time,
-            is_busy: self.is_busy,
         };
 
         let task = PdTask::StoreHeartbeat {
             stats: stats,
             store_info: store_info,
         };
-        self.is_busy = false;
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
