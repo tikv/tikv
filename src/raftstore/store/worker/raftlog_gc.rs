@@ -82,13 +82,13 @@ impl Runner {
             info!("[region {}] no need to gc", region_id);
             return Ok(0);
         }
-        let wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
-            box_try!(wb.delete(&key));
+            box_try!(raft_wb.delete(&key));
         }
         // TODO: disable WAL here.
-        raft_engine.write(wb).unwrap();
+        raft_engine.write(raft_wb).unwrap();
         Ok(end_idx - first_idx)
     }
 
@@ -133,23 +133,23 @@ mod test {
     #[test]
     fn test_gc_raft_log() {
         let path = TempDir::new("gc-raft-log-test").unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
-        let db = Arc::new(db);
+        let raft_db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let raft_db = Arc::new(raft_db);
 
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner::new(Some(tx));
 
         // generate raft logs
         let region_id = 1;
-        let wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
         for i in 0..100 {
             let k = keys::raft_log_key(region_id, i);
-            wb.put(&k, b"entry").unwrap();
+            raft_wb.put(&k, b"entry").unwrap();
         }
-        db.write(wb).unwrap();
+        raft_db.write(raft_wb).unwrap();
 
         let tbls = vec![(Task {
-                            raft_engine: db.clone(),
+                            raft_engine: raft_db.clone(),
                             region_id: region_id,
                             start_idx: 0,
                             end_idx: 10,
@@ -158,7 +158,7 @@ mod test {
                          (0, 10),
                          (10, 100)),
                         (Task {
-                            raft_engine: db.clone(),
+                            raft_engine: raft_db.clone(),
                             region_id: region_id,
                             start_idx: 0,
                             end_idx: 50,
@@ -167,7 +167,7 @@ mod test {
                          (0, 50),
                          (50, 100)),
                         (Task {
-                            raft_engine: db.clone(),
+                            raft_engine: raft_db.clone(),
                             region_id: region_id,
                             start_idx: 50,
                             end_idx: 50,
@@ -176,7 +176,7 @@ mod test {
                          (0, 50),
                          (50, 100)),
                         (Task {
-                            raft_engine: db.clone(),
+                            raft_engine: raft_db.clone(),
                             region_id: region_id,
                             start_idx: 50,
                             end_idx: 60,
@@ -189,8 +189,8 @@ mod test {
             runner.run(task);
             let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert_eq!(res.collected, expected_collectd);
-            raft_log_must_not_exist(&db, 1, not_exist_range.0, not_exist_range.1);
-            raft_log_must_exist(&db, 1, exist_range.0, exist_range.1);
+            raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);
+            raft_log_must_exist(&raft_db, 1, exist_range.0, exist_range.1);
         }
     }
 

@@ -172,18 +172,18 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         .unwrap_or_else(|e| exit_with_err(e));
     let trans = server.transport();
 
-    // Create raft_cf engine.
+    // Create raft engine.
     let raft_db_path = if cfg.storage.raft_data_dir.is_empty() {
         store_path.join(Path::new("raft"))
     } else {
         Path::new(&cfg.storage.raft_data_dir).to_path_buf()
     };
     let raft_db_opts = cfg.raftdb.build_opt();
-    let raft_cf_opts = cfg.raftdb.build_cf_opts(true);
+    let raft_db_cf_opts = cfg.raftdb.build_cf_opts(true);
     let raft_engine = Arc::new(rocksdb_util::new_engine_opt(raft_db_path.to_str()
                                                                 .unwrap(),
                                                             raft_db_opts,
-                                                            raft_cf_opts)
+                                                            raft_db_cf_opts)
         .unwrap_or_else(|s| exit_with_msg(s)));
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
