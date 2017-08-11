@@ -53,7 +53,8 @@ pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: u8) -> Result<i64> {
 }
 
 pub fn convert_float_to_int(fval: f64, lower_bound: i64, upper_bound: i64, tp: u8) -> Result<i64> {
-    let val = fval.round(); // TODO
+    // TODO any performance problem to use round directly?
+    let val = fval.round();
     if val < lower_bound as f64 {
         return overflow!(val, tp);
     }
@@ -65,7 +66,8 @@ pub fn convert_float_to_int(fval: f64, lower_bound: i64, upper_bound: i64, tp: u
 }
 
 pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64> {
-    let val = fval.round(); // TODO
+    // TODO any performance problem to use round directly?
+    let val = fval.round();
     if val < 0 as f64 {
         return overflow!(val, tp);
     }
