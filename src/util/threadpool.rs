@@ -15,14 +15,13 @@ use std::usize;
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::VecDeque;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::fmt::{self, Write, Debug, Formatter};
 use std::sync::mpsc::{Sender, Receiver, channel};
-use super::collections::HashMap;
 
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
@@ -82,124 +81,6 @@ pub trait ScheduleQueue<T: Debug> {
     fn on_task_started(&mut self, gid: &T);
 }
 
-#[derive(Debug)]
-pub struct ReachConcurrencyLimit<T: Debug>(pub T);
-
-#[derive(Default)]
-struct GroupStatisticsItem {
-    running_count: usize,
-    high_priority_queue_count: usize,
-    low_priority_queue_count: usize,
-}
-
-impl GroupStatisticsItem {
-    fn sum(&self) -> usize {
-        self.running_count + self.high_priority_queue_count + self.low_priority_queue_count
-    }
-}
-
-// `SmallGroupFirstQueue` tries to run groups with number of
-//  tasks smaller than small_group_tasks_limit first when all threads are busy.
-pub struct SmallGroupFirstQueue<T> {
-    high_priority_queue: VecDeque<Task<T>>,
-    low_priority_queue: VecDeque<Task<T>>,
-    group_concurrency_on_busy: usize,
-    small_group_tasks_limit: usize,
-    statistics: HashMap<T, GroupStatisticsItem>,
-}
-
-impl<T: Hash + Ord + Send + Clone + Debug> SmallGroupFirstQueue<T> {
-    pub fn new(group_concurrency_on_busy: usize,
-               small_group_tasks_limit: usize)
-               -> SmallGroupFirstQueue<T> {
-        SmallGroupFirstQueue {
-            high_priority_queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY),
-            low_priority_queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY),
-            statistics: HashMap::new(),
-            group_concurrency_on_busy: group_concurrency_on_busy,
-            small_group_tasks_limit: small_group_tasks_limit,
-        }
-    }
-
-    fn pop_from_high_priority_queue(&mut self) -> Option<Task<T>> {
-        if self.high_priority_queue.is_empty() {
-            return None;
-        }
-        let task = self.high_priority_queue.pop_front().unwrap();
-        let mut statistics = self.statistics.get_mut(&task.gid).unwrap();
-        statistics.high_priority_queue_count -= 1;
-        Some(task)
-    }
-
-    fn pop_from_low_priority_queue(&mut self) -> Option<Task<T>> {
-        if self.low_priority_queue.is_empty() {
-            return None;
-        }
-        let task = self.low_priority_queue.pop_front().unwrap();
-        let mut statistics = self.statistics
-            .get_mut(&task.gid)
-            .unwrap();
-        statistics.low_priority_queue_count -= 1;
-        Some(task)
-    }
-}
-
-impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupFirstQueue<T> {
-    fn push(&mut self, task: Task<T>) {
-        let mut statistics = self.statistics
-            .entry(task.gid.clone())
-            .or_insert(Default::default());
-        if statistics.low_priority_queue_count == 0 &&
-           statistics.running_count + statistics.high_priority_queue_count <
-           self.small_group_tasks_limit {
-            self.high_priority_queue.push_back(task);
-            statistics.high_priority_queue_count += 1;
-        } else {
-            self.low_priority_queue.push_back(task);
-            statistics.low_priority_queue_count += 1;
-        }
-    }
-
-    fn pop(&mut self) -> Option<Task<T>> {
-        if self.high_priority_queue.is_empty() {
-            return self.pop_from_low_priority_queue();
-        }
-
-        if self.low_priority_queue.is_empty() {
-            return self.pop_from_high_priority_queue();
-        }
-
-        let pop_from_high_priority_queue = {
-            let t1 = self.high_priority_queue.front().unwrap();
-            let t2 = self.low_priority_queue.front().unwrap();
-            t1.id < t2.id ||
-            (self.statistics[&t2.gid].running_count >= self.group_concurrency_on_busy)
-        };
-
-        if pop_from_high_priority_queue {
-            self.pop_from_high_priority_queue()
-        } else {
-            self.pop_from_low_priority_queue()
-        }
-    }
-
-    fn on_task_started(&mut self, gid: &T) {
-        let mut statistics = self.statistics.get_mut(gid).unwrap();
-        statistics.running_count += 1;
-    }
-
-    fn on_task_finished(&mut self, gid: &T) {
-        let count = {
-            let mut statistics = self.statistics.get_mut(gid).unwrap();
-            statistics.running_count -= 1;
-            statistics.sum()
-        };
-        if count == 0 {
-            self.statistics.remove(gid);
-        }
-    }
-}
-
 // First in first out queue.
 pub struct FifoQueue<T> {
     queue: VecDeque<Task<T>>,
@@ -228,149 +109,6 @@ impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for FifoQueue<T> {
 
     fn on_task_started(&mut self, _: &T) {}
     fn on_task_finished(&mut self, _: &T) {}
-}
-
-// `BigGroupThrottledQueue` tries to throttle group's concurrency to
-//  `group_concurrency_limit` when all threads are busy.
-// When one worker asks a task to run, it schedules in the following way:
-// 1. Find out which group has a running number that is smaller than
-//    that of `group_concurrency_limit`.
-// 2. If more than one group meets the first point, run the one who
-//    comes first.
-// If no group meets the first point, choose according to the following rules:
-// 1. Select the groups with least running tasks.
-// 2. If more than one group meets the first point,choose the one
-//     whose task comes first(with the minimum task's ID)
-pub struct BigGroupThrottledQueue<T> {
-    // The Tasks in `high_priority_queue` have higher priority than
-    // tasks in `low_priority_queue`.
-    high_priority_queue: BinaryHeap<Task<T>>,
-
-    // gid => tasks array. If `group_statistics[gid]` is bigger than
-    // `group_concurrency_limit`(which means the number of on-going tasks is
-    // more than `group_concurrency_limit`), the rest of the group's tasks
-    // would be pushed into `low_priority_queue[gid]`
-    low_priority_queue: HashMap<T, VecDeque<Task<T>>>,
-
-    // gid => (running_count,high_priority_queue_count)
-    group_statistics: HashMap<T, GroupStatisticsItem>,
-
-    // The maximum number of threads that each group can run when the pool is busy.
-    // Each value in `group_statistics` shouldn't be bigger than this value.
-    group_concurrency_limit: usize,
-}
-
-impl<T: Debug + Hash + Ord + Send + Clone> BigGroupThrottledQueue<T> {
-    pub fn new(group_concurrency_limit: usize) -> BigGroupThrottledQueue<T> {
-        BigGroupThrottledQueue {
-            high_priority_queue: BinaryHeap::new(),
-            low_priority_queue: HashMap::new(),
-            group_statistics: HashMap::new(),
-            group_concurrency_limit: group_concurrency_limit,
-        }
-    }
-
-    // Try push into high priority queue. Return none on success,return PushError(task) on failed.
-    #[inline]
-    fn try_push_into_high_priority_queue(&mut self,
-                                         task: Task<T>)
-                                         -> Result<(), ReachConcurrencyLimit<Task<T>>> {
-        let mut statistics = self.group_statistics
-            .entry(task.gid.clone())
-            .or_insert(Default::default());
-        if statistics.sum() >= self.group_concurrency_limit {
-            return Err(ReachConcurrencyLimit(task));
-        }
-        self.high_priority_queue.push(task);
-        statistics.high_priority_queue_count += 1;
-        Ok(())
-    }
-
-    #[inline]
-    fn pop_from_low_priority_queue(&mut self) -> Option<Task<T>> {
-        let gid = {
-            // Groups in low_priority_queue wouldn't too much, so iterate the map
-            // is quick.
-            let best_group = self.low_priority_queue
-                .iter()
-                .map(|(gid, low_priority_queue)| {
-                    (self.group_statistics[gid].sum(), low_priority_queue[0].id, gid)
-                })
-                .min();
-            if let Some((_, _, gid)) = best_group {
-                gid.clone()
-            } else {
-                return None;
-            }
-        };
-
-        let task = self.pop_from_low_priority_queue_by_gid(&gid);
-        Some(task)
-    }
-
-    #[inline]
-    fn pop_from_low_priority_queue_by_gid(&mut self, gid: &T) -> Task<T> {
-        let (empty_after_pop, task) = {
-            let mut waiting_tasks = self.low_priority_queue.get_mut(gid).unwrap();
-            let task = waiting_tasks.pop_front().unwrap();
-            (waiting_tasks.is_empty(), task)
-        };
-
-        if empty_after_pop {
-            self.low_priority_queue.remove(gid);
-        }
-        task
-    }
-}
-
-impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
-    fn push(&mut self, task: Task<T>) {
-        if let Err(ReachConcurrencyLimit(task)) = self.try_push_into_high_priority_queue(task) {
-            self.low_priority_queue
-                .entry(task.gid.clone())
-                .or_insert_with(VecDeque::new)
-                .push_back(task);
-        }
-    }
-
-    fn pop(&mut self) -> Option<Task<T>> {
-        if let Some(task) = self.high_priority_queue.pop() {
-            let mut statistics = self.group_statistics.get_mut(&task.gid).unwrap();
-            statistics.high_priority_queue_count -= 1;
-            return Some(task);
-        } else if let Some(task) = self.pop_from_low_priority_queue() {
-            return Some(task);
-        }
-        None
-    }
-
-    fn on_task_started(&mut self, gid: &T) {
-        let mut statistics = self.group_statistics.entry(gid.clone()).or_insert(Default::default());
-        statistics.running_count += 1
-    }
-
-    fn on_task_finished(&mut self, gid: &T) {
-        let count = {
-            let mut statistics = self.group_statistics.get_mut(gid).unwrap();
-            statistics.running_count -= 1;
-            statistics.sum()
-        };
-        if count == 0 {
-            self.group_statistics.remove(gid);
-        } else if count >= self.group_concurrency_limit {
-            // If the number of running tasks for this group is big enough.
-            return;
-        }
-
-        if !self.low_priority_queue.contains_key(gid) {
-            return;
-        }
-
-        // If the value of `group_statistics[gid]` is not big enough, pop
-        // a task from `low_priority_queue[gid]` and push it into `high_priority_queue`.
-        let group_task = self.pop_from_low_priority_queue_by_gid(gid);
-        self.try_push_into_high_priority_queue(group_task).unwrap();
-    }
 }
 
 struct TaskPool<Q, T> {
@@ -568,8 +306,7 @@ impl<Q, T> Worker<Q, T>
 
 #[cfg(test)]
 mod test {
-    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SmallGroupFirstQueue,
-                FifoQueue};
+    use super::{ThreadPool, Task, ScheduleQueue, FifoQueue};
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Mutex};
@@ -578,7 +315,7 @@ mod test {
     fn test_for_tasks_with_different_cost() {
         let name = thd_name!("test_tasks_with_different_cost");
         let concurrency = 2;
-        let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(1));
+        let mut task_pool = ThreadPool::new(name, concurrency, FifoQueue::new());
         let (jtx, jrx) = channel();
         let group_with_big_task = 1001 as u64;
         let timeout = Duration::from_secs(2);
@@ -619,7 +356,7 @@ mod test {
     fn test_get_task_count() {
         let name = thd_name!("test_get_task_count");
         let concurrency = 1;
-        let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(1));
+        let mut task_pool = ThreadPool::new(name, concurrency, FifoQueue::new());
         let (tx, rx) = channel();
         let (ftx, frx) = channel();
         let receiver = Arc::new(Mutex::new(rx));
@@ -649,160 +386,6 @@ mod test {
             task_num -= 1;
         }
         task_pool.stop().unwrap();
-    }
-
-    #[test]
-    fn test_throttled_queue() {
-        let mut queue = BigGroupThrottledQueue::new(1);
-        let mut id = 1;
-        // Push 4 tasks of `group1` into queue
-        let group1 = 1001;
-        for _ in 0..4 {
-            let mut task = Task::new(group1, move || {});
-            task.id = id;
-            id += 1;
-            queue.push(task);
-        }
-
-        // Push 4 tasks of `group2` into queue.
-        let group2 = 1002;
-        for _ in 0..4 {
-            let mut task = Task::new(group2, move || {});
-            task.id = id;
-            id += 1;
-            queue.push(task);
-        }
-
-        // queue: g1, g1, g1, g1, g2, g2, g2, g2. As all groups has a running number that is
-        // smaller than that of group_concurrency_limit, and g1 comes first.
-        let task = queue.pop().unwrap();
-        assert_eq!(task.gid, group1);
-        queue.on_task_started(&group1);
-
-        // queue: g1, g1, g1, g2, g2, g2, g2; running:g1.
-        // only g2 has a running number that is smaller than that of group_concurrency_limit.
-        let task = queue.pop().unwrap();
-        assert_eq!(task.gid, group2);
-        queue.on_task_started(&group2);
-
-        // queue: g1, g1, g1, g2, g2, g2; running:g1,g2. Since no group has a running number
-        // smaller than `group_concurrency_limit`, and each group's running number is
-        // the same, choose g1 since it comes first.
-        let task = queue.pop().unwrap();
-        assert_eq!(task.gid, group1);
-        queue.on_task_started(&group1);
-
-        // queue:g1, g1, g2, g2, g2; running:g1,g2,g1. Since no group has a running number
-        // smaller than `group_concurrency_limit`, and the running number of g2 is smaller,
-        // choose g2 since it comes first.
-        let task = queue.pop().unwrap();
-        assert_eq!(task.gid, group2);
-        queue.on_task_started(&group2);
-    }
-
-    #[test]
-    fn test_small_group_first_queue() {
-        let concurrency_limit = 2;
-        let small_group_tasks_limit = 2;
-        let mut queue = SmallGroupFirstQueue::new(concurrency_limit, small_group_tasks_limit);
-        let mut id = 1;
-
-        // high_priority_queue and low_priority_queue is both empty.
-        assert!(queue.pop().is_none());
-
-        // Push 2 tasks of `group1` into queue
-        let group1 = 1001;
-        for _ in 0..small_group_tasks_limit {
-            let mut task = Task::new(group1, move || {});
-            task.id = id;
-            id += 1;
-            queue.push(task);
-        }
-
-        // high:[g11,g12]; low:[]
-        assert!(queue.low_priority_queue.is_empty());
-
-        // low_priority_queue is empty
-        let task = queue.pop().unwrap();
-        let expect_task_id = 1;
-        assert_eq!(task.id, expect_task_id);
-        queue.on_task_started(&task.gid);
-
-        // high:[g12]; low:[];running:g11
-        for _ in 0..small_group_tasks_limit {
-            let mut task = Task::new(group1, move || {});
-            task.id = id;
-            id += 1;
-            queue.push(task);
-        }
-
-        // since g11(front in high) comes before g13(front in low),
-        // g11 would run first. high:[g12]; low:[g13,g14]; running:[g11]
-        assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
-        assert_eq!(queue.high_priority_queue.len(), small_group_tasks_limit - 1);
-
-        let group2 = 1002;
-        for _ in 0..small_group_tasks_limit {
-            let mut task = Task::new(group2, move || {});
-            task.id = id;
-            id += 1;
-            queue.push(task);
-        }
-        // high:[g12,g21,g22], low:[g13,g14], running:[g11]
-        let task = queue.pop().unwrap();
-        let expect_task_id = 2;
-        assert_eq!(task.id, expect_task_id);
-        queue.on_task_started(&task.gid);
-        // since g12(front in high) comes before g13(front in low),
-        // g12 would run first.
-        assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
-
-        // high:[g21,g22], low:[g13,g14], running:[g11,g12]
-        queue.on_task_finished(&task.gid);
-        // high:[g21,g22], low:[g13,g14], running:[g11]
-        let task = queue.pop().unwrap();
-        queue.on_task_started(&task.gid);
-        // since g13(font in low) comes before g21(front in high),
-        // and group g1's running number < group_concurrency_on_busy(2)
-        // g13 would run first.
-        assert_eq!(task.gid, group1);
-
-        // high:[g21,g22], low:[g14], running:[g11,g13]
-        let task = queue.pop().unwrap();
-        queue.on_task_started(&task.gid);
-        // since group g1's running number >= group_concurrency_on_busy(2),
-        // the task should be g21
-        assert_eq!(task.gid, group2);
-
-        // high:[g22], low:[g14], running:[g11,g13,g21]
-        let task = queue.pop().unwrap();
-        queue.on_task_started(&task.gid);
-        assert_eq!(task.gid, group2);
-
-        // high:[], low:[g14], running:[g11,g13,g21,g22]
-        let mut task = Task::new(group1, move || {});
-        task.id = id;
-        id += 1;
-        queue.push(task);
-        // since low_priority_queue_count of g1 > 0, g15 should be
-        // pushed into low_priority_queue
-        assert!(queue.high_priority_queue.is_empty());
-        assert_eq!(queue.low_priority_queue.len(), 2);
-
-        // push new job g23
-        // high:[], low:[g14,g15], running:[g11,g13,g21,g22]
-        let mut task = Task::new(group2, move || {});
-        task.id = id;
-        queue.push(task);
-        // since sum of  running_count and high_priority_queue_count for
-        // g2 is 2 >= small_group_tasks_limit, the task g23 would be pushed
-        // into low_priority_queue
-        assert!(queue.high_priority_queue.is_empty());
-
-        // high:[], low:[g14,g15,g23], running:[g11,g13,g21,g22]
-        let task = queue.pop().unwrap();
-        queue.on_task_started(&task.gid);
-        assert_eq!(task.gid, group1);
     }
 
     #[test]
