@@ -320,12 +320,19 @@ impl<T, C> Store<T, C> {
                         raft_wb: &mut WriteBatch,
                         region: &metapb::Region) {
         let raft_key = keys::raft_state_key(region.get_id());
-        if self.engine.get(&raft_key).unwrap().is_none() {
+        let raft_state = match self.raft_engine.get_msg(&raft_key).unwrap() {
             // it has been cleaned up.
-            return;
-        }
+            None => return,
+            Some(value) => value,
+        };
 
-        peer_storage::clear_meta(wb, raft_wb, &self.raft_engine, region.get_id()).unwrap();
+        peer_storage::clear_meta(wb,
+                                 raft_wb,
+                                 &self.raft_engine,
+                                 region.get_id(),
+                                 &raft_state,
+                                 true)
+            .unwrap();
         peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
     }
 
@@ -959,8 +966,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
 
+        // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
+        // otherwise, if program restart happen between two write, raft log will be removed,
+        // but region state may not changed in disk.
         if !wb.is_empty() {
-            // RegionLocalState, ApplyState, RaftLocalState
+            // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log);
             self.engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
@@ -969,7 +979,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if !raft_wb.is_empty() {
-            // Raft Log Entry
+            // RaftLocalState, Raft Log Entry
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log);
             self.raft_engine.write_opt(raft_wb, &write_opts).unwrap_or_else(|e| {

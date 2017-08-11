@@ -371,11 +371,11 @@ impl<T: Simulator> Cluster<T> {
         for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(&engines.engine, self.id(), id).unwrap();
+            bootstrap_store(engines, self.id(), id).unwrap();
         }
 
         for engines in self.engines.values() {
-            try!(write_prepare_bootstrap(&engines.engine, &region));
+            try!(write_prepare_bootstrap(engines, &region));
         }
 
         self.bootstrap_cluster(region);
@@ -391,11 +391,11 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for (&id, engines) in &self.engines {
-            bootstrap_store(&engines.engine, self.id(), id).unwrap();
+            bootstrap_store(engines, self.id(), id).unwrap();
         }
 
         let node_id = 1;
-        let region = prepare_bootstrap(&self.engines[&node_id].engine, 1, 1, 1).unwrap();
+        let region = prepare_bootstrap(&self.engines[&node_id], 1, 1, 1).unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid

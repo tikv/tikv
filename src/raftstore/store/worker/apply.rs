@@ -36,7 +36,8 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Store, cmd_resp, keys, util};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Snapshot, Peekable, Mutable};
-use raftstore::store::peer_storage::{self, write_initial_state, write_peer_state, compact_raft_log};
+use raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state,
+                                     compact_raft_log};
 use raftstore::store::peer::{parse_data_at, check_epoch, Peer};
 use raftstore::store::metrics::*;
 
@@ -810,7 +811,7 @@ impl ApplyDelegate {
         new_region.mut_region_epoch().set_version(region_ver);
         write_peer_state(ctx.wb, &region, PeerState::Normal)
             .and_then(|_| write_peer_state(ctx.wb, &new_region, PeerState::Normal))
-            .and_then(|_| write_initial_state(ctx.wb, new_region.get_id()))
+            .and_then(|_| write_initial_apply_state(ctx.wb, new_region.get_id()))
             .unwrap_or_else(|e| {
                 panic!("{} failed to save split region {:?}: {:?}",
                        self.tag,

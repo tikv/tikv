@@ -169,10 +169,10 @@ fn main() {
             let skip_tombstone = matches.is_present("skip-tombstone");
             match matches.value_of("region") {
                 Some(id) => {
-                    dump_region_info(&db, id.parse().unwrap(), skip_tombstone);
+                    dump_region_info(&db, &raft_db, id.parse().unwrap(), skip_tombstone);
                 }
                 None => {
-                    dump_all_region_info(&db, skip_tombstone);
+                    dump_all_region_info(&db, &raft_db, skip_tombstone);
                 }
             }
         } else {
@@ -359,7 +359,7 @@ fn dump_raft_log_entry(raft_db: DB, idx_key: &[u8]) {
     println!("{:?}", msg);
 }
 
-fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
+fn dump_region_info(db: &DB, raft_db: &DB, region_id: u64, skip_tombstone: bool) {
     let region_state_key = keys::region_state_key(region_id);
     let region_state: Option<RegionLocalState> = db.get_msg(&region_state_key).unwrap();
     if skip_tombstone &&
@@ -371,7 +371,7 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
 
     let raft_state_key = keys::raft_state_key(region_id);
     println!("raft state key: {}", escape(&raft_state_key));
-    let raft_state: Option<RaftLocalState> = db.get_msg(&raft_state_key).unwrap();
+    let raft_state: Option<RaftLocalState> = raft_db.get_msg(&raft_state_key).unwrap();
     println!("raft state: {:?}", raft_state);
 
     let apply_state_key = keys::apply_state_key(region_id);
@@ -409,10 +409,10 @@ fn dump_region_size(db: &DB, region_id: u64, cf: Option<&str>) {
     println!("region size: {}", convert_gbmb(size));
 }
 
-fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
+fn dump_all_region_info(db: &DB, raft_db: &DB, skip_tombstone: bool) {
     let region_ids = get_all_region_ids(db);
     for region_id in region_ids {
-        dump_region_info(db, region_id, skip_tombstone);
+        dump_region_info(db, raft_db, region_id, skip_tombstone);
     }
 }
 

@@ -28,8 +28,7 @@ use util::worker::Runnable;
 use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
-                                     JOB_STATUS_CANCELLING, JOB_STATUS_PENDING,
-                                     JOB_STATUS_RUNNING, clear_raft_entries};
+                                     JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
 use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyOptions, keys,
                        Peekable};
 use raftstore::store::snap::{Error, Result};
@@ -183,14 +182,6 @@ impl SnapContext {
         let end_key = keys::enc_end_key(&region);
         box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
 
-        // clear raft log. in case of reboot happen when we just put region state to Applying,
-        // but not clear raft log in time.
-        let raft_wb = WriteBatch::new();
-        box_try!(clear_raft_entries(&raft_wb, &self.raft_db, region_id));
-        if !raft_wb.is_empty() {
-            box_try!(self.raft_db.write(raft_wb));
-        }
-
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match box_try!(self.db.get_msg(&state_key)) {
             Some(state) => state,
@@ -216,8 +207,12 @@ impl SnapContext {
             write_batch_size: self.batch_size,
         };
         try!(s.apply(options));
+
+        let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
-        box_try!(self.db.put_msg(&region_key, &region_state));
+        box_try!(wb.put_msg(&region_key, &region_state));
+        box_try!(wb.delete(&keys::raft_state_key(region_id)));
+        box_try!(self.db.write(wb));
         info!("[region {}] apply new data takes {:?}",
               region_id,
               timer.elapsed());

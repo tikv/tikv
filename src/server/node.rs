@@ -118,9 +118,9 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         let bootstrapped = try!(self.check_cluster_bootstrapped());
-        let mut store_id = try!(self.check_store(&engines.engine));
+        let mut store_id = try!(self.check_store(&engines));
         if store_id == INVALID_ID {
-            store_id = try!(self.bootstrap_store(&engines.engine));
+            store_id = try!(self.bootstrap_store(&engines));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
             return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped, \
@@ -131,12 +131,12 @@ impl<C> Node<C>
         }
 
         self.store.set_id(store_id);
-        try!(self.check_prepare_bootstrap_cluster(&engines.engine));
+        try!(self.check_prepare_bootstrap_cluster(&engines));
         if !bootstrapped {
             // cluster is not bootstrapped, and we choose first store to bootstrap
             // prepare bootstrap.
-            let region = try!(self.prepare_bootstrap_cluster(&engines.engine, store_id));
-            try!(self.bootstrap_cluster(&engines.engine, region));
+            let region = try!(self.prepare_bootstrap_cluster(&engines, store_id));
+            try!(self.bootstrap_cluster(&engines, region));
         }
 
         // inform pd.
@@ -161,8 +161,8 @@ impl<C> Node<C>
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engine: &DB) -> Result<u64> {
-        let res = try!(engine.get_msg::<StoreIdent>(&keys::store_ident_key()));
+    fn check_store(&self, engines: &Engines) -> Result<u64> {
+        let res = try!(engines.engine.get_msg::<StoreIdent>(&keys::store_ident_key()));
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -189,16 +189,19 @@ impl<C> Node<C>
         Ok(id)
     }
 
-    fn bootstrap_store(&self, engine: &DB) -> Result<u64> {
+    fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
         let store_id = try!(self.alloc_id());
         info!("alloc store id {} ", store_id);
 
-        try!(store::bootstrap_store(engine, self.cluster_id, store_id));
+        try!(store::bootstrap_store(engines, self.cluster_id, store_id));
 
         Ok(store_id)
     }
 
-    pub fn prepare_bootstrap_cluster(&self, engine: &DB, store_id: u64) -> Result<metapb::Region> {
+    pub fn prepare_bootstrap_cluster(&self,
+                                     engines: &Engines,
+                                     store_id: u64)
+                                     -> Result<metapb::Region> {
         let region_id = try!(self.alloc_id());
         info!("alloc first region id {} for cluster {}, store {}",
               region_id,
@@ -209,12 +212,12 @@ impl<C> Node<C>
               peer_id,
               region_id);
 
-        let region = try!(store::prepare_bootstrap(engine, store_id, region_id, peer_id));
+        let region = try!(store::prepare_bootstrap(engines, store_id, region_id, peer_id));
         Ok(region)
     }
 
-    fn check_prepare_bootstrap_cluster(&self, engine: &DB) -> Result<()> {
-        let res = try!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
+    fn check_prepare_bootstrap_cluster(&self, engines: &Engines) -> Result<()> {
+        let res = try!(engines.engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
         if res.is_none() {
             return Ok(());
         }
@@ -225,9 +228,9 @@ impl<C> Node<C>
                 Ok(region) => {
                     if region.get_id() == first_region.get_id() {
                         try!(check_region_epoch(&region, &first_region));
-                        try!(store::clear_prepare_bootstrap_state(engine));
+                        try!(store::clear_prepare_bootstrap_state(engines));
                     } else {
-                        try!(store::clear_prepare_bootstrap(engine, first_region.get_id()));
+                        try!(store::clear_prepare_bootstrap(engines, first_region.get_id()));
                     }
                     return Ok(());
                 }
@@ -241,18 +244,18 @@ impl<C> Node<C>
         Err(box_err!("check cluster prepare bootstrapped failed"))
     }
 
-    fn bootstrap_cluster(&mut self, engine: &DB, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(&mut self, engines: &Engines, region: metapb::Region) -> Result<()> {
         let region_id = region.get_id();
         match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
             Err(PdError::ClusterBootstrapped(_)) => {
                 error!("cluster {} is already bootstrapped", self.cluster_id);
-                try!(store::clear_prepare_bootstrap(engine, region_id));
+                try!(store::clear_prepare_bootstrap(engines, region_id));
                 Ok(())
             }
             // TODO: should we clean region for other errors too?
             Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
             Ok(_) => {
-                try!(store::clear_prepare_bootstrap_state(engine));
+                try!(store::clear_prepare_bootstrap_state(engines));
                 info!("bootstrap cluster {} ok", self.cluster_id);
                 Ok(())
             }

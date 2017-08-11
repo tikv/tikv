@@ -17,6 +17,7 @@ use kvproto::metapb;
 use raftstore::Result;
 use super::keys;
 use super::engine::{Iterable, Mutable};
+use super::store::Engines;
 use super::peer_storage::write_initial_state;
 use storage::CF_DEFAULT;
 
@@ -39,10 +40,10 @@ fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Re
 }
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
-pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()> {
+pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::new();
 
-    if !try!(is_range_empty(engine, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)) {
+    if !try!(is_range_empty(&engines.engine, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)) {
         return Err(box_err!("store is not empty and has already had data."));
     }
 
@@ -51,44 +52,46 @@ pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()
     ident.set_cluster_id(cluster_id);
     ident.set_store_id(store_id);
 
-    engine.put_msg(&ident_key, &ident)
+    engines.engine.put_msg(&ident_key, &ident)
 }
 
 // Write first region meta and prepare state.
-pub fn write_prepare_bootstrap(engine: &DB, region: &metapb::Region) -> Result<()> {
+pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::new();
     state.set_region(region.clone());
 
     let wb = WriteBatch::new();
+    let raft_wb = WriteBatch::new();
     try!(wb.put_msg(&keys::region_state_key(region.get_id()), &state));
-    try!(write_initial_state(&wb, region.get_id()));
+    try!(write_initial_state(&wb, &raft_wb, region.get_id()));
     try!(wb.put_msg(&keys::prepare_bootstrap_key(), region));
-    try!(engine.write(wb));
+    try!(engines.engine.write(wb));
+    try!(engines.raft_engine.write(raft_wb));
     Ok(())
 }
 
 // Clear first region meta and prepare state.
-pub fn clear_prepare_bootstrap(engine: &DB, region_id: u64) -> Result<()> {
+pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> {
     let wb = WriteBatch::new();
 
     try!(wb.delete(&keys::region_state_key(region_id)));
     try!(wb.delete(&keys::prepare_bootstrap_key()));
     // should clear raft initial state too.
-    try!(wb.delete(&keys::raft_state_key(region_id)));
     try!(wb.delete(&keys::apply_state_key(region_id)));
 
-    try!(engine.write(wb));
+    try!(engines.raft_engine.delete(&keys::raft_state_key(region_id)));
+    try!(engines.engine.write(wb));
     Ok(())
 }
 
 // Clear prepare state
-pub fn clear_prepare_bootstrap_state(engine: &DB) -> Result<()> {
-    try!(engine.delete(&keys::prepare_bootstrap_key()));
+pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
+    try!(engines.engine.delete(&keys::prepare_bootstrap_key()));
     Ok(())
 }
 
 // Prepare bootstrap.
-pub fn prepare_bootstrap(engine: &DB,
+pub fn prepare_bootstrap(engines: &Engines,
                          store_id: u64,
                          region_id: u64,
                          peer_id: u64)
@@ -105,7 +108,7 @@ pub fn prepare_bootstrap(engine: &DB,
     peer.set_id(peer_id);
     region.mut_peers().push(peer);
 
-    try!(write_prepare_bootstrap(engine, &region));
+    try!(write_prepare_bootstrap(engines, &region));
 
     Ok(region)
 }
@@ -113,36 +116,42 @@ pub fn prepare_bootstrap(engine: &DB,
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use tempdir::TempDir;
 
     use super::*;
     use util::rocksdb;
     use raftstore::store::engine::Peekable;
-    use raftstore::store::keys;
+    use raftstore::store::{keys, Engines};
     use storage::CF_DEFAULT;
 
     #[test]
     fn test_bootstrap() {
         let path = TempDir::new("var").unwrap();
-        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let raft_path = path.path().join("raft");
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT])
+            .unwrap());
+        let raft_engine = Arc::new(rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT])
+            .unwrap());
+        let engines = Engines::new(engine.clone(), raft_engine.clone());
 
-        assert!(bootstrap_store(&engine, 1, 1).is_ok());
-        assert!(bootstrap_store(&engine, 1, 1).is_err());
+        assert!(bootstrap_store(&engines, 1, 1).is_ok());
+        assert!(bootstrap_store(&engines, 1, 1).is_err());
 
-        assert!(prepare_bootstrap(&engine, 1, 1, 1).is_ok());
+        assert!(prepare_bootstrap(&engines, 1, 1, 1).is_ok());
         assert!(engine.get_value(&keys::region_state_key(1)).unwrap().is_some());
         assert!(engine.get_value(&keys::prepare_bootstrap_key()).unwrap().is_some());
-        assert!(engine.get_value(&keys::raft_state_key(1)).unwrap().is_some());
+        assert!(raft_engine.get_value(&keys::raft_state_key(1)).unwrap().is_some());
         assert!(engine.get_value(&keys::apply_state_key(1)).unwrap().is_some());
 
-        assert!(clear_prepare_bootstrap_state(&engine).is_ok());
-        assert!(clear_prepare_bootstrap(&engine, 1).is_ok());
+        assert!(clear_prepare_bootstrap_state(&engines).is_ok());
+        assert!(clear_prepare_bootstrap(&engines, 1).is_ok());
         assert!(is_range_empty(&engine,
                                CF_DEFAULT,
                                &keys::region_meta_prefix(1),
                                &keys::region_meta_prefix(2))
             .unwrap());
-        assert!(is_range_empty(&engine,
+        assert!(is_range_empty(&raft_engine,
                                CF_DEFAULT,
                                &keys::region_raft_prefix(1),
                                &keys::region_raft_prefix(2))

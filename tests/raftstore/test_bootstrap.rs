@@ -54,6 +54,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let engine = Arc::new(rocksdb::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS).unwrap());
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
     let raft_engine = Arc::new(rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), &[]).unwrap());
+    let engines = Engines::new(engine.clone(), raft_engine.clone());
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
     let mut node = Node::new(&mut event_loop, &cfg, pd_client.clone());
@@ -68,8 +69,8 @@ fn test_node_bootstrap_with_prepared_data() {
 
     // now anthoer node at same time begin bootstrap node, but panic after prepared bootstrap
     // now rocksDB must have some prepare data
-    bootstrap_store(&engine, 0, 1).unwrap();
-    let region = node.prepare_bootstrap_cluster(&engine, 1).unwrap();
+    bootstrap_store(&engines, 0, 1).unwrap();
+    let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
     assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
         .unwrap()
         .is_some());
@@ -77,7 +78,6 @@ fn test_node_bootstrap_with_prepared_data() {
     assert!(engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_some());
 
     // try to restart this node, will clear the prepare data
-    let engines = Engines::new(engine.clone(), raft_engine.clone());
     node.start(event_loop,
                engines,
                simulate_trans,
