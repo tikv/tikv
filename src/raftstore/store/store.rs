@@ -277,6 +277,14 @@ impl<T, C> Store<T, C> {
                 self.clear_stale_meta(&mut wb, &mut raft_wb, region);
                 return Ok(true);
             }
+            if local_state.get_state() == PeerState::Applying {
+                // in case of restart happen when we just write region state to Applying,
+                // but not write raft_local_state to raft rocksdb in time.
+                try!(peer_storage::recover_from_applying_state(&self.engine,
+                                                               &self.raft_engine,
+                                                               region_id));
+            }
+
             let mut peer = try!(Peer::create(self, region));
 
             if local_state.get_state() == PeerState::Applying {

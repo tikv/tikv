@@ -308,55 +308,49 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_raft_to(&self, wb: &mut WriteBatch) -> Result<()> {
+    pub fn save_raft_state_to(&self, wb: &mut WriteBatch) -> Result<()> {
         try!(wb.put_msg(&keys::raft_state_key(self.region_id), &self.raft_state));
         Ok(())
     }
 
     #[inline]
-    pub fn save_apply_to(&self, wb: &mut WriteBatch) -> Result<()> {
+    pub fn save_apply_state_to(&self, wb: &mut WriteBatch) -> Result<()> {
         try!(wb.put_msg(&keys::apply_state_key(self.region_id), &self.apply_state));
         Ok(())
     }
 }
 
-fn init_raft_state(engine: &DB, raft_engine: &DB, region: &Region) -> Result<RaftLocalState> {
-    let raft_state_key = keys::raft_state_key(region.get_id());
-    let region_state: Option<RegionLocalState> =
-        try!(engine.get_msg(&keys::region_state_key(region.get_id())));
+pub fn recover_from_applying_state(engine: &DB, raft_engine: &DB, region_id: u64) -> Result<()> {
+    let raft_wb = WriteBatch::new();
+    box_try!(clear_raft_data(&raft_wb, raft_engine, region_id));
 
-    // in case of restart happen when we just write region state to Applying,
-    // but not write raft_local_state to raft rocksdb in time.
-    if region_state.is_some() && region_state.as_ref().unwrap().get_state() == PeerState::Applying {
-        let raft_wb = WriteBatch::new();
-        box_try!(clear_raft_data(&raft_wb, raft_engine, region.get_id()));
+    let state_key = keys::raft_state_key(region_id);
+    let raft_state: RaftLocalState = match box_try!(engine.get_msg(&state_key)) {
+        Some(state) => state,
+        None => {
+            return Err(box_err!("[region {}] failed to get raftstate from {}, when recover from \
+                                 applying state",
+                                region_id,
+                                escape(&state_key)));
+        }
+    };
+    try!(raft_wb.put_msg(&state_key, &raft_state));
+    try!(raft_engine.write(raft_wb));
+    Ok(())
+}
 
-        let raft_state: RaftLocalState = match box_try!(engine.get_msg(&raft_state_key)) {
-            Some(state) => state,
-            None => {
-                return Err(box_err!("failed to get raftstate from {}", escape(&raft_state_key)))
-            }
-        };
-        try!(raft_wb.put_msg(&raft_state_key, &raft_state));
-        try!(raft_engine.write(raft_wb));
-        return Ok(raft_state);
-    }
-
-    Ok(match try!(raft_engine.get_msg(&raft_state_key)) {
+fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> {
+    let state_key = keys::raft_state_key(region.get_id());
+    Ok(match try!(raft_engine.get_msg(&state_key)) {
         Some(s) => s,
         None => {
             let mut raft_state = RaftLocalState::new();
-            if region_state.is_some() && region_state.unwrap().get_state() == PeerState::Normal {
-                // new split region, init raft state when region state is Normal.
+            if !region.get_peers().is_empty() {
+                // new split region
                 raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
                 raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
                 raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-                try!(raft_engine.put_msg(&raft_state_key, &raft_state));
-                return Ok(raft_state);
-            }
-
-            if !region.get_peers().is_empty() {
-                raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
+                try!(raft_engine.put_msg(&state_key, &raft_state));
             }
             raft_state
         }
@@ -416,7 +410,7 @@ impl PeerStorage {
         debug!("creating storage on {} for {:?}",
                raft_engine.path(),
                region);
-        let raft_state = try!(init_raft_state(&engine, &raft_engine, region));
+        let raft_state = try!(init_raft_state(&raft_engine, region));
         let apply_state = try!(init_apply_state(&engine, region));
         if raft_state.get_last_index() < apply_state.get_applied_index() {
             panic!("{} unexpected raft log index: last_index {} < applied_index {}",
@@ -968,7 +962,7 @@ impl PeerStorage {
                                 ready: &Ready)
                                 -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let has_apply_snapshot = if raft::is_empty_snap(&ready.snapshot) {
+        let applying_new_snapshot = if raft::is_empty_snap(&ready.snapshot) {
             false
         } else {
             try!(self.apply_snapshot(&mut ctx, &ready.snapshot, &ready_ctx.wb, &ready_ctx.raft_wb));
@@ -988,16 +982,16 @@ impl PeerStorage {
         }
 
         if ctx.raft_state != self.raft_state {
-            try!(ctx.save_raft_to(&mut ready_ctx.raft_wb));
-            if has_apply_snapshot {
+            try!(ctx.save_raft_state_to(&mut ready_ctx.raft_wb));
+            if applying_new_snapshot {
                 // in case of restart happen when we just write region state to Applying,
                 // but not write raft_local_state to raft rocksdb in time.
-                try!(ctx.save_raft_to(&mut ready_ctx.wb));
+                try!(ctx.save_raft_state_to(&mut ready_ctx.wb));
             }
         }
 
         if ctx.apply_state != self.apply_state {
-            try!(ctx.save_apply_to(&mut ready_ctx.wb));
+            try!(ctx.save_apply_state_to(&mut ready_ctx.wb));
         }
 
         Ok(ctx)
@@ -1281,7 +1275,7 @@ mod test {
         ctx.apply_state.mut_truncated_state().set_index(ents[0].get_index());
         ctx.apply_state.mut_truncated_state().set_term(ents[0].get_term());
         ctx.apply_state.set_applied_index(ents.last().unwrap().get_index());
-        ctx.save_apply_to(&mut wb).unwrap();
+        ctx.save_apply_state_to(&mut wb).unwrap();
         store.raft_engine.write(raft_wb).expect("");
         store.engine.write(wb).expect("");
         store.raft_state = ctx.raft_state;
@@ -1293,7 +1287,7 @@ mod test {
         let mut ctx = InvokeContext::new(store);
         let mut raft_wb = WriteBatch::new();
         store.append(&mut ctx, ents, &mut raft_wb).unwrap();
-        ctx.save_raft_to(&mut raft_wb).unwrap();
+        ctx.save_raft_state_to(&mut raft_wb).unwrap();
         store.raft_engine.write(raft_wb).expect("");
         store.raft_state = ctx.raft_state;
     }
@@ -1464,7 +1458,7 @@ mod test {
             }
             if res.is_ok() {
                 let mut wb = WriteBatch::new();
-                ctx.save_apply_to(&mut wb).unwrap();
+                ctx.save_apply_state_to(&mut wb).unwrap();
                 store.engine.write(wb).expect("");
             }
         }
@@ -1532,8 +1526,8 @@ mod test {
         ctx.raft_state.set_hard_state(hs);
         ctx.raft_state.set_last_index(7);
         ctx.apply_state.set_applied_index(7);
-        ctx.save_raft_to(&mut raft_wb).unwrap();
-        ctx.save_apply_to(&mut wb).unwrap();
+        ctx.save_raft_state_to(&mut raft_wb).unwrap();
+        ctx.save_apply_state_to(&mut wb).unwrap();
         s.engine.write(wb).unwrap();
         s.raft_engine.write(raft_wb).unwrap();
         s.apply_state = ctx.apply_state;
@@ -1542,7 +1536,7 @@ mod test {
         let term = s.term(7).unwrap();
         compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
         wb = WriteBatch::new();
-        ctx.save_apply_to(&mut wb).unwrap();
+        ctx.save_apply_state_to(&mut wb).unwrap();
         s.engine.write(wb).unwrap();
         s.apply_state = ctx.apply_state;
         let (tx, rx) = channel();
