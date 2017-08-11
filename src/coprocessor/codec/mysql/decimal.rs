@@ -781,7 +781,7 @@ pub struct Decimal {
     /// The number of calculated or printed result fraction digits.
     result_frac_cnt: u8,
 
-    pub negative: bool,
+    negative: bool,
 
     /// An array of u32 words.
     /// A word is an u32 value can hold 9 digits.(0 <= word < wordBase)
@@ -1001,16 +1001,10 @@ impl Decimal {
 
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
-    pub fn convert_to(self, ctx: &EvalContext, flen: i32, decimal: i32) -> Result<Decimal> {
-        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
-            return Ok(self);
-        }
-
-        let decimal = decimal as u8;
-        let flen = flen as u8;
+    pub fn convert_to(self, ctx: &EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
         let (prec, frac) = self.prec_and_frac();
-        if !self.is_zero() && prec - frac > (flen - decimal) as u8 {
-            return Ok(max_or_min_dec(self.negative, flen as u8, decimal));
+        if !self.is_zero() && prec - frac > flen - decimal {
+            return Ok(max_or_min_dec(self.negative, flen, decimal));
             // TODO:select (cast 111 as decimal(1)) causes a warning in MySQL.
         }
 

@@ -154,7 +154,12 @@ impl FnCall {
             let uval = try!(convert_int_to_uint(val, u64::MAX, types::LONG_LONG));
             Decimal::from(uval)
         };
-        let res = try!(res.convert_to(ctx, field_type.get_flen(), field_type.get_decimal()));
+        let flen = field_type.get_flen();
+        let decimal = field_type.get_decimal();
+        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+            return Ok(Some(res));
+        }
+        let res = try!(res.convert_to(ctx, flen as u8, decimal as u8));
         Ok(Some(res))
     }
 
