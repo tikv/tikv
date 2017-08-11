@@ -16,7 +16,7 @@ use std::ops::DerefMut;
 use std::io;
 use std::{slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::vec_deque::{Iter, VecDeque};
@@ -36,14 +36,13 @@ pub mod rocksdb;
 pub mod config;
 pub mod buf;
 pub mod transport;
-pub mod time_monitor;
 pub mod file;
 pub mod file_log;
-pub mod clocktime;
 pub mod metrics;
 pub mod threadpool;
 pub mod collections;
 pub mod properties;
+pub mod time;
 
 #[cfg(target_os="linux")]
 mod thread_metrics;
@@ -256,48 +255,6 @@ pub fn as_slice<T>(t: &T) -> &[T] {
     }
 }
 
-pub struct SlowTimer {
-    slow_time: Duration,
-    t: Instant,
-}
-
-impl SlowTimer {
-    pub fn new() -> SlowTimer {
-        SlowTimer::default()
-    }
-
-    pub fn from(slow_time: Duration) -> SlowTimer {
-        SlowTimer {
-            slow_time: slow_time,
-            t: Instant::now(),
-        }
-    }
-
-    pub fn from_secs(secs: u64) -> SlowTimer {
-        SlowTimer::from(Duration::from_secs(secs))
-    }
-
-    pub fn from_millis(millis: u64) -> SlowTimer {
-        SlowTimer::from(Duration::from_millis(millis))
-    }
-
-    pub fn elapsed(&self) -> Duration {
-        self.t.elapsed()
-    }
-
-    pub fn is_slow(&self) -> bool {
-        self.elapsed() >= self.slow_time
-    }
-}
-
-const DEFAULT_SLOW_SECS: u64 = 1;
-
-impl Default for SlowTimer {
-    fn default() -> SlowTimer {
-        SlowTimer::from_secs(DEFAULT_SLOW_SECS)
-    }
-}
-
 /// `TryInsertWith` is a helper trait for `Entry` to accept a failable closure.
 pub trait TryInsertWith<'a, V, E> {
     fn or_try_insert_with<F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>;
@@ -313,30 +270,6 @@ impl<'a, T: 'a, V: 'a, E> TryInsertWith<'a, V, E> for Entry<'a, T, V> {
             }
         }
     }
-}
-
-/// Convert Duration to milliseconds.
-#[inline]
-pub fn duration_to_ms(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() * 1_000 + (nanos / 1_000_000)
-}
-
-/// Convert Duration to seconds.
-#[inline]
-pub fn duration_to_sec(d: Duration) -> f64 {
-    let nanos = d.subsec_nanos() as f64;
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() as f64 + (nanos / 1_000_000_000.0)
-}
-
-/// Convert Duration to nanoseconds.
-#[inline]
-pub fn duration_to_nanos(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() * 1_000_000_000 + nanos
 }
 
 pub fn get_tag_from_thread_name() -> Option<String> {
@@ -509,9 +442,8 @@ pub fn is_even(n: usize) -> bool {
 mod tests {
     use std::collections::*;
     use std::net::{SocketAddr, AddrParseError};
-    use std::time::Duration;
     use std::rc::Rc;
-    use std::{f64, cmp};
+    use std::cmp;
     use std::sync::atomic::{AtomicBool, Ordering};
     use kvproto::eraftpb::Entry;
     use protobuf::Message;
@@ -561,19 +493,6 @@ mod tests {
             queue.swap_remove_front(|_| true).unwrap();
         }
         assert_eq!(None, queue.swap_remove_front(|_| true));
-    }
-
-    #[test]
-    fn test_duration_to() {
-        let tbl = vec![0, 100, 1_000, 5_000, 9999, 1_000_000, 1_000_000_000];
-        for ms in tbl {
-            let d = Duration::from_millis(ms);
-            assert_eq!(ms, duration_to_ms(d));
-            let exp_sec = ms as f64 / 1000.0;
-            let act_sec = duration_to_sec(d);
-            assert!((act_sec - exp_sec).abs() < f64::EPSILON);
-            assert_eq!(ms * 1_000_000, duration_to_nanos(d));
-        }
     }
 
     #[test]

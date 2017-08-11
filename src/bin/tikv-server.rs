@@ -17,6 +17,9 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 
 #![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
+// TODO: remove this once rust-lang/rust#43268 is resolved.
+#![allow(logic_bug)]
 
 #[macro_use]
 extern crate clap;
@@ -70,7 +73,7 @@ use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
-use tikv::util::time_monitor::TimeMonitor;
+use tikv::util::time::Monitor;
 
 fn exit_with_err<E: Error>(e: E) -> ! {
     exit_with_msg(format!("{:?}", e))
@@ -382,6 +385,6 @@ fn main() {
     config.server.cluster_id = cluster_id;
     info!("connect to PD cluster {}", cluster_id);
 
-    let _m = TimeMonitor::default();
+    let _m = Monitor::default();
     run_raft_server(pd_client, &config);
 }
