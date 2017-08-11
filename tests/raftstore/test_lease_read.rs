@@ -19,8 +19,6 @@ use std::sync::atomic::*;
 use std::time::*;
 use std::collections::HashSet;
 
-use time::Duration as TimeDuration;
-
 use kvproto::eraftpb::{MessageType, ConfChangeType};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::CmdType;
@@ -29,6 +27,7 @@ use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::Peekable;
 use tikv::util::{escape, HandyRwLock};
+use tikv::util::config::*;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -128,12 +127,12 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    cluster.cfg.raft_store.raft_base_tick_interval = 50;
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
     // Use large election timeout to make leadership stable.
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10000;
 
     let max_lease = Duration::from_secs(2);
-    cluster.cfg.raft_store.raft_store_max_leader_lease = TimeDuration::from_std(max_lease).unwrap();
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
     let node_id = 1u64;
     let store_id = 1u64;
@@ -221,9 +220,9 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    cluster.cfg.raft_store.raft_base_tick_interval = 50;
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
 
-    let election_timeout = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval) *
+    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0 *
                            cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     let node_id = 3u64;
     let store_id = 3u64;
@@ -268,12 +267,11 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    cluster.cfg.raft_store.raft_base_tick_interval = 50;
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
 
-    let base_tick = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval);
+    let base_tick = cluster.cfg.raft_store.raft_base_tick_interval.0;
     let election_timeout = base_tick * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
-    cluster.cfg.raft_store.raft_store_max_leader_lease = TimeDuration::from_std(election_timeout)
-        .unwrap();
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(election_timeout);
 
     let store_id = 1u64;
     let peer = new_peer(store_id, 1);

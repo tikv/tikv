@@ -24,6 +24,7 @@
 #![feature(const_fn)]
 
 #![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
 
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;

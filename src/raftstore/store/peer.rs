@@ -311,7 +311,7 @@ impl Peer {
             peers: vec![],
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
-            max_size_per_msg: cfg.raft_max_size_per_msg,
+            max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: true,
@@ -349,7 +349,7 @@ impl Peer {
                 hash: vec![],
             },
             raft_log_size_hint: 0,
-            raft_entry_max_size: cfg.raft_entry_max_size,
+            raft_entry_max_size: cfg.raft_entry_max_size.0,
             cfg: cfg,
             leader_lease_expired_time: None,
             peer_stat: PeerStat::default(),
@@ -605,7 +605,7 @@ impl Peer {
         // "lease = max_lease - (quorum_commit_ts - send_to_quorum_ts)"
         // And the expired timestamp for that leader lease is "quorum_commit_ts + lease",
         // which is "send_to_quorum_ts + max_lease" in short.
-        send_to_quorum_ts + self.cfg.raft_store_max_leader_lease
+        send_to_quorum_ts + self.cfg.raft_store_max_leader_lease()
     }
 
     fn on_role_changed(&mut self, ready: &Ready, worker: &FutureWorker<PdTask>) {
@@ -1231,7 +1231,7 @@ impl Peer {
 
         let renew_lease_time = monotonic_raw_now();
         if let Some(read) = self.pending_reads.reads.back_mut() {
-            if read.renew_lease_time + self.cfg.raft_store_max_leader_lease > renew_lease_time {
+            if read.renew_lease_time + self.cfg.raft_store_max_leader_lease() > renew_lease_time {
                 read.cmds.push((req, cb));
                 return false;
             }
@@ -1487,7 +1487,7 @@ impl Peer {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
-            down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration),
+            down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.last_written_bytes,
             written_keys: self.peer_stat.last_written_keys,

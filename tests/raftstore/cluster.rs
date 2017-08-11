@@ -24,6 +24,7 @@ use futures::Future;
 
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
+use tikv::config::TiKvConfig;
 use tikv::storage::ALL_CFS;
 use super::util::*;
 use kvproto::pdpb;
@@ -34,7 +35,6 @@ use kvproto::errorpb::Error as PbError;
 use tikv::pd::PdClient;
 use tikv::util::{HandyRwLock, escape, rocksdb};
 use tikv::util::transport::SendCh;
-use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use tikv::raftstore::store::keys::data_key;
 use super::transport_simulate::*;
@@ -52,7 +52,7 @@ pub trait Simulator {
     // TODO: we will rename node name here because now we use store only.
     fn run_node(&mut self,
                 node_id: u64,
-                cfg: ServerConfig,
+                cfg: TiKvConfig,
                 engine: Arc<DB>,
                 raft_engine: Arc<DB>)
                 -> u64;
@@ -78,7 +78,7 @@ pub trait Simulator {
 }
 
 pub struct Cluster<T: Simulator> {
-    pub cfg: ServerConfig,
+    pub cfg: TiKvConfig,
     leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
     dbs: Vec<Engines>,
@@ -99,7 +99,7 @@ impl<T: Simulator> Cluster<T> {
                pd_client: Arc<TestPdClient>)
                -> Cluster<T> {
         let mut c = Cluster {
-            cfg: new_server_config(id),
+            cfg: new_tikv_config(id),
             leaders: HashMap::new(),
             paths: vec![],
             dbs: vec![],
@@ -114,7 +114,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn id(&self) -> u64 {
-        self.cfg.cluster_id
+        self.cfg.server.cluster_id
     }
 
     fn create_engines(&mut self, count: usize, cfs: &[&str]) {

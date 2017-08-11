@@ -25,6 +25,7 @@ use tikv::pd::PdClient;
 use tikv::storage::{CF_DEFAULT, CF_WRITE};
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
+use tikv::util::config::*;
 use super::transport_simulate::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
@@ -144,11 +145,11 @@ fn put_cf_till_size<T: Simulator>(cluster: &mut Cluster<T>,
 }
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.split_region_check_tick_interval = 100;
-    cluster.cfg.raft_store.region_max_size = REGION_MAX_SIZE;
-    cluster.cfg.raft_store.region_split_size = REGION_SPLIT_SIZE;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_max_size = ReadableSize(REGION_MAX_SIZE);
+    cluster.cfg.raft_store.region_split_size = ReadableSize(REGION_SPLIT_SIZE);
 
-    let check_size_diff = cluster.cfg.raft_store.region_check_size_diff;
+    let check_size_diff = cluster.cfg.raft_store.region_split_check_diff.0;
     let mut range = 1..;
 
     cluster.run();
@@ -346,7 +347,7 @@ fn test_server_split_overlap_snapshot() {
 
 fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
     cluster.cfg.raft_store.raft_log_gc_threshold = 5;
 
@@ -410,7 +411,7 @@ fn test_server_apply_new_version_snapshot() {
 
 fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     // disable raft log gc.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 60000;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -489,11 +490,11 @@ fn test_server_split_with_stale_peer() {
 fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
     let region_max_size = 2000;
     let region_split_size = 1000;
-    cluster.cfg.raft_store.split_region_check_tick_interval = 100;
-    cluster.cfg.raft_store.region_check_size_diff = 10;
-    cluster.cfg.raft_store.region_max_size = region_max_size;
-    cluster.cfg.raft_store.region_split_size = region_split_size;
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20000;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize(10);
+    cluster.cfg.raft_store.region_max_size = ReadableSize(region_max_size);
+    cluster.cfg.raft_store.region_split_size = ReadableSize(region_split_size);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
 
     let mut range = 1..;
 
@@ -594,7 +595,8 @@ fn test_node_split_stale_epoch_right_derive() {
 // `test_quick_election_after_split` is a helper function for testing this feature.
 fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
     // Calculate the reserved time before a new campaign after split.
-    let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval * 2);
+    let reserved_time =
+        Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval.as_millis() * 2);
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");

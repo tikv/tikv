@@ -29,10 +29,10 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::eraftpb::MessageType;
+use tikv::config::TiKvConfig;
 use tikv::raftstore::{Result, Error};
 use tikv::util::HandyRwLock;
 use tikv::util::transport::SendCh;
-use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use tikv::raft::SnapshotStatus;
 use super::pd::TestPdClient;
@@ -158,7 +158,7 @@ impl NodeCluster {
 impl Simulator for NodeCluster {
     fn run_node(&mut self,
                 node_id: u64,
-                cfg: ServerConfig,
+                cfg: TiKvConfig,
                 engine: Arc<DB>,
                 raft_engine: Arc<DB>)
                 -> u64 {
@@ -168,7 +168,10 @@ impl Simulator for NodeCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
-        let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
+        let mut node = Node::new(&mut event_loop,
+                                 &cfg.server,
+                                 &cfg.raft_store,
+                                 self.pd_client.clone());
 
         let (snap_mgr, tmp) = if node_id == 0 ||
                                  !self.trans.rl().snap_paths.contains_key(&node_id) {
