@@ -338,7 +338,7 @@ stats-dump-period = "10m"
 # compaction-pri = 0
 
 [rocksdb.lockcf]
-# compression-per-level = "no:no:no:no:no:no:no"
+# compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
 # block-size = "16KB"
 # write-buffer-size = "128MB"
 # max-write-buffer-number = 5
