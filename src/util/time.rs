@@ -149,24 +149,13 @@ impl Drop for Monitor {
     }
 }
 
-#[inline]
-fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
-    if later >= earlier {
-        Duration::new((later.sec - earlier.sec) as u64,
-                      (later.nsec - earlier.nsec) as u32)
-    } else {
-        panic!("system time jumped back, {:.9} -> {:.9}",
-               earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
-               later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64);
-    }
-}
-
 /// `monotonic_raw_now` returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
 use self::inner::monotonic_now;
 use self::inner::monotonic_coarse_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+const NANOSECONDS_PER_MILLISECOND: i32 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
@@ -228,7 +217,7 @@ mod inner {
 /// A measurement of a monotonically increasing clock.
 /// It's similar and meat to replace `std::time::Instant`,
 /// for providing extra features.
-#[derive(Copy, Clone, Debug, Eq)]
+#[derive(Copy, Clone, Debug)]
 pub enum Instant {
     Monotonic(Timespec),
     MonotonicCoarse(Timespec),
@@ -247,44 +236,74 @@ impl Instant {
         match *self {
             Instant::Monotonic(t) => {
                 let now = monotonic_now();
-                elapsed_duration(now, t)
+                Instant::elapsed_duration(now, t)
             }
             Instant::MonotonicCoarse(t) => {
                 let now = monotonic_coarse_now();
-                elapsed_duration(now, t)
+                Instant::elapsed_duration_coarse(now, t)
             }
         }
     }
 
     pub fn duration_since(&self, earlier: Instant) -> Duration {
-        let later = self.get_timespec();
-        let earlier = earlier.get_timespec();
-        elapsed_duration(later, earlier)
+        match (*self, earlier) {
+            (Instant::Monotonic(later), Instant::Monotonic(earlier)) => {
+                Instant::elapsed_duration(later, earlier)
+            }
+            (Instant::MonotonicCoarse(later), Instant::MonotonicCoarse(earlier)) => {
+                Instant::elapsed_duration_coarse(later, earlier)
+            }
+            _ => {
+                panic!("duration between different types of Instants");
+            }
+        }
     }
 
-    fn get_timespec(&self) -> Timespec {
-        match *self {
-            Instant::Monotonic(t) |
-            Instant::MonotonicCoarse(t) => t,
+    fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
+        if later >= earlier {
+            Duration::new((later.sec - earlier.sec) as u64,
+                          (later.nsec - earlier.nsec) as u32)
+        } else {
+            panic!("system time jumped back, {:.9} -> {:.9}",
+                   earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
+                   later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64);
+        }
+    }
+
+    fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
+        let sec = later.sec - earlier.sec;
+        let later_nsec = later.nsec - later.nsec % NANOSECONDS_PER_MILLISECOND;
+        let earlier_nsec = earlier.nsec - earlier.nsec % NANOSECONDS_PER_MILLISECOND;
+        if sec > 0 || (sec == 0 && later_nsec >= earlier_nsec) {
+            Duration::new(sec as u64, (later_nsec - earlier_nsec) as u32)
+        } else {
+            panic!("system time jumped back, {:.3} -> {:.3}",
+                   earlier.sec as f64 + earlier_nsec as f64 / NANOSECONDS_PER_SECOND as f64,
+                   later.sec as f64 + later_nsec as f64 / NANOSECONDS_PER_SECOND as f64);
         }
     }
 }
 
 impl PartialEq for Instant {
     fn eq(&self, other: &Instant) -> bool {
-        self.get_timespec().eq(&other.get_timespec())
-    }
-}
-
-impl Ord for Instant {
-    fn cmp(&self, other: &Instant) -> Ordering {
-        self.get_timespec().cmp(&other.get_timespec())
+        match (*self, *other) {
+            (Instant::Monotonic(this), Instant::Monotonic(other)) |
+            (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => this.eq(&other),
+            _ => false,
+        }
     }
 }
 
 impl PartialOrd for Instant {
     fn partial_cmp(&self, other: &Instant) -> Option<Ordering> {
-        self.get_timespec().partial_cmp(&other.get_timespec())
+        match (*self, *other) {
+            (Instant::Monotonic(this), Instant::Monotonic(other)) |
+            (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => {
+                this.partial_cmp(&other)
+            }
+            // The Order of different types of Instants is meaningless.
+            _ => None,
+        }
     }
 }
 
@@ -423,5 +442,13 @@ mod tests {
         // Add Duration.
         assert_eq!(late_raw + zero, late_raw);
         assert_eq!(late_coarse + zero, late_coarse);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_instant_panic() {
+        let earlier = Instant::now();
+        thread::sleep(Duration::from_millis(10));
+        Instant::now_coarse().duration_since(earlier);
     }
 }
