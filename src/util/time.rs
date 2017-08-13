@@ -155,6 +155,7 @@ use self::inner::monotonic_now;
 use self::inner::monotonic_coarse_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+const MILLISECOND_PER_SECOND: i64 = 1_000;
 const NANOSECONDS_PER_MILLISECOND: i32 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
@@ -261,8 +262,7 @@ impl Instant {
 
     fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
-            Duration::new((later.sec - earlier.sec) as u64,
-                          (later.nsec - earlier.nsec) as u32)
+            (later - earlier).to_std().unwrap()
         } else {
             panic!("system time jumped back, {:.9} -> {:.9}",
                    earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
@@ -271,15 +271,16 @@ impl Instant {
     }
 
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
-        let sec = later.sec - earlier.sec;
-        let later_nsec = later.nsec - later.nsec % NANOSECONDS_PER_MILLISECOND;
-        let earlier_nsec = earlier.nsec - earlier.nsec % NANOSECONDS_PER_MILLISECOND;
-        if sec > 0 || (sec == 0 && later_nsec >= earlier_nsec) {
-            Duration::new(sec as u64, (later_nsec - earlier_nsec) as u32)
+        let later_ms = later.sec * MILLISECOND_PER_SECOND +
+                       (later.nsec / NANOSECONDS_PER_MILLISECOND) as i64;
+        let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND +
+                         (earlier.nsec / NANOSECONDS_PER_MILLISECOND) as i64;
+        if later_ms >= earlier_ms {
+            Duration::from_millis((later_ms - earlier_ms) as u64)
         } else {
             panic!("system time jumped back, {:.3} -> {:.3}",
-                   earlier.sec as f64 + earlier_nsec as f64 / NANOSECONDS_PER_SECOND as f64,
-                   later.sec as f64 + later_nsec as f64 / NANOSECONDS_PER_SECOND as f64);
+                   earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
+                   later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64);
         }
     }
 }
