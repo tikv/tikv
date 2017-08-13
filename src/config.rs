@@ -56,8 +56,6 @@ fn memory_mb_for_cf(cf: &str) -> usize {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CfConfig {
-    #[serde(skip)]
-    pub cf: String,
     pub block_size: ReadableSize,
     pub block_cache_size: ReadableSize,
     pub cache_index_and_filter_blocks: bool,
@@ -83,7 +81,6 @@ pub struct CfConfig {
 impl Default for CfConfig {
     fn default() -> CfConfig {
         CfConfig {
-            cf: CF_DEFAULT.to_owned(),
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(CF_DEFAULT) as u64),
             cache_index_and_filter_blocks: true,
@@ -115,7 +112,6 @@ impl Default for CfConfig {
 impl CfConfig {
     fn write_config() -> CfConfig {
         let mut cfg = CfConfig::default();
-        cfg.cf = CF_WRITE.to_owned();
         cfg.block_cache_size = ReadableSize::mb(memory_mb_for_cf(CF_WRITE) as u64);
         cfg.whole_key_filtering = false;
         cfg
@@ -123,7 +119,6 @@ impl CfConfig {
 
     fn raft_config() -> CfConfig {
         let mut cfg = CfConfig::default();
-        cfg.cf = CF_RAFT.to_owned();
         cfg.use_bloom_filter = false;
         cfg.block_cache_size = ReadableSize::mb(memory_mb_for_cf(CF_RAFT) as u64);
         cfg.compaction_pri = CompactionPriority::ByCompensatedSize;
@@ -132,7 +127,6 @@ impl CfConfig {
 
     fn lock_config() -> CfConfig {
         let mut cfg = CfConfig::default();
-        cfg.cf = CF_LOCK.to_owned();
         cfg.block_cache_size = ReadableSize::mb(memory_mb_for_cf(CF_LOCK) as u64);
         cfg.block_size = ReadableSize::kb(16);
         cfg.whole_key_filtering = true;
@@ -143,7 +137,7 @@ impl CfConfig {
         cfg
     }
 
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
+    pub fn build_opt(&self, cf: &str) -> ColumnFamilyOptions {
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size(self.block_size.0 as usize);
         block_base_opts.set_lru_cache(self.block_cache_size.0 as usize);
@@ -167,7 +161,7 @@ impl CfConfig {
         cf_opts.set_max_compaction_bytes(self.max_compaction_bytes.0);
         cf_opts.compaction_priority(self.compaction_pri);
 
-        match self.cf.as_str() {
+        match cf {
             CF_DEFAULT => {
                 let f = Box::new(SizePropertiesCollectorFactory::default());
                 cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
@@ -305,10 +299,10 @@ impl DbConfig {
 
     pub fn build_cf_opts(&self) -> Vec<CFOptions> {
         vec![
-            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
-            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(CF_DEFAULT)),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt(CF_LOCK)),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt(CF_WRITE)),
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt(CF_RAFT)),
         ]
     }
 
