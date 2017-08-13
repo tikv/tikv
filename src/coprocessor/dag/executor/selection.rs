@@ -51,7 +51,7 @@ impl<'a> SelectionExecutor<'a> {
     }
 }
 
-
+#[allow(never_loop)]
 impl<'a> Executor for SelectionExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = try!(self.src.next()) {
