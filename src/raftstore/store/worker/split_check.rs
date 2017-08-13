@@ -288,6 +288,10 @@ mod tests {
             engine.put(&s, &s).unwrap();
         }
 
+        // Approximate size of memtable is inaccurate for small data,
+        // we flush it to SST so we can use the size properties instead.
+        engine.flush(true).unwrap();
+
         runnable.run(Task::new(&region));
         match rx.try_recv() {
             Ok(Msg::SplitCheckResult { region_id, epoch, split_key }) => {
@@ -305,6 +309,10 @@ mod tests {
                 let handle = engine.cf_handle(cf).unwrap();
                 engine.put_cf(handle, &s, &s).unwrap();
             }
+        }
+        for cf in ALL_CFS {
+            let handle = engine.cf_handle(cf).unwrap();
+            engine.flush_cf(handle, true).unwrap();
         }
 
         runnable.run(Task::new(&region));
