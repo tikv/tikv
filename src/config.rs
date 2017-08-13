@@ -52,38 +52,69 @@ fn memory_mb_for_cf(cf: &str) -> usize {
     size / MB as usize
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct CfConfig {
-    #[serde(skip)]
-    pub cf: String,
-    pub block_size: ReadableSize,
-    pub block_cache_size: ReadableSize,
-    pub cache_index_and_filter_blocks: bool,
-    pub use_bloom_filter: bool,
-    pub whole_key_filtering: bool,
-    pub bloom_filter_bits_per_key: i32,
-    pub block_based_bloom_filter: bool,
-    #[serde(with = "compression_type_level_serde")]
-    pub compression_per_level: [DBCompressionType; 7],
-    pub write_buffer_size: ReadableSize,
-    pub max_write_buffer_number: i32,
-    pub min_write_buffer_number_to_merge: i32,
-    pub max_bytes_for_level_base: ReadableSize,
-    pub target_file_size_base: ReadableSize,
-    pub level0_file_num_compaction_trigger: i32,
-    pub level0_slowdown_writes_trigger: i32,
-    pub level0_stop_writes_trigger: i32,
-    pub max_compaction_bytes: ReadableSize,
-    #[serde(with = "config::compaction_pri_serde")]
-    pub compaction_pri: CompactionPriority,
+macro_rules! cf_config {
+    ($name:ident) => {
+        #[derive(Clone, Serialize, Deserialize)]
+        #[serde(default)]
+        #[serde(rename_all = "kebab-case")]
+        pub struct $name {
+            pub block_size: ReadableSize,
+            pub block_cache_size: ReadableSize,
+            pub cache_index_and_filter_blocks: bool,
+            pub use_bloom_filter: bool,
+            pub whole_key_filtering: bool,
+            pub bloom_filter_bits_per_key: i32,
+            pub block_based_bloom_filter: bool,
+            #[serde(with = "compression_type_level_serde")]
+            pub compression_per_level: [DBCompressionType; 7],
+            pub write_buffer_size: ReadableSize,
+            pub max_write_buffer_number: i32,
+            pub min_write_buffer_number_to_merge: i32,
+            pub max_bytes_for_level_base: ReadableSize,
+            pub target_file_size_base: ReadableSize,
+            pub level0_file_num_compaction_trigger: i32,
+            pub level0_slowdown_writes_trigger: i32,
+            pub level0_stop_writes_trigger: i32,
+            pub max_compaction_bytes: ReadableSize,
+            #[serde(with = "config::compaction_pri_serde")]
+            pub compaction_pri: CompactionPriority,
+        }
+    }
 }
 
-impl Default for CfConfig {
-    fn default() -> CfConfig {
-        CfConfig {
-            cf: CF_DEFAULT.to_owned(),
+macro_rules! build_cf_opt {
+    ($opt:ident) => {{
+        let mut block_base_opts = BlockBasedOptions::new();
+        block_base_opts.set_block_size($opt.block_size.0 as usize);
+        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize);
+        block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
+        if $opt.use_bloom_filter {
+            block_base_opts.set_bloom_filter($opt.bloom_filter_bits_per_key,
+                                             $opt.block_based_bloom_filter);
+            block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
+        }
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_block_based_table_factory(&block_base_opts);
+        cf_opts.compression_per_level(&$opt.compression_per_level);
+        cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
+        cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
+        cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
+        cf_opts.set_max_bytes_for_level_base($opt.max_bytes_for_level_base.0);
+        cf_opts.set_target_file_size_base($opt.target_file_size_base.0);
+        cf_opts.set_level_zero_file_num_compaction_trigger($opt.level0_file_num_compaction_trigger);
+        cf_opts.set_level_zero_slowdown_writes_trigger($opt.level0_slowdown_writes_trigger);
+        cf_opts.set_level_zero_stop_writes_trigger($opt.level0_stop_writes_trigger);
+        cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
+        cf_opts.compaction_priority($opt.compaction_pri);
+        cf_opts
+    }};
+}
+
+cf_config!(DefaultCfConfig);
+
+impl Default for DefaultCfConfig {
+    fn default() -> DefaultCfConfig {
+        DefaultCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(CF_DEFAULT) as u64),
             cache_index_and_filter_blocks: true,
@@ -112,91 +143,141 @@ impl Default for CfConfig {
     }
 }
 
-impl CfConfig {
-    fn write_config() -> CfConfig {
-        let mut cfg = CfConfig::default();
-        cfg.cf = CF_WRITE.to_owned();
-        cfg.block_cache_size = ReadableSize::mb(memory_mb_for_cf(CF_WRITE) as u64);
-        cfg.whole_key_filtering = false;
-        cfg
-    }
-
-    fn raft_config() -> CfConfig {
-        let mut cfg = CfConfig::default();
-        cfg.cf = CF_RAFT.to_owned();
-        cfg.use_bloom_filter = false;
-        cfg.block_cache_size = ReadableSize::mb(memory_mb_for_cf(CF_RAFT) as u64);
-        cfg.compaction_pri = CompactionPriority::ByCompensatedSize;
-        cfg
-    }
-
-    fn lock_config() -> CfConfig {
-        let mut cfg = CfConfig::default();
-        cfg.cf = CF_LOCK.to_owned();
-        cfg.block_cache_size = ReadableSize::mb(memory_mb_for_cf(CF_LOCK) as u64);
-        cfg.block_size = ReadableSize::kb(16);
-        cfg.whole_key_filtering = true;
-        cfg.compression_per_level = [DBCompressionType::No; 7];
-        cfg.level0_file_num_compaction_trigger = 1;
-        cfg.max_bytes_for_level_base = ReadableSize::mb(128);
-        cfg.compaction_pri = CompactionPriority::ByCompensatedSize;
-        cfg
-    }
-
+impl DefaultCfConfig {
     pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut block_base_opts = BlockBasedOptions::new();
-        block_base_opts.set_block_size(self.block_size.0 as usize);
-        block_base_opts.set_lru_cache(self.block_cache_size.0 as usize);
-        block_base_opts.set_cache_index_and_filter_blocks(self.cache_index_and_filter_blocks);
-        if self.use_bloom_filter {
-            block_base_opts.set_bloom_filter(self.bloom_filter_bits_per_key,
-                                             self.block_based_bloom_filter);
-            block_base_opts.set_whole_key_filtering(self.whole_key_filtering);
-        }
-        let mut cf_opts = ColumnFamilyOptions::new();
-        cf_opts.set_block_based_table_factory(&block_base_opts);
-        cf_opts.compression_per_level(&self.compression_per_level);
-        cf_opts.set_write_buffer_size(self.write_buffer_size.0);
-        cf_opts.set_max_write_buffer_number(self.max_write_buffer_number);
-        cf_opts.set_min_write_buffer_number_to_merge(self.min_write_buffer_number_to_merge);
-        cf_opts.set_max_bytes_for_level_base(self.max_bytes_for_level_base.0);
-        cf_opts.set_target_file_size_base(self.target_file_size_base.0);
-        cf_opts.set_level_zero_file_num_compaction_trigger(self.level0_file_num_compaction_trigger);
-        cf_opts.set_level_zero_slowdown_writes_trigger(self.level0_slowdown_writes_trigger);
-        cf_opts.set_level_zero_stop_writes_trigger(self.level0_stop_writes_trigger);
-        cf_opts.set_max_compaction_bytes(self.max_compaction_bytes.0);
-        cf_opts.compaction_priority(self.compaction_pri);
+        let mut cf_opts = build_cf_opt!(self);
+        let f = Box::new(SizePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
+        cf_opts
+    }
+}
 
-        match self.cf.as_str() {
-            CF_DEFAULT => {
-                let f = Box::new(SizePropertiesCollectorFactory::default());
-                cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
-            }
-            CF_WRITE => {
-                // Prefix extractor(trim the timestamp at tail) for write cf.
-                let e = Box::new(FixedSuffixSliceTransform::new(8));
-                cf_opts.set_prefix_extractor("FixedSuffixSliceTransform", e).unwrap();
-                // Create prefix bloom filter for memtable.
-                cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-                // Collects user defined properties.
-                let f = Box::new(MvccPropertiesCollectorFactory::default());
-                cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-                let f = Box::new(SizePropertiesCollectorFactory::default());
-                cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
-            }
-            CF_RAFT => {
-                let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
-                cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
-                    .unwrap();
-            }
-            CF_LOCK => {
-                let f = Box::new(NoopSliceTransform);
-                cf_opts.set_prefix_extractor("NoopSliceTransform", f).unwrap();
-                cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-            }
-            _ => unreachable!(),
-        }
+cf_config!(WriteCfConfig);
 
+impl Default for WriteCfConfig {
+    fn default() -> WriteCfConfig {
+        WriteCfConfig {
+            block_size: ReadableSize::kb(64),
+            block_cache_size: ReadableSize::mb(memory_mb_for_cf(CF_WRITE) as u64),
+            cache_index_and_filter_blocks: true,
+            use_bloom_filter: true,
+            whole_key_filtering: false,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            compression_per_level: [DBCompressionType::No,
+                                    DBCompressionType::No,
+                                    DBCompressionType::Lz4,
+                                    DBCompressionType::Lz4,
+                                    DBCompressionType::Lz4,
+                                    DBCompressionType::Zstd,
+                                    DBCompressionType::Zstd],
+            write_buffer_size: ReadableSize::mb(128),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(512),
+            target_file_size_base: ReadableSize::mb(32),
+            level0_file_num_compaction_trigger: 4,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::MinOverlappingRatio,
+        }
+    }
+}
+
+impl WriteCfConfig {
+    pub fn build_opt(&self) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self);
+        // Prefix extractor(trim the timestamp at tail) for write cf.
+        let e = Box::new(FixedSuffixSliceTransform::new(8));
+        cf_opts.set_prefix_extractor("FixedSuffixSliceTransform", e).unwrap();
+        // Create prefix bloom filter for memtable.
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        // Collects user defined properties.
+        let f = Box::new(MvccPropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        let f = Box::new(SizePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
+        cf_opts
+    }
+}
+
+cf_config!(RaftCfConfig);
+
+impl Default for RaftCfConfig {
+    fn default() -> RaftCfConfig {
+        RaftCfConfig {
+            block_size: ReadableSize::kb(64),
+            block_cache_size: ReadableSize::mb(memory_mb_for_cf(CF_RAFT) as u64),
+            cache_index_and_filter_blocks: true,
+            use_bloom_filter: false,
+            whole_key_filtering: true,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            compression_per_level: [DBCompressionType::No,
+                                    DBCompressionType::No,
+                                    DBCompressionType::Lz4,
+                                    DBCompressionType::Lz4,
+                                    DBCompressionType::Lz4,
+                                    DBCompressionType::Zstd,
+                                    DBCompressionType::Zstd],
+            write_buffer_size: ReadableSize::mb(128),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(512),
+            target_file_size_base: ReadableSize::mb(32),
+            level0_file_num_compaction_trigger: 4,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::ByCompensatedSize,
+        }
+    }
+}
+
+impl RaftCfConfig {
+    pub fn build_opt(&self) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self);
+        let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
+        cf_opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
+            .unwrap();
+        cf_opts
+    }
+}
+
+cf_config!(LockCfConfig);
+
+impl Default for LockCfConfig {
+    fn default() -> LockCfConfig {
+        LockCfConfig {
+            block_size: ReadableSize::kb(16),
+            block_cache_size: ReadableSize::mb(memory_mb_for_cf(CF_LOCK) as u64),
+            cache_index_and_filter_blocks: true,
+            use_bloom_filter: true,
+            whole_key_filtering: true,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            compression_per_level: [DBCompressionType::No; 7],
+            write_buffer_size: ReadableSize::mb(128),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(128),
+            target_file_size_base: ReadableSize::mb(32),
+            level0_file_num_compaction_trigger: 1,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::ByCompensatedSize,
+        }
+    }
+}
+
+impl LockCfConfig {
+    pub fn build_opt(&self) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self);
+        let f = Box::new(NoopSliceTransform);
+        cf_opts.set_prefix_extractor("NoopSliceTransform", f).unwrap();
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts
     }
 }
@@ -227,10 +308,10 @@ pub struct DbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
     pub backup_dir: String,
-    pub defaultcf: CfConfig,
-    pub writecf: CfConfig,
-    pub raftcf: CfConfig,
-    pub lockcf: CfConfig,
+    pub defaultcf: DefaultCfConfig,
+    pub writecf: WriteCfConfig,
+    pub raftcf: RaftCfConfig,
+    pub lockcf: LockCfConfig,
 }
 
 impl Default for DbConfig {
@@ -257,10 +338,10 @@ impl Default for DbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             backup_dir: "".to_owned(),
-            defaultcf: CfConfig::default(),
-            writecf: CfConfig::write_config(),
-            raftcf: CfConfig::raft_config(),
-            lockcf: CfConfig::lock_config(),
+            defaultcf: DefaultCfConfig::default(),
+            writecf: WriteCfConfig::default(),
+            raftcf: RaftCfConfig::default(),
+            lockcf: LockCfConfig::default(),
         }
     }
 }
