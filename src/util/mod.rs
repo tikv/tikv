@@ -41,8 +41,9 @@ pub mod file_log;
 pub mod metrics;
 pub mod threadpool;
 pub mod collections;
-pub mod properties;
 pub mod time;
+
+pub use self::rocksdb::properties;
 
 #[cfg(target_os="linux")]
 mod thread_metrics;
