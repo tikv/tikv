@@ -13,13 +13,14 @@
 
 use futures::BoxFuture;
 
-mod async;
 mod metrics;
+mod client;
+mod util;
 
 pub mod errors;
 pub use self::errors::{Result, Error};
-pub use self::async::RpcClient;
-pub use self::async::validate_endpoints;
+pub use self::client::RpcClient;
+pub use self::util::validate_endpoints;
 
 use kvproto::metapb;
 use kvproto::pdpb;
