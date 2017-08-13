@@ -443,12 +443,4 @@ mod tests {
         assert_eq!(late_raw + zero, late_raw);
         assert_eq!(late_coarse + zero, late_coarse);
     }
-
-    #[test]
-    #[should_panic]
-    fn test_instant_panic() {
-        let earlier = Instant::now();
-        thread::sleep(Duration::from_millis(10));
-        Instant::now_coarse().duration_since(earlier);
-    }
 }
