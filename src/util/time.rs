@@ -270,6 +270,10 @@ impl Instant {
         }
     }
 
+    // It is different from `elapsed_duration`, the resolution here is millisecond.
+    // The processors in an SMP system do not start all at exactly the same time
+    // and therefore the timer registers are typically running at an offset.
+    // Use millisecond resolution for ignoring the error.
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
         let later_ms = later.sec * MILLISECOND_PER_SECOND +
                        (later.nsec / NANOSECONDS_PER_MILLISECOND) as i64;
@@ -443,5 +447,16 @@ mod tests {
         // Add Duration.
         assert_eq!(late_raw + zero, late_raw);
         assert_eq!(late_coarse + zero, late_coarse);
+    }
+
+    #[test]
+    fn test_coarse_instant_on_smp() {
+        for i in 0..100000 {
+            let now = Instant::now_coarse();
+            if i % 100 == 0 {
+                thread::yield_now();
+            }
+            now.elapsed();
+        }
     }
 }
