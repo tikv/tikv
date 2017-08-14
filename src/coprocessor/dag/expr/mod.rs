@@ -109,28 +109,52 @@ impl Expression {
                     ScalarFuncSig::GEInt | ScalarFuncSig::EQInt | ScalarFuncSig::NEInt |
                     ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, f.sig),
 
-                    ScalarFuncSig::LTReal | ScalarFuncSig::LEReal | ScalarFuncSig::GTReal |
-                    ScalarFuncSig::GEReal | ScalarFuncSig::EQReal | ScalarFuncSig::NEReal |
+                    ScalarFuncSig::LTReal |
+                    ScalarFuncSig::LEReal |
+                    ScalarFuncSig::GTReal |
+                    ScalarFuncSig::GEReal |
+                    ScalarFuncSig::EQReal |
+                    ScalarFuncSig::NEReal |
                     ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, f.sig),
 
-                    ScalarFuncSig::LTDecimal | ScalarFuncSig::LEDecimal | ScalarFuncSig::GTDecimal |
-                    ScalarFuncSig::GEDecimal | ScalarFuncSig::EQDecimal | ScalarFuncSig::NEDecimal |
+                    ScalarFuncSig::LTDecimal |
+                    ScalarFuncSig::LEDecimal |
+                    ScalarFuncSig::GTDecimal |
+                    ScalarFuncSig::GEDecimal |
+                    ScalarFuncSig::EQDecimal |
+                    ScalarFuncSig::NEDecimal |
                     ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, f.sig),
 
-                    ScalarFuncSig::LTString | ScalarFuncSig::LEString | ScalarFuncSig::GTString |
-                    ScalarFuncSig::GEString | ScalarFuncSig::EQString | ScalarFuncSig::NEString |
+                    ScalarFuncSig::LTString |
+                    ScalarFuncSig::LEString |
+                    ScalarFuncSig::GTString |
+                    ScalarFuncSig::GEString |
+                    ScalarFuncSig::EQString |
+                    ScalarFuncSig::NEString |
                     ScalarFuncSig::NullEQString => f.compare_string(ctx, row, f.sig),
 
-                    ScalarFuncSig::LTTime | ScalarFuncSig::LETime | ScalarFuncSig::GTTime |
-                    ScalarFuncSig::GETime | ScalarFuncSig::EQTime | ScalarFuncSig::NETime |
+                    ScalarFuncSig::LTTime |
+                    ScalarFuncSig::LETime |
+                    ScalarFuncSig::GTTime |
+                    ScalarFuncSig::GETime |
+                    ScalarFuncSig::EQTime |
+                    ScalarFuncSig::NETime |
                     ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, f.sig),
 
-                    ScalarFuncSig::LTDuration | ScalarFuncSig::LEDuration | ScalarFuncSig::GTDuration |
-                    ScalarFuncSig::GEDuration | ScalarFuncSig::EQDuration | ScalarFuncSig::NEDuration |
+                    ScalarFuncSig::LTDuration |
+                    ScalarFuncSig::LEDuration |
+                    ScalarFuncSig::GTDuration |
+                    ScalarFuncSig::GEDuration |
+                    ScalarFuncSig::EQDuration |
+                    ScalarFuncSig::NEDuration |
                     ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, f.sig),
 
-                    ScalarFuncSig::LTJson | ScalarFuncSig::LEJson | ScalarFuncSig::GTJson |
-                    ScalarFuncSig::GEJson | ScalarFuncSig::EQJson | ScalarFuncSig::NEJson |
+                    ScalarFuncSig::LTJson |
+                    ScalarFuncSig::LEJson |
+                    ScalarFuncSig::GTJson |
+                    ScalarFuncSig::GEJson |
+                    ScalarFuncSig::EQJson |
+                    ScalarFuncSig::NEJson |
                     ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, f.sig),
                     _ => Err(Error::Other("Unknown signature")),
                 }

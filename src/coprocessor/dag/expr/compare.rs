@@ -16,7 +16,7 @@ use std::cmp::Ordering;
 
 use tipb::expression::ScalarFuncSig;
 
-use coprocessor::codec::{mysql, Datum};
+use coprocessor::codec::{datum, mysql, Datum};
 use super::{StatementContext, Result, FnCall};
 
 impl FnCall {
@@ -44,8 +44,8 @@ impl FnCall {
                     ScalarFuncSig::LEInt => ordering != Ordering::Greater,
                     ScalarFuncSig::GTInt => ordering == Ordering::Greater,
                     ScalarFuncSig::GEInt => ordering != Ordering::Less,
-                    ScalarFuncSig::EQInt => ordering == Ordering::Equal,
                     ScalarFuncSig::NEInt => ordering != Ordering::Equal,
+                    ScalarFuncSig::EQInt | ScalarFuncSig::NullEQInt => ordering == Ordering::Equal,
                     _ => unreachable!(),
                 } as i64))
             }
@@ -68,14 +68,15 @@ impl FnCall {
                 }
             }
             (Some(lhs), Some(rhs)) => {
-                let ordering = cmp_f64(lhs, rhs);
+                let ordering = try!(datum::cmp_f64(lhs, rhs));
                 Ok(Some(match sig {
                     ScalarFuncSig::LTReal => ordering == Ordering::Less,
                     ScalarFuncSig::LEReal => ordering != Ordering::Greater,
                     ScalarFuncSig::GTReal => ordering == Ordering::Greater,
                     ScalarFuncSig::GEReal => ordering != Ordering::Less,
-                    ScalarFuncSig::EQReal => ordering == Ordering::Equal,
                     ScalarFuncSig::NEReal => ordering != Ordering::Equal,
+                    ScalarFuncSig::EQReal |
+                    ScalarFuncSig::NullEQReal => ordering == Ordering::Equal,
                     _ => unreachable!(),
                 } as i64))
             }
@@ -104,8 +105,9 @@ impl FnCall {
                     ScalarFuncSig::LEDecimal => ordering != Ordering::Greater,
                     ScalarFuncSig::GTDecimal => ordering == Ordering::Greater,
                     ScalarFuncSig::GEDecimal => ordering != Ordering::Less,
-                    ScalarFuncSig::EQDecimal => ordering == Ordering::Equal,
                     ScalarFuncSig::NEDecimal => ordering != Ordering::Equal,
+                    ScalarFuncSig::EQDecimal |
+                    ScalarFuncSig::NullEQDecimal => ordering == Ordering::Equal,
                     _ => unreachable!(),
                 } as i64))
             }
@@ -134,8 +136,9 @@ impl FnCall {
                     ScalarFuncSig::LEString => ordering != Ordering::Greater,
                     ScalarFuncSig::GTString => ordering == Ordering::Greater,
                     ScalarFuncSig::GEString => ordering != Ordering::Less,
-                    ScalarFuncSig::EQString => ordering == Ordering::Equal,
                     ScalarFuncSig::NEString => ordering != Ordering::Equal,
+                    ScalarFuncSig::EQString |
+                    ScalarFuncSig::NullEQString => ordering == Ordering::Equal,
                     _ => unreachable!(),
                 } as i64))
             }
@@ -164,8 +167,9 @@ impl FnCall {
                     ScalarFuncSig::LETime => ordering != Ordering::Greater,
                     ScalarFuncSig::GTTime => ordering == Ordering::Greater,
                     ScalarFuncSig::GETime => ordering != Ordering::Less,
-                    ScalarFuncSig::EQTime => ordering == Ordering::Equal,
                     ScalarFuncSig::NETime => ordering != Ordering::Equal,
+                    ScalarFuncSig::EQTime |
+                    ScalarFuncSig::NullEQTime => ordering == Ordering::Equal,
                     _ => unreachable!(),
                 } as i64))
             }
@@ -194,8 +198,9 @@ impl FnCall {
                     ScalarFuncSig::LEDuration => ordering != Ordering::Greater,
                     ScalarFuncSig::GTDuration => ordering == Ordering::Greater,
                     ScalarFuncSig::GEDuration => ordering != Ordering::Less,
-                    ScalarFuncSig::EQDuration => ordering == Ordering::Equal,
                     ScalarFuncSig::NEDuration => ordering != Ordering::Equal,
+                    ScalarFuncSig::EQDuration |
+                    ScalarFuncSig::NullEQDuration => ordering == Ordering::Equal,
                     _ => unreachable!(),
                 } as i64))
             }
@@ -224,8 +229,9 @@ impl FnCall {
                     ScalarFuncSig::LEJson => ordering != Ordering::Greater,
                     ScalarFuncSig::GTJson => ordering == Ordering::Greater,
                     ScalarFuncSig::GEJson => ordering != Ordering::Less,
-                    ScalarFuncSig::EQJson => ordering == Ordering::Equal,
                     ScalarFuncSig::NEJson => ordering != Ordering::Equal,
+                    ScalarFuncSig::EQJson |
+                    ScalarFuncSig::NullEQJson => ordering == Ordering::Equal,
                     _ => unreachable!(),
                 } as i64))
             }
@@ -240,7 +246,12 @@ fn cmp_i64_with_unsigned_flag(lhs: i64,
                               rhs_unsigned: bool)
                               -> Ordering {
     match (lhs_unsigned, rhs_unsigned) {
-        (true, true) | (false, false) => lhs.cmp(&rhs),
+        (false, false) => lhs.cmp(&rhs),
+        (true, true) => {
+            let lhs = lhs as u64;
+            let rhs = rhs as u64;
+            lhs.cmp(&rhs)
+        }
         (true, false) => {
             if rhs < 0 || lhs as u64 > i64::MAX as u64 {
                 Ordering::Greater
@@ -258,17 +269,6 @@ fn cmp_i64_with_unsigned_flag(lhs: i64,
     }
 }
 
-#[inline]
-fn cmp_f64(lhs: f64, rhs: f64) -> Ordering {
-    if lhs == rhs {
-        Ordering::Equal
-    } else if lhs < rhs {
-        Ordering::Less
-    } else {
-        Ordering::Greater
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::{i64, u64};
@@ -278,10 +278,15 @@ mod test {
     fn test_cmp_i64_with_unsigned_flag() {
         let cases = vec![
             (5, false, 3, false, Ordering::Greater),
+            (u64::MAX as i64, false, 5 as i64, false, Ordering::Less),
+
             (u64::MAX as i64, true, (u64::MAX - 1) as i64, true, Ordering::Greater),
+            (u64::MAX as i64, true, 5 as i64, true, Ordering::Greater),
+
             (5, true, i64::MIN, false, Ordering::Greater),
             (u64::MAX as i64, true, i64::MIN, false, Ordering::Greater),
             (5, true, 3, false, Ordering::Greater),
+
             (i64::MIN, false, 3, true, Ordering::Less),
             (5, false, u64::MAX as i64, true, Ordering::Less),
             (5, false, 3, true, Ordering::Greater),
