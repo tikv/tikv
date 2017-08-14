@@ -17,7 +17,7 @@
 use std::{i64, u64, str};
 
 use coprocessor::codec::{Datum, mysql};
-use coprocessor::codec::mysql::{Decimal, Time, Duration};
+use coprocessor::codec::mysql::{Decimal, Time, Duration, Json};
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_int_to_uint, convert_float_to_int,
                                   convert_float_to_uint};
@@ -111,6 +111,16 @@ impl FnCall {
         try!(val.round_frac(mysql::DEFAULT_FSP));
         let dec = try!(val.to_decimal());
         let res = try!(convert::dec_to_i64(dec));
+        Ok(Some(res))
+    }
+
+    pub fn cast_json_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let val = try!(self.children[0].eval_json(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let val = val.unwrap();
+        let res = try!(val.cast_to_int());
         Ok(Some(res))
     }
 
@@ -337,6 +347,13 @@ impl FnCall {
                                      ctx: &StatementContext,
                                      row: &[Datum])
                                      -> Result<Option<Vec<Duration>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_int_as_json(&self,
+                            ctx: &StatementContext,
+                            row: &[Datum])
+                            -> Result<Option<Vec<Json>>> {
         unimplemented!()
     }
 }
