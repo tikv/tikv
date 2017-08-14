@@ -28,18 +28,18 @@ use util::transport::SendCh;
 use raftstore::store::{self, Msg, SnapshotStatusMsg, StoreChannel, Store, Config as StoreConfig,
                        keys, Peekable, Transport, SnapManager};
 use super::Result;
-use super::config::Config;
-use storage::{Storage, RaftKv};
+use server::Config as ServerConfig;
+use storage::{Storage, RaftKv, Config as StorageConfig};
 use super::transport::RaftStoreRouter;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
+pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &StorageConfig) -> Result<Storage>
     where S: RaftStoreRouter + 'static
 {
     let engine = box RaftKv::new(db, router);
-    let store = try!(Storage::from_engine(engine, &cfg.storage));
+    let store = try!(Storage::from_engine(engine, cfg));
     Ok(store)
 }
 
@@ -75,7 +75,8 @@ impl<C> Node<C>
     where C: PdClient
 {
     pub fn new<T>(event_loop: &mut EventLoop<Store<T, C>>,
-                  cfg: &Config,
+                  cfg: &ServerConfig,
+                  store_cfg: &StoreConfig,
                   pd_client: Arc<C>)
                   -> Node<C>
         where T: Transport + 'static
@@ -101,7 +102,7 @@ impl<C> Node<C>
         Node {
             cluster_id: cfg.cluster_id,
             store: store,
-            store_cfg: cfg.raft_store.clone(),
+            store_cfg: store_cfg.clone(),
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
