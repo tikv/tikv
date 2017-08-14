@@ -1094,7 +1094,7 @@ impl Decimal {
                 RoundMode::Ceiling => {
                     // If any word after scale is not zero, do increment.
                     // e.g ceiling 3.0001 to scale 1, gets 3.1
-                    let idx = to_idx + (frac_word_cnt as i8) + frac_words_to;
+                    let idx = to_idx + frac_word_cnt as i8 + frac_words_to;
                     if idx > to_idx {
                         let start = if to_idx < 0 { 0 } else { to_idx as usize + 1 };
                         res.word_buf[start..(idx as usize + 1)].iter().any(|c| *c != 0)
@@ -1539,14 +1539,7 @@ impl Decimal {
     }
 
     pub fn is_zero(&self) -> bool {
-        let mut len = self.int_cnt / DIGITS_PER_WORD + self.frac_cnt / DIGITS_PER_WORD;
-        if self.int_cnt % DIGITS_PER_WORD > 0 {
-            len += 1;
-        }
-        if self.frac_cnt % DIGITS_PER_WORD > 0 {
-            len += 1;
-        }
-
+        let len = word_cnt!(self.int_cnt) + word_cnt!(self.frac_cnt);
         !self.word_buf[0..len as usize].iter().any(|&x| x != 0)
     }
 }
@@ -2550,6 +2543,24 @@ mod test {
             negative_exp.push_str(exp);
             let res = negative.to_string();
             assert_eq!(res, negative_exp);
+        }
+    }
+
+    #[test]
+    fn test_reset_to_zero() {
+        let cases = vec!["12345",
+                         "0.99999",
+                         "18446744073709551615",
+                         "18446744073709551616",
+                         "-1",
+                         "1.23",
+                         "9999999999999999999999999.000"];
+
+        for case in cases {
+            let mut dec: Decimal = case.parse().unwrap();
+            assert!(!dec.is_zero());
+            dec.reset_to_zero();
+            assert!(dec.is_zero());
         }
     }
 }
