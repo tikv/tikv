@@ -51,7 +51,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
-                    ApplyTaskRes, MetricsFlusher};
+                    ApplyTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
 use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
@@ -63,7 +63,7 @@ use super::msg::{Callback, BatchCallback};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
-use super::engine_metrics::*;
+use util::rocksdb::engine_metrics::*;
 use super::local_metrics::RaftMetrics;
 use prometheus::local::LocalHistogram;
 
@@ -120,7 +120,6 @@ pub struct Store<T, C: 'static> {
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
-    metrics_flusher: MetricsFlusher,
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
@@ -205,7 +204,6 @@ impl<T, C> Store<T, C> {
             pd_worker: FutureWorker::new("pd worker"),
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
-            metrics_flusher: MetricsFlusher::new(engine.clone()),
             apply_res_receiver: None,
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
@@ -453,8 +451,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
-        box_try!(self.metrics_flusher.start());
-
         try!(event_loop.run(self));
         Ok(())
     }
@@ -476,15 +472,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.apply_worker.stop());
-        handles.push(self.metrics_flusher.stop());
-
 
         for h in handles {
             if let Some(h) = h {
                 h.join().unwrap();
             }
         }
-
 
         self.coprocessor_host.shutdown();
 
@@ -1669,7 +1662,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         stats.set_capacity(capacity);
 
-        let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
+        let mut used_size = get_used_size(self.engine.clone());
         used_size += self.snap_mgr.get_total_snap_size();
 
         stats.set_used_size(used_size);

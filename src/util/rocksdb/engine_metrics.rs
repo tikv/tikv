@@ -269,23 +269,37 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData) {
     }
 }
 
-pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
+pub fn get_used_size(engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
     for cf in ALL_CFS {
         let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
         let cf_used_size = engine.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .expect("rocksdb is too old, missing total-sst-files-size property");
 
+        used_size += cf_used_size;
+
+        // For memtable
+        if let Some(mem_table) =
+               engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
+            used_size += mem_table;
+        }
+    }
+    used_size
+}
+
+pub fn flush_engine_properties(engine: Arc<DB>) {
+    for cf in ALL_CFS {
+        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+        // It is important to monitor each cf's size, especially the "raft" and "lock" column
+        // families.
+        let cf_used_size = engine.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+            .expect("rocksdb is too old, missing total-sst-files-size property");
+        STORE_ENGINE_SIZE_GAUGE_VEC.with_label_values(&[cf]).set(cf_used_size as f64);
+
         // For block cache usage
         let block_cache_usage = engine.get_block_cache_usage_cf(handle);
         STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC.with_label_values(&[cf])
             .set(block_cache_usage as f64);
-
-        // It is important to monitor each cf's size, especially the "raft" and "lock" column
-        // families.
-        STORE_ENGINE_SIZE_GAUGE_VEC.with_label_values(&[cf]).set(cf_used_size as f64);
-
-        used_size += cf_used_size;
 
         // TODO: find a better place to record these metrics.
         // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
@@ -300,7 +314,6 @@ pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
                engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
             STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[cf, "mem-tables"])
                 .set(mem_table as f64);
-            used_size += mem_table;
         }
 
         // TODO: add cache usage and pinned usage.
@@ -317,7 +330,6 @@ pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
                 .set(pending_compaction_bytes as f64);
         }
     }
-    used_size
 }
 
 lazy_static!{

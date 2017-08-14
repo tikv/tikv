@@ -13,7 +13,7 @@
 
 use rocksdb::DB;
 use std::sync::{Arc, RwLock};
-use super::super::engine_metrics::*;
+use util::rocksdb::engine_metrics::*;
 use std::thread::{self, JoinHandle, Builder};
 use std::io;
 use std::time;
@@ -22,20 +22,23 @@ pub struct MetricsFlusher {
     engine: Arc<DB>,
     flag: Arc<RwLock<bool>>,
     handle: Option<JoinHandle<()>>,
+    interval: Arc<RwLock<u64>>,
 }
 
 impl MetricsFlusher {
-    pub fn new(engine: Arc<DB>) -> MetricsFlusher {
+    pub fn new(engine: Arc<DB>, interval: u64) -> MetricsFlusher {
         MetricsFlusher {
             engine: engine,
             flag: Arc::new(RwLock::new(false)),
             handle: None,
+            interval: Arc::new(RwLock::new(interval)),
         }
     }
 
     pub fn start(&mut self) -> Result<(), io::Error> {
         let db = self.engine.clone();
         let flag = self.flag.clone();
+        let interval = self.interval.clone();
         let h = try!(Builder::new()
             .name(thd_name!("flush metrics"))
             .spawn(move || {
@@ -52,7 +55,8 @@ impl MetricsFlusher {
                             flush_engine_histogram_metrics(*t, v);
                         }
                     }
-                    thread::sleep(time::Duration::from_millis(1000));
+                    flush_engine_properties(db.clone());
+                    thread::sleep(time::Duration::from_millis(*(interval.read().unwrap())));
                 }
             }));
 

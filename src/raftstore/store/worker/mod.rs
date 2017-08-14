@@ -53,7 +53,6 @@ mod pd;
 mod metrics;
 mod consistency_check;
 pub mod apply;
-mod metrics_flush;
 
 pub use self::region::{Task as RegionTask, Runner as RegionRunner};
 pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
@@ -63,4 +62,3 @@ pub use self::pd::{Task as PdTask, Runner as PdRunner};
 pub use self::consistency_check::{Task as ConsistencyCheckTask, Runner as ConsistencyCheckRunner};
 pub use self::apply::{Task as ApplyTask, Runner as ApplyRunner, TaskRes as ApplyTaskRes, ApplyRes,
                       ApplyMetrics, Registration, Apply, Proposal, RegionProposal};
-pub use self::metrics_flush::MetricsFlusher;
