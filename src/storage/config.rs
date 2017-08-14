@@ -59,7 +59,6 @@ impl Config {
         }
 
         self.data_dir = try!(config::canonicalize_path(&self.data_dir));
-        
         Ok(())
     }
 }
