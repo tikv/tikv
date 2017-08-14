@@ -91,7 +91,6 @@ pub fn new_store_cfg() -> Config {
         max_leader_missing_duration: ReadableDuration::secs(3),
         report_region_flow_interval: ReadableDuration::millis(100),
         raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
-        use_sst_file_snapshot: true,
         allow_remove_leader: true,
         ..Config::default()
     }

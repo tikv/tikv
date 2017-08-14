@@ -91,8 +91,6 @@ pub struct Config {
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: ReadableDuration,
 
-    pub use_sst_file_snapshot: bool,
-
     // Right region derive origin region id when split.
     pub right_derive_when_split: bool,
 
@@ -139,7 +137,6 @@ impl Default for Config {
             consistency_check_interval: ReadableDuration::secs(0),
             report_region_flow_interval: ReadableDuration::minutes(1),
             raft_store_max_leader_lease: ReadableDuration::secs(9),
-            use_sst_file_snapshot: true,
             right_derive_when_split: true,
             allow_remove_leader: false,
         }
