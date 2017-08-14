@@ -23,14 +23,16 @@ extern crate protobuf;
 extern crate kvproto;
 extern crate rocksdb;
 extern crate tempdir;
+extern crate rustc_serialize;
 
 use std::{str, u64};
 use clap::{Arg, App, SubCommand};
+use rustc_serialize::hex::{FromHex, ToHex};
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState, PeerState};
 use kvproto::eraftpb::Entry;
-use rocksdb::DB;
+use rocksdb::{DB, SeekKey, ReadOptions};
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
@@ -46,7 +48,15 @@ fn main() {
         .arg(Arg::with_name("db")
             .short("d")
             .takes_value(true)
-            .help("set rocksdb path, required"))
+            .help("set rocksdb path"))
+        .arg(Arg::with_name("hex-to-escaped")
+            .short("h")
+            .takes_value(true)
+            .help("convert hex key to escaped key"))
+        .arg(Arg::with_name("escaped-to-hex")
+            .short("e")
+            .takes_value(true)
+            .help("convert escaped key to hex key"))
         .subcommand(SubCommand::with_name("raft")
             .about("print raft log entry")
             .subcommand(SubCommand::with_name("log")
@@ -78,7 +88,11 @@ fn main() {
             .arg(Arg::with_name("region")
                 .short("r")
                 .takes_value(true)
-                .help("set the region id, if not specified, print all regions.")))
+                .help("set the region id, if not specified, print all regions."))
+            .arg(Arg::with_name("cf")
+                .short("c")
+                .takes_value(true)
+                .help("set the cf name, if not specified, print all cf.")))
         .subcommand(SubCommand::with_name("scan")
             .about("print the range db range")
             .arg(Arg::with_name("from")
@@ -134,9 +148,33 @@ fn main() {
                 .help("set start_ts as filter"))
             .arg(Arg::with_name("commit_ts")
                 .takes_value(true)
-                .help("set commit_ts as filter")));
+                .help("set commit_ts as filter")))
+        .subcommand(SubCommand::with_name("diff")
+            .about("diff two region keys")
+            .arg(Arg::with_name("to")
+                .short("t")
+                .takes_value(true)
+                .help("to which db"))
+            .arg(Arg::with_name("region")
+                .short("r")
+                .takes_value(true)
+                .help("specify region id")));
     let matches = app.clone().get_matches();
 
+    let hex_key = matches.value_of("hex-to-escaped");
+    let escaped_key = matches.value_of("escaped-to-hex");
+    match (hex_key, escaped_key) {
+        (None, None) => {}
+        (Some(_), Some(_)) => panic!("hex and escaped can not be passed together!"),
+        (Some(hex), None) => {
+            println!("{}", escape(&from_hex(hex)));
+            return;
+        }
+        (None, Some(escaped)) => {
+            println!("{}", &unescape(escaped).to_hex().to_uppercase());
+            return;
+        }
+    };
     let db_path = matches.value_of("db").unwrap();
     let db = util::rocksdb::open(db_path, ALL_CFS).unwrap();
     if let Some(matches) = matches.subcommand_matches("print") {
@@ -168,11 +206,12 @@ fn main() {
             panic!("Currently only support raft log entry and scan.")
         }
     } else if let Some(matches) = matches.subcommand_matches("size") {
+        let cf_name = matches.value_of("cf");
         match matches.value_of("region") {
             Some(id) => {
-                dump_region_size(&db, id.parse().unwrap());
+                dump_region_size(&db, id.parse().unwrap(), cf_name);
             }
-            None => dump_all_region_size(&db),
+            None => dump_all_region_size(&db, cf_name),
         }
     } else if let Some(matches) = matches.subcommand_matches("scan") {
         let from = String::from(matches.value_of("from").unwrap());
@@ -214,6 +253,11 @@ fn main() {
                 let _ = app.print_help();
             }
         }
+    } else if let Some(matches) = matches.subcommand_matches("diff") {
+        let region_id: u64 = matches.value_of("region").unwrap().parse().unwrap();
+        let db_path2 = matches.value_of("to").unwrap();
+        let db2 = util::rocksdb::open(db_path2, ALL_CFS).unwrap();
+        dump_diff(&db, &db2, region_id);
     } else {
         let _ = app.print_help();
     }
@@ -246,6 +290,17 @@ impl MvccDeserializable for Vec<u8> {
 pub struct MvccKv<T> {
     key: Key,
     value: T,
+}
+
+fn from_hex(key: &str) -> Vec<u8> {
+    const HEX_PREFIX: &str = "0x";
+    let mut s = String::from(key);
+    if s.starts_with(HEX_PREFIX) {
+        let len = s.len();
+        let new_len = len.saturating_sub(HEX_PREFIX.len());
+        s.truncate(new_len);
+    }
+    s.as_str().from_hex().unwrap()
 }
 
 pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
@@ -283,7 +338,8 @@ fn dump_mvcc_default(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
         if start_ts.is_none() || start_ts.unwrap() == ts {
-            println!("Key: {:?}", escape(key.encoded()));
+            let v = key.encoded();
+            println!("Key: {:?}", escape(v));
             println!("Value: {:?}", escape(kv.value.as_slice()));
             println!("Start_ts: {:?}", ts);
             println!("");
@@ -347,6 +403,88 @@ fn dump_raft_log_entry(db: DB, idx_key: &[u8]) {
     println!("{:?}", msg);
 }
 
+fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
+    println!("region id: {}", region_id);
+    let region_state_key = keys::region_state_key(region_id);
+    let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
+    println!("db1 region state: {:?}", region_state);
+    let region_state2: RegionLocalState = db2.get_msg(&region_state_key).unwrap().unwrap();
+    println!("db2 region state: {:?}", region_state2);
+
+    let raft_state_key = keys::apply_state_key(region_id);
+
+    let apply_state: RaftApplyState = db.get_msg_cf("raft", &raft_state_key).unwrap().unwrap();
+    println!("db1 apply state: {:?}", apply_state);
+
+    let apply_state: RaftApplyState = db2.get_msg_cf("raft", &raft_state_key).unwrap().unwrap();
+    println!("db2 apply state: {:?}", apply_state);
+
+
+    let region = region_state.get_region();
+    let start_key = &keys::data_key(region.get_start_key());
+    let end_key = &keys::data_end_key(region.get_end_key());
+    for cf in ALL_CFS {
+        let handle = db.cf_handle(cf).unwrap();
+        let handle2 = db2.cf_handle(cf).unwrap();
+        println!("cf: {}", cf);
+        let mut ropt = ReadOptions::new();
+        ropt.set_iterate_upper_bound(end_key);
+        let mut iter = db.iter_cf_opt(handle, ropt);
+        let mut ropt = ReadOptions::new();
+        ropt.set_iterate_upper_bound(end_key);
+        let mut iter2 = db2.iter_cf_opt(handle2, ropt);
+        iter.seek(SeekKey::Key(start_key));
+        iter2.seek(SeekKey::Key(start_key));
+        let mut has_diff = false;
+        let mut common_head_len = 0;
+        while iter.valid() && iter2.valid() {
+            if iter.key() != iter2.key() {
+                if iter.key() > iter2.key() {
+                    has_diff = true;
+                    println!("only db2 has : {}", escape(iter2.key()));
+                    if cf == &CF_DEFAULT || cf == &CF_WRITE {
+                        println!("timestamp: {}",
+                                 Key::from_encoded(iter2.key().to_vec()).decode_ts().unwrap());
+                    }
+                    iter2.next();
+                    continue;
+                }
+                if iter.key() < iter2.key() {
+                    has_diff = true;
+                    println!("only db1 has : {}", escape(iter.key()));
+                    if cf == &CF_DEFAULT || cf == &CF_WRITE {
+                        println!("timestamp: {}",
+                                 Key::from_encoded(iter.key().to_vec()).decode_ts().unwrap());
+                    }
+                    iter.next();
+                    continue;
+                }
+            }
+            if !has_diff {
+                common_head_len += 1;
+            }
+            iter.next();
+            iter2.next();
+        }
+        println!("head have {} same keys", common_head_len);
+
+        if !iter.valid() && iter2.valid() {
+            println!("iter1 invalid but iter2 valid!");
+            while iter2.valid() {
+                println!("only db2 has : {:?}", escape(iter2.key()));
+                iter2.next();
+            }
+        }
+        if iter.valid() && !iter2.valid() {
+            println!("iter2 invalid but iter1 valid!");
+            while iter.valid() {
+                println!("only db1 has : {:?}", escape(iter.key()));
+                iter.next();
+            }
+        }
+    }
+}
+
 fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     let region_state_key = keys::region_state_key(region_id);
     let region_state: Option<RegionLocalState> = db.get_msg(&region_state_key).unwrap();
@@ -371,6 +509,9 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
 fn convert_gbmb(mut bytes: u64) -> String {
     const GB: u64 = 1024 * 1024 * 1024;
     const MB: u64 = 1024 * 1024;
+    if bytes < MB {
+        return bytes.to_string();
+    }
     let mb = if bytes % GB == 0 {
         String::from("")
     } else {
@@ -385,9 +526,12 @@ fn convert_gbmb(mut bytes: u64) -> String {
     format!("{}{}", gb, mb)
 }
 
-fn dump_region_size(db: &DB, region_id: u64) {
+fn dump_region_size(db: &DB, region_id: u64, cf: Option<&str>) {
     println!("region id: {}", region_id);
-    let size = get_region_size(db, region_id);
+    if let Some(cf_name) = cf {
+        println!("cf_name: {}", cf_name);
+    }
+    let size = get_region_size(db, region_id, cf);
     println!("region size: {}", convert_gbmb(size));
 }
 
@@ -398,10 +542,10 @@ fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
     }
 }
 
-fn dump_all_region_size(db: &DB) {
+fn dump_all_region_size(db: &DB, cf: Option<&str>) {
     let mut region_ids = get_all_region_ids(db);
     let mut region_sizes: Vec<u64> =
-        region_ids.iter().map(|&region_id| get_region_size(db, region_id)).collect();
+        region_ids.iter().map(|&region_id| get_region_size(db, region_id, cf)).collect();
     let region_number = region_ids.len();
     let total_size = region_sizes.iter().sum();
     let mut v: Vec<(u64, u64)> = region_sizes.drain(..).zip(region_ids.drain(..)).collect();
@@ -434,14 +578,17 @@ fn get_all_region_ids(db: &DB) -> Vec<u64> {
     region_ids
 }
 
-fn get_region_size(db: &DB, region_id: u64) -> u64 {
+fn get_region_size(db: &DB, region_id: u64, cf: Option<&str>) -> u64 {
     let region_state_key = keys::region_state_key(region_id);
     let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
     let region = region_state.get_region();
     let start_key = &keys::data_key(region.get_start_key());
     let end_key = &keys::data_end_key(region.get_end_key());
     let mut size: u64 = 0;
-    let cf_arr = [CF_DEFAULT, CF_WRITE, CF_LOCK];
+    let cf_arr = match cf {
+        Some(s) => vec![s],
+        None => vec![CF_DEFAULT, CF_WRITE, CF_LOCK],
+    };
     for cf in &cf_arr {
         db.scan_cf(cf,
                      start_key,

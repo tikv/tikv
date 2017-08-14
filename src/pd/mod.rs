@@ -13,13 +13,14 @@
 
 use futures::BoxFuture;
 
-mod async;
 mod metrics;
+mod client;
+mod util;
 
 pub mod errors;
 pub use self::errors::{Result, Error};
-pub use self::async::RpcClient;
-pub use self::async::validate_endpoints;
+pub use self::client::RpcClient;
+pub use self::util::validate_endpoints;
 
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -33,19 +34,22 @@ pub struct RegionStat {
     pub pending_peers: Vec<metapb::Peer>,
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub approximate_size: u64,
 }
 
 impl RegionStat {
     pub fn new(down_peers: Vec<pdpb::PeerStats>,
                pending_peers: Vec<metapb::Peer>,
                written_bytes: u64,
-               written_keys: u64)
+               written_keys: u64,
+               approximate_size: u64)
                -> RegionStat {
         RegionStat {
             down_peers: down_peers,
             pending_peers: pending_peers,
             written_bytes: written_bytes,
             written_keys: written_keys,
+            approximate_size: approximate_size,
         }
     }
 }

@@ -21,7 +21,6 @@ use kvproto::tikvpb_grpc::*;
 use util::worker::Worker;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
-use raftstore::store::config::REGION_SPLIT_SIZE;
 
 use super::{Result, Config};
 use coprocessor::{EndPointHost, EndPointTask};
@@ -33,7 +32,6 @@ use super::raft_client::RaftClient;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: usize = 4 * REGION_SPLIT_SIZE as usize;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
@@ -54,6 +52,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     pub fn new(cfg: &Config,
+               region_split_size: usize,
                storage: Storage,
                raft_router: T,
                snapshot_status_sender: Sender<SnapshotStatusMsg>,
@@ -72,10 +71,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let addr = try!(SocketAddr::from_str(&cfg.addr));
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size)
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
+            .max_send_message_len(region_split_size as usize * 4)
             .build_args();
         let grpc_server = try!(ServerBuilder::new(env.clone())
             .register_service(create_tikv(h))
@@ -116,9 +115,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     pub fn start(&mut self, cfg: &Config) -> Result<()> {
         let end_point = EndPointHost::new(self.storage.get_engine(),
                                           self.end_point_worker.scheduler(),
-                                          cfg.end_point_concurrency,
-                                          cfg.end_point_txn_concurrency_on_busy,
-                                          cfg.end_point_small_txn_tasks_limit);
+                                          cfg.end_point_concurrency);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         let snap_runner = SnapHandler::new(self.env.clone(),
                                            self.snap_mgr.clone(),
@@ -159,12 +156,13 @@ mod tests {
     use super::super::{Result, Config};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
-    use storage::Storage;
+    use storage::{Storage, Config as StorageConfig};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::transport::Transport;
 
+    #[derive(Clone)]
     struct MockResolver {
         addr: Arc<Mutex<Option<SocketAddr>>>,
     }
@@ -211,11 +209,12 @@ mod tests {
 
     #[test]
     fn test_peer_resolve() {
-        let mut cfg = Config::new();
+        let mut cfg = Config::default();
+        let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let mut storage = Storage::new(&cfg.storage).unwrap();
-        storage.start(&cfg.storage).unwrap();
+        let mut storage = Storage::new(&storage_cfg).unwrap();
+        storage.start(&storage_cfg).unwrap();
 
         let (tx, rx) = mpsc::channel();
         let router = TestRaftStoreRouter::new(tx);
@@ -224,6 +223,7 @@ mod tests {
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(&cfg,
+                                     1024,
                                      storage,
                                      router,
                                      snapshot_status_sender,

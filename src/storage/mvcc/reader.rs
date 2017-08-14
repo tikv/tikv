@@ -19,7 +19,7 @@ use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
 use kvproto::kvrpcpb::IsolationLevel;
-use util::properties::GetPropertiesOptions;
+use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -61,11 +61,8 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn reset(&mut self, upper_bound: Option<Vec<u8>>) {
-        self.upper_bound = upper_bound;
-        self.data_cursor = None;
-        self.lock_cursor = None;
-        self.write_cursor = None;
+    pub fn close(self) -> &'a mut Statistics {
+        self.statistics
     }
 
     pub fn set_key_only(&mut self, key_only: bool) {
@@ -255,6 +252,16 @@ impl<'a> MvccReader<'a> {
         Ok(None)
     }
 
+    fn create_data_cursor(&mut self) -> Result<()> {
+        self.scan_mode = Some(ScanMode::Forward);
+        if self.data_cursor.is_none() {
+            let iter_opt = IterOption::new(None, self.fill_cache);
+            let iter = try!(self.snapshot.iter(iter_opt, self.get_scan_mode(true)));
+            self.data_cursor = Some(iter);
+        }
+        Ok(())
+    }
+
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
             let iter_opt = IterOption::new(self.upper_bound.as_ref().cloned(), self.fill_cache);
@@ -271,6 +278,23 @@ impl<'a> MvccReader<'a> {
             self.lock_cursor = Some(iter);
         }
         Ok(())
+    }
+
+    // Return the first committed key which start_ts equals to ts
+    pub fn seek_ts(&mut self, ts: u64) -> Result<Option<Key>> {
+        assert!(self.scan_mode.is_some());
+        try!(self.create_write_cursor());
+
+        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let mut ok = cursor.seek_to_first(&mut self.statistics.write);
+
+        while ok {
+            if try!(Write::parse(cursor.value())).start_ts == ts {
+                return Ok(Some(try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts())));
+            }
+            ok = cursor.next(&mut self.statistics.write);
+        }
+        Ok(None)
     }
 
     pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
@@ -429,6 +453,29 @@ impl<'a> MvccReader<'a> {
         }
     }
 
+    // Get all Value of the given key in CF_DEFAULT
+    pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(u64, Value)>> {
+        try!(self.create_data_cursor());
+        let mut cursor = self.data_cursor.as_mut().unwrap();
+        let mut ok = try!(cursor.seek(key, &mut self.statistics.data));
+        if !ok {
+            return Ok(vec![]);
+        }
+        let mut v = vec![];
+        while ok {
+            let cur_key = Key::from_encoded(cursor.key().to_vec());
+            let cur_key_without_ts = try!(cur_key.truncate_ts());
+            if cur_key_without_ts.encoded().as_slice() == key.encoded().as_slice() {
+                v.push((try!(cur_key.decode_ts()), cursor.value().to_vec()));
+            }
+            if cur_key_without_ts.encoded().as_slice() != key.encoded().as_slice() {
+                break;
+            }
+            ok = cursor.next(&mut self.statistics.data);
+        }
+        Ok(v)
+    }
+
     // Returns true if it needs gc.
     // This is for optimization purpose, does not mean to be accurate.
     pub fn need_gc(&self, safe_point: u64, ratio_threshold: f64) -> bool {
@@ -437,11 +484,9 @@ impl<'a> MvccReader<'a> {
             return true;
         }
 
-        let mut opts = GetPropertiesOptions::default();
-        opts.max_ts = Some(safe_point);
-        let props = match self.snapshot.get_properties_cf(CF_WRITE, &opts) {
-            Ok(v) => v,
-            Err(_) => return true,
+        let props = match self.get_mvcc_properties(safe_point) {
+            Some(v) => v,
+            None => return true,
         };
 
         // No data older than safe_point to GC.
@@ -464,11 +509,34 @@ impl<'a> MvccReader<'a> {
         // A lot of MVCC versions of a single row to GC.
         props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
     }
+
+    fn get_mvcc_properties(&self, safe_point: u64) -> Option<MvccProperties> {
+        let collection = match self.snapshot.get_properties_cf(CF_WRITE) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        if collection.is_empty() {
+            return None;
+        }
+        // Aggregate MVCC properties.
+        let mut props = MvccProperties::new();
+        for (_, v) in &*collection {
+            let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
+                Ok(v) => v,
+                Err(_) => return None,
+            };
+            // Filter out properties after safe_point.
+            if mvcc.min_ts > safe_point {
+                continue;
+            }
+            props.add(&mvcc);
+        }
+        Some(props)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::u64;
     use kvproto::metapb::{Peer, Region};
     use kvproto::kvrpcpb::IsolationLevel;
@@ -480,10 +548,9 @@ mod tests {
     use storage::mvcc::{MvccTxn, MvccReader};
     use tempdir::TempDir;
     use raftstore::coprocessor::RegionSnapshot;
-    use raftstore::errors::Result;
     use raftstore::store::keys;
     use util::rocksdb::{self as rocksdb_util, CFOptions};
-    use util::properties::{UserProperties, UserPropertiesCollectorFactory};
+    use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -557,6 +624,12 @@ mod tests {
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.delete_cf(handle, &k).unwrap();
                     }
+                    Modify::DeleteRange(cf, k1, k2) => {
+                        let k1 = keys::data_key(k1.encoded());
+                        let k2 = keys::data_key(k2.encoded());
+                        let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
+                        wb.delete_range_cf(handle, &k1, &k2).unwrap();
+                    }
                 }
             }
             db.write(wb).unwrap();
@@ -578,15 +651,15 @@ mod tests {
     }
 
     fn open_db(path: &str, with_properties: bool) -> Arc<DB> {
-        let db_opts = rocksdb::Options::new();
-        let mut cf_opts = rocksdb::Options::new();
+        let db_opts = rocksdb::DBOptions::new();
+        let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
         if with_properties {
-            let f = Box::new(UserPropertiesCollectorFactory::default());
+            let f = Box::new(MvccPropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::Options::new()),
-                            CFOptions::new(CF_RAFT, rocksdb::Options::new()),
-                            CFOptions::new(CF_LOCK, rocksdb::Options::new()),
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
+                            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
+                            CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
                             CFOptions::new(CF_WRITE, cf_opts)];
         Arc::new(rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
     }
@@ -603,18 +676,16 @@ mod tests {
         region
     }
 
-    fn get_properties(db: Arc<DB>, region: Region, safe_point: u64) -> Result<UserProperties> {
-        let mut opts = GetPropertiesOptions::default();
-        opts.max_ts = Some(safe_point);
-        let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
-        snap.get_properties_cf(CF_WRITE, &opts)
-    }
-
-    fn check_need_gc(db: Arc<DB>, region: Region, safe_point: u64, need_gc: bool) {
+    fn check_need_gc(db: Arc<DB>,
+                     region: Region,
+                     safe_point: u64,
+                     need_gc: bool)
+                     -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
         let mut stat = Statistics::default();
         let reader = MvccReader::new(&snap, &mut stat, None, false, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
+        reader.get_mvcc_properties(safe_point)
     }
 
     #[test]
@@ -633,13 +704,11 @@ mod tests {
         // Put 2 keys.
         engine.put(&[1], 1, 1);
         engine.put(&[4], 2, 2);
-        assert!(get_properties(db.clone(), region.clone(), 10).is_err());
-        check_need_gc(db.clone(), region.clone(), 10, true);
+        assert!(check_need_gc(db.clone(), region.clone(), 10, true).is_none());
         engine.flush();
         // After this flush, we have a SST file without properties.
         // Without properties, we always need GC.
-        assert!(get_properties(db.clone(), region.clone(), 10).is_err());
-        check_need_gc(db.clone(), region.clone(), 10, true);
+        assert!(check_need_gc(db.clone(), region.clone(), 10, true).is_none());
     }
 
     #[allow(cyclomatic_complexity)]
@@ -654,20 +723,18 @@ mod tests {
         // After this flush, we have a SST file w/ properties, plus the SST
         // file w/o properties from previous flush. We always need GC as
         // long as we can't get properties from any SST files.
-        assert!(get_properties(db.clone(), region.clone(), 10).is_err());
-        check_need_gc(db.clone(), region.clone(), 10, true);
+        assert!(check_need_gc(db.clone(), region.clone(), 10, true).is_none());
         engine.compact();
         // After this compact, the two SST files are compacted into a new
         // SST file with properties. Now all SST files have properties and
         // all keys have only one version, so we don't need gc.
-        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 10, false).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 4);
         assert_eq!(props.num_rows, 4);
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 4);
         assert_eq!(props.max_row_versions, 1);
-        check_need_gc(db.clone(), region.clone(), 10, false);
 
         // Put 2 more keys and delete them.
         engine.put(&[5], 5, 5);
@@ -677,23 +744,21 @@ mod tests {
         engine.flush();
         // After this flush, keys 5,6 in the new SST file have more than one
         // versions, so we need gc.
-        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 10, true).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 8);
         assert_eq!(props.num_rows, 6);
         assert_eq!(props.num_puts, 6);
         assert_eq!(props.num_versions, 8);
         assert_eq!(props.max_row_versions, 2);
-        check_need_gc(db.clone(), region.clone(), 10, true);
         // But if the `safe_point` is older than all versions, we don't need gc too.
-        let props = get_properties(db.clone(), region.clone(), 0).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 0, false).unwrap();
         assert_eq!(props.min_ts, u64::MAX);
         assert_eq!(props.max_ts, 0);
         assert_eq!(props.num_rows, 0);
         assert_eq!(props.num_puts, 0);
         assert_eq!(props.num_versions, 0);
         assert_eq!(props.max_row_versions, 0);
-        check_need_gc(db.clone(), region.clone(), 0, false);
 
         // We gc the two deleted keys manually.
         engine.gc(&[5], 10);
@@ -701,25 +766,23 @@ mod tests {
         engine.compact();
         // After this compact, all versions of keys 5,6 are deleted,
         // no keys have more than one versions, so we don't need gc.
-        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 10, false).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 4);
         assert_eq!(props.num_rows, 4);
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 4);
         assert_eq!(props.max_row_versions, 1);
-        check_need_gc(db.clone(), region.clone(), 10, false);
 
         // A single lock version need gc.
         engine.lock(&[7], 9, 9);
         engine.flush();
-        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 10, true).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 9);
         assert_eq!(props.num_rows, 5);
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 5);
         assert_eq!(props.max_row_versions, 1);
-        check_need_gc(db.clone(), region.clone(), 10, true);
     }
 }

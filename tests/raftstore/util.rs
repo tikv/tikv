@@ -18,7 +18,6 @@ use std::thread;
 
 use rocksdb::DB;
 use protobuf;
-use time::Duration as TimeDuration;
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
@@ -30,8 +29,12 @@ use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::escape;
+use tikv::util::config::*;
+use tikv::config::TiKvConfig;
 
 pub use tikv::raftstore::store::util::find_peer;
+
+pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -75,19 +78,19 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
 pub fn new_store_cfg() -> Config {
     Config {
         sync_log: false,
-        raft_base_tick_interval: 10,
+        raft_base_tick_interval: ReadableDuration::millis(10),
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 25,
-        raft_log_gc_tick_interval: 100,
+        raft_log_gc_tick_interval: ReadableDuration::millis(100),
         raft_log_gc_threshold: 1,
-        pd_heartbeat_tick_interval: 20,
-        region_check_size_diff: 10000,
+        pd_heartbeat_tick_interval: ReadableDuration::millis(20),
+        region_split_check_diff: ReadableSize(10000),
         // Use a value of 3 seconds as max_leader_missing_duration just for test.
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
-        max_leader_missing_duration: Duration::from_secs(3),
-        report_region_flow_interval: 100, // 100ms
-        raft_store_max_leader_lease: TimeDuration::milliseconds(25 * 10),
+        max_leader_missing_duration: ReadableDuration::secs(3),
+        report_region_flow_interval: ReadableDuration::millis(100),
+        raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
         use_sst_file_snapshot: true,
         allow_remove_leader: true,
         ..Config::default()
@@ -95,19 +98,24 @@ pub fn new_store_cfg() -> Config {
 }
 
 pub fn new_server_config(cluster_id: u64) -> ServerConfig {
-    let store_cfg = new_store_cfg();
-
     ServerConfig {
         cluster_id: cluster_id,
         addr: "127.0.0.1:0".to_owned(),
-        raft_store: store_cfg,
-        storage: StorageConfig { sched_worker_pool_size: 1, ..StorageConfig::default() },
         grpc_concurrency: 1,
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
         end_point_concurrency: 1,
         ..ServerConfig::default()
+    }
+}
+
+pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
+    TiKvConfig {
+        storage: StorageConfig { scheduler_worker_pool_size: 1, ..StorageConfig::default() },
+        server: new_server_config(cluster_id),
+        raft_store: new_store_cfg(),
+        ..TiKvConfig::default()
     }
 }
 
@@ -159,6 +167,15 @@ pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
     cmd.set_cmd_type(CmdType::Delete);
     cmd.mut_delete().set_key(key.to_vec());
     cmd.mut_delete().set_cf(cf.to_string());
+    cmd
+}
+
+pub fn new_delete_range_cmd(cf: &str, start: &[u8], end: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::DeleteRange);
+    cmd.mut_delete_range().set_start_key(start.to_vec());
+    cmd.mut_delete_range().set_end_key(end.to_vec());
+    cmd.mut_delete_range().set_cf(cf.to_string());
     cmd
 }
 

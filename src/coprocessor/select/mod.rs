@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod client;
-mod util;
-
-pub use self::client::RpcClient;
-pub use self::util::validate_endpoints;
+pub mod aggregate;
+pub mod xeval;
+pub mod select;
+pub mod topn_heap;

@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg;
 use tikv::util::HandyRwLock;
+use tikv::util::config::*;
 use kvproto::eraftpb::{Message, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 
@@ -32,8 +33,8 @@ use super::util::*;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 10;
-    cluster.cfg.raft_store.snap_apply_batch_size = 500;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
@@ -100,10 +101,10 @@ fn test_server_huge_snapshot() {
 
 fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
-    cluster.cfg.raft_store.snap_gc_timeout = 2;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -198,7 +199,7 @@ fn test_server_snap_gc() {
 /// arrive at the same raftstore.
 fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable raft log gc in this test case.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 60000;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -246,10 +247,10 @@ fn test_server_concurrent_snap() {
 
 fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
-    cluster.cfg.raft_store.snap_gc_timeout = 2;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
     cluster.run();
     let cf = "lock";
@@ -419,10 +420,10 @@ impl Filter<Msg> for SnapshotAppendFilter {
 
 fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
-    cluster.cfg.raft_store.snap_gc_timeout = 2;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.

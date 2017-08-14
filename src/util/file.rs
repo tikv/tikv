@@ -101,17 +101,6 @@ mod test {
         delete_file_if_exist(&existent_file);
         assert_eq!(file_exists(&existent_file), false);
 
-        let perm_file = dir_path.join("perm_file");
-        {
-            let f = OpenOptions::new().write(true).create_new(true).open(&perm_file).unwrap();
-            let mut perm = f.metadata().unwrap().permissions();
-            perm.set_readonly(true);
-            f.set_permissions(perm).unwrap();
-        }
-        assert_eq!(file_exists(&perm_file), true);
-        delete_file_if_exist(&perm_file);
-        assert_eq!(file_exists(&perm_file), false);
-
         let non_existent_file = dir_path.join("non_existent_file");
         delete_file_if_exist(&non_existent_file);
     }

@@ -24,6 +24,7 @@
 #![feature(const_fn)]
 
 #![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
 
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
@@ -41,7 +42,7 @@ extern crate tipb;
 extern crate time;
 extern crate fnv;
 extern crate test;
-extern crate grpc;
+extern crate grpcio as grpc;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate tokio_core;
