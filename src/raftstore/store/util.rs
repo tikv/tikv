@@ -367,7 +367,7 @@ mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         // Prefix extractor(trim the timestamp at tail) for write cf.
         cf_opts.set_prefix_extractor("FixedSuffixSliceTransform",
-                                  Box::new(rocksdb::FixedSuffixSliceTransform::new(8)))
+                                  Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
             .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);

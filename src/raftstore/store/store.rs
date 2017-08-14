@@ -43,7 +43,7 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler, FutureWorker};
 use util::transport::SendCh;
-use util::{rocksdb, RingQueue};
+use util::RingQueue;
 use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
