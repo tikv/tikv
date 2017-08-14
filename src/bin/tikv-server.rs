@@ -74,6 +74,7 @@ use tikv::server::resolve;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::util::time::Monitor;
+use util::rocksdb::MetricsFlusher;
 
 fn exit_with_err<E: Error>(e: E) -> ! {
     exit_with_msg(format!("{:?}", e))
@@ -162,10 +163,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
                                     Some(store_sendch),
                                     cfg.raft_store.use_sst_file_snapshot);
+
+    let mut metrics_flusher = MetricsFlusher::new(engine.clone(), 10000);
+
     let mut server = Server::new(&cfg.server,
                                  cfg.raft_store.region_split_size.0 as usize,
                                  storage.clone(),
-                                 Some(engine.clone()),
                                  raft_router,
                                  snap_status_sender,
                                  resolver,
@@ -189,12 +192,20 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         panic!("failed to start storage, error = {:?}", e);
     }
 
+    if let Err(e) = metrics_flusher.start() {
+        error!("failed to start metrics flusher, error = {:?}", e);
+    }
+
     // Run server.
     server.start(&cfg.server).unwrap_or_else(|e| exit_with_err(e));
+
     signal_handler::handle_signal(engine, &cfg.rocksdb.backup_dir);
 
     // Stop.
     server.stop().unwrap_or_else(|e| exit_with_err(e));
+
+    metrics_flusher.stop();
+
     node.stop().unwrap_or_else(|e| exit_with_err(e));
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!("ignore failure when stopping resolver: {:?}", e);

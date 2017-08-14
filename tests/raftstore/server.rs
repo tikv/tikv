@@ -115,7 +115,6 @@ impl Simulator for ServerCluster {
         let mut server = Server::new(&cfg.server,
                                      cfg.raft_store.region_split_size.0 as usize,
                                      store.clone(),
-                                     None,
                                      sim_router.clone(),
                                      snap_status_sender,
                                      resolver,

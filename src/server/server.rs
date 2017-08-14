@@ -29,8 +29,6 @@ use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
 use super::raft_client::RaftClient;
-use util::rocksdb::MetricsFlusher;
-use rocksdb::DB;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
@@ -50,15 +48,12 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
-    metrics_flusher: Option<MetricsFlusher>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
-    #[allow(too_many_arguments)]
     pub fn new(cfg: &Config,
                region_split_size: usize,
                storage: Storage,
-               engine: Option<Arc<DB>>,
                raft_router: T,
                snapshot_status_sender: Sender<SnapshotStatusMsg>,
                resolver: S,
@@ -68,12 +63,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.clone())));
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
-
-        let metrics_flusher = if engine.is_some() {
-            Some(MetricsFlusher::new(engine.unwrap(), cfg.flush_metrics_interval))
-        } else {
-            None
-        };
 
         let h = Service::new(storage.clone(),
                              end_point_worker.scheduler(),
@@ -114,7 +103,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
-            metrics_flusher: metrics_flusher,
         };
 
         Ok(svr)
@@ -132,9 +120,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let snap_runner = SnapHandler::new(self.env.clone(),
                                            self.snap_mgr.clone(),
                                            self.raft_router.clone());
-        if self.metrics_flusher.is_some() {
-            box_try!(self.metrics_flusher.as_mut().unwrap().start());
-        }
         box_try!(self.snap_worker.start(snap_runner));
         self.grpc_server.start();
         info!("TiKV is ready to serve");
@@ -144,9 +129,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     pub fn stop(&mut self) -> Result<()> {
         self.end_point_worker.stop();
         self.snap_worker.stop();
-        if self.metrics_flusher.is_some() {
-            self.metrics_flusher.as_mut().unwrap().stop();
-        }
         if let Err(e) = self.storage.stop() {
             error!("failed to stop store: {:?}", e);
         }
@@ -163,7 +145,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::time::Duration;
     use std::sync::{Arc, Mutex};
     use std::sync::mpsc::{self, Sender};
@@ -181,8 +163,8 @@ mod tests {
     use raftstore::store::transport::Transport;
 
     #[derive(Clone)]
-    struct MockResolver {
-        addr: Arc<Mutex<Option<SocketAddr>>>,
+    pub struct MockResolver {
+        pub addr: Arc<Mutex<Option<SocketAddr>>>,
     }
 
     impl StoreAddrResolver for MockResolver {
@@ -193,13 +175,13 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct TestRaftStoreRouter {
+    pub struct TestRaftStoreRouter {
         tx: Sender<usize>,
-        report_unreachable_count: Arc<AtomicUsize>,
+        pub report_unreachable_count: Arc<AtomicUsize>,
     }
 
     impl TestRaftStoreRouter {
-        fn new(tx: Sender<usize>) -> TestRaftStoreRouter {
+        pub fn new(tx: Sender<usize>) -> TestRaftStoreRouter {
             TestRaftStoreRouter {
                 tx: tx,
                 report_unreachable_count: Arc::new(AtomicUsize::new(0)),
@@ -243,7 +225,6 @@ mod tests {
         let mut server = Server::new(&cfg,
                                      1024,
                                      storage,
-                                     None,
                                      router,
                                      snapshot_status_sender,
                                      MockResolver { addr: addr.clone() },
