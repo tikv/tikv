@@ -215,7 +215,8 @@ use crc::crc32::{self, Digest, Hasher32};
 use protobuf::RepeatedField;
 use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
 use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, DBCompressionType};
-use util::{rocksdb, duration_to_sec};
+use util::rocksdb;
+use util::time::duration_to_sec;
 use util::file::{get_file_size, file_exists, delete_file_if_exist};
 use util::rocksdb::get_fastest_supported_compression_type;
 
