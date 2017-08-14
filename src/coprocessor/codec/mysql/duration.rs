@@ -22,7 +22,7 @@ use super::super::Result;
 use super::{Decimal, parse_frac, check_fsp};
 
 const NANOS_PER_SEC: i64 = 1_000_000_000;
-const NANO_WIDTH: u32 = 9;
+pub const NANO_WIDTH: u32 = 9;
 const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
 

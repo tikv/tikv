@@ -20,6 +20,7 @@ use chrono::{DateTime, Timelike, Utc, Datelike, FixedOffset, Duration, TimeZone}
 
 use coprocessor::codec::mysql::{self, types, parse_frac, check_fsp};
 use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::mysql::duration::NANO_WIDTH;
 use super::super::{Result, TEN_POW};
 
 
@@ -296,6 +297,34 @@ impl Time {
         let micro = t.nanosecond() as u64 / 1000;
         (((ymd << 17) | hms) << 24) | micro
     }
+
+    pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
+        if self.tp == types::DATETIME || self.is_zero() {
+            // date type has no fsp
+            return Ok(());
+        }
+        let fsp = try!(check_fsp(fsp));
+        if fsp == self.fsp {
+            return Ok(());
+        }
+        // TODO:support case month or day is 0(2012-00-00 12:12:12)
+        let nanos = self.time.nanosecond();
+        let base = 10u32.pow(NANO_WIDTH - fsp as u32);
+        let expect_nanos = ((nanos as f64 / base as f64).round() as u32) * base;
+        let diff = nanos as i64 - expect_nanos as i64;
+        let new_time = if diff < 0 {
+            self.time.checked_sub_signed(Duration::nanoseconds(-diff))
+        } else {
+            self.time.checked_add_signed(Duration::nanoseconds(diff))
+        };
+        if new_time.is_none() {
+            Err(box_err!("round_frac {} overflows", self.time))
+        } else {
+            self.time = new_time.unwrap();
+            self.fsp = fsp;
+            Ok(())
+        }
+    }
 }
 
 impl PartialOrd for Time {
@@ -524,6 +553,71 @@ mod test {
         for (s, exp) in cases {
             let res = Time::parse_datetime_format(s);
             assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_round_frac() {
+        let ok_tables = vec![
+            ("2012-12-31 11:30:45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("0000-00-00 00:00:00", UN_SPECIFIED_FSP, "0000-00-00 00:00:00"),
+            ("0001-01-01 00:00:00", UN_SPECIFIED_FSP, "0001-01-01 00:00:00"),
+            ("00-12-31 11:30:45", UN_SPECIFIED_FSP, "2000-12-31 11:30:45"),
+            ("12-12-31 11:30:45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-12-31", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("20121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("2012^12^31 11+30+45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012^12^31T11+30+45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("12-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("20121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-02-29", UN_SPECIFIED_FSP, "2012-02-29 00:00:00"),
+            ("121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
+            ("20121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
+            ("121231113045.9999999", 6, "2012-12-31 11:30:46.000000"),
+            ("121231113045.999999", 6, "2012-12-31 11:30:45.999999"),
+            ("121231113045.999999", 5, "2012-12-31 11:30:46.00000"),
+            ("2012-12-31 11:30:45.123456", 4, "2012-12-31 11:30:45.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "2012-12-31 11:30:45.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "2012-12-31 11:30:45"),
+            ("2012-12-31 11:30:45.123456", 1, "2012-12-31 11:30:45.1"),
+            ("2012-12-31 11:30:45.999999", 4, "2012-12-31 11:30:46.0000"),
+            ("2012-12-31 11:30:45.999999", 0, "2012-12-31 11:30:46"),
+            // TODO: TIDB can handle this case, but we can't.
+            //("2012-00-00 11:30:45.999999", 3, "2012-00-00 11:30:46.000"),
+            // TODO: MySQL can handle this case, but we can't.
+            // ("2012-01-00 23:59:59.999999", 3, "2012-01-01 00:00:00.000"),
+        ];
+
+        for (input, fsp, exp) in ok_tables {
+            let mut utc_t = Time::parse_utc_datetime(input, UN_SPECIFIED_FSP).unwrap();
+            utc_t.round_frac(fsp).unwrap();
+            let expect = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
+            assert_eq!(utc_t,
+                       expect,
+                       "input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
+                       input,
+                       exp,
+                       utc_t,
+                       expect);
+
+            for mut offset in MIN_OFFSET..MAX_OFFSET {
+                offset *= 60;
+                let tz = FixedOffset::east(offset);
+                let mut t = Time::parse_datetime(input, UN_SPECIFIED_FSP, &tz).unwrap();
+                t.round_frac(fsp).unwrap();
+                let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, &tz).unwrap();
+                assert_eq!(t,
+                           expect,
+                           "tz:{:?},input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
+                           offset,
+                           input,
+                           exp,
+                           t,
+                           expect);
+            }
         }
     }
 }
