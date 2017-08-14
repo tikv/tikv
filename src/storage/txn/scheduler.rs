@@ -84,7 +84,7 @@ type SnapshotResult = (Vec<u64>, CbContext, EngineResult<Box<Snapshot>>);
 pub enum Msg {
     Quit,
     RawCmd { cmd: Command, cb: StorageCb },
-    GetSnapshot(Vec<(Context, Vec<u64>)>),
+    RetryGetSnapshots(Vec<(Context, Vec<u64>)>),
     SnapshotFinished {
         cids: Vec<u64>,
         cb_ctx: CbContext,
@@ -113,7 +113,7 @@ impl Debug for Msg {
         match *self {
             Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
-            Msg::GetSnapshot(ref tasks) => write!(f, "GetSnapshot {:?}", tasks),
+            Msg::RetryGetSnapshots(ref tasks) => write!(f, "RetryGetSnapshots {:?}", tasks),
             Msg::SnapshotFinished { ref cids, .. } => {
                 write!(f, "SnapshotFinished [cids={:?}]", cids)
             }
@@ -860,7 +860,9 @@ impl Scheduler {
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "process"]).inc();
-        debug!("process cmd with snapshot, cid={}", cid);
+        debug!("process cmd with snapshot, cid={}, cb_ctx={:?}",
+               cid,
+               cb_ctx);
         let mut cmd = {
             let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
             assert_eq!(ctx.cid, cid);
@@ -993,7 +995,7 @@ impl Scheduler {
 
     /// Initiates an async operation to batch get snapshot from the storage engine, then posts a
     /// `BatchSnapshotFinished` message back to the event loop when it finishes, also it posts a
-    /// `GetSnapshot` message if there are any `None` responses.
+    /// `RetryGetSnapshots` message if there are any `None` responses.
     fn batch_get_snapshot(&mut self, batch: Vec<(Context, Vec<u64>)>) {
         let mut all_cids = Vec::with_capacity(batch.iter().map(|&(_, ref cids)| cids.len()).sum());
         for &(_, ref cids) in &batch {
@@ -1026,11 +1028,11 @@ impl Scheduler {
             }
             if !retry.is_empty() {
                 BATCH_COMMANDS.with_label_values(&["retry"]).observe(retry.len() as f64);
-                match ch.send(Msg::GetSnapshot(retry)) {
+                match ch.send(Msg::RetryGetSnapshots(retry)) {
                     Ok(_) => {}
                     e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
                     Err(e) => {
-                        panic!("send GetSnapshot failed err {:?}", e);
+                        panic!("send RetryGetSnapshots failed err {:?}", e);
                     }
                 }
             }
@@ -1058,7 +1060,9 @@ impl Scheduler {
                             cids: Vec<u64>,
                             cb_ctx: CbContext,
                             snapshot: EngineResult<Box<Snapshot>>) {
-        debug!("receive snapshot finish msg for cid={:?}", cids);
+        debug!("receive snapshot finish msg for cids={:?}, cb_ctx={:?}",
+               cids,
+               cb_ctx);
         match snapshot {
             Ok(ref snapshot) => {
                 for cid in cids {
@@ -1192,7 +1196,7 @@ impl Scheduler {
                 match msg {
                     Msg::Quit => return Ok(()),
                     Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-                    Msg::GetSnapshot(tasks) => {
+                    Msg::RetryGetSnapshots(tasks) => {
                         for (ctx, cids) in tasks {
                             self.get_snapshot(&ctx, cids);
                         }

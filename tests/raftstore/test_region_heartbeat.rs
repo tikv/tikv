@@ -3,6 +3,7 @@ use std::sync::mpsc;
 use std::time::{Instant, Duration};
 
 use tikv::util::HandyRwLock;
+use tikv::util::config::*;
 
 use super::util;
 use super::node::new_node_cluster;
@@ -27,7 +28,7 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<
 }
 
 fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.max_peer_down_duration = Duration::from_secs(1);
+    cluster.cfg.raft_store.max_peer_down_duration = ReadableDuration::secs(1);
     cluster.run();
 
     // Kill 1, 2

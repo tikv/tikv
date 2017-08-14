@@ -23,6 +23,7 @@ use futures::Future;
 
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
+use tikv::config::TiKvConfig;
 use super::util::*;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -32,7 +33,6 @@ use kvproto::errorpb::Error as PbError;
 use tikv::pd::PdClient;
 use tikv::util::{HandyRwLock, escape, rocksdb};
 use tikv::util::transport::SendCh;
-use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use tikv::raftstore::store::keys::data_key;
 use super::transport_simulate::*;
@@ -48,7 +48,7 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
+    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command_on_node(&self,
@@ -71,7 +71,7 @@ pub trait Simulator {
 }
 
 pub struct Cluster<T: Simulator> {
-    pub cfg: ServerConfig,
+    pub cfg: TiKvConfig,
     leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
     dbs: Vec<Arc<DB>>,
@@ -92,7 +92,7 @@ impl<T: Simulator> Cluster<T> {
                pd_client: Arc<TestPdClient>)
                -> Cluster<T> {
         let mut c = Cluster {
-            cfg: new_server_config(id),
+            cfg: new_tikv_config(id),
             leaders: HashMap::new(),
             paths: vec![],
             dbs: vec![],
@@ -107,7 +107,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn id(&self) -> u64 {
-        self.cfg.cluster_id
+        self.cfg.server.cluster_id
     }
 
     fn create_engines(&mut self, count: usize, cfs: &[&str]) {
@@ -601,6 +601,12 @@ impl<T: Simulator> Cluster<T> {
         }
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
+    }
+
+    pub fn must_flush(&mut self, sync: bool) {
+        for db in &self.dbs {
+            db.flush(sync).unwrap();
+        }
     }
 
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
