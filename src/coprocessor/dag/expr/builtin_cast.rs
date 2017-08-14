@@ -139,14 +139,20 @@ impl FnCall {
     }
 
     pub fn cast_real_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        unimplemented!()
+        self.children[0].eval_real(ctx, row)
     }
 
     pub fn cast_decimal_as_real(&self,
                                 ctx: &StatementContext,
                                 row: &[Datum])
                                 -> Result<Option<f64>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_decimal(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let val = val.unwrap();
+        let res = try!(val.as_f64());
+        Ok(Some(res))
     }
 
     pub fn cast_str_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
