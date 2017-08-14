@@ -603,6 +603,12 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
     }
 
+    pub fn must_flush(&mut self, sync: bool) {
+        for db in &self.dbs {
+            db.flush(sync).unwrap();
+        }
+    }
+
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         self.pd_client
             .get_region_by_id(region_id)
