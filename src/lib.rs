@@ -17,6 +17,7 @@
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
+#![feature(try_from)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
@@ -27,6 +28,9 @@
 #![allow(should_implement_trait)]
 #![allow(large_enum_variant)]
 #![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
+#![allow(new_without_default_derive)]
+#![allow(verbose_bit_mask)]
 
 #[macro_use]
 extern crate log;
@@ -74,11 +78,12 @@ extern crate sys_info;
 
 #[macro_use]
 pub mod util;
+pub mod config;
 pub mod raft;
 pub mod storage;
-
-pub use storage::Storage;
 pub mod raftstore;
 pub mod pd;
 pub mod server;
 pub mod coprocessor;
+
+pub use storage::Storage;

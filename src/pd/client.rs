@@ -23,7 +23,7 @@ use kvproto::pdpb::{self, Member};
 
 use util::{Either, HandyRwLock};
 use pd::PdFuture;
-use super::super::{Result, Error, PdClient, RegionStat};
+use super::{Result, Error, PdClient, RegionStat};
 use super::util::{validate_endpoints, sync_request, check_resp_header, LeaderClient, Inner};
 
 const CQ_COUNT: usize = 1;
@@ -197,6 +197,7 @@ impl PdClient for RpcClient {
         req.set_pending_peers(RepeatedField::from_vec(region_stat.pending_peers));
         req.set_bytes_written(region_stat.written_bytes);
         req.set_keys_written(region_stat.written_keys);
+        req.set_approximate_size(region_stat.approximate_size);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
             let mut inner = client.wl();

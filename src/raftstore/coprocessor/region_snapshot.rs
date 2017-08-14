@@ -12,12 +12,12 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator, TablePropertiesCollection};
+use rocksdb::{DB, SeekKey, DBVector, DBIterator, TablePropertiesCollection};
 use kvproto::metapb::Region;
 
 use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
 use raftstore::store::{keys, util, PeerStorage};
-use raftstore::{Error, Result};
+use raftstore::Result;
 
 
 /// Snapshot of a region.
@@ -109,13 +109,7 @@ impl RegionSnapshot {
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
-        let db = self.snap.get_db();
-        let cf = try!(db.cf_handle(cf)
-            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
-        let start = keys::enc_start_key(self.get_region());
-        let end = keys::enc_end_key(self.get_region());
-        let range = Range::new(&start, &end);
-        db.get_properties_of_tables_in_range(cf, &[range]).map_err(|e| e.into())
+        util::get_region_properties_cf(&self.snap.get_db(), cf, self.get_region())
     }
 
     pub fn get_start_key(&self) -> &[u8] {

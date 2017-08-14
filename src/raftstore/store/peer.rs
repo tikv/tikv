@@ -37,7 +37,8 @@ use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{FutureWorker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
-use util::{clocktime, Either};
+use util::Either;
+use util::time::monotonic_raw_now;
 use util::collections::{HashSet, FlatMap, FlatMapValues as Values};
 
 use pd::INVALID_ID;
@@ -306,7 +307,7 @@ impl Peer {
             peers: vec![],
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
-            max_size_per_msg: cfg.raft_max_size_per_msg,
+            max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: true,
@@ -343,7 +344,7 @@ impl Peer {
                 hash: vec![],
             },
             raft_log_size_hint: 0,
-            raft_entry_max_size: cfg.raft_entry_max_size,
+            raft_entry_max_size: cfg.raft_entry_max_size.0,
             cfg: cfg,
             leader_lease_expired_time: None,
             peer_stat: PeerStat::default(),
@@ -489,7 +490,7 @@ impl Peer {
                     // For lease safty during leader transfer, mark `leader_lease_expired_time`
                     // to be unsafe until next_lease_expired_time from now
                     self.leader_lease_expired_time =
-                        Some(Either::Right(self.next_lease_expired_time(clocktime::raw_now())));
+                        Some(Either::Right(self.next_lease_expired_time(monotonic_raw_now())));
 
                     metrics.timeout_now += 1;
                 }
@@ -593,7 +594,7 @@ impl Peer {
         // "lease = max_lease - (quorum_commit_ts - send_to_quorum_ts)"
         // And the expired timestamp for that leader lease is "quorum_commit_ts + lease",
         // which is "send_to_quorum_ts + max_lease" in short.
-        send_to_quorum_ts + self.cfg.raft_store_max_leader_lease
+        send_to_quorum_ts + self.cfg.raft_store_max_leader_lease()
     }
 
     fn on_role_changed(&mut self, ready: &Ready, worker: &FutureWorker<PdTask>) {
@@ -609,7 +610,7 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    let next_expired_time = self.next_lease_expired_time(clocktime::raw_now());
+                    let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
                     self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
@@ -1026,7 +1027,7 @@ impl Peer {
 
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(clocktime::raw_now());
+        meta.renew_lease_time = Some(monotonic_raw_now());
 
         let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
         self.apply_proposals.push(p);
@@ -1084,7 +1085,7 @@ impl Peer {
         }
 
         if let Some(Either::Left(safe_expired_time)) = self.leader_lease_expired_time {
-            if clocktime::raw_now() <= safe_expired_time {
+            if monotonic_raw_now() <= safe_expired_time {
                 return Ok(RequestPolicy::ReadLocal);
             }
 
@@ -1217,9 +1218,9 @@ impl Peer {
                   -> bool {
         metrics.read_index += 1;
 
-        let renew_lease_time = clocktime::raw_now();
+        let renew_lease_time = monotonic_raw_now();
         if let Some(read) = self.pending_reads.reads.back_mut() {
-            if read.renew_lease_time + self.cfg.raft_store_max_leader_lease > renew_lease_time {
+            if read.renew_lease_time + self.cfg.raft_store_max_leader_lease() > renew_lease_time {
                 read.cmds.push((req, cb));
                 return false;
             }
@@ -1467,14 +1468,19 @@ impl Peer {
         None
     }
 
+    pub fn approximate_size(&self) -> Result<u64> {
+        util::get_region_approximate_size(&self.engine(), self.region())
+    }
+
     pub fn heartbeat_pd(&self, worker: &FutureWorker<PdTask>) {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
-            down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration),
+            down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.last_written_bytes,
             written_keys: self.peer_stat.last_written_keys,
+            approximate_size: self.approximate_size().unwrap_or(0),
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
