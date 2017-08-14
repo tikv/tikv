@@ -860,7 +860,9 @@ impl Scheduler {
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "process"]).inc();
-        debug!("process cmd with snapshot, cid={}, cb_ctx={:?}", cid, cb_ctx);
+        debug!("process cmd with snapshot, cid={}, cb_ctx={:?}",
+               cid,
+               cb_ctx);
         let mut cmd = {
             let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
             assert_eq!(ctx.cid, cid);
@@ -1058,7 +1060,9 @@ impl Scheduler {
                             cids: Vec<u64>,
                             cb_ctx: CbContext,
                             snapshot: EngineResult<Box<Snapshot>>) {
-        debug!("receive snapshot finish msg for cids={:?}, cb_ctx={:?}", cids, cb_ctx);
+        debug!("receive snapshot finish msg for cids={:?}, cb_ctx={:?}",
+               cids,
+               cb_ctx);
         match snapshot {
             Ok(ref snapshot) => {
                 for cid in cids {
