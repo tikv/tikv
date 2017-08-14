@@ -319,7 +319,9 @@ impl InvokeContext {
                                        wb: &mut WriteBatch)
                                        -> Result<()> {
         let mut snapshot_raft_state = self.raft_state.clone();
-        snapshot_raft_state.mut_hard_state().set_commit(snapshot_index);
+        if snapshot_index < snapshot_raft_state.get_hard_state().get_commit() {
+            snapshot_raft_state.mut_hard_state().set_commit(snapshot_index);
+        }
         snapshot_raft_state.set_last_index(snapshot_index);
         try!(wb.put_msg(&keys::snapshot_raft_state_key(self.region_id),
                         &snapshot_raft_state));
