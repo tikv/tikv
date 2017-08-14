@@ -141,6 +141,9 @@ fn put_cf_till_size<T: Simulator>(cluster: &mut Cluster<T>,
         len += key.len() as u64 + 1;
         len += value.len() as u64;
     }
+    // Approximate size of memtable is inaccurate for small data,
+    // we flush it to SST so we can use the size properties instead.
+    cluster.must_flush(true);
     key
 }
 
@@ -502,7 +505,12 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    put_till_size(cluster, region_max_size * 10, &mut range);
+    // The default size index distance is too large for small data,
+    // we flush multiple times to generate more size index handles.
+    for _ in 0..10 {
+        put_till_size(cluster, region_max_size, &mut range);
+    }
+
     // Peer will split when size of region meet region_max_size,
     // so assume the last region_max_size of data is not involved in split,
     // there will be at least (region_max_size * 10 - region_max_size) / region_split_size regions.

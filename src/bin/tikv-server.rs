@@ -146,7 +146,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     // Create engine, storage.
     let db_opts = cfg.rocksdb.build_opt();
-    let cfs_opts = cfg.rocksdb.build_cf_opts(false);
+    let cfs_opts = cfg.rocksdb.build_cf_opts();
     let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
                                                            .unwrap(),
                                                        db_opts,
@@ -179,7 +179,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         Path::new(&cfg.storage.raft_data_dir).to_path_buf()
     };
     let raft_db_opts = cfg.raftdb.build_opt();
-    let raft_db_cf_opts = cfg.raftdb.build_cf_opts(true);
+    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
     let raft_engine = Arc::new(rocksdb_util::new_engine_opt(raft_db_path.to_str()
                                                                 .unwrap(),
                                                             raft_db_opts,

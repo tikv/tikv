@@ -322,8 +322,6 @@ impl InvokeContext {
 
 pub fn recover_from_applying_state(engine: &DB, raft_engine: &DB, region_id: u64) -> Result<()> {
     let raft_wb = WriteBatch::new();
-    box_try!(clear_raft_data(&raft_wb, raft_engine, region_id));
-
     let state_key = keys::raft_state_key(region_id);
     let raft_state: RaftLocalState = match box_try!(engine.get_msg(&state_key)) {
         Some(state) => state,

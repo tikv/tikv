@@ -599,7 +599,7 @@ fn get_region_size(db: &DB, region_id: u64, cf: Option<&str>) -> u64 {
     let mut size: u64 = 0;
     let cf_arr = match cf {
         Some(s) => vec![s],
-        None => ALL_CFS.to_vec(),
+        None => vec![CF_DEFAULT, CF_WRITE, CF_LOCK],
     };
     for cf in &cf_arr {
         db.scan_cf(cf,

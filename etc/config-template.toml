@@ -7,7 +7,7 @@
 
 # log level: trace, debug, info, warn, error, off.
 log-level = "info"
-# file to stoe log, write to stderr if it's empty.
+# file to store log, write to stderr if it's empty.
 # log-file = ""
 
 [server]
