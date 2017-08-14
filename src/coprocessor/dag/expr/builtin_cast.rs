@@ -97,14 +97,21 @@ impl FnCall {
         let dec = try!(val.to_decimal());
         let res = try!(convert::dec_to_i64(dec));
         Ok(Some(res))
-
     }
 
     pub fn cast_duration_as_int(&self,
                                 ctx: &StatementContext,
                                 row: &[Datum])
                                 -> Result<Option<i64>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_duration(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let mut val = val.unwrap();
+        try!(val.round_frac(mysql::DEFAULT_FSP));
+        let dec = try!(val.to_decimal());
+        let res = try!(convert::dec_to_i64(dec));
+        Ok(Some(res))
     }
 
     pub fn cast_int_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
