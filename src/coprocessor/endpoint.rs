@@ -326,23 +326,23 @@ impl BatchRunnable<Task> for Host {
 
                         if pri == CommandPri::Low {
                             self.low_priority_pool
-                                .execute(txn_id, move |d: DummyContext| -> DummyContext {
+                                .execute(txn_id, move |ctx: DummyContext| -> DummyContext {
                                     end_point.handle_request(req);
                                     COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
-                                    d
+                                    ctx
                                 });
                         } else if pri == CommandPri::High {
                             self.high_priority_pool
-                                .execute(txn_id, move |d: DummyContext| -> DummyContext {
+                                .execute(txn_id, move |ctx: DummyContext| -> DummyContext {
                                     end_point.handle_request(req);
                                     COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
-                                    d
+                                    ctx
                                 });
                         } else {
-                            self.pool.execute(txn_id, move |d: DummyContext| -> DummyContext {
+                            self.pool.execute(txn_id, move |ctx: DummyContext| -> DummyContext {
                                 end_point.handle_request(req);
                                 COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
-                                d
+                                ctx
                             });
                         }
                     }

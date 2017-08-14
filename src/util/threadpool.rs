@@ -362,53 +362,6 @@ mod test {
     }
 
     #[test]
-    fn test_for_tasks_with_different_cost() {
-        let name = thd_name!("test_tasks_with_different_cost");
-        let concurrency = 2;
-        let f = DummyContextFactory {};
-        let mut task_pool = ThreadPool::new(name, concurrency, FifoQueue::new(), f);
-        let (jtx, jrx) = channel();
-        let group_with_big_task = 1001 as u64;
-        let timeout = Duration::from_secs(2);
-        let (ftx, frx) = channel();
-        // Push a big task into pool.
-        task_pool.execute(group_with_big_task,
-                          move |d: DummyContext| -> DummyContext {
-            // Since a long task of `group_with_big_task` is running,
-            // the other threads shouldn't run any task of `group_with_big_task`.
-            for _ in 0..10 {
-                let gid = jrx.recv_timeout(timeout).unwrap();
-                assert_ne!(gid, group_with_big_task);
-            }
-            for _ in 0..10 {
-                let gid = jrx.recv_timeout(timeout).unwrap();
-                assert_eq!(gid, group_with_big_task);
-            }
-            ftx.send(true).unwrap();
-            d
-        });
-
-        for gid in 0..10 {
-            let sender = jtx.clone();
-            task_pool.execute(gid, move |d: DummyContext| -> DummyContext {
-                sender.send(gid).unwrap();
-                d
-            });
-        }
-
-        for _ in 0..10 {
-            let sender = jtx.clone();
-            task_pool.execute(group_with_big_task,
-                              move |d: DummyContext| -> DummyContext {
-                                  sender.send(group_with_big_task).unwrap();
-                                  d
-                              });
-        }
-        frx.recv_timeout(timeout).unwrap();
-        task_pool.stop().unwrap();
-    }
-
-    #[test]
     fn test_get_task_count() {
         let name = thd_name!("test_get_task_count");
         let concurrency = 1;
@@ -423,12 +376,12 @@ mod test {
         for gid in 0..group_num {
             let rxer = receiver.clone();
             let ftx = ftx.clone();
-            task_pool.execute(gid, move |d: DummyContext| -> DummyContext {
+            task_pool.execute(gid, move |ctx: DummyContext| -> DummyContext {
                 let rx = rxer.lock().unwrap();
                 let id = rx.recv_timeout(timeout).unwrap();
                 assert_eq!(id, gid);
                 ftx.send(true).unwrap();
-                d
+                ctx
             });
             task_num += 1;
             assert_eq!(task_pool.get_task_count(), task_num);
@@ -516,10 +469,10 @@ mod test {
         let mut task_pool = ThreadPool::new(name, concurrency, FifoQueue::new(), f);
 
         for gid in 0..10 {
-            task_pool.execute(gid, move |mut d: TestContext| -> TestContext {
-                assert_eq!(d.get("dummy"), 5);
-                d.set("dummy", 0);
-                d
+            task_pool.execute(gid, move |mut ctx: TestContext| -> TestContext {
+                assert_eq!(ctx.get("dummy"), 5);
+                ctx.set("dummy", 0);
+                ctx
             });
         }
         let mut fin: isize = -1;
