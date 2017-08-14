@@ -25,7 +25,7 @@ use tikv::util::codec::number::*;
 use tikv::storage::{Mutation, Key, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::Worker;
-use kvproto::coprocessor::{Request, KeyRange};
+use kvproto::coprocessor::{Request, KeyRange, Response};
 use tipb::select::{SelectRequest, DAGRequest, SelectResponse, Chunk};
 use tipb::executor::{Executor, ExecType, TableScan, IndexScan, Selection, Aggregation, TopN, Limit};
 use tipb::schema::{self, ColumnInfo};
@@ -557,10 +557,10 @@ impl ProductTable {
     }
 }
 
-// This function will create a Product table and initialize with the specified data.
-fn init_with_data(tbl: &ProductTable,
-                  vals: &[(i64, Option<&str>, i64)])
-                  -> (Store, Worker<EndPointTask>) {
+fn init_data_with_commit(tbl: &ProductTable,
+                         vals: &[(i64, Option<&str>, i64)],
+                         commit: bool)
+                         -> (Store, Worker<EndPointTask>) {
     let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     let mut store = Store::new(engine);
 
@@ -572,13 +572,21 @@ fn init_with_data(tbl: &ProductTable,
             .set(tbl.count, Datum::I64(count))
             .execute();
     }
-    store.commit();
-
+    if commit {
+        store.commit();
+    }
     let mut end_point = Worker::new("test select worker");
     let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8);
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)
+}
+
+// This function will create a Product table and initialize with the specified data.
+fn init_with_data(tbl: &ProductTable,
+                  vals: &[(i64, Option<&str>, i64)])
+                  -> (Store, Worker<EndPointTask>) {
+    init_data_with_commit(tbl, vals, true)
 }
 
 fn offset_for_column(cols: &[ColumnInfo], col_id: i64) -> i64 {
@@ -1394,11 +1402,15 @@ fn test_reverse() {
     end_point.stop().unwrap().join().unwrap();
 }
 
-fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
+fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = mpsc::channel();
     let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
     end_point.schedule(EndPointTask::Request(req)).unwrap();
-    let resp = rx.recv().unwrap();
+    rx.recv().unwrap()
+}
+
+fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
+    let resp = handle_request(end_point, req);
     assert!(!resp.get_data().is_empty(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -2252,5 +2264,43 @@ fn test_output_offsets() {
         assert_eq!(row.data, &*expected_encoded);
     }
 
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_key_is_locked_for_primary() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_data_with_commit(&product, &data, false);
+
+    let req = DAGSelect::from(&product.table).build();
+    let resp = handle_request(&end_point, req);
+    assert!(resp.get_data().is_empty(), "{:?}", resp);
+    assert!(resp.has_locked(), "{:?}", resp);
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_key_is_locked_for_index() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_data_with_commit(&product, &data, false);
+
+    let req = DAGSelect::from_index(&product.table, product.name).build();
+    let resp = handle_request(&end_point, req);
+    assert!(resp.get_data().is_empty(), "{:?}", resp);
+    assert!(resp.has_locked(), "{:?}", resp);
     end_point.stop().unwrap().join().unwrap();
 }
