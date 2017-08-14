@@ -447,6 +447,13 @@ mod tests {
         // Add Duration.
         assert_eq!(late_raw + zero, late_raw);
         assert_eq!(late_coarse + zero, late_coarse);
+
+        // PartialEq and PartialOrd
+        let ts = Timespec::new(1, 1);
+        let now1 = Instant::Monotonic(ts);
+        let now2 = Instant::MonotonicCoarse(ts);
+        assert_ne!(now1, now2);
+        assert_eq!(now1.partial_cmp(&now2), None);
     }
 
     #[test]
