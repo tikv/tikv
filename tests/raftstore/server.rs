@@ -109,8 +109,7 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
-        let snap_mgr = SnapManager::new(tmp_str,
-                                        Some(store_sendch));
+        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch));
         let mut server = Server::new(&cfg.server,
                                      cfg.raft_store.region_split_size.0 as usize,
                                      store.clone(),
