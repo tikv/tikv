@@ -308,8 +308,21 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_raft_state_to(&self, wb: &mut WriteBatch) -> Result<()> {
-        try!(wb.put_msg(&keys::raft_state_key(self.region_id), &self.raft_state));
+    pub fn save_raft_state_to(&self, raft_wb: &mut WriteBatch) -> Result<()> {
+        try!(raft_wb.put_msg(&keys::raft_state_key(self.region_id), &self.raft_state));
+        Ok(())
+    }
+
+    #[inline]
+    pub fn save_snapshot_raft_state_to(&self,
+                                       snapshot_index: u64,
+                                       wb: &mut WriteBatch)
+                                       -> Result<()> {
+        let mut snapshot_raft_state = self.raft_state.clone();
+        snapshot_raft_state.mut_hard_state().set_commit(snapshot_index);
+        snapshot_raft_state.set_last_index(snapshot_index);
+        try!(wb.put_msg(&keys::snapshot_raft_state_key(self.region_id),
+                        &snapshot_raft_state));
         Ok(())
     }
 
@@ -321,19 +334,27 @@ impl InvokeContext {
 }
 
 pub fn recover_from_applying_state(engine: &DB, raft_engine: &DB, region_id: u64) -> Result<()> {
-    let raft_wb = WriteBatch::new();
-    let state_key = keys::raft_state_key(region_id);
-    let raft_state: RaftLocalState = match box_try!(engine.get_msg(&state_key)) {
+    let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
+    let snapshot_raft_state: RaftLocalState =
+        match box_try!(engine.get_msg(&snapshot_raft_state_key)) {
+            Some(state) => state,
+            None => {
+                return Err(box_err!("[region {}] failed to get raftstate from kv engine {}, \
+                                     when recover from applying state",
+                                    region_id,
+                                    escape(&snapshot_raft_state_key)));
+            }
+        };
+
+    let raft_state_key = keys::raft_state_key(region_id);
+    let raft_state: RaftLocalState = match box_try!(raft_engine.get_msg(&raft_state_key)) {
         Some(state) => state,
-        None => {
-            return Err(box_err!("[region {}] failed to get raftstate from {}, when recover from \
-                                 applying state",
-                                region_id,
-                                escape(&state_key)));
-        }
+        None => RaftLocalState::new(),
     };
-    try!(raft_wb.put_msg(&state_key, &raft_state));
-    try!(raft_engine.write(raft_wb));
+
+    if last_index(&snapshot_raft_state) > last_index(&raft_state) {
+        try!(raft_engine.put_msg(&raft_state_key, &snapshot_raft_state));
+    }
     Ok(())
 }
 
@@ -960,11 +981,11 @@ impl PeerStorage {
                                 ready: &Ready)
                                 -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let applying_new_snapshot = if raft::is_empty_snap(&ready.snapshot) {
-            false
+        let snapshot_index = if raft::is_empty_snap(&ready.snapshot) {
+            0
         } else {
             try!(self.apply_snapshot(&mut ctx, &ready.snapshot, &ready_ctx.wb, &ready_ctx.raft_wb));
-            true
+            last_index(&ctx.raft_state)
         };
 
         if !ready.entries.is_empty() {
@@ -981,10 +1002,12 @@ impl PeerStorage {
 
         if ctx.raft_state != self.raft_state {
             try!(ctx.save_raft_state_to(&mut ready_ctx.raft_wb));
-            if applying_new_snapshot {
+            if snapshot_index > 0 {
                 // in case of restart happen when we just write region state to Applying,
                 // but not write raft_local_state to raft rocksdb in time.
-                try!(ctx.save_raft_state_to(&mut ready_ctx.wb));
+                // we write raft state to default rocksdb, with last index set to snap index,
+                // in case of recv raft log after snapshot.
+                try!(ctx.save_snapshot_raft_state_to(snapshot_index, &mut ready_ctx.wb));
             }
         }
 
@@ -1035,13 +1058,13 @@ pub fn clear_meta(wb: &WriteBatch,
                   raft_engine: &DB,
                   region_id: u64,
                   raft_state: &RaftLocalState,
-                  is_recovery: bool)
+                  is_stale_meta: bool)
                   -> Result<()> {
     let t = Instant::now();
     try!(wb.delete(&keys::region_state_key(region_id)));
     try!(wb.delete(&keys::apply_state_key(region_id)));
 
-    let raft_count = if is_recovery {
+    let raft_count = if is_stale_meta {
         try!(clear_raft_data(raft_wb, raft_engine, region_id))
     } else {
         let last_index = last_index(raft_state);

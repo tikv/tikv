@@ -211,7 +211,7 @@ impl SnapContext {
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg(&region_key, &region_state));
-        box_try!(wb.delete(&keys::raft_state_key(region_id)));
+        box_try!(wb.delete(&keys::snapshot_raft_state_key(region_id)));
         box_try!(self.db.write(wb));
         info!("[region {}] apply new data takes {:?}",
               region_id,

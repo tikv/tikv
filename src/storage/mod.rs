@@ -45,6 +45,7 @@ pub const CF_WRITE: CfName = "write";
 // Cfs that should be very large generally.
 pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const DATA_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -603,8 +604,8 @@ impl Storage {
                               end_key: Key,
                               callback: Callback<()>)
                               -> Result<()> {
-        let mut modifies = Vec::with_capacity(ALL_CFS.len());
-        for cf in ALL_CFS {
+        let mut modifies = Vec::with_capacity(DATA_CFS.len());
+        for cf in DATA_CFS {
             // We enable memtable prefix bloom for CF_WRITE column family, for delete_range
             // operation, RocksDB will add start key to the prefix bloom, and the start key
             // will go through function prefix_extractor. In our case the prefix_extractor

@@ -31,12 +31,16 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 
 use raftstore::Result as RaftStoreResult;
 use raftstore::store::Msg;
+use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::transport::SendCh;
 use util::HandyRwLock;
 use util::collections::{HashMap, HashMapEntry as Entry};
 
 use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
+
+// Data in CF_RAFT should be excluded for a snapshot.
+pub const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &'static str = "gen";
@@ -202,7 +206,6 @@ mod v1 {
     use crc::crc32::{self, Digest, Hasher32};
     use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
     use rocksdb::{Writable, WriteBatch, CFHandle};
-    use storage::ALL_CFS;
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::RaftSnapshotData;
     use util::{HandyRwLock, rocksdb};
@@ -215,9 +218,9 @@ mod v1 {
     use super::super::util;
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
-    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX, Result,
-                SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort, SnapshotDeleter,
-                retry_delete_snapshot};
+    use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX,
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort,
+                SnapshotDeleter, retry_delete_snapshot};
 
     pub const SNAPSHOT_VERSION: u64 = 1;
     pub const CRC32_BYTES_COUNT: usize = 4;
@@ -422,7 +425,7 @@ mod v1 {
 
             let mut snap_key_count = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
-            for cf in ALL_CFS {
+            for cf in SNAPSHOT_CFS {
                 box_try!(self.encode_compact_bytes(cf.as_bytes()));
                 let (cf_key_count, cf_size) =
                     try!(build_plain_cf_file(self, snap, cf, &begin_key, &end_key));
@@ -715,7 +718,7 @@ mod v2 {
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
     use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, DBCompressionType};
-    use storage::{CfName, CF_LOCK, ALL_CFS};
+    use storage::{CfName, CF_LOCK};
     use util::{HandyRwLock, rocksdb};
     use util::time::duration_to_sec;
     use util::file::{get_file_size, file_exists, delete_file_if_exist};
@@ -726,9 +729,9 @@ mod v2 {
     use super::super::keys::{enc_start_key, enc_end_key};
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
-    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Result,
-                SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort, SnapshotDeleter,
-                retry_delete_snapshot};
+    use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX,
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort,
+                SnapshotDeleter, retry_delete_snapshot};
     use super::v1::{build_plain_cf_file, apply_plain_cf_file};
 
     pub const SNAPSHOT_VERSION: u64 = 2;
@@ -762,7 +765,7 @@ mod v2 {
     fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
         let mut meta = Vec::with_capacity(cf_files.len());
         for cf_file in cf_files {
-            if ALL_CFS.iter().find(|&cf| cf_file.cf == *cf).is_none() {
+            if SNAPSHOT_CFS.iter().find(|&cf| cf_file.cf == *cf).is_none() {
                 return Err(box_err!("failed to encode invalid snapshot cf {}", cf_file.cf));
             }
 
@@ -860,8 +863,8 @@ mod v2 {
             let prefix = format!("{}_{}", snap_prefix, key);
             let display_path = Snap::get_display_path(&dir_path, &prefix);
 
-            let mut cf_files = Vec::with_capacity(ALL_CFS.len());
-            for cf in ALL_CFS {
+            let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
+            for cf in SNAPSHOT_CFS {
                 let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
                 let path = dir_path.join(&filename);
                 let tmp_path = dir_path.join(format!("{}{}", filename, TMP_FILE_SUFFIX));
@@ -1029,7 +1032,7 @@ mod v2 {
         fn set_snapshot_meta(&mut self, snapshot_meta: SnapshotMeta) -> RaftStoreResult<()> {
             if snapshot_meta.get_cf_files().len() != self.cf_files.len() {
                 return Err(box_err!("invalid cf number of snapshot meta, expect {}, got {}",
-                                    ALL_CFS.len(),
+                                    SNAPSHOT_CFS.len(),
                                     snapshot_meta.get_cf_files().len()));
             }
             for (i, cf_file) in self.cf_files.iter_mut().enumerate() {
@@ -1064,7 +1067,7 @@ mod v2 {
         }
 
         fn get_display_path(dir_path: &PathBuf, prefix: &str) -> String {
-            let cf_names = "(".to_owned() + &ALL_CFS.join("|") + ")";
+            let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
             format!("{}/{}_{}{}",
                     dir_path.display(),
                     prefix,
@@ -1172,7 +1175,7 @@ mod v2 {
 
             let mut snap_key_count = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
-            for cf in ALL_CFS {
+            for cf in SNAPSHOT_CFS {
                 try!(self.switch_to_cf_file(cf));
                 let (cf_key_count, cf_size) = if plain_file_used(cf) {
                     let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
@@ -1455,7 +1458,7 @@ mod v2 {
         use raftstore::store::keys;
         use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable, Iterable};
         use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-        use super::super::{SNAP_GEN_PREFIX, SnapKey, Snapshot, SnapshotDeleter};
+        use super::super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SnapKey, Snapshot, SnapshotDeleter};
         use super::{META_FILE_SUFFIX, Snap, SnapshotStatistics, ApplyOptions};
 
         const TEST_STORE_ID: u64 = 1;
@@ -1497,7 +1500,7 @@ mod v2 {
 
         pub fn get_kv_count(snap: &DbSnapshot) -> usize {
             let mut kv_count = 0;
-            for cf in ALL_CFS {
+            for cf in SNAPSHOT_CFS {
                 snap.scan_cf(cf,
                              &keys::data_key(b"a"),
                              &keys::data_key(b"z"),
@@ -1527,7 +1530,7 @@ mod v2 {
 
         pub fn assert_eq_db(expected_db: Arc<DB>, db: &DB) {
             let key = keys::data_key(TEST_KEY);
-            for cf in ALL_CFS {
+            for cf in SNAPSHOT_CFS {
                 let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
                 if p1.is_some() {
                     let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
@@ -1549,8 +1552,8 @@ mod v2 {
 
         #[test]
         fn test_gen_snapshot_meta() {
-            let mut cf_file = Vec::with_capacity(super::ALL_CFS.len());
-            for (i, cf) in super::ALL_CFS.iter().enumerate() {
+            let mut cf_file = Vec::with_capacity(super::SNAPSHOT_CFS.len());
+            for (i, cf) in super::SNAPSHOT_CFS.iter().enumerate() {
                 let f = super::CfFile {
                     cf: cf,
                     size: 100 * (i + 1) as u64,

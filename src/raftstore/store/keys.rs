@@ -99,6 +99,10 @@ pub fn raft_state_key(region_id: u64) -> Vec<u8> {
     make_region_id_key(region_id, RAFT_STATE_SUFFIX, 0)
 }
 
+pub fn snapshot_raft_state_key(region_id: u64) -> Vec<u8> {
+    make_region_id_key(region_id, RAFT_STATE_SUFFIX, 0)
+}
+
 pub fn apply_state_key(region_id: u64) -> Vec<u8> {
     make_region_id_key(region_id, APPLY_STATE_SUFFIX, 0)
 }

@@ -588,6 +588,20 @@ impl TiKvConfig {
                 format!("{}",
                         Path::new(&self.storage.data_dir).join("backup").display());
         }
+        if !self.rocksdb.wal_dir.is_empty() &&
+           (self.rocksdb.wal_dir == self.raftdb.wal_dir ||
+            self.rocksdb.wal_dir == self.storage.raft_data_dir) {
+            return Err("please check rocksdb.wal_dir, can not equal to storage.raft_data_dir or \
+                        raftdb.wal_dir"
+                .into());
+        }
+        if !self.raftdb.wal_dir.is_empty() &&
+           (self.rocksdb.wal_dir == self.raftdb.wal_dir ||
+            self.raftdb.wal_dir == self.storage.data_dir) {
+            return Err("please check raftdb.wal_dir, can not equal to storage.data_dir or \
+                        rocksdb.wal_dir"
+                .into());
+        }
         try!(self.rocksdb.validate());
         try!(self.server.validate());
         try!(self.raft_store.validate());
