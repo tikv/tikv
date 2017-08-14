@@ -449,7 +449,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#a67bce5405bff5aa3b3b511c82a712fc10b39255"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#b95e696fd28b1c3e1df4ba8798a802e4256f3092"
 dependencies = [
  "gcc 0.3.51 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -760,7 +760,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#a67bce5405bff5aa3b3b511c82a712fc10b39255"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#b95e696fd28b1c3e1df4ba8798a802e4256f3092"
 dependencies = [
  "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
