@@ -164,6 +164,10 @@ impl FnCall {
         unimplemented!()
     }
 
+    pub fn cast_json_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+        unimplemented!()
+    }
+
     pub fn cast_int_as_decimal(&self,
                                ctx: &StatementContext,
                                row: &[Datum])
@@ -224,6 +228,14 @@ impl FnCall {
         unimplemented!()
     }
 
+
+    pub fn cast_json_as_decimal(&self,
+                                ctx: &StatementContext,
+                                row: &[Datum])
+                                -> Result<Option<Decimal>> {
+        unimplemented!()
+    }
+
     pub fn cast_int_as_str(&self,
                            ctx: &StatementContext,
                            row: &[Datum])
@@ -252,10 +264,10 @@ impl FnCall {
         unimplemented!()
     }
 
-    pub fn cast_time_as_strl(&self,
-                             ctx: &StatementContext,
-                             row: &[Datum])
-                             -> Result<Option<Vec<u8>>> {
+    pub fn cast_time_as_str(&self,
+                            ctx: &StatementContext,
+                            row: &[Datum])
+                            -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
@@ -263,6 +275,13 @@ impl FnCall {
                                 ctx: &StatementContext,
                                 row: &[Datum])
                                 -> Result<Option<Vec<u8>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_json_as_str(&self,
+                            ctx: &StatementContext,
+                            row: &[Datum])
+                            -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
@@ -308,6 +327,13 @@ impl FnCall {
         unimplemented!()
     }
 
+    pub fn cast_json_as_time(&self,
+                             ctx: &StatementContext,
+                             row: &[Datum])
+                             -> Result<Option<Vec<Time>>> {
+        unimplemented!()
+    }
+
     pub fn cast_int_as_duration(&self,
                                 ctx: &StatementContext,
                                 row: &[Datum])
@@ -350,10 +376,59 @@ impl FnCall {
         unimplemented!()
     }
 
+    pub fn cast_json_as_duration(&self,
+                                 ctx: &StatementContext,
+                                 row: &[Datum])
+                                 -> Result<Option<Vec<Duration>>> {
+        unimplemented!()
+    }
+
     pub fn cast_int_as_json(&self,
                             ctx: &StatementContext,
                             row: &[Datum])
                             -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_real_as_json(&self,
+                             ctx: &StatementContext,
+                             row: &[Datum])
+                             -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_decimal_as_json(&self,
+                                ctx: &StatementContext,
+                                row: &[Datum])
+                                -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_str_as_json(&self,
+                            ctx: &StatementContext,
+                            row: &[Datum])
+                            -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_time_as_json(&self,
+                             ctx: &StatementContext,
+                             row: &[Datum])
+                             -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_duration_as_json(&self,
+                                 ctx: &StatementContext,
+                                 row: &[Datum])
+                                 -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_json_as_json(&self,
+                             ctx: &StatementContext,
+                             row: &[Datum])
+                             -> Result<Option<Vec<Json>>> {
         unimplemented!()
     }
 }
