@@ -19,7 +19,7 @@ use std::convert::TryFrom;
 
 use tipb::expression::{Expr, ExprType, ScalarFuncSig, FieldType, DataType};
 
-use coprocessor::codec::mysql::{Duration, Time, Decimal, MAX_FSP};
+use coprocessor::codec::mysql::{Duration, Time, Decimal, Json, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::Datum;
 use util;
@@ -115,6 +115,10 @@ impl Expression {
     }
 
     fn eval_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Duration>> {
+        unimplemented!()
+    }
+
+    fn eval_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
         unimplemented!()
     }
 
