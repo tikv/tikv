@@ -183,7 +183,13 @@ impl FnCall {
     }
 
     pub fn cast_time_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_time(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let val = val.unwrap();
+        let res = try!(val.to_decimal());
+        Ok(Some(try!(res.as_f64())))
     }
 
     pub fn cast_duration_as_real(
