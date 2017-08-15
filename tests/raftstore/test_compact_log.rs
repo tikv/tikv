@@ -27,7 +27,8 @@ use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 
 fn get_msg_cf_or_default<M>(engine: &DB, cf: &str, key: &[u8]) -> M
-    where M: protobuf::Message + protobuf::MessageStatic
+where
+    M: protobuf::Message + protobuf::MessageStatic,
 {
     engine.get_msg_cf(cf, key).unwrap().unwrap_or_default()
 }
@@ -57,10 +58,11 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     panic!("after inserting 1000 entries, compaction is still not finished.");
 }
 
-fn check_compacted(engines: &HashMap<u64, Arc<DB>>,
-                   before_states: &HashMap<u64, RaftTruncatedState>,
-                   compact_count: u64)
-                   -> bool {
+fn check_compacted(
+    engines: &HashMap<u64, Arc<DB>>,
+    before_states: &HashMap<u64, RaftTruncatedState>,
+    compact_count: u64,
+) -> bool {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
     let mut compacted_idx = HashMap::new();
 

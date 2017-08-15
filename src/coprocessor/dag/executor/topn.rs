@@ -20,11 +20,11 @@ use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
 
 use coprocessor::Result;
-use coprocessor::select::xeval::{Evaluator, EvalContext};
+use coprocessor::select::xeval::{EvalContext, Evaluator};
 use coprocessor::select::topn_heap::{SortRow, TopNHeap};
 use coprocessor::metrics::*;
 
-use super::{Executor, Row, ExprColumnRefVisitor, inflate_with_col_for_dag};
+use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
 pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
@@ -37,11 +37,12 @@ pub struct TopNExecutor<'a> {
 }
 
 impl<'a> TopNExecutor<'a> {
-    pub fn new(mut meta: TopN,
-               ctx: Rc<EvalContext>,
-               columns_info: Rc<Vec<ColumnInfo>>,
-               src: Box<Executor + 'a>)
-               -> Result<TopNExecutor<'a>> {
+    pub fn new(
+        mut meta: TopN,
+        ctx: Rc<EvalContext>,
+        columns_info: Rc<Vec<ColumnInfo>>,
+        src: Box<Executor + 'a>,
+    ) -> Result<TopNExecutor<'a>> {
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
@@ -64,22 +65,26 @@ impl<'a> TopNExecutor<'a> {
     fn fetch_all(&mut self) -> Result<()> {
         while let Some(row) = try!(self.src.next()) {
             let mut eval = Evaluator::default();
-            try!(inflate_with_col_for_dag(&mut eval,
-                                          &self.ctx,
-                                          &row.data,
-                                          self.cols.clone(),
-                                          &self.related_cols_offset,
-                                          row.handle));
+            try!(inflate_with_col_for_dag(
+                &mut eval,
+                &self.ctx,
+                &row.data,
+                self.cols.clone(),
+                &self.related_cols_offset,
+                row.handle
+            ));
             let mut ob_values = Vec::with_capacity(self.order_by.len());
             for by_item in self.order_by.as_ref().iter() {
                 let v = box_try!(eval.eval(&self.ctx, by_item.get_expr()));
                 ob_values.push(v);
             }
-            try!(self.heap.as_mut().unwrap().try_add_row(row.handle,
-                                                         row.data,
-                                                         ob_values,
-                                                         self.order_by.clone(),
-                                                         self.ctx.clone()));
+            try!(self.heap.as_mut().unwrap().try_add_row(
+                row.handle,
+                row.data,
+                ob_values,
+                self.order_by.clone(),
+                self.ctx.clone()
+            ));
         }
         Ok(())
     }
@@ -89,16 +94,16 @@ impl<'a> Executor for TopNExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         if self.iter.is_none() {
             try!(self.fetch_all());
-            self.iter = Some(try!(self.heap.take().unwrap().into_sorted_vec()).into_iter());
+            self.iter = Some(
+                try!(self.heap.take().unwrap().into_sorted_vec()).into_iter(),
+            );
         }
         let iter = self.iter.as_mut().unwrap();
         match iter.next() {
-            Some(sort_row) => {
-                Ok(Some(Row {
-                    handle: sort_row.handle,
-                    data: sort_row.data,
-                }))
-            }
+            Some(sort_row) => Ok(Some(Row {
+                handle: sort_row.handle,
+                data: sort_row.data,
+            })),
             None => Ok(None),
         }
     }
@@ -120,11 +125,11 @@ pub mod test {
     use util::collections::HashMap;
     use util::codec::number::NumberEncoder;
 
-    use storage::{Statistics, SnapshotStore};
+    use storage::{SnapshotStore, Statistics};
 
     use super::*;
     use super::super::table_scan::TableScanExecutor;
-    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::scanner::test::{get_range, new_col_info, TestStore};
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();
@@ -148,32 +153,100 @@ pub mod test {
 
         let test_data = vec![
             (1, String::from("data1"), Datum::Null, Datum::I64(1)),
-            (2, String::from("data2"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
-            (5, String::from("data5"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(6)),
-            (6, String::from("data6"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(4)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+            (
+                2,
+                String::from("data2"),
+                Datum::Bytes(b"name:0".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                3,
+                String::from("data3"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                4,
+                String::from("data4"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                5,
+                String::from("data5"),
+                Datum::Bytes(b"name:0".to_vec()),
+                Datum::I64(6),
+            ),
+            (
+                6,
+                String::from("data6"),
+                Datum::Bytes(b"name:0".to_vec()),
+                Datum::I64(4),
+            ),
+            (
+                7,
+                String::from("data7"),
+                Datum::Bytes(b"name:7".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                8,
+                String::from("data8"),
+                Datum::Bytes(b"name:8".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                9,
+                String::from("data9"),
+                Datum::Bytes(b"name:9".to_vec()),
+                Datum::I64(2),
+            ),
         ];
 
         let exp = vec![
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+            (
+                9,
+                String::from("data9"),
+                Datum::Bytes(b"name:9".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                8,
+                String::from("data8"),
+                Datum::Bytes(b"name:8".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                7,
+                String::from("data7"),
+                Datum::Bytes(b"name:7".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                3,
+                String::from("data3"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                4,
+                String::from("data4"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(2),
+            ),
         ];
 
         for (handle, data, name, count) in test_data {
             let ob_values: Vec<Datum> = vec![name, count];
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
-            topn_heap.try_add_row(handle as i64,
-                             row_data,
-                             ob_values,
-                             order_cols.clone(),
-                             ctx.clone())
+            topn_heap
+                .try_add_row(
+                    handle as i64,
+                    row_data,
+                    ob_values,
+                    order_cols.clone(),
+                    ctx.clone(),
+                )
                 .unwrap();
         }
         let result = topn_heap.into_sorted_vec().unwrap();
@@ -196,39 +269,51 @@ pub mod test {
 
         let ob_values1: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
-        topn_heap.try_add_row(0 as i64,
-                         row_data,
-                         ob_values1,
-                         order_cols.clone(),
-                         ctx.clone())
+        topn_heap
+            .try_add_row(
+                0 as i64,
+                row_data,
+                ob_values1,
+                order_cols.clone(),
+                ctx.clone(),
+            )
             .unwrap();
 
         let ob_values2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
         let row_data2 = RowColsDict::new(HashMap::default(), b"name:2".to_vec());
-        topn_heap.try_add_row(0 as i64,
-                         row_data2,
-                         ob_values2,
-                         order_cols.clone(),
-                         ctx.clone())
+        topn_heap
+            .try_add_row(
+                0 as i64,
+                row_data2,
+                ob_values2,
+                order_cols.clone(),
+                ctx.clone(),
+            )
             .unwrap();
 
         let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
         let row_data3 = RowColsDict::new(HashMap::default(), b"name:3".to_vec());
 
-        assert!(topn_heap.try_add_row(0 as i64,
-                         row_data3,
-                         bad_key1,
-                         order_cols.clone(),
-                         ctx.clone())
-            .is_err());
+        assert!(
+            topn_heap
+                .try_add_row(
+                    0 as i64,
+                    row_data3,
+                    bad_key1,
+                    order_cols.clone(),
+                    ctx.clone()
+                )
+                .is_err()
+        );
         assert!(topn_heap.into_sorted_vec().is_err());
     }
 
     // the first column should be i64 since it will be used as row handle
-    pub fn gen_table_data(tid: i64,
-                          cis: &[ColumnInfo],
-                          rows: &[Vec<Datum>])
-                          -> Vec<(Vec<u8>, Vec<u8>)> {
+    pub fn gen_table_data(
+        tid: i64,
+        cis: &[ColumnInfo],
+        rows: &[Vec<Datum>],
+    ) -> Vec<(Vec<u8>, Vec<u8>)> {
         let mut kv_data = Vec::new();
         let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
         for cols in rows.iter() {
@@ -246,16 +331,48 @@ pub mod test {
     fn test_topn_executor() {
         // prepare data and store
         let tid = 1;
-        let cis = vec![new_col_info(1, types::LONG_LONG),
-                       new_col_info(2, types::VARCHAR),
-                       new_col_info(3, types::NEW_DECIMAL)];
-        let raw_data = vec![vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
-                            vec![Datum::I64(2), Datum::Bytes(b"b".to_vec()), Datum::Dec(7.into())],
-                            vec![Datum::I64(3), Datum::Bytes(b"b".to_vec()), Datum::Dec(8.into())],
-                            vec![Datum::I64(4), Datum::Bytes(b"d".to_vec()), Datum::Dec(3.into())],
-                            vec![Datum::I64(5), Datum::Bytes(b"f".to_vec()), Datum::Dec(5.into())],
-                            vec![Datum::I64(6), Datum::Bytes(b"e".to_vec()), Datum::Dec(9.into())],
-                            vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::Dec(6.into())]];
+        let cis = vec![
+            new_col_info(1, types::LONG_LONG),
+            new_col_info(2, types::VARCHAR),
+            new_col_info(3, types::NEW_DECIMAL),
+        ];
+        let raw_data = vec![
+            vec![
+                Datum::I64(1),
+                Datum::Bytes(b"a".to_vec()),
+                Datum::Dec(7.into()),
+            ],
+            vec![
+                Datum::I64(2),
+                Datum::Bytes(b"b".to_vec()),
+                Datum::Dec(7.into()),
+            ],
+            vec![
+                Datum::I64(3),
+                Datum::Bytes(b"b".to_vec()),
+                Datum::Dec(8.into()),
+            ],
+            vec![
+                Datum::I64(4),
+                Datum::Bytes(b"d".to_vec()),
+                Datum::Dec(3.into()),
+            ],
+            vec![
+                Datum::I64(5),
+                Datum::Bytes(b"f".to_vec()),
+                Datum::Dec(5.into()),
+            ],
+            vec![
+                Datum::I64(6),
+                Datum::Bytes(b"e".to_vec()),
+                Datum::Dec(9.into()),
+            ],
+            vec![
+                Datum::I64(7),
+                Datum::Bytes(b"f".to_vec()),
+                Datum::Dec(6.into()),
+            ],
+        ];
         let table_data = gen_table_data(tid, &cis, &raw_data);
         let mut test_store = TestStore::new(&table_data);
         // init table scan meta
@@ -281,11 +398,12 @@ pub mod test {
         let limit = 4;
         topn.set_limit(limit);
         // init topn executor
-        let mut topn_ect = TopNExecutor::new(topn,
-                                             Rc::new(EvalContext::default()),
-                                             Rc::new(cis),
-                                             Box::new(ts_ect))
-            .unwrap();
+        let mut topn_ect = TopNExecutor::new(
+            topn,
+            Rc::new(EvalContext::default()),
+            Rc::new(cis),
+            Box::new(ts_ect),
+        ).unwrap();
         let mut topn_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = topn_ect.next().unwrap() {
             topn_rows.push(row);

@@ -12,7 +12,7 @@
 // limitations under the License.
 
 
-use std::{cmp, result, io};
+use std::{cmp, io, result};
 use std::error;
 
 quick_error! {
@@ -92,8 +92,10 @@ impl cmp::PartialEq for StorageError {
             (&StorageError::Compacted, &StorageError::Compacted) => true,
             (&StorageError::Unavailable, &StorageError::Unavailable) => true,
             (&StorageError::SnapshotOutOfDate, &StorageError::SnapshotOutOfDate) => true,
-            (&StorageError::SnapshotTemporarilyUnavailable,
-             &StorageError::SnapshotTemporarilyUnavailable) => true,
+            (
+                &StorageError::SnapshotTemporarilyUnavailable,
+                &StorageError::SnapshotTemporarilyUnavailable,
+            ) => true,
             _ => false,
         }
     }
@@ -109,21 +111,35 @@ mod tests {
     #[test]
     fn test_error_equal() {
         assert_eq!(Error::StepPeerNotFound, Error::StepPeerNotFound);
-        assert_eq!(Error::Store(StorageError::Compacted),
-                   Error::Store(StorageError::Compacted));
-        assert_eq!(Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "oh no!")),
-                   Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "oh yes!")));
-        assert_ne!(Error::Io(io::Error::new(io::ErrorKind::NotFound, "error")),
-                   Error::Io(io::Error::new(io::ErrorKind::BrokenPipe, "error")));
+        assert_eq!(
+            Error::Store(StorageError::Compacted),
+            Error::Store(StorageError::Compacted)
+        );
+        assert_eq!(
+            Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "oh no!")),
+            Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "oh yes!"))
+        );
+        assert_ne!(
+            Error::Io(io::Error::new(io::ErrorKind::NotFound, "error")),
+            Error::Io(io::Error::new(io::ErrorKind::BrokenPipe, "error"))
+        );
         assert_eq!(Error::StepLocalMsg, Error::StepLocalMsg);
-        assert_eq!(Error::ConfigInvalid(String::from("config error")),
-                   Error::ConfigInvalid(String::from("config error")));
-        assert_ne!(Error::ConfigInvalid(String::from("config error")),
-                   Error::ConfigInvalid(String::from("other error")));
-        assert_eq!(Error::from(io::Error::new(io::ErrorKind::Other, "oh no!")),
-                   Error::from(io::Error::new(io::ErrorKind::Other, "oh yes!")));
-        assert_ne!(Error::StepPeerNotFound,
-                   Error::Store(StorageError::Compacted));
+        assert_eq!(
+            Error::ConfigInvalid(String::from("config error")),
+            Error::ConfigInvalid(String::from("config error"))
+        );
+        assert_ne!(
+            Error::ConfigInvalid(String::from("config error")),
+            Error::ConfigInvalid(String::from("other error"))
+        );
+        assert_eq!(
+            Error::from(io::Error::new(io::ErrorKind::Other, "oh no!")),
+            Error::from(io::Error::new(io::ErrorKind::Other, "oh yes!"))
+        );
+        assert_ne!(
+            Error::StepPeerNotFound,
+            Error::Store(StorageError::Compacted)
+        );
         assert_ne!(Error::Other(box Error::StepLocalMsg), Error::StepLocalMsg);
     }
 
@@ -131,12 +147,18 @@ mod tests {
     fn test_storage_error_equal() {
         assert_eq!(StorageError::Compacted, StorageError::Compacted);
         assert_eq!(StorageError::Unavailable, StorageError::Unavailable);
-        assert_eq!(StorageError::SnapshotOutOfDate,
-                   StorageError::SnapshotOutOfDate);
-        assert_eq!(StorageError::SnapshotTemporarilyUnavailable,
-                   StorageError::SnapshotTemporarilyUnavailable);
+        assert_eq!(
+            StorageError::SnapshotOutOfDate,
+            StorageError::SnapshotOutOfDate
+        );
+        assert_eq!(
+            StorageError::SnapshotTemporarilyUnavailable,
+            StorageError::SnapshotTemporarilyUnavailable
+        );
         assert_ne!(StorageError::Compacted, StorageError::Unavailable);
-        assert_ne!(StorageError::Other(box StorageError::Unavailable),
-                   StorageError::Unavailable);
+        assert_ne!(
+            StorageError::Other(box StorageError::Unavailable),
+            StorageError::Unavailable
+        );
     }
 }

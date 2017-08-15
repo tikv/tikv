@@ -19,14 +19,14 @@ use tipb::expression::Expr;
 use util::collections::{HashMap, HashMapEntry as Entry};
 
 use coprocessor::codec::table::RowColsDict;
-use coprocessor::codec::datum::{self, Datum, DatumEncoder, approximate_size};
+use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
 use coprocessor::select::aggregate::{self, AggrFunc};
-use coprocessor::select::xeval::{Evaluator, EvalContext};
+use coprocessor::select::xeval::{EvalContext, Evaluator};
 use coprocessor::metrics::*;
 use coprocessor::Result;
 
-use super::{Executor, Row, ExprColumnRefVisitor, inflate_with_col_for_dag};
+use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
 pub struct AggregationExecutor<'a> {
     group_by: Vec<Expr>,
@@ -42,18 +42,21 @@ pub struct AggregationExecutor<'a> {
 }
 
 impl<'a> AggregationExecutor<'a> {
-    pub fn new(mut meta: Aggregation,
-               ctx: Rc<EvalContext>,
-               columns: Rc<Vec<ColumnInfo>>,
-               src: Box<Executor + 'a>)
-               -> Result<AggregationExecutor<'a>> {
+    pub fn new(
+        mut meta: Aggregation,
+        ctx: Rc<EvalContext>,
+        columns: Rc<Vec<ColumnInfo>>,
+        src: Box<Executor + 'a>,
+    ) -> Result<AggregationExecutor<'a>> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(columns.len());
         let group_by = meta.take_group_by().into_vec();
         try!(visitor.batch_visit(&group_by));
         let aggr_func = meta.take_agg_func().into_vec();
         try!(visitor.batch_visit(&aggr_func));
-        COPR_EXECUTOR_COUNT.with_label_values(&["aggregation"]).inc();
+        COPR_EXECUTOR_COUNT
+            .with_label_values(&["aggregation"])
+            .inc();
         Ok(AggregationExecutor {
             group_by: group_by,
             aggr_func: aggr_func,
@@ -85,12 +88,14 @@ impl<'a> AggregationExecutor<'a> {
     fn aggregate(&mut self) -> Result<()> {
         while let Some(row) = try!(self.src.next()) {
             let mut eval = Evaluator::default();
-            try!(inflate_with_col_for_dag(&mut eval,
-                                          &self.ctx,
-                                          &row.data,
-                                          self.cols.clone(),
-                                          &self.related_cols_offset,
-                                          row.handle));
+            try!(inflate_with_col_for_dag(
+                &mut eval,
+                &self.ctx,
+                &row.data,
+                self.cols.clone(),
+                &self.related_cols_offset,
+                row.handle
+            ));
             let group_key = Rc::new(try!(self.get_group_key(&mut eval)));
             match self.group_key_aggrs.entry(group_key.clone()) {
                 Entry::Vacant(e) => {
@@ -159,12 +164,12 @@ mod test {
     use coprocessor::codec::datum::{Datum, DatumDecoder};
     use coprocessor::codec::mysql::decimal::Decimal;
     use coprocessor::codec::mysql::types;
-    use storage::{Statistics, SnapshotStore};
+    use storage::{SnapshotStore, Statistics};
     use util::codec::number::NumberEncoder;
 
     use super::*;
     use super::super::table_scan::TableScanExecutor;
-    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::scanner::test::{get_range, new_col_info, TestStore};
     use super::super::topn::test::gen_table_data;
 
     #[inline]
@@ -201,16 +206,48 @@ mod test {
     fn test_aggregation() {
         // prepare data and store
         let tid = 1;
-        let cis = vec![new_col_info(1, types::LONG_LONG),
-                       new_col_info(2, types::VARCHAR),
-                       new_col_info(3, types::NEW_DECIMAL)];
-        let raw_data = vec![vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
-                            vec![Datum::I64(2), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
-                            vec![Datum::I64(3), Datum::Bytes(b"b".to_vec()), Datum::Dec(8.into())],
-                            vec![Datum::I64(4), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
-                            vec![Datum::I64(5), Datum::Bytes(b"f".to_vec()), Datum::Dec(5.into())],
-                            vec![Datum::I64(6), Datum::Bytes(b"b".to_vec()), Datum::Dec(8.into())],
-                            vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::Dec(6.into())]];
+        let cis = vec![
+            new_col_info(1, types::LONG_LONG),
+            new_col_info(2, types::VARCHAR),
+            new_col_info(3, types::NEW_DECIMAL),
+        ];
+        let raw_data = vec![
+            vec![
+                Datum::I64(1),
+                Datum::Bytes(b"a".to_vec()),
+                Datum::Dec(7.into()),
+            ],
+            vec![
+                Datum::I64(2),
+                Datum::Bytes(b"a".to_vec()),
+                Datum::Dec(7.into()),
+            ],
+            vec![
+                Datum::I64(3),
+                Datum::Bytes(b"b".to_vec()),
+                Datum::Dec(8.into()),
+            ],
+            vec![
+                Datum::I64(4),
+                Datum::Bytes(b"a".to_vec()),
+                Datum::Dec(7.into()),
+            ],
+            vec![
+                Datum::I64(5),
+                Datum::Bytes(b"f".to_vec()),
+                Datum::Dec(5.into()),
+            ],
+            vec![
+                Datum::I64(6),
+                Datum::Bytes(b"b".to_vec()),
+                Datum::Dec(8.into()),
+            ],
+            vec![
+                Datum::I64(7),
+                Datum::Bytes(b"f".to_vec()),
+                Datum::Dec(6.into()),
+            ],
+        ];
         let table_data = gen_table_data(tid, &cis, &raw_data);
         let mut test_store = TestStore::new(&table_data);
         // init table scan meta
@@ -234,22 +271,48 @@ mod test {
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init Aggregation Executor
-        let mut aggr_ect = AggregationExecutor::new(aggregation,
-                                                    Rc::new(EvalContext::default()),
-                                                    Rc::new(cis),
-                                                    Box::new(ts_ect))
-            .unwrap();
+        let mut aggr_ect = AggregationExecutor::new(
+            aggregation,
+            Rc::new(EvalContext::default()),
+            Rc::new(cis),
+            Box::new(ts_ect),
+        ).unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(row) = aggr_ect.next().unwrap() {
             row_data.push(row.data);
         }
         assert_eq!(row_data.len(), expect_row_cnt);
-        let expect_row_data =
-            vec![(3 as u64, Decimal::from(7), 3 as u64, b"a".as_ref(), Decimal::from(7)),
-                 (2 as u64, Decimal::from(9), 2 as u64, b"b".as_ref(), Decimal::from(8)),
-                 (1 as u64, Decimal::from(5), 1 as u64, b"f".as_ref(), Decimal::from(5)),
-                 (1 as u64, Decimal::from(7), 1 as u64, b"f".as_ref(), Decimal::from(6))];
+        let expect_row_data = vec![
+            (
+                3 as u64,
+                Decimal::from(7),
+                3 as u64,
+                b"a".as_ref(),
+                Decimal::from(7),
+            ),
+            (
+                2 as u64,
+                Decimal::from(9),
+                2 as u64,
+                b"b".as_ref(),
+                Decimal::from(8),
+            ),
+            (
+                1 as u64,
+                Decimal::from(5),
+                1 as u64,
+                b"f".as_ref(),
+                Decimal::from(5),
+            ),
+            (
+                1 as u64,
+                Decimal::from(7),
+                1 as u64,
+                b"f".as_ref(),
+                Decimal::from(6),
+            ),
+        ];
         let expect_col_cnt = 5;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
             let ds = row.value.as_slice().decode().unwrap();

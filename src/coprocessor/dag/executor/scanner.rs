@@ -13,7 +13,7 @@
 
 use kvproto::coprocessor::KeyRange;
 
-use storage::{Key, Value, ScanMode, Statistics, SnapshotStore, StoreScanner};
+use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
 use storage::txn::Result;
 use util::escape;
 // `Scanner` is a helper struct to wrap all common scan operations
@@ -28,11 +28,12 @@ pub struct Scanner<'a> {
 }
 
 impl<'a> Scanner<'a> {
-    pub fn new(store: SnapshotStore<'a>,
-               desc: bool,
-               key_only: bool,
-               statistics: &'a mut Statistics)
-               -> Scanner<'a> {
+    pub fn new(
+        store: SnapshotStore<'a>,
+        desc: bool,
+        key_only: bool,
+        statistics: &'a mut Statistics,
+    ) -> Scanner<'a> {
         let scan_mode = if desc {
             ScanMode::Backward
         } else {
@@ -69,10 +70,12 @@ impl<'a> Scanner<'a> {
         };
 
         if range.get_start() > key.as_slice() || range.get_end() <= key.as_slice() {
-            debug!("key: {} out of range [{}, {})",
-                   escape(&key),
-                   escape(range.get_start()),
-                   escape(range.get_end()));
+            debug!(
+                "key: {} out of range [{}, {})",
+                escape(&key),
+                escape(range.get_start()),
+                escape(range.get_end())
+            );
             return Ok(None);
         }
         Ok(Some((key, value)))
@@ -80,8 +83,7 @@ impl<'a> Scanner<'a> {
 
     pub fn get_row(&mut self, key: &[u8]) -> Result<Option<Value>> {
         let statistics = self.take_statistics();
-        let data = try!(self.store
-            .get(&Key::from_raw(key), statistics));
+        let data = try!(self.store.get(&Key::from_raw(key), statistics));
         self.statistics = Some(statistics);
         Ok(data)
     }
@@ -100,8 +102,10 @@ impl<'a> Scanner<'a> {
             Some(Key::from_raw(range.get_end()).encoded().to_vec())
         };
         let statistics = self.take_statistics();
-        let scanner = try!(self.store
-            .scanner(self.scan_mode, self.key_only, upper_bound, statistics));
+        let scanner = try!(
+            self.store
+                .scanner(self.scan_mode, self.key_only, upper_bound, statistics)
+        );
         self.scanner = Some(scanner);
         Ok(())
     }
@@ -129,8 +133,8 @@ pub mod test {
     use util::collections::HashMap;
     use util::codec::number::NumberEncoder;
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, Snapshot, SnapshotStore};
-    use storage::engine::{self, Engine, TEMP_DIR, Modify};
+    use storage::{make_key, Mutation, Options, Snapshot, SnapshotStore, Statistics, ALL_CFS};
+    use storage::engine::{self, Engine, Modify, TEMP_DIR};
 
     use super::*;
 
@@ -167,9 +171,11 @@ pub mod test {
     }
 
     pub fn prepare_table_data(key_number: usize, table_id: i64) -> Data {
-        let cols = vec![new_col_info(1, types::LONG_LONG),
-                        new_col_info(2, types::VARCHAR),
-                        new_col_info(3, types::NEW_DECIMAL)];
+        let cols = vec![
+            new_col_info(1, types::LONG_LONG),
+            new_col_info(2, types::VARCHAR),
+            new_col_info(3, types::NEW_DECIMAL),
+        ];
 
         let mut kv_data = Vec::new();
         let mut expect_rows = Vec::new();
@@ -232,31 +238,36 @@ pub mod test {
             let mut statistics = Statistics::default();
             // do prewrite.
             let txn_motifies = {
-                let mut txn = MvccTxn::new(self.snapshot.as_ref(),
-                                           &mut statistics,
-                                           START_TS,
-                                           None,
-                                           IsolationLevel::SI);
+                let mut txn = MvccTxn::new(
+                    self.snapshot.as_ref(),
+                    &mut statistics,
+                    START_TS,
+                    None,
+                    IsolationLevel::SI,
+                );
                 let mut pk = vec![];
                 for &(ref key, ref value) in kv_data {
                     if pk.is_empty() {
                         pk = key.clone();
                     }
-                    txn.prewrite(Mutation::Put((make_key(key), value.to_vec())),
-                                  &pk,
-                                  &Options::default())
-                        .unwrap();
+                    txn.prewrite(
+                        Mutation::Put((make_key(key), value.to_vec())),
+                        &pk,
+                        &Options::default(),
+                    ).unwrap();
                 }
                 txn.modifies()
             };
             self.write_modifies(txn_motifies);
             // do commit
             let txn_modifies = {
-                let mut txn = MvccTxn::new(self.snapshot.as_ref(),
-                                           &mut statistics,
-                                           START_TS,
-                                           None,
-                                           IsolationLevel::SI);
+                let mut txn = MvccTxn::new(
+                    self.snapshot.as_ref(),
+                    &mut statistics,
+                    START_TS,
+                    None,
+                    IsolationLevel::SI,
+                );
                 for &(ref key, _) in kv_data {
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
@@ -371,7 +382,7 @@ pub mod test {
         let pv = b"value1";
         let test_data = vec![
             (pk.clone(), pv.to_vec()),
-            (table::encode_row_key(table_id,b"key2"), b"value2".to_vec()),
+            (table::encode_row_key(table_id, b"key2"), b"value2".to_vec()),
         ];
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
@@ -389,9 +400,7 @@ pub mod test {
         let table_id = 1;
         let pk = table::encode_row_key(table_id, b"key1");
         let pv = b"value1";
-        let test_data = vec![
-            (pk.clone(), pv.to_vec()),
-        ];
+        let test_data = vec![(pk.clone(), pv.to_vec())];
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();

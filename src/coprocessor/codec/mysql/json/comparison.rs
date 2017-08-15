@@ -51,7 +51,11 @@ impl Json {
                 let v = try!(self.as_literal());
                 Ok(v as f64)
             }
-            _ => Err(invalid_type!("{:?} from {} to f64", ERR_CONVERT_FAILED, self.to_string())),
+            _ => Err(invalid_type!(
+                "{:?} from {} to f64",
+                ERR_CONVERT_FAILED,
+                self.to_string()
+            )),
         }
     }
 }

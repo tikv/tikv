@@ -19,7 +19,7 @@ use std::{str, i64, u64};
 use std::io::Write;
 
 use super::super::Result;
-use super::{Decimal, parse_frac, check_fsp};
+use super::{check_fsp, parse_frac, Decimal};
 
 const NANOS_PER_SEC: i64 = 1_000_000_000;
 const NANO_WIDTH: u32 = 9;
@@ -32,7 +32,11 @@ const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
 fn check_dur(dur: &StdDuration) -> Result<()> {
     let secs = dur.as_secs();
     if secs > MAX_TIME_IN_SECS || secs == MAX_TIME_IN_SECS && dur.subsec_nanos() > 0 {
-        return Err(invalid_type!("{:?} is larger than {:?}", dur, MAX_TIME_IN_SECS));
+        return Err(invalid_type!(
+            "{:?} is larger than {:?}",
+            dur,
+            MAX_TIME_IN_SECS
+        ));
     }
     Ok(())
 }
@@ -82,7 +86,11 @@ impl Duration {
 
     pub fn to_secs(&self) -> f64 {
         let res = self.dur.as_secs() as f64 + self.dur.subsec_nanos() as f64 * 10e-9;
-        if self.neg { -res } else { res }
+        if self.neg {
+            -res
+        } else {
+            res
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -91,15 +99,21 @@ impl Duration {
 
     pub fn to_nanos(&self) -> i64 {
         let nanos = self.dur.as_secs() as i64 * NANOS_PER_SEC + self.dur.subsec_nanos() as i64;
-        if self.neg { -nanos } else { nanos }
+        if self.neg {
+            -nanos
+        } else {
+            nanos
+        }
     }
 
     pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
         let neg = nanos < 0;
         let nanos = nanos.abs();
 
-        let dur = StdDuration::new((nanos / NANOS_PER_SEC) as u64,
-                                   (nanos % NANOS_PER_SEC) as u32);
+        let dur = StdDuration::new(
+            (nanos / NANOS_PER_SEC) as u64,
+            (nanos % NANOS_PER_SEC) as u32,
+        );
         Duration::new(dur, neg, fsp)
     }
 
@@ -184,11 +198,13 @@ impl Duration {
         if self.neg {
             try!(write!(buf, "-"));
         }
-        try!(write!(buf,
-                    "{:02}{:02}{:02}",
-                    self.hours(),
-                    self.minutes(),
-                    self.secs()));
+        try!(write!(
+            buf,
+            "{:02}{:02}{:02}",
+            self.hours(),
+            self.minutes(),
+            self.secs()
+        ));
         if self.fsp > 0 {
             try!(write!(buf, "."));
             let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - self.fsp as u32));
@@ -204,11 +220,13 @@ impl Display for Duration {
         if self.neg {
             try!(write!(formatter, "-"));
         }
-        try!(write!(formatter,
-                    "{:02}:{:02}:{:02}",
-                    self.hours(),
-                    self.minutes(),
-                    self.secs()));
+        try!(write!(
+            formatter,
+            "{:02}:{:02}:{:02}",
+            self.hours(),
+            self.minutes(),
+            self.secs()
+        ));
         if self.fsp > 0 {
             try!(write!(formatter, "."));
             let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - self.fsp as u32));
@@ -297,11 +315,9 @@ mod test {
                         panic!("expect parse {} to {}, got {}", escape(input), exp, s);
                     }
                 }
-                None => {
-                    if !d.is_err() {
-                        panic!("{} should not be passed, got {:?}", escape(input), d);
-                    }
-                }
+                None => if !d.is_err() {
+                    panic!("{} should not be passed, got {:?}", escape(input), d);
+                },
             }
         }
     }
