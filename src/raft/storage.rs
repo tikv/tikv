@@ -28,8 +28,8 @@
 
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use kvproto::eraftpb::{HardState, ConfState, Entry, Snapshot};
-use raft::errors::{Result, Error, StorageError};
+use kvproto::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use raft::errors::{Error, Result, StorageError};
 use util::{self, HandyRwLock};
 
 #[derive(Debug, Clone)]
@@ -121,23 +121,28 @@ impl MemStorageCore {
     /// can be used to reconstruct the state at that point.
     /// If any configuration changes have been made since the last compaction,
     /// the result of the last apply_conf_change must be passed in.
-    pub fn create_snapshot(&mut self,
-                           idx: u64,
-                           cs: Option<ConfState>,
-                           data: Vec<u8>)
-                           -> Result<&Snapshot> {
+    pub fn create_snapshot(
+        &mut self,
+        idx: u64,
+        cs: Option<ConfState>,
+        data: Vec<u8>,
+    ) -> Result<&Snapshot> {
         if idx <= self.snapshot.get_metadata().get_index() {
             return Err(Error::Store(StorageError::SnapshotOutOfDate));
         }
 
         let offset = self.entries[0].get_index();
         if idx > self.inner_last_index() {
-            panic!("snapshot {} is out of bound lastindex({})",
-                   idx,
-                   self.inner_last_index())
+            panic!(
+                "snapshot {} is out of bound lastindex({})",
+                idx,
+                self.inner_last_index()
+            )
         }
         self.snapshot.mut_metadata().set_index(idx);
-        self.snapshot.mut_metadata().set_term(self.entries[(idx - offset) as usize].get_term());
+        self.snapshot
+            .mut_metadata()
+            .set_term(self.entries[(idx - offset) as usize].get_term());
         if let Some(cs) = cs {
             self.snapshot.mut_metadata().set_conf_state(cs)
         }
@@ -154,9 +159,11 @@ impl MemStorageCore {
             return Err(Error::Store(StorageError::Compacted));
         }
         if compact_index > self.inner_last_index() {
-            panic!("compact {} is out of bound lastindex({})",
-                   compact_index,
-                   self.inner_last_index())
+            panic!(
+                "compact {} is out of bound lastindex({})",
+                compact_index,
+                self.inner_last_index()
+            )
         }
 
         let i = (compact_index - offset) as usize;
@@ -196,9 +203,11 @@ impl MemStorageCore {
         } else if self.entries.len() as u64 == offset {
             self.entries.extend_from_slice(te);
         } else {
-            panic!("missing log entry [last: {}, append at: {}]",
-                   self.inner_last_index(),
-                   te[0].get_index())
+            panic!(
+                "missing log entry [last: {}, append at: {}]",
+                self.inner_last_index(),
+                te[0].get_index()
+            )
         }
 
         Ok(())
@@ -214,7 +223,9 @@ pub struct MemStorage {
 
 impl MemStorage {
     pub fn new() -> MemStorage {
-        MemStorage { ..Default::default() }
+        MemStorage {
+            ..Default::default()
+        }
     }
 
     pub fn rl(&self) -> RwLockReadGuard<MemStorageCore> {
@@ -294,9 +305,9 @@ impl Storage for MemStorage {
 #[cfg(test)]
 mod test {
     use protobuf;
-    use kvproto::eraftpb::{Entry, Snapshot, ConfState};
-    use raft::{StorageError, Error as RaftError};
-    use raft::storage::{Storage, MemStorage};
+    use kvproto::eraftpb::{ConfState, Entry, Snapshot};
+    use raft::{Error as RaftError, StorageError};
+    use raft::storage::{MemStorage, Storage};
 
     // TODO extract these duplicated utility functions for tests
 
@@ -322,11 +333,7 @@ mod test {
 
     #[test]
     fn test_storage_term() {
-        let ents = vec![
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-        ];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let mut tests = vec![
             (2, Err(RaftError::Store(StorageError::Compacted))),
             (3, Ok(3)),
@@ -356,23 +363,54 @@ mod test {
         ];
         let max_u64 = u64::max_value();
         let mut tests = vec![
-            (2, 6, max_u64, Err(RaftError::Store(StorageError::Compacted))),
-            (3, 4, max_u64, Err(RaftError::Store(StorageError::Compacted))),
+            (
+                2,
+                6,
+                max_u64,
+                Err(RaftError::Store(StorageError::Compacted)),
+            ),
+            (
+                3,
+                4,
+                max_u64,
+                Err(RaftError::Store(StorageError::Compacted)),
+            ),
             (4, 5, max_u64, Ok(vec![new_entry(4, 4)])),
             (4, 6, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+            (
+                4,
+                7,
+                max_u64,
+                Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]),
+            ),
             // even if maxsize is zero, the first entry should be returned
             (4, 7, 0, Ok(vec![new_entry(4, 4)])),
             // limit to 2
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2])) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])/2) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (
+                4,
+                7,
+                (size_of(&ents[1]) + size_of(&ents[2])) as u64,
+                Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
+            ),
+            (
+                4,
+                7,
+                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
+                Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
+            ),
+            (
+                4,
+                7,
+                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
+                Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
+            ),
             // all
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+            (
+                4,
+                7,
+                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
+                Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]),
+            ),
         ];
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let storage = MemStorage::new();
@@ -386,11 +424,7 @@ mod test {
 
     #[test]
     fn test_storage_last_index() {
-        let ents = vec![
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-        ];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let storage = MemStorage::new();
         storage.wl().entries = ents;
 
@@ -400,7 +434,10 @@ mod test {
             panic!("want {:?}, got {:?}", wresult, result);
         }
 
-        storage.wl().append(&[new_entry(6, 5)]).expect("append failed");
+        storage
+            .wl()
+            .append(&[new_entry(6, 5)])
+            .expect("append failed");
         let wresult = Ok(6);
         let result = storage.last_index();
         if result != wresult {
@@ -410,11 +447,7 @@ mod test {
 
     #[test]
     fn test_storage_first_index() {
-        let ents = vec![
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-        ];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let storage = MemStorage::new();
         storage.wl().entries = ents;
 
@@ -480,7 +513,8 @@ mod test {
             let storage = MemStorage::new();
             storage.wl().entries = ents.clone();
 
-            storage.wl()
+            storage
+                .wl()
                 .create_snapshot(idx, Some(cs.clone()), data.clone())
                 .expect("create snapshot failed");
             let result = storage.snapshot();
@@ -505,9 +539,19 @@ mod test {
                 vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
             ),
             (
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+                vec![
+                    new_entry(3, 3),
+                    new_entry(4, 4),
+                    new_entry(5, 5),
+                    new_entry(6, 5),
+                ],
                 Ok(()),
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+                vec![
+                    new_entry(3, 3),
+                    new_entry(4, 4),
+                    new_entry(5, 5),
+                    new_entry(6, 5),
+                ],
             ),
             // truncate incoming entries, truncate the existing entries and append
             (
@@ -525,7 +569,12 @@ mod test {
             (
                 vec![new_entry(6, 6)],
                 Ok(()),
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)],
+                vec![
+                    new_entry(3, 3),
+                    new_entry(4, 4),
+                    new_entry(5, 5),
+                    new_entry(6, 6),
+                ],
             ),
         ];
         for (i, (entries, wresult, wentries)) in tests.drain(..).enumerate() {

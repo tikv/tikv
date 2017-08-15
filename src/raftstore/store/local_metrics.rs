@@ -32,37 +32,43 @@ impl RaftReadyMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.message > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["message"])
+            STORE_RAFT_READY_COUNTER_VEC
+                .with_label_values(&["message"])
                 .inc_by(self.message as f64)
                 .unwrap();
             self.message = 0;
         }
         if self.commit > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["commit"])
+            STORE_RAFT_READY_COUNTER_VEC
+                .with_label_values(&["commit"])
                 .inc_by(self.commit as f64)
                 .unwrap();
             self.commit = 0;
         }
         if self.append > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["append"])
+            STORE_RAFT_READY_COUNTER_VEC
+                .with_label_values(&["append"])
                 .inc_by(self.append as f64)
                 .unwrap();
             self.append = 0;
         }
         if self.snapshot > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"])
+            STORE_RAFT_READY_COUNTER_VEC
+                .with_label_values(&["snapshot"])
                 .inc_by(self.snapshot as f64)
                 .unwrap();
             self.snapshot = 0;
         }
         if self.pending_region > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["pending_region"])
+            STORE_RAFT_READY_COUNTER_VEC
+                .with_label_values(&["pending_region"])
                 .inc_by(self.pending_region as f64)
                 .unwrap();
             self.pending_region = 0;
         }
         if self.has_ready_region > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["has_ready_region"])
+            STORE_RAFT_READY_COUNTER_VEC
+                .with_label_values(&["has_ready_region"])
                 .inc_by(self.has_ready_region as f64)
                 .unwrap();
             self.has_ready_region = 0;
@@ -89,55 +95,64 @@ impl RaftMessageMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.append > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["append"])
                 .inc_by(self.append as f64)
                 .unwrap();
             self.append = 0;
         }
         if self.append_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["append_resp"])
                 .inc_by(self.append_resp as f64)
                 .unwrap();
             self.append_resp = 0;
         }
         if self.vote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["vote"])
                 .inc_by(self.vote as f64)
                 .unwrap();
             self.vote = 0;
         }
         if self.vote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["vote_resp"])
                 .inc_by(self.vote_resp as f64)
                 .unwrap();
             self.vote_resp = 0;
         }
         if self.snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["snapshot"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["snapshot"])
                 .inc_by(self.snapshot as f64)
                 .unwrap();
             self.snapshot = 0;
         }
         if self.heartbeat > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["heartbeat"])
                 .inc_by(self.heartbeat as f64)
                 .unwrap();
             self.heartbeat = 0;
         }
         if self.heartbeat_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["heartbeat_resp"])
                 .inc_by(self.heartbeat_resp as f64)
                 .unwrap();
             self.heartbeat_resp = 0;
         }
         if self.transfer_leader > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["transfer_leader"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["transfer_leader"])
                 .inc_by(self.transfer_leader as f64)
                 .unwrap();
             self.transfer_leader = 0;
         }
         if self.timeout_now > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["timeout_now"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["timeout_now"])
                 .inc_by(self.timeout_now as f64)
                 .unwrap();
             self.timeout_now = 0;
@@ -176,37 +191,43 @@ impl RaftProposeMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.all > 0 {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"])
+            PEER_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["all"])
                 .inc_by(self.all as f64)
                 .unwrap();
             self.all = 0;
         }
         if self.local_read > 0 {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"])
+            PEER_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["local_read"])
                 .inc_by(self.local_read as f64)
                 .unwrap();
             self.local_read = 0;
         }
         if self.read_index > 0 {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["read_index"])
+            PEER_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["read_index"])
                 .inc_by(self.read_index as f64)
                 .unwrap();
             self.read_index = 0;
         }
         if self.normal > 0 {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["normal"])
+            PEER_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["normal"])
                 .inc_by(self.normal as f64)
                 .unwrap();
             self.normal = 0;
         }
         if self.transfer_leader > 0 {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["transfer_leader"])
+            PEER_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["transfer_leader"])
                 .inc_by(self.transfer_leader as f64)
                 .unwrap();
             self.transfer_leader = 0;
         }
         if self.conf_change > 0 {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["conf_change"])
+            PEER_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["conf_change"])
                 .inc_by(self.conf_change as f64)
                 .unwrap();
             self.conf_change = 0;
@@ -233,8 +254,12 @@ impl Default for RaftMetrics {
             ready: Default::default(),
             message: Default::default(),
             propose: Default::default(),
-            process_tick: PEER_RAFT_PROCESS_DURATION.with_label_values(&["tick"]).local(),
-            process_ready: PEER_RAFT_PROCESS_DURATION.with_label_values(&["ready"]).local(),
+            process_tick: PEER_RAFT_PROCESS_DURATION
+                .with_label_values(&["tick"])
+                .local(),
+            process_ready: PEER_RAFT_PROCESS_DURATION
+                .with_label_values(&["ready"])
+                .local(),
             append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
         }
     }

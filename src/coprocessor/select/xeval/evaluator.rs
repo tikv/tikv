@@ -24,10 +24,10 @@ use util::collections::{HashMap, HashMapEntry};
 
 use coprocessor::codec;
 use coprocessor::codec::datum::{Datum, DatumDecoder};
-use coprocessor::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression,
-                                ModifyType};
-use coprocessor::codec::mysql::json::{json_object, json_array};
-use super::{Result, Error};
+use coprocessor::codec::mysql::{DecimalDecoder, Duration, Json, ModifyType, PathExpression,
+                                MAX_FSP};
+use coprocessor::codec::mysql::json::{json_array, json_object};
+use super::{Error, Result};
 
 /// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
 /// truncate error.
@@ -121,8 +121,7 @@ impl Evaluator {
             ExprType::Or => self.eval_logic(ctx, expr, Some(true), eval_or),
             ExprType::Not => self.eval_not(ctx, expr),
             ExprType::Like => self.eval_like(ctx, expr),
-            ExprType::Float32 |
-            ExprType::Float64 => self.eval_float(expr),
+            ExprType::Float32 | ExprType::Float64 => self.eval_float(expr),
             ExprType::MysqlDuration => self.eval_duration(expr),
             ExprType::MysqlDecimal => self.eval_decimal(expr),
             ExprType::In => self.eval_in(ctx, expr),
@@ -181,7 +180,10 @@ impl Evaluator {
 
     fn eval_column_ref(&self, expr: &Expr) -> Result<Datum> {
         let i = try!(expr.get_val().decode_i64());
-        self.row.get(&i).cloned().ok_or_else(|| Error::Eval(format!("column {} not found", i)))
+        self.row
+            .get(&i)
+            .cloned()
+            .ok_or_else(|| Error::Eval(format!("column {} not found", i)))
     }
 
     fn eval_lt(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -231,7 +233,9 @@ impl Evaluator {
     pub fn get_one_child<'a>(&mut self, expr: &'a Expr) -> Result<&'a Expr> {
         let l = expr.get_children().len();
         if l != 1 {
-            return Err(Error::Expr(format!("{:?} need 1 operand but got {}", expr.get_tp(), l)));
+            return Err(Error::Expr(
+                format!("{:?} need 1 operand but got {}", expr.get_tp(), l),
+            ));
         }
         let children = expr.get_children();
         Ok(&children[0])
@@ -240,7 +244,9 @@ impl Evaluator {
     fn get_two_children<'a>(&mut self, expr: &'a Expr) -> Result<(&'a Expr, &'a Expr)> {
         let l = expr.get_children().len();
         if l != 2 {
-            return Err(Error::Expr(format!("{:?} need 2 operands but got {}", expr.get_tp(), l)));
+            return Err(Error::Expr(
+                format!("{:?} need 2 operands but got {}", expr.get_tp(), l),
+            ));
         }
         let children = expr.get_children();
         Ok((&children[0], &children[1]))
@@ -258,26 +264,29 @@ impl Evaluator {
         Ok((left, right))
     }
 
-    fn eval_more_children(&mut self,
-                          ctx: &EvalContext,
-                          expr: &Expr,
-                          num: usize)
-                          -> Result<Vec<Datum>> {
+    fn eval_more_children(
+        &mut self,
+        ctx: &EvalContext,
+        expr: &Expr,
+        num: usize,
+    ) -> Result<Vec<Datum>> {
         let children = expr.get_children();
         if children.len() < num {
-            return Err(Error::Expr(format!("expect more than {} operands, got {}",
-                                           num,
-                                           children.len())));
+            return Err(Error::Expr(format!(
+                "expect more than {} operands, got {}",
+                num,
+                children.len()
+            )));
         }
-        children.iter()
-            .map(|child| self.eval(ctx, child))
-            .collect()
+        children.iter().map(|child| self.eval(ctx, child)).collect()
     }
 
     fn eval_not(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let children_cnt = expr.get_children().len();
         if children_cnt != 1 {
-            return Err(Error::Expr(format!("expect 1 operand, got {}", children_cnt)));
+            return Err(Error::Expr(
+                format!("expect 1 operand, got {}", children_cnt),
+            ));
         }
         let d = try!(self.eval(ctx, &expr.get_children()[0]));
         if d == Datum::Null {
@@ -294,7 +303,10 @@ impl Evaluator {
         }
         let mut target_str = try!(target.into_string());
         let mut pattern_str = try!(pattern.into_string());
-        if pattern_str.chars().any(|x| x.is_ascii() && x.is_alphabetic()) {
+        if pattern_str
+            .chars()
+            .any(|x| x.is_ascii() && x.is_alphabetic())
+        {
             target_str = target_str.to_ascii_lowercase();
             pattern_str = pattern_str.to_ascii_lowercase();
         }
@@ -315,8 +327,10 @@ impl Evaluator {
 
     fn eval_in(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         if expr.get_children().len() != 2 {
-            return Err(Error::Expr(format!("IN need 2 operands, got {}",
-                                           expr.get_children().len())));
+            return Err(Error::Expr(format!(
+                "IN need 2 operands, got {}",
+                expr.get_children().len()
+            )));
         }
         let children = expr.get_children();
         let target = try!(self.eval(ctx, &children[0]));
@@ -325,7 +339,9 @@ impl Evaluator {
         }
         let value_list_expr = &children[1];
         if value_list_expr.get_tp() != ExprType::ValueList {
-            return Err(Error::Expr("the second child should be of the value list type".to_owned()));
+            return Err(Error::Expr(
+                "the second child should be of the value list type".to_owned(),
+            ));
         }
         let decoded = try!(self.decode_value_list(value_list_expr));
         if try!(check_in(ctx, target, decoded)) {
@@ -350,7 +366,8 @@ impl Evaluator {
     }
 
     fn eval_arith<F>(&mut self, ctx: &EvalContext, expr: &Expr, f: F) -> Result<Datum>
-        where F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>
+    where
+        F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>,
     {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
         eval_arith(ctx, left, right, f)
@@ -374,7 +391,9 @@ impl Evaluator {
     fn eval_if(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let children = expr.get_children();
         if children.len() != 3 {
-            return Err(Error::Expr(format!("expect 3 operands, got {}", children.len())));
+            return Err(Error::Expr(
+                format!("expect 3 operands, got {}", children.len()),
+            ));
         }
         let cond = try!(self.eval(ctx, &children[0]));
         let d = match try!(cond.into_bool(ctx)) {
@@ -397,7 +416,9 @@ impl Evaluator {
     fn eval_if_null(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let children = expr.get_children();
         if children.len() != 2 {
-            return Err(Error::Expr(format!("expect 2 operands, got {}", children.len())));
+            return Err(Error::Expr(
+                format!("expect 2 operands, got {}", children.len()),
+            ));
         }
         let left = try!(self.eval(ctx, &children[0]));
         if left == Datum::Null {
@@ -410,7 +431,9 @@ impl Evaluator {
     fn eval_is_null(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let children = expr.get_children();
         if children.len() != 1 {
-            return Err(Error::Expr(format!("expect 1 operand, got {}", children.len())));
+            return Err(Error::Expr(
+                format!("expect 1 operand, got {}", children.len()),
+            ));
         }
         let d = try!(self.eval(ctx, &children[0]));
         Ok((d == Datum::Null).into())
@@ -428,15 +451,18 @@ impl Evaluator {
         }
     }
 
-    fn eval_json_modify(&mut self,
-                        ctx: &EvalContext,
-                        expr: &Expr,
-                        mt: ModifyType)
-                        -> Result<Datum> {
+    fn eval_json_modify(
+        &mut self,
+        ctx: &EvalContext,
+        expr: &Expr,
+        mt: ModifyType,
+    ) -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 2));
         if is_even(children.len()) {
-            return Err(Error::Expr(format!("expect odd number of operands, got {}",
-                                           children.len())));
+            return Err(Error::Expr(format!(
+                "expect odd number of operands, got {}",
+                children.len()
+            )));
         }
 
         let mut index = 0 as i64;
@@ -475,8 +501,8 @@ impl Evaluator {
         }
         let mut children = children.into_iter();
         let mut json = try!(children.next().unwrap().cast_as_json());
-        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.to_json_path_expr())
-            .collect());
+        let path_extrs: Vec<PathExpression> =
+            try!(children.map(|item| item.to_json_path_expr()).collect());
         try!(json.remove(&path_extrs));
         Ok(Datum::Json(json))
     }
@@ -505,8 +531,8 @@ impl Evaluator {
         }
         let mut children = children.into_iter();
         let json = try!(children.next().unwrap().cast_as_json());
-        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.to_json_path_expr())
-            .collect());
+        let path_extrs: Vec<PathExpression> =
+            try!(children.map(|item| item.to_json_path_expr()).collect());
         if let Some(data) = json.extract(&path_extrs) {
             Ok(Datum::Json(data))
         } else {
@@ -531,8 +557,7 @@ impl Evaluator {
         }
         let mut children = children.into_iter();
         let first = try!(children.next().unwrap().cast_as_json());
-        let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json())
-            .collect());
+        let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json()).collect());
         Ok(Datum::Json(first.merge(suffixes)))
     }
 
@@ -556,17 +581,21 @@ impl Evaluator {
             ScalarFuncSig::CeilReal => self.ceil_real(ctx, expr),
             ScalarFuncSig::FloorInt => self.floor_int(ctx, expr),
             ScalarFuncSig::FloorReal => self.floor_real(ctx, expr),
-            _ => Err(Error::Expr(format!("unsupported scalar function: {:?}", expr.get_sig()))),
+            _ => Err(Error::Expr(
+                format!("unsupported scalar function: {:?}", expr.get_sig()),
+            )),
         }
     }
 
-    fn eval_logic<F>(&mut self,
-                     ctx: &EvalContext,
-                     expr: &Expr,
-                     break_res: Option<bool>,
-                     logic_func: F)
-                     -> Result<Datum>
-        where F: FnOnce(Option<bool>, Option<bool>) -> Datum
+    fn eval_logic<F>(
+        &mut self,
+        ctx: &EvalContext,
+        expr: &Expr,
+        break_res: Option<bool>,
+        logic_func: F,
+    ) -> Result<Datum>
+    where
+        F: FnOnce(Option<bool>, Option<bool>) -> Datum,
     {
         let (left_expr, right_expr) = try!(self.get_two_children(expr));
         let left_datum = try!(self.eval(ctx, left_expr));
@@ -603,7 +632,8 @@ fn eval_or(lhs: Option<bool>, rhs: Option<bool>) -> Datum {
 
 #[inline]
 pub fn eval_arith<F>(ctx: &EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
-    where F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>
+where
+    F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>,
 {
     let left = try!(left.into_arith(ctx));
     let right = try!(right.into_arith(ctx));
@@ -619,13 +649,11 @@ pub fn eval_arith<F>(ctx: &EvalContext, left: Datum, right: Datum, f: F) -> Resu
 /// Check if `target` is in `value_list`.
 fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bool> {
     let mut err = None;
-    let pos = value_list.binary_search_by(|d| {
-        match d.cmp(ctx, &target) {
-            Ok(ord) => ord,
-            Err(e) => {
-                err = Some(e);
-                Ordering::Less
-            }
+    let pos = value_list.binary_search_by(|d| match d.cmp(ctx, &target) {
+        Ok(ord) => ord,
+        Err(e) => {
+            err = Some(e);
+            Ordering::Less
         }
     });
     if let Some(e) = err {
@@ -638,8 +666,8 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
 pub mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
-    use coprocessor::codec::{Datum, datum};
-    use coprocessor::codec::mysql::{self, MAX_FSP, Decimal, Duration, DecimalEncoder};
+    use coprocessor::codec::{datum, Datum};
+    use coprocessor::codec::mysql::{self, Decimal, DecimalEncoder, Duration, MAX_FSP};
 
     use std::i32;
 
@@ -786,362 +814,1103 @@ pub mod test {
     }
 
 
-    test_eval!(test_eval_datum_col,
-               vec![
-        (datum_expr(Datum::F64(1.1)), Datum::F64(1.1)),
-        (datum_expr(Datum::I64(1)), Datum::I64(1)),
-        (datum_expr(Datum::U64(1)), Datum::U64(1)),
-        (datum_expr(b"abc".as_ref().into()), b"abc".as_ref().into()),
-        (datum_expr(Datum::Null), Datum::Null),
-        (datum_expr(Duration::parse(b"01:00:00", 0).unwrap().into()),
-            Duration::from_nanos(3600 * 1_000_000_000, MAX_FSP).unwrap().into()),
-        (datum_expr(Datum::Dec("1.1".parse().unwrap())),
-            Datum::Dec(Decimal::from_f64(1.1).unwrap())),
-        (col_expr(1), Datum::I64(100)),
-    ]);
+    test_eval!(
+        test_eval_datum_col,
+        vec![
+            (datum_expr(Datum::F64(1.1)), Datum::F64(1.1)),
+            (datum_expr(Datum::I64(1)), Datum::I64(1)),
+            (datum_expr(Datum::U64(1)), Datum::U64(1)),
+            (datum_expr(b"abc".as_ref().into()), b"abc".as_ref().into()),
+            (datum_expr(Datum::Null), Datum::Null),
+            (
+                datum_expr(Duration::parse(b"01:00:00", 0).unwrap().into()),
+                Duration::from_nanos(3600 * 1_000_000_000, MAX_FSP)
+                    .unwrap()
+                    .into(),
+            ),
+            (
+                datum_expr(Datum::Dec("1.1".parse().unwrap())),
+                Datum::Dec(Decimal::from_f64(1.1).unwrap()),
+            ),
+            (col_expr(1), Datum::I64(100)),
+        ]
+    );
 
-    test_eval!(test_eval_cmp,
-               vec![
-        (bin_expr(Duration::parse(b"11:00:00", 0).unwrap().into(),
-            Duration::parse(b"00:00:00", 0).unwrap().into(), ExprType::LT), Datum::I64(0)),
-        (bin_expr(Duration::parse(b"11:00:00.233", 2).unwrap().into(),
-            Duration::parse(b"11:00:00.233", 0).unwrap().into(), ExprType::EQ), Datum::I64(0)),
-        (bin_expr(Duration::parse(b"11:00:00.233", 3).unwrap().into(),
-            Duration::parse(b"11:00:00.233", 4).unwrap().into(), ExprType::EQ), Datum::I64(1)),
-        (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(2u64.into()),
-            ExprType::EQ), Datum::I64(1)),
-        (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LT), Datum::I64(0)),
-        (bin_expr(Datum::I64(1), Datum::I64(100), ExprType::LT), Datum::I64(1)),
-        (bin_expr(Datum::I64(100), Datum::Null, ExprType::LT), Datum::Null),
-        (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LE), Datum::I64(0)),
-        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::LE), Datum::I64(1)),
-        (bin_expr(Datum::I64(100), Datum::Null, ExprType::LE), Datum::Null),
-        (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::EQ), Datum::I64(0)),
-        (bin_expr(Datum::I64(100), Datum::I64(100), ExprType::EQ), Datum::I64(1)),
-        (bin_expr(Datum::I64(100), Datum::Null, ExprType::EQ), Datum::Null),
-        (bin_expr(Datum::I64(100), Datum::I64(100), ExprType::NE), Datum::I64(0)),
-        (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::NE), Datum::I64(1)),
-        (bin_expr(Datum::I64(100), Datum::Null, ExprType::NE), Datum::Null),
-        (bin_expr(Datum::I64(1), Datum::I64(100), ExprType::GE), Datum::I64(0)),
-        (bin_expr(Datum::I64(100), Datum::I64(100), ExprType::GE), Datum::I64(1)),
-        (bin_expr(Datum::I64(100), Datum::Null, ExprType::GE), Datum::Null),
-        (bin_expr(Datum::I64(100), Datum::I64(100), ExprType::GT), Datum::I64(0)),
-        (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::GT), Datum::I64(1)),
-        (bin_expr(Datum::I64(100), Datum::Null, ExprType::GT), Datum::Null),
-        (bin_expr(Datum::I64(1), Datum::Null, ExprType::NullEQ), Datum::I64(0)),
-        (bin_expr(Datum::Null, Datum::Null, ExprType::NullEQ), Datum::I64(1)),
-    ]);
+    test_eval!(
+        test_eval_cmp,
+        vec![
+            (
+                bin_expr(
+                    Duration::parse(b"11:00:00", 0).unwrap().into(),
+                    Duration::parse(b"00:00:00", 0).unwrap().into(),
+                    ExprType::LT,
+                ),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(
+                    Duration::parse(b"11:00:00.233", 2).unwrap().into(),
+                    Duration::parse(b"11:00:00.233", 0).unwrap().into(),
+                    ExprType::EQ,
+                ),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(
+                    Duration::parse(b"11:00:00.233", 3).unwrap().into(),
+                    Duration::parse(b"11:00:00.233", 4).unwrap().into(),
+                    ExprType::EQ,
+                ),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec(Decimal::from_f64(2.0).unwrap()),
+                    Datum::Dec(2u64.into()),
+                    ExprType::EQ,
+                ),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LT),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::I64(100), ExprType::LT),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::Null, ExprType::LT),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LE),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::I64(1), ExprType::LE),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::Null, ExprType::LE),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::I64(1), ExprType::EQ),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::I64(100), ExprType::EQ),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::Null, ExprType::EQ),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::I64(100), ExprType::NE),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::I64(1), ExprType::NE),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::Null, ExprType::NE),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::I64(100), ExprType::GE),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::I64(100), ExprType::GE),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::Null, ExprType::GE),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::I64(100), ExprType::GT),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::I64(1), ExprType::GT),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(100), Datum::Null, ExprType::GT),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Null, ExprType::NullEQ),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::Null, ExprType::NullEQ),
+                Datum::I64(1),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_logic,
-               vec![
-        (bin_expr(Datum::I64(0), Datum::I64(1), ExprType::And), Datum::I64(0)),
-        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::And), Datum::I64(1)),
-        (bin_expr(Datum::I64(1), Datum::Null, ExprType::And), Datum::Null),
-        (bin_expr(Datum::Null, Datum::I64(1), ExprType::And), Datum::Null),
-        (bin_expr(Datum::I64(0), Datum::Null, ExprType::And), Datum::I64(0)),
-        (bin_expr(Datum::Null, Datum::I64(0), ExprType::And), Datum::I64(0)),
-        (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
-            ExprType::And), Datum::I64(0)),
-        (bin_expr(Datum::Null, Datum::Null, ExprType::And), Datum::Null),
-        (bin_expr(Datum::I64(0), Datum::I64(0), ExprType::Or), Datum::I64(0)),
-        (bin_expr(Datum::I64(0), Datum::I64(1), ExprType::Or), Datum::I64(1)),
-        (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
-            ExprType::Or), Datum::I64(1)),
-        (bin_expr(Datum::I64(1), Datum::Null, ExprType::Or), Datum::I64(1)),
-        (bin_expr(Datum::Null, Datum::I64(1), ExprType::Or), Datum::I64(1)),
-        (bin_expr(Datum::Null, Datum::Null, ExprType::Or), Datum::Null),
-        (bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
-        (bin_expr(Datum::I64(0), Datum::Null, ExprType::Or), Datum::Null),
-        (build_expr_r(vec![bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
-            bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ)], ExprType::And), Datum::I64(1)),
-        (not_expr(Datum::I64(1)), Datum::I64(0)),
-        (not_expr(Datum::I64(0)), Datum::I64(1)),
-        (not_expr(Datum::Null), Datum::Null),
-    ]);
+    test_eval!(
+        test_eval_logic,
+        vec![
+            (
+                bin_expr(Datum::I64(0), Datum::I64(1), ExprType::And),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::I64(1), ExprType::And),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Null, ExprType::And),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(1), ExprType::And),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(0), Datum::Null, ExprType::And),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(0), ExprType::And),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec(Decimal::from_f64(2.0).unwrap()),
+                    Datum::Dec(0u64.into()),
+                    ExprType::And,
+                ),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::Null, ExprType::And),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(0), Datum::I64(0), ExprType::Or),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(0), Datum::I64(1), ExprType::Or),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec(Decimal::from_f64(2.0).unwrap()),
+                    Datum::Dec(0u64.into()),
+                    ExprType::Or,
+                ),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Null, ExprType::Or),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(1), ExprType::Or),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::Null, ExprType::Or),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(0), ExprType::Or),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(0), Datum::Null, ExprType::Or),
+                Datum::Null,
+            ),
+            (
+                build_expr_r(
+                    vec![
+                        bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
+                        bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
+                    ],
+                    ExprType::And,
+                ),
+                Datum::I64(1),
+            ),
+            (not_expr(Datum::I64(1)), Datum::I64(0)),
+            (not_expr(Datum::I64(0)), Datum::I64(1)),
+            (not_expr(Datum::Null), Datum::Null),
+        ]
+    );
 
-    test_eval!(test_eval_like,
-               vec![
-        (like_expr("a", ""), Datum::I64(0)),
-        (like_expr("a", "a"), Datum::I64(1)),
-        (like_expr("a", "b"), Datum::I64(0)),
-        (like_expr("aAb", "AaB"), Datum::I64(1)),
-        (like_expr("a", "%"), Datum::I64(1)),
-        (like_expr("aAD", "%d"), Datum::I64(1)),
-        (like_expr("aAeD", "%e"), Datum::I64(0)),
-        (like_expr("aAb", "Aa%"), Datum::I64(1)),
-        (like_expr("abAb", "Aa%"), Datum::I64(0)),
-        (like_expr("aAcb", "%C%"), Datum::I64(1)),
-        (like_expr("aAb", "%C%"), Datum::I64(0)),
-        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Like), Datum::I64(1)),
-        (bin_expr(Datum::U64(1), Datum::U64(1), ExprType::Like), Datum::I64(1)),
-        (bin_expr(Datum::F64(1.0), Datum::F64(1.0), ExprType::Like), Datum::I64(1)),
-        (bin_expr(Duration::parse(b"11:00:00", 0).unwrap().into(),
-         Duration::parse(b"11:00:00", 0).unwrap().into(), ExprType::Like), Datum::I64(1)),
-    ]);
+    test_eval!(
+        test_eval_like,
+        vec![
+            (like_expr("a", ""), Datum::I64(0)),
+            (like_expr("a", "a"), Datum::I64(1)),
+            (like_expr("a", "b"), Datum::I64(0)),
+            (like_expr("aAb", "AaB"), Datum::I64(1)),
+            (like_expr("a", "%"), Datum::I64(1)),
+            (like_expr("aAD", "%d"), Datum::I64(1)),
+            (like_expr("aAeD", "%e"), Datum::I64(0)),
+            (like_expr("aAb", "Aa%"), Datum::I64(1)),
+            (like_expr("abAb", "Aa%"), Datum::I64(0)),
+            (like_expr("aAcb", "%C%"), Datum::I64(1)),
+            (like_expr("aAb", "%C%"), Datum::I64(0)),
+            (
+                bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Like),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::U64(1), Datum::U64(1), ExprType::Like),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::F64(1.0), Datum::F64(1.0), ExprType::Like),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(
+                    Duration::parse(b"11:00:00", 0).unwrap().into(),
+                    Duration::parse(b"11:00:00", 0).unwrap().into(),
+                    ExprType::Like,
+                ),
+                Datum::I64(1),
+            ),
+        ]
+    );
 
     // TODO: test time
-    test_eval!(test_eval_plus,
-               vec![
-        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
-        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Plus), Datum::U64(2)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Plus), Datum::F64(2.0)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Plus), Datum::F64(0.0)),
-        (bin_expr(Datum::Null, Datum::Null, ExprType::Plus), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Plus), Datum::Null),
-        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Plus), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::U64(1), ExprType::Plus), Datum::U64(0)),
-        (bin_expr(Datum::I64(i64::min_value()), Datum::U64(i64::max_value() as u64 + 1),
-         ExprType::Plus), Datum::U64(0)),
-        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Plus), Datum::F64(1.0)),
-        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Plus), Datum::F64(3.0)),
-        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Plus),
-         Datum::Dec("2.3".parse().unwrap())),
-        (bin_expr(Datum::F64(2.0), Datum::Dec("3.3".parse().unwrap()), ExprType::Plus),
-         Datum::F64(5.3)),
-        (bin_expr(Datum::Dec("3.3".parse().unwrap()), b"2.0".as_ref().into(), ExprType::Plus),
-         Datum::F64(5.3)),
-        (bin_expr(Datum::I64(2), Datum::Dur(Duration::parse(b"21 00:02", 0).unwrap()),
-         ExprType::Plus), Datum::Dec(Decimal::from_f64(5040202.000000).unwrap())),
-        (bin_expr(Datum::I64(2), Datum::Dur(Duration::parse(b"21 00:02:00.321", 2).unwrap()),
-         ExprType::Plus), Datum::Dec(Decimal::from_f64(5040202.32).unwrap())),
-    ]);
+    test_eval!(
+        test_eval_plus,
+        vec![
+            (
+                bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus),
+                Datum::I64(2),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Plus),
+                Datum::U64(2),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Plus),
+                Datum::F64(2.0),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Plus),
+                Datum::F64(0.0),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::Null, ExprType::Plus),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::Null, ExprType::Plus),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(-1), ExprType::Plus),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::U64(1), ExprType::Plus),
+                Datum::U64(0),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(i64::min_value()),
+                    Datum::U64(i64::max_value() as u64 + 1),
+                    ExprType::Plus,
+                ),
+                Datum::U64(0),
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Plus),
+                Datum::F64(1.0),
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Plus),
+                Datum::F64(3.0),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec("3.3".parse().unwrap()),
+                    Datum::I64(-1),
+                    ExprType::Plus,
+                ),
+                Datum::Dec("2.3".parse().unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dec("3.3".parse().unwrap()),
+                    ExprType::Plus,
+                ),
+                Datum::F64(5.3),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec("3.3".parse().unwrap()),
+                    b"2.0".as_ref().into(),
+                    ExprType::Plus,
+                ),
+                Datum::F64(5.3),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2),
+                    Datum::Dur(Duration::parse(b"21 00:02", 0).unwrap()),
+                    ExprType::Plus,
+                ),
+                Datum::Dec(Decimal::from_f64(5040202.000000).unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2),
+                    Datum::Dur(Duration::parse(b"21 00:02:00.321", 2).unwrap()),
+                    ExprType::Plus,
+                ),
+                Datum::Dec(Decimal::from_f64(5040202.32).unwrap()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_div,
-               vec![
-        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Div), Datum::Dec(1.into())),
-        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Div), Datum::Dec(1.into())),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Div), Datum::F64(1f64)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Div), Datum::F64(-1f64)),
-        (bin_expr(Datum::Null, Datum::Null, ExprType::Div), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Div), Datum::Null),
-        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Div), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::U64(1), ExprType::Div), Datum::Dec((-1).into())),
-        (bin_expr(Datum::I64(i64::min_value()), Datum::U64(i64::max_value() as u64 + 1),
-         ExprType::Div), Datum::Dec((-1).into())),
-        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Div), Datum::F64(-2.0)),
-        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Div), Datum::F64(2.0)),
-        (bin_expr(Datum::F64(2.0), Datum::Dec("0.3".parse().unwrap()), ExprType::Div),
-         Datum::F64(6.666666666666667)),
-        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::Div), Datum::F64(0.00000832639467110741)),
-        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Div),
-         Datum::Dec("-3.3".parse().unwrap())),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::Div), Datum::Dec("0.008326394671107410".parse().unwrap())),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
-         ExprType::Div), Datum::Dec("9.984025559105431309".parse().unwrap())),
-    ]);
+    test_eval!(
+        test_eval_div,
+        vec![
+            (
+                bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Div),
+                Datum::Dec(1.into()),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Div),
+                Datum::Dec(1.into()),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Div),
+                Datum::F64(1f64),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Div),
+                Datum::F64(-1f64),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::Null, ExprType::Div),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::Null, ExprType::Div),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(-1), ExprType::Div),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::U64(1), ExprType::Div),
+                Datum::Dec((-1).into()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(i64::min_value()),
+                    Datum::U64(i64::max_value() as u64 + 1),
+                    ExprType::Div,
+                ),
+                Datum::Dec((-1).into()),
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Div),
+                Datum::F64(-2.0),
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Div),
+                Datum::F64(2.0),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dec("0.3".parse().unwrap()),
+                    ExprType::Div,
+                ),
+                Datum::F64(6.666666666666667),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::Div,
+                ),
+                Datum::F64(0.00000832639467110741),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec("3.3".parse().unwrap()),
+                    Datum::I64(-1),
+                    ExprType::Div,
+                ),
+                Datum::Dec("-3.3".parse().unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::Div,
+                ),
+                Datum::Dec("0.008326394671107410".parse().unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+                    ExprType::Div,
+                ),
+                Datum::Dec("9.984025559105431309".parse().unwrap()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_minus,
-               vec![
-        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Minus), Datum::I64(0)),
-        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Minus), Datum::U64(0)),
-        (bin_expr(Datum::U64(1), Datum::I64(-1), ExprType::Minus), Datum::U64(2)),
-        (bin_expr(Datum::U64(1), Datum::U64(1), ExprType::Minus), Datum::U64(0)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Minus), Datum::F64(0.0)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Minus), Datum::F64(2.0)),
-        (bin_expr(Datum::Null, Datum::Null, ExprType::Minus), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Minus), Datum::Null),
-        (bin_expr(Datum::U64(1), Datum::I64(i64::min_value()), ExprType::Minus),
-         Datum::U64(i64::max_value() as u64 + 2)),
-        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Minus), Datum::Null),
-        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Minus), Datum::F64(3.0)),
-        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Minus), Datum::F64(1.0)),
-        (bin_expr(Datum::F64(2.0), Datum::Dec("0.3".parse().unwrap()), ExprType::Minus),
-         Datum::F64(1.7)),
-        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::Minus), Datum::F64(-240198.0)),
-        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Minus),
-         Datum::Dec("4.3".parse().unwrap())),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::Minus), Datum::Dec("-238200".parse().unwrap())),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
-         ExprType::Minus), Datum::Dec("1799.680000".parse().unwrap())),
-    ]);
+    test_eval!(
+        test_eval_minus,
+        vec![
+            (
+                bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Minus),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Minus),
+                Datum::U64(0),
+            ),
+            (
+                bin_expr(Datum::U64(1), Datum::I64(-1), ExprType::Minus),
+                Datum::U64(2),
+            ),
+            (
+                bin_expr(Datum::U64(1), Datum::U64(1), ExprType::Minus),
+                Datum::U64(0),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Minus),
+                Datum::F64(0.0),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Minus),
+                Datum::F64(2.0),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::Null, ExprType::Minus),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::Null, ExprType::Minus),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::U64(1), Datum::I64(i64::min_value()), ExprType::Minus),
+                Datum::U64(i64::max_value() as u64 + 2),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(-1), ExprType::Minus),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Minus),
+                Datum::F64(3.0),
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Minus),
+                Datum::F64(1.0),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dec("0.3".parse().unwrap()),
+                    ExprType::Minus,
+                ),
+                Datum::F64(1.7),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::Minus,
+                ),
+                Datum::F64(-240198.0),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec("3.3".parse().unwrap()),
+                    Datum::I64(-1),
+                    ExprType::Minus,
+                ),
+                Datum::Dec("4.3".parse().unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::Minus,
+                ),
+                Datum::Dec("-238200".parse().unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+                    ExprType::Minus,
+                ),
+                Datum::Dec("1799.680000".parse().unwrap()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_mul,
-               vec![
-        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Mul), Datum::I64(1)),
-        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Mul), Datum::U64(1)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Mul), Datum::F64(1f64)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Mul), Datum::F64(-1f64)),
-        (bin_expr(Datum::Null, Datum::Null, ExprType::Mul), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Mul), Datum::Null),
-        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Mul), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::I64(1), ExprType::Mul), Datum::I64((-1).into())),
-        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Mul), Datum::F64(-2.0)),
-        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Mul), Datum::F64(2.0)),
-        (bin_expr(Datum::F64(2.0), Datum::Dec("0.3".parse().unwrap()), ExprType::Mul),
-         Datum::F64(0.6)),
-        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::Mul), Datum::F64(480400.0)),
-        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Mul),
-         Datum::Dec("-3.3".parse().unwrap())),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::Mul), Datum::Dec("480400000".parse().unwrap())),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
-         ExprType::Mul), Datum::Dec("400640".parse().unwrap())),
-    ]);
+    test_eval!(
+        test_eval_mul,
+        vec![
+            (
+                bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Mul),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Mul),
+                Datum::U64(1),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Mul),
+                Datum::F64(1f64),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Mul),
+                Datum::F64(-1f64),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::Null, ExprType::Mul),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::Null, ExprType::Mul),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(-1), ExprType::Mul),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::I64(1), ExprType::Mul),
+                Datum::I64((-1).into()),
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Mul),
+                Datum::F64(-2.0),
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Mul),
+                Datum::F64(2.0),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dec("0.3".parse().unwrap()),
+                    ExprType::Mul,
+                ),
+                Datum::F64(0.6),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::Mul,
+                ),
+                Datum::F64(480400.0),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec("3.3".parse().unwrap()),
+                    Datum::I64(-1),
+                    ExprType::Mul,
+                ),
+                Datum::Dec("-3.3".parse().unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::Mul,
+                ),
+                Datum::Dec("480400000".parse().unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+                    ExprType::Mul,
+                ),
+                Datum::Dec("400640".parse().unwrap()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_int_div,
-               vec![
-        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv), Datum::I64(1)),
-        (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::IntDiv), Datum::Null),
-        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::IntDiv), Datum::U64(1)),
-        (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::IntDiv), Datum::Null),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::IntDiv), Datum::I64(1)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::IntDiv), Datum::I64(-1)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"0".to_vec()), ExprType::IntDiv), Datum::Null),
-        (bin_expr(Datum::Null, Datum::Null, ExprType::IntDiv), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::IntDiv), Datum::Null),
-        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::IntDiv), Datum::Null),
-        (bin_expr(Datum::I64(i64::min_value()), Datum::U64(i64::max_value() as u64 + 2),
-         ExprType::IntDiv), Datum::U64(0)),
-        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::IntDiv), Datum::I64(-2)),
-        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::IntDiv), Datum::I64(2)),
-        (bin_expr(Datum::I64(2), Datum::Dec("0.3".parse().unwrap()), ExprType::IntDiv),
-         Datum::I64(6)),
-        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::IntDiv), Datum::I64(0)),
-        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::IntDiv),
-         Datum::I64(-3)),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::IntDiv), Datum::I64(0)),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
-         ExprType::IntDiv), Datum::I64(9)),
-    ]);
+    test_eval!(
+        test_eval_int_div,
+        vec![
+            (
+                bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::I64(0), ExprType::IntDiv),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::U64(1), ExprType::IntDiv),
+                Datum::U64(1),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::U64(0), ExprType::IntDiv),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::IntDiv),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(1),
+                    Datum::Bytes(b"-1".to_vec()),
+                    ExprType::IntDiv,
+                ),
+                Datum::I64(-1),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::Bytes(b"0".to_vec()), ExprType::IntDiv),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::Null, Datum::Null, ExprType::IntDiv),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::Null, ExprType::IntDiv),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(-1), ExprType::IntDiv),
+                Datum::Null,
+            ),
+            (
+                bin_expr(
+                    Datum::I64(i64::min_value()),
+                    Datum::U64(i64::max_value() as u64 + 2),
+                    ExprType::IntDiv,
+                ),
+                Datum::U64(0),
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::IntDiv),
+                Datum::I64(-2),
+            ),
+            (
+                bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::IntDiv),
+                Datum::I64(2),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2),
+                    Datum::Dec("0.3".parse().unwrap()),
+                    ExprType::IntDiv,
+                ),
+                Datum::I64(6),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::IntDiv,
+                ),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec("3.3".parse().unwrap()),
+                    Datum::I64(-1),
+                    ExprType::IntDiv,
+                ),
+                Datum::I64(-3),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::IntDiv,
+                ),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+                    ExprType::IntDiv,
+                ),
+                Datum::I64(9),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_rem,
-               vec![
-        (bin_expr(Datum::I64(3), Datum::I64(1), ExprType::Mod), Datum::I64(0)),
-        (bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod), Datum::I64(1)),
-        (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::Mod), Datum::Null),
-        (bin_expr(Datum::I64(3), Datum::U64(2), ExprType::Mod), Datum::I64(1)),
-        (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::Mod), Datum::Null),
-        (bin_expr(Datum::I64(3), Datum::Bytes(b"2".to_vec()), ExprType::Mod), Datum::F64(1.0)),
-        (bin_expr(Datum::I64(3), Datum::Bytes(b"-2".to_vec()), ExprType::Mod), Datum::F64(1.0)),
-        (bin_expr(Datum::Null, Datum::Null, ExprType::Mod), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Mod), Datum::Null),
-        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Mod), Datum::Null),
-        (bin_expr(Datum::I64(-1), Datum::U64(2), ExprType::Mod), Datum::I64((-1).into())),
-        (bin_expr(Datum::I64(i64::min_value()), Datum::U64(i64::max_value() as u64),
-         ExprType::Mod), Datum::I64(-1)),
-        (bin_expr(Datum::U64(i64::max_value() as u64), Datum::I64(i64::min_value()),
-         ExprType::Mod), Datum::U64(i64::max_value() as u64)),
-        (bin_expr(Datum::F64(3.2), Datum::I64(2), ExprType::Mod), Datum::F64(1.2000000000000002)),
-        (bin_expr(Datum::F64(-3.2), Datum::I64(2), ExprType::Mod), Datum::F64(-1.2000000000000002)),
-        (bin_expr(Datum::F64(2.0), Datum::Dec("0.3".parse().unwrap()), ExprType::Mod),
-         Datum::F64(0.20000000000000007)),
-        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::Mod), Datum::F64(2.0)),
-        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Mod),
-         Datum::Dec("0.3".parse().unwrap())),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
-         ExprType::Mod), Datum::Dec("2000".parse().unwrap())),
-        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
-         ExprType::Mod), Datum::Dec("197.12".parse().unwrap())),
-    ]);
+    test_eval!(
+        test_eval_rem,
+        vec![
+            (
+                bin_expr(Datum::I64(3), Datum::I64(1), ExprType::Mod),
+                Datum::I64(0),
+            ),
+            (
+                bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::I64(0), ExprType::Mod),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(3), Datum::U64(2), ExprType::Mod),
+                Datum::I64(1),
+            ),
+            (
+                bin_expr(Datum::I64(1), Datum::U64(0), ExprType::Mod),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(3), Datum::Bytes(b"2".to_vec()), ExprType::Mod),
+                Datum::F64(1.0),
+            ),
+            (
+                bin_expr(Datum::I64(3), Datum::Bytes(b"-2".to_vec()), ExprType::Mod),
+                Datum::F64(1.0),
+            ),
+            (
+                bin_expr(Datum::Null, Datum::Null, ExprType::Mod),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::Null, ExprType::Mod),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::Null, Datum::I64(-1), ExprType::Mod),
+                Datum::Null,
+            ),
+            (
+                bin_expr(Datum::I64(-1), Datum::U64(2), ExprType::Mod),
+                Datum::I64((-1).into()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(i64::min_value()),
+                    Datum::U64(i64::max_value() as u64),
+                    ExprType::Mod,
+                ),
+                Datum::I64(-1),
+            ),
+            (
+                bin_expr(
+                    Datum::U64(i64::max_value() as u64),
+                    Datum::I64(i64::min_value()),
+                    ExprType::Mod,
+                ),
+                Datum::U64(i64::max_value() as u64),
+            ),
+            (
+                bin_expr(Datum::F64(3.2), Datum::I64(2), ExprType::Mod),
+                Datum::F64(1.2000000000000002),
+            ),
+            (
+                bin_expr(Datum::F64(-3.2), Datum::I64(2), ExprType::Mod),
+                Datum::F64(-1.2000000000000002),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dec("0.3".parse().unwrap()),
+                    ExprType::Mod,
+                ),
+                Datum::F64(0.20000000000000007),
+            ),
+            (
+                bin_expr(
+                    Datum::F64(2.0),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::Mod,
+                ),
+                Datum::F64(2.0),
+            ),
+            (
+                bin_expr(
+                    Datum::Dec("3.3".parse().unwrap()),
+                    Datum::I64(-1),
+                    ExprType::Mod,
+                ),
+                Datum::Dec("0.3".parse().unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+                    ExprType::Mod,
+                ),
+                Datum::Dec("2000".parse().unwrap()),
+            ),
+            (
+                bin_expr(
+                    Datum::I64(2000),
+                    Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+                    ExprType::Mod,
+                ),
+                Datum::Dec("197.12".parse().unwrap()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_case_when,
-               vec![
-        (case_when(vec![
-            Datum::I64(0), b"case1".as_ref().into(),
-            Datum::I64(1), b"case2".as_ref().into(),
-            Datum::I64(1), b"case3".as_ref().into()
-        ]), b"case2".as_ref().into()),
-        (case_when(vec![
-            Datum::I64(0), b"case1".as_ref().into(),
-            Datum::I64(0), b"case2".as_ref().into(),
-            Datum::I64(0), b"case3".as_ref().into(),
-            b"else".as_ref().into()
-        ]), b"else".as_ref().into()),
-        (case_when(vec![
-            Datum::I64(0), b"case1".as_ref().into(),
-            Datum::I64(0), b"case2".as_ref().into(),
-            Datum::I64(0), b"case3".as_ref().into()
-        ]), Datum::Null),
-        (build_expr_r(vec![
-            case_when(vec![
-                Datum::I64(0), Datum::I64(0),
-                Datum::I64(1), Datum::I64(1)
-            ]), datum_expr(b"nested case when".as_ref().into()),
-            datum_expr(Datum::I64(0)), datum_expr(b"case1".as_ref().into()),
-            datum_expr(Datum::I64(1)), datum_expr(b"case2".as_ref().into()),
-            datum_expr(Datum::I64(1)), datum_expr(b"case3".as_ref().into()),
-        ], ExprType::Case), b"nested case when".as_ref().into()),
-        (case_when(vec![
-            Datum::Null, b"case1".as_ref().into(),
-            Datum::I64(0), b"case2".as_ref().into(),
-            Datum::I64(1), b"case3".as_ref().into()
-        ]), b"case3".as_ref().into()),
-    ]);
+    test_eval!(
+        test_eval_case_when,
+        vec![
+            (
+                case_when(vec![
+                    Datum::I64(0),
+                    b"case1".as_ref().into(),
+                    Datum::I64(1),
+                    b"case2".as_ref().into(),
+                    Datum::I64(1),
+                    b"case3".as_ref().into(),
+                ]),
+                b"case2".as_ref().into(),
+            ),
+            (
+                case_when(vec![
+                    Datum::I64(0),
+                    b"case1".as_ref().into(),
+                    Datum::I64(0),
+                    b"case2".as_ref().into(),
+                    Datum::I64(0),
+                    b"case3".as_ref().into(),
+                    b"else".as_ref().into(),
+                ]),
+                b"else".as_ref().into(),
+            ),
+            (
+                case_when(vec![
+                    Datum::I64(0),
+                    b"case1".as_ref().into(),
+                    Datum::I64(0),
+                    b"case2".as_ref().into(),
+                    Datum::I64(0),
+                    b"case3".as_ref().into(),
+                ]),
+                Datum::Null,
+            ),
+            (
+                build_expr_r(
+                    vec![
+                        case_when(vec![
+                            Datum::I64(0),
+                            Datum::I64(0),
+                            Datum::I64(1),
+                            Datum::I64(1),
+                        ]),
+                        datum_expr(b"nested case when".as_ref().into()),
+                        datum_expr(Datum::I64(0)),
+                        datum_expr(b"case1".as_ref().into()),
+                        datum_expr(Datum::I64(1)),
+                        datum_expr(b"case2".as_ref().into()),
+                        datum_expr(Datum::I64(1)),
+                        datum_expr(b"case3".as_ref().into()),
+                    ],
+                    ExprType::Case,
+                ),
+                b"nested case when".as_ref().into(),
+            ),
+            (
+                case_when(vec![
+                    Datum::Null,
+                    b"case1".as_ref().into(),
+                    Datum::I64(0),
+                    b"case2".as_ref().into(),
+                    Datum::I64(1),
+                    b"case3".as_ref().into(),
+                ]),
+                b"case3".as_ref().into(),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_if,
-               vec![
-                (build_expr(vec![true.into(), b"expr1".as_ref().into(), b"expr2".as_ref().into()],
-                    ExprType::If), b"expr1".as_ref().into()),
-                (build_expr(vec![false.into(), b"expr1".as_ref().into(), b"expr2".as_ref().into()],
-                    ExprType::If), b"expr2".as_ref().into()),
-                (build_expr(vec![Datum::Null, b"expr1".as_ref().into(), b"expr2".as_ref().into()],
-                    ExprType::If), b"expr2".as_ref().into()),
-                (build_expr(vec![true.into(), Datum::Null, b"expr2".as_ref().into()],
-                    ExprType::If), Datum::Null),
-                (build_expr(vec![false.into(), b"expr1".as_ref().into(), Datum::Null],
-                    ExprType::If), Datum::Null),
-                (build_expr_r(vec![
-                    build_expr(vec![true.into(), Datum::Null, true.into()], ExprType::If),
-                    build_expr(vec![
-                            true.into(),
-                            b"expr1".as_ref().into(),
-                            b"expr2".as_ref().into()
-                        ],ExprType::If),
-                    build_expr(vec![
-                            false.into(),
-                            b"expr1".as_ref().into(),
-                            b"expr2".as_ref().into()
-                        ],ExprType::If),
-                ], ExprType::If), b"expr2".as_ref().into()),
-    ]);
+    test_eval!(
+        test_eval_if,
+        vec![
+            (
+                build_expr(
+                    vec![
+                        true.into(),
+                        b"expr1".as_ref().into(),
+                        b"expr2".as_ref().into(),
+                    ],
+                    ExprType::If,
+                ),
+                b"expr1".as_ref().into(),
+            ),
+            (
+                build_expr(
+                    vec![
+                        false.into(),
+                        b"expr1".as_ref().into(),
+                        b"expr2".as_ref().into(),
+                    ],
+                    ExprType::If,
+                ),
+                b"expr2".as_ref().into(),
+            ),
+            (
+                build_expr(
+                    vec![
+                        Datum::Null,
+                        b"expr1".as_ref().into(),
+                        b"expr2".as_ref().into(),
+                    ],
+                    ExprType::If,
+                ),
+                b"expr2".as_ref().into(),
+            ),
+            (
+                build_expr(
+                    vec![true.into(), Datum::Null, b"expr2".as_ref().into()],
+                    ExprType::If,
+                ),
+                Datum::Null,
+            ),
+            (
+                build_expr(
+                    vec![false.into(), b"expr1".as_ref().into(), Datum::Null],
+                    ExprType::If,
+                ),
+                Datum::Null,
+            ),
+            (
+                build_expr_r(
+                    vec![
+                        build_expr(vec![true.into(), Datum::Null, true.into()], ExprType::If),
+                        build_expr(
+                            vec![
+                                true.into(),
+                                b"expr1".as_ref().into(),
+                                b"expr2".as_ref().into(),
+                            ],
+                            ExprType::If,
+                        ),
+                        build_expr(
+                            vec![
+                                false.into(),
+                                b"expr1".as_ref().into(),
+                                b"expr2".as_ref().into(),
+                            ],
+                            ExprType::If,
+                        ),
+                    ],
+                    ExprType::If,
+                ),
+                b"expr2".as_ref().into(),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_coalesce,
-               vec![
-        (coalesce(vec![Datum::Null, Datum::Null, Datum::Null]), Datum::Null),
-        (coalesce(vec![Datum::Null, b"not-null".as_ref().into(), Datum::Null]),
-         b"not-null".as_ref().into()),
-        (coalesce(vec![Datum::Null, b"not-null".as_ref().into(),
-         b"not-null-2".as_ref().into(), Datum::Null]), b"not-null".as_ref().into()),
-    ]);
+    test_eval!(
+        test_eval_coalesce,
+        vec![
+            (
+                coalesce(vec![Datum::Null, Datum::Null, Datum::Null]),
+                Datum::Null,
+            ),
+            (
+                coalesce(vec![Datum::Null, b"not-null".as_ref().into(), Datum::Null]),
+                b"not-null".as_ref().into(),
+            ),
+            (
+                coalesce(vec![
+                    Datum::Null,
+                    b"not-null".as_ref().into(),
+                    b"not-null-2".as_ref().into(),
+                    Datum::Null,
+                ]),
+                b"not-null".as_ref().into(),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_if_null,
-               vec![
-            (build_expr(vec![Datum::Null, b"right".as_ref().into()], ExprType::IfNull),
-                b"right".as_ref().into()),
-            (build_expr(vec![b"left".as_ref().into(), b"right".as_ref().into()], ExprType::IfNull),
-                b"left".as_ref().into()),
-            (build_expr(vec![b"left".as_ref().into(), Datum::Null], ExprType::IfNull),
-                b"left".as_ref().into()),
-            (build_expr(vec![Datum::Null, Datum::Null], ExprType::IfNull),
-                Datum::Null),
-    ]);
+    test_eval!(
+        test_eval_if_null,
+        vec![
+            (
+                build_expr(
+                    vec![Datum::Null, b"right".as_ref().into()],
+                    ExprType::IfNull,
+                ),
+                b"right".as_ref().into(),
+            ),
+            (
+                build_expr(
+                    vec![b"left".as_ref().into(), b"right".as_ref().into()],
+                    ExprType::IfNull,
+                ),
+                b"left".as_ref().into(),
+            ),
+            (
+                build_expr(vec![b"left".as_ref().into(), Datum::Null], ExprType::IfNull),
+                b"left".as_ref().into(),
+            ),
+            (
+                build_expr(vec![Datum::Null, Datum::Null], ExprType::IfNull),
+                Datum::Null,
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_is_null,
-               vec![
-        (build_expr(vec![b"abc".as_ref().into()], ExprType::IsNull), false.into()),
-        (build_expr(vec![Datum::Null], ExprType::IsNull), true.into()),
-        (build_expr(vec![Datum::I64(0)], ExprType::IsNull), false.into()),
-    ]);
+    test_eval!(
+        test_eval_is_null,
+        vec![
+            (
+                build_expr(vec![b"abc".as_ref().into()], ExprType::IsNull),
+                false.into(),
+            ),
+            (build_expr(vec![Datum::Null], ExprType::IsNull), true.into()),
+            (
+                build_expr(vec![Datum::I64(0)], ExprType::IsNull),
+                false.into(),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_null_if,
-               vec![
-         (build_expr(vec![b"abc".as_ref().into(), b"abc".as_ref().into()], ExprType::NullIf),
-            Datum::Null),
-         (build_expr(vec![Datum::Null, Datum::Null], ExprType::NullIf),
-            Datum::Null),
-         (build_expr(vec![123i64.into(), 111i64.into()], ExprType::NullIf),
-            123i64.into()),
-         (build_expr(vec![123i64.into(), Datum::Null], ExprType::NullIf),
-            123i64.into()),
-    ]);
+    test_eval!(
+        test_eval_null_if,
+        vec![
+            (
+                build_expr(
+                    vec![b"abc".as_ref().into(), b"abc".as_ref().into()],
+                    ExprType::NullIf,
+                ),
+                Datum::Null,
+            ),
+            (
+                build_expr(vec![Datum::Null, Datum::Null], ExprType::NullIf),
+                Datum::Null,
+            ),
+            (
+                build_expr(vec![123i64.into(), 111i64.into()], ExprType::NullIf),
+                123i64.into(),
+            ),
+            (
+                build_expr(vec![123i64.into(), Datum::Null], ExprType::NullIf),
+                123i64.into(),
+            ),
+        ]
+    );
 
     fn in_expr(target: Datum, mut list: Vec<Datum>) -> Expr {
         let target_expr = datum_expr(target);
@@ -1170,15 +1939,37 @@ pub mod test {
     #[test]
     fn test_where_in() {
         let cases = vec![
-            (in_expr(Datum::I64(1), vec![Datum::I64(1), Datum::I64(2)]), Datum::I64(1)),
-            (in_expr(Datum::I64(1), vec![Datum::I64(2), Datum::Null]), Datum::Null),
-            (in_expr(Datum::Null, vec![Datum::I64(1), Datum::Null]), Datum::Null),
-            (in_expr(Datum::I64(2), vec![Datum::I64(1), Datum::Null]), Datum::Null),
+            (
+                in_expr(Datum::I64(1), vec![Datum::I64(1), Datum::I64(2)]),
+                Datum::I64(1),
+            ),
+            (
+                in_expr(Datum::I64(1), vec![Datum::I64(2), Datum::Null]),
+                Datum::Null,
+            ),
+            (
+                in_expr(Datum::Null, vec![Datum::I64(1), Datum::Null]),
+                Datum::Null,
+            ),
+            (
+                in_expr(Datum::I64(2), vec![Datum::I64(1), Datum::Null]),
+                Datum::Null,
+            ),
             (in_expr(Datum::I64(2), vec![]), Datum::I64(0)),
-            (in_expr(b"abc".as_ref().into(), vec![b"abc".as_ref().into(),
-             b"ab".as_ref().into()]), Datum::I64(1)),
-            (in_expr(b"abc".as_ref().into(), vec![b"aba".as_ref().into(),
-             b"bab".as_ref().into()]), Datum::I64(0)),
+            (
+                in_expr(
+                    b"abc".as_ref().into(),
+                    vec![b"abc".as_ref().into(), b"ab".as_ref().into()],
+                ),
+                Datum::I64(1),
+            ),
+            (
+                in_expr(
+                    b"abc".as_ref().into(),
+                    vec![b"aba".as_ref().into(), b"bab".as_ref().into()],
+                ),
+                Datum::I64(0),
+            ),
         ];
 
         let mut eval = Evaluator::default();
@@ -1189,160 +1980,305 @@ pub mod test {
             }
             let res = res.unwrap();
             if res != expect_res {
-                panic!("wrong result {:?}, expect {:?} while executing {:?}",
-                       res,
-                       expect_res,
-                       expr);
+                panic!(
+                    "wrong result {:?}, expect {:?} while executing {:?}",
+                    res,
+                    expect_res,
+                    expr
+                );
             }
         }
     }
 
     fn build_byte_datums_expr(data: &[&[u8]], tp: ExprType) -> Expr {
-        let datums = data.into_iter().map(|item| Datum::Bytes(item.to_vec())).collect();
+        let datums = data.into_iter()
+            .map(|item| Datum::Bytes(item.to_vec()))
+            .collect();
         build_expr(datums, tp)
     }
 
-    test_eval!(test_eval_json_modify,
-               vec![
-        (build_expr(vec![Datum::Null, Datum::Null, Datum::Null], ExprType::JsonSet),
-                    Datum::Null),
-        (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
-                         ExprType::JsonSet),
-                    Datum::Json(r#"[9,3]"#.parse().unwrap())),
-        (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
-                         ExprType::JsonInsert),
-                    Datum::Json(r#"[9,3]"#.parse().unwrap())),
-        (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
-                         ExprType::JsonReplace),
-                    Datum::Json(r#"9"#.parse().unwrap())),
-        (build_expr(vec![Datum::Bytes(br#"{"a":"x"}"#.to_vec()),
-                            Datum::Bytes(b"$.a".to_vec()),Datum::Null],
-                        ExprType::JsonSet),
-                    Datum::Json(r#"{"a":null}"#.parse().unwrap())),
-               ]);
+    test_eval!(
+        test_eval_json_modify,
+        vec![
+            (
+                build_expr(
+                    vec![Datum::Null, Datum::Null, Datum::Null],
+                    ExprType::JsonSet,
+                ),
+                Datum::Null,
+            ),
+            (
+                build_expr(
+                    vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                    ExprType::JsonSet,
+                ),
+                Datum::Json(r#"[9,3]"#.parse().unwrap()),
+            ),
+            (
+                build_expr(
+                    vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                    ExprType::JsonInsert,
+                ),
+                Datum::Json(r#"[9,3]"#.parse().unwrap()),
+            ),
+            (
+                build_expr(
+                    vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                    ExprType::JsonReplace,
+                ),
+                Datum::Json(r#"9"#.parse().unwrap()),
+            ),
+            (
+                build_expr(
+                    vec![
+                        Datum::Bytes(br#"{"a":"x"}"#.to_vec()),
+                        Datum::Bytes(b"$.a".to_vec()),
+                        Datum::Null,
+                    ],
+                    ExprType::JsonSet,
+                ),
+                Datum::Json(r#"{"a":null}"#.parse().unwrap()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_json_unquote,
-               vec![
-            (build_expr(vec![Datum::Null], ExprType::JsonUnquote),
-                        Datum::Null),
-            (build_byte_datums_expr(&[b"a"], ExprType::JsonUnquote),
-                        Datum::Bytes(b"a".to_vec())),
-            (build_byte_datums_expr(&[br#"\"3\""#], ExprType::JsonUnquote),
-                        Datum::Bytes(br#""3""#.to_vec())),
-            (build_byte_datums_expr(&[br#"{"a":  "b"}"#], ExprType::JsonUnquote),
-                        Datum::Bytes(br#"{"a":  "b"}"#.to_vec())),
-            (build_byte_datums_expr(&[br#"hello,\"quoted string\",world"#],
-                                    ExprType::JsonUnquote),
-                        Datum::Bytes(br#"hello,"quoted string",world"#.to_vec())),
-               ]);
+    test_eval!(
+        test_eval_json_unquote,
+        vec![
+            (
+                build_expr(vec![Datum::Null], ExprType::JsonUnquote),
+                Datum::Null,
+            ),
+            (
+                build_byte_datums_expr(&[b"a"], ExprType::JsonUnquote),
+                Datum::Bytes(b"a".to_vec()),
+            ),
+            (
+                build_byte_datums_expr(&[br#"\"3\""#], ExprType::JsonUnquote),
+                Datum::Bytes(br#""3""#.to_vec()),
+            ),
+            (
+                build_byte_datums_expr(&[br#"{"a":  "b"}"#], ExprType::JsonUnquote),
+                Datum::Bytes(br#"{"a":  "b"}"#.to_vec()),
+            ),
+            (
+                build_byte_datums_expr(
+                    &[br#"hello,\"quoted string\",world"#],
+                    ExprType::JsonUnquote,
+                ),
+                Datum::Bytes(br#"hello,"quoted string",world"#.to_vec()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_json_extract,
-               vec![(build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonExtract),
-                     Datum::Null),
-                    (build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#,
-                                              b"$.a[0].aa[0].aaa",
-                                              b"$.aaa"],
-                                            ExprType::JsonExtract),
-                     Datum::Json("[1,2]".parse().unwrap()))]);
+    test_eval!(
+        test_eval_json_extract,
+        vec![
+            (
+                build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonExtract),
+                Datum::Null,
+            ),
+            (
+                build_byte_datums_expr(
+                    &[
+                        br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#,
+                        b"$.a[0].aa[0].aaa",
+                        b"$.aaa",
+                    ],
+                    ExprType::JsonExtract,
+                ),
+                Datum::Json("[1,2]".parse().unwrap()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_json_type,
-               vec![
-            (build_expr(vec![Datum::Null], ExprType::JsonType),
-                        Datum::Null),
-            (build_byte_datums_expr(&[br#"true"#], ExprType::JsonType),
-                        Datum::Bytes(b"BOOLEAN".to_vec())),
-            (build_byte_datums_expr(&[br#"null"#], ExprType::JsonType),
-                        Datum::Bytes(b"NULL".to_vec())),
-            (build_byte_datums_expr(&[br#"-3"#], ExprType::JsonType),
-                        Datum::Bytes(b"INTEGER".to_vec())),
-            (build_byte_datums_expr(&[br#"3"#], ExprType::JsonType),
-                        Datum::Bytes(b"UNSIGNED INTEGER".to_vec())),
-            (build_byte_datums_expr(&[br#"3.14"#], ExprType::JsonType),
-                        Datum::Bytes(b"DOUBLE".to_vec())),
-            (build_byte_datums_expr(&[br#"{"name":"shirly","age":18}"#], ExprType::JsonType),
-                        Datum::Bytes(b"OBJECT".to_vec())),
-            (build_byte_datums_expr(&[br#"[1,2,3]"#], ExprType::JsonType),
-                        Datum::Bytes(b"ARRAY".to_vec())),
-    ]);
+    test_eval!(
+        test_eval_json_type,
+        vec![
+            (
+                build_expr(vec![Datum::Null], ExprType::JsonType),
+                Datum::Null,
+            ),
+            (
+                build_byte_datums_expr(&[br#"true"#], ExprType::JsonType),
+                Datum::Bytes(b"BOOLEAN".to_vec()),
+            ),
+            (
+                build_byte_datums_expr(&[br#"null"#], ExprType::JsonType),
+                Datum::Bytes(b"NULL".to_vec()),
+            ),
+            (
+                build_byte_datums_expr(&[br#"-3"#], ExprType::JsonType),
+                Datum::Bytes(b"INTEGER".to_vec()),
+            ),
+            (
+                build_byte_datums_expr(&[br#"3"#], ExprType::JsonType),
+                Datum::Bytes(b"UNSIGNED INTEGER".to_vec()),
+            ),
+            (
+                build_byte_datums_expr(&[br#"3.14"#], ExprType::JsonType),
+                Datum::Bytes(b"DOUBLE".to_vec()),
+            ),
+            (
+                build_byte_datums_expr(&[br#"{"name":"shirly","age":18}"#], ExprType::JsonType),
+                Datum::Bytes(b"OBJECT".to_vec()),
+            ),
+            (
+                build_byte_datums_expr(&[br#"[1,2,3]"#], ExprType::JsonType),
+                Datum::Bytes(b"ARRAY".to_vec()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_json_merge,
-               vec![
-        (build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonMerge),
-                    Datum::Null),
-        (build_byte_datums_expr(&[b"{}", b"[]"], ExprType::JsonMerge),
-                    Datum::Json("[{}]".parse().unwrap())),
-        (build_byte_datums_expr(&[b"{}", b"[]", b"3", br#""4""#], ExprType::JsonMerge),
-                    Datum::Json(r#"[{}, 3, "4"]"#.parse().unwrap())),
-    ]);
+    test_eval!(
+        test_eval_json_merge,
+        vec![
+            (
+                build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonMerge),
+                Datum::Null,
+            ),
+            (
+                build_byte_datums_expr(&[b"{}", b"[]"], ExprType::JsonMerge),
+                Datum::Json("[{}]".parse().unwrap()),
+            ),
+            (
+                build_byte_datums_expr(&[b"{}", b"[]", b"3", br#""4""#], ExprType::JsonMerge),
+                Datum::Json(r#"[{}, 3, "4"]"#.parse().unwrap()),
+            ),
+        ]
+    );
 
-    test_eval_err!(test_eval_json_err,
-                   vec![
-          build_byte_datums_expr(&[b"{}", b"$invalidPath", b"3",], ExprType::JsonReplace),
-          build_byte_datums_expr(&[b"{}", b"$.a", b"3", b"$.c"], ExprType::JsonReplace),
-          build_expr(vec![], ExprType::JsonUnquote),
-          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonUnquote),
-          build_expr(vec![], ExprType::JsonExtract),
-          build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#],
-                                ExprType::JsonExtract),
-          build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#, b"aaa"],
-                                ExprType::JsonExtract),
-          build_expr(vec![], ExprType::JsonType),
-          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
-          build_expr(vec![], ExprType::JsonMerge),
-          build_expr(vec![Datum::Null], ExprType::JsonMerge),
-          build_expr(vec![Datum::Null], ExprType::JsonRemove),
-          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$"],
-                                 ExprType::JsonRemove),
-          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$.*"],
-                                 ExprType::JsonRemove),
-          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$[*]"],
-                                 ExprType::JsonRemove),
-          build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$**.a"],
-                                 ExprType::JsonRemove),
-    ]);
+    test_eval_err!(
+        test_eval_json_err,
+        vec![
+            build_byte_datums_expr(&[b"{}", b"$invalidPath", b"3"], ExprType::JsonReplace),
+            build_byte_datums_expr(&[b"{}", b"$.a", b"3", b"$.c"], ExprType::JsonReplace),
+            build_expr(vec![], ExprType::JsonUnquote),
+            build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonUnquote),
+            build_expr(vec![], ExprType::JsonExtract),
+            build_byte_datums_expr(
+                &[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#],
+                ExprType::JsonExtract,
+            ),
+            build_byte_datums_expr(
+                &[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#, b"aaa"],
+                ExprType::JsonExtract,
+            ),
+            build_expr(vec![], ExprType::JsonType),
+            build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
+            build_expr(vec![], ExprType::JsonMerge),
+            build_expr(vec![Datum::Null], ExprType::JsonMerge),
+            build_expr(vec![Datum::Null], ExprType::JsonRemove),
+            build_byte_datums_expr(
+                &[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$"],
+                ExprType::JsonRemove,
+            ),
+            build_byte_datums_expr(
+                &[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$.*"],
+                ExprType::JsonRemove,
+            ),
+            build_byte_datums_expr(
+                &[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$[*]"],
+                ExprType::JsonRemove,
+            ),
+            build_byte_datums_expr(
+                &[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$**.a"],
+                ExprType::JsonRemove,
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_json_object,
-               vec![
-        (build_expr(vec![], ExprType::JsonObject), Datum::Json("{}".parse().unwrap())),
-        (build_expr(vec![Datum::U64(1), Datum::Null], ExprType::JsonObject),
-            Datum::Json(r#"{"1":null}"#.parse().unwrap())),
-        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::U64(2), Datum::Bytes(b"sdf".to_vec()),
-                Datum::Bytes(b"k1".to_vec()), Datum::Bytes(b"v1".to_vec())], ExprType::JsonObject),
-            Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap())),
-    ]);
+    test_eval!(
+        test_eval_json_object,
+        vec![
+            (
+                build_expr(vec![], ExprType::JsonObject),
+                Datum::Json("{}".parse().unwrap()),
+            ),
+            (
+                build_expr(vec![Datum::U64(1), Datum::Null], ExprType::JsonObject),
+                Datum::Json(r#"{"1":null}"#.parse().unwrap()),
+            ),
+            (
+                build_expr(
+                    vec![
+                        Datum::U64(1),
+                        Datum::Null,
+                        Datum::U64(2),
+                        Datum::Bytes(b"sdf".to_vec()),
+                        Datum::Bytes(b"k1".to_vec()),
+                        Datum::Bytes(b"v1".to_vec()),
+                    ],
+                    ExprType::JsonObject,
+                ),
+                Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_json_array,
-               vec![
-        (build_expr(vec![], ExprType::JsonArray), Datum::Json("[]".parse().unwrap())),
-        (build_expr(vec![Datum::Null], ExprType::JsonArray),
-            Datum::Json("[null]".parse().unwrap())),
-        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::Bytes(b"sdf".to_vec())],
-            ExprType::JsonArray), Datum::Json(r#"[1,null,"sdf"]"#.parse().unwrap())),
-    ]);
+    test_eval!(
+        test_eval_json_array,
+        vec![
+            (
+                build_expr(vec![], ExprType::JsonArray),
+                Datum::Json("[]".parse().unwrap()),
+            ),
+            (
+                build_expr(vec![Datum::Null], ExprType::JsonArray),
+                Datum::Json("[null]".parse().unwrap()),
+            ),
+            (
+                build_expr(
+                    vec![Datum::U64(1), Datum::Null, Datum::Bytes(b"sdf".to_vec())],
+                    ExprType::JsonArray,
+                ),
+                Datum::Json(r#"[1,null,"sdf"]"#.parse().unwrap()),
+            ),
+        ]
+    );
 
-    test_eval!(test_eval_json_remove,
-               vec![
-        (build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonRemove),
-                    Datum::Null),
-        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
-                                  b"$.a[2].aa"],
-                                ExprType::JsonRemove),
-                    Datum::Json(r#"{"a": [1, 2, {}]}"#.parse().unwrap())),
-        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
-                                  b"$.a[1]"],
-                                ExprType::JsonRemove),
-                    Datum::Json(r#"{"a": [1, {"aa": "xx"}]}"#.parse().unwrap())),
-        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
-                                  b"$.a[2].aa", b"$.a[1]"],
-                                ExprType::JsonRemove),
-                    Datum::Json(r#"{"a": [1, {}]}"#.parse().unwrap())),
-        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
-                                  b"$.a[1]", b"$.a[1].aa"],
-                                ExprType::JsonRemove),
-                    Datum::Json(r#"{"a": [1, {}]}"#.parse().unwrap())),
-        (build_byte_datums_expr(&[br#"{"a": [1, 2, {"aa": "xx"}]}"#,
-                                  b"$.a[3]", b"$.b"],
-                                ExprType::JsonRemove),
-                    Datum::Json(r#"{"a": [1, 2, {"aa": "xx"}]}"#.parse().unwrap())),
-    ]);
+    test_eval!(
+        test_eval_json_remove,
+        vec![
+            (
+                build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonRemove),
+                Datum::Null,
+            ),
+            (
+                build_byte_datums_expr(
+                    &[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$.a[2].aa"],
+                    ExprType::JsonRemove,
+                ),
+                Datum::Json(r#"{"a": [1, 2, {}]}"#.parse().unwrap()),
+            ),
+            (
+                build_byte_datums_expr(
+                    &[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$.a[1]"],
+                    ExprType::JsonRemove,
+                ),
+                Datum::Json(r#"{"a": [1, {"aa": "xx"}]}"#.parse().unwrap()),
+            ),
+            (
+                build_byte_datums_expr(
+                    &[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$.a[2].aa", b"$.a[1]"],
+                    ExprType::JsonRemove,
+                ),
+                Datum::Json(r#"{"a": [1, {}]}"#.parse().unwrap()),
+            ),
+            (
+                build_byte_datums_expr(
+                    &[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$.a[1]", b"$.a[1].aa"],
+                    ExprType::JsonRemove,
+                ),
+                Datum::Json(r#"{"a": [1, {}]}"#.parse().unwrap()),
+            ),
+            (
+                build_byte_datums_expr(
+                    &[br#"{"a": [1, 2, {"aa": "xx"}]}"#, b"$.a[3]", b"$.b"],
+                    ExprType::JsonRemove,
+                ),
+                Datum::Json(r#"{"a": [1, 2, {"aa": "xx"}]}"#.parse().unwrap()),
+            ),
+        ]
+    );
 }

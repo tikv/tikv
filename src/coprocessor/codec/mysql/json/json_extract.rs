@@ -15,7 +15,7 @@
 #![allow(dead_code)]
 
 use super::Json;
-use super::path_expr::{PathLeg, PathExpression, PATH_EXPR_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK};
+use super::path_expr::{PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK};
 
 impl Json {
     // extract receives several path expressions as arguments, matches them in j, and returns
@@ -46,48 +46,36 @@ pub fn extract_json(j: &Json, path_legs: &[PathLeg]) -> Vec<Json> {
     let (current_leg, sub_path_legs) = (&path_legs[0], &path_legs[1..]);
     let mut ret = vec![];
     match *current_leg {
-        PathLeg::Index(i) => {
-            match *j {
-                Json::Array(ref array) => {
-                    if i == PATH_EXPR_ARRAY_INDEX_ASTERISK {
-                        for child in array {
-                            ret.append(&mut extract_json(child, sub_path_legs))
-                        }
-                    } else if (i as usize) < array.len() {
-                        ret.append(&mut extract_json(&array[i as usize], sub_path_legs))
-                    }
+        PathLeg::Index(i) => match *j {
+            Json::Array(ref array) => if i == PATH_EXPR_ARRAY_INDEX_ASTERISK {
+                for child in array {
+                    ret.append(&mut extract_json(child, sub_path_legs))
                 }
-                _ => {
-                    if (i == PATH_EXPR_ARRAY_INDEX_ASTERISK) || (i as usize == 0) {
-                        ret.append(&mut extract_json(j, sub_path_legs))
-                    }
-                }
-            }
-        }
-        PathLeg::Key(ref key) => {
-            if let Json::Object(ref map) = *j {
-                if key == PATH_EXPR_ASTERISK {
-                    for key in map.keys() {
-                        ret.append(&mut extract_json(&map[key], sub_path_legs))
-                    }
-                } else if map.contains_key(key) {
+            } else if (i as usize) < array.len() {
+                ret.append(&mut extract_json(&array[i as usize], sub_path_legs))
+            },
+            _ => if (i == PATH_EXPR_ARRAY_INDEX_ASTERISK) || (i as usize == 0) {
+                ret.append(&mut extract_json(j, sub_path_legs))
+            },
+        },
+        PathLeg::Key(ref key) => if let Json::Object(ref map) = *j {
+            if key == PATH_EXPR_ASTERISK {
+                for key in map.keys() {
                     ret.append(&mut extract_json(&map[key], sub_path_legs))
                 }
+            } else if map.contains_key(key) {
+                ret.append(&mut extract_json(&map[key], sub_path_legs))
             }
-        }
+        },
         PathLeg::DoubleAsterisk => {
             ret.append(&mut extract_json(j, sub_path_legs));
             match *j {
-                Json::Array(ref array) => {
-                    for child in array {
-                        ret.append(&mut extract_json(child, path_legs))
-                    }
-                }
-                Json::Object(ref map) => {
-                    for key in map.keys() {
-                        ret.append(&mut extract_json(&map[key], path_legs))
-                    }
-                }
+                Json::Array(ref array) => for child in array {
+                    ret.append(&mut extract_json(child, path_legs))
+                },
+                Json::Object(ref map) => for key in map.keys() {
+                    ret.append(&mut extract_json(&map[key], path_legs))
+                },
                 _ => {}
             }
         }
@@ -99,78 +87,119 @@ pub fn extract_json(j: &Json, path_legs: &[PathLeg]) -> Vec<Json> {
 mod test {
     use std::str::FromStr;
     use super::*;
-    use super::super::path_expr::{PathExpressionFlag, PATH_EXPR_ARRAY_INDEX_ASTERISK,
-                                  PATH_EXPRESSION_CONTAINS_ASTERISK,
-                                  PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK};
+    use super::super::path_expr::{PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
+                                  PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                                  PATH_EXPR_ARRAY_INDEX_ASTERISK};
 
     #[test]
     fn test_json_extract() {
-        let mut test_cases = vec![// no path expression
+        let mut test_cases = vec![
+            // no path expression
             ("null", vec![], None),
             // Index
-            ("[true, 2017]",
-             vec![PathExpression {
-                 legs: vec![PathLeg::Index(0)],
-                 flags: PathExpressionFlag::default(),
-             }],
-             Some("true")),
-            ("[true, 2017]",
-             vec![PathExpression {
-                 legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
-                 flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
-             }],
-             Some("[true, 2017]")),
-            ("[true, 2107]",
-             vec![PathExpression {
-                 legs: vec![PathLeg::Index(2)],
-                 flags: PathExpressionFlag::default(),
-             }],
-             None),
-            ("6.18",
-             vec![PathExpression {
-                 legs: vec![PathLeg::Index(0)],
-                 flags: PathExpressionFlag::default(),
-             }],
-             Some("6.18")),
+            (
+                "[true, 2017]",
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::Index(0)],
+                        flags: PathExpressionFlag::default(),
+                    },
+                ],
+                Some("true"),
+            ),
+            (
+                "[true, 2017]",
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                        flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
+                    },
+                ],
+                Some("[true, 2017]"),
+            ),
+            (
+                "[true, 2107]",
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::Index(2)],
+                        flags: PathExpressionFlag::default(),
+                    },
+                ],
+                None,
+            ),
+            (
+                "6.18",
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::Index(0)],
+                        flags: PathExpressionFlag::default(),
+                    },
+                ],
+                Some("6.18"),
+            ),
             // Key
-            (r#"{"a": "a1", "b": 20.08, "c": false}"#,
-             vec![PathExpression {
-                 legs: vec![PathLeg::Key(String::from("c"))],
-                 flags: PathExpressionFlag::default(),
-             }],
-             Some("false")),
-            (r#"{"a": "a1", "b": 20.08, "c": false}"#,
-             vec![PathExpression {
-                  legs: vec![PathLeg::Key(String::from(PATH_EXPR_ASTERISK))],
-                  flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
-             }],
-             Some(r#"["a1", 20.08, false]"#)),
-            (r#"{"a": "a1", "b": 20.08, "c": false}"#,
-              vec![PathExpression {
-                  legs: vec![PathLeg::Key(String::from("d"))],
-                  flags: PathExpressionFlag::default(),
-              }],
-              None),
-             // Double asterisks
-             ("21",
-              vec![PathExpression {
-                  legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
-                  flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-              }],
-              None),
-             (r#"{"g": {"a": "a1", "b": 20.08, "c": false}}"#,
-              vec![PathExpression {
-                  legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
-                  flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-              }],
-              Some("false")),
-             (r#"[{"a": "a1", "b": 20.08, "c": false}, true]"#,
-              vec![PathExpression {
-                  legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
-                  flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-              }],
-              Some("false")),
-            ];
+            (
+                r#"{"a": "a1", "b": 20.08, "c": false}"#,
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::Key(String::from("c"))],
+                        flags: PathExpressionFlag::default(),
+                    },
+                ],
+                Some("false"),
+            ),
+            (
+                r#"{"a": "a1", "b": 20.08, "c": false}"#,
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::Key(String::from(PATH_EXPR_ASTERISK))],
+                        flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
+                    },
+                ],
+                Some(r#"["a1", 20.08, false]"#),
+            ),
+            (
+                r#"{"a": "a1", "b": 20.08, "c": false}"#,
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::Key(String::from("d"))],
+                        flags: PathExpressionFlag::default(),
+                    },
+                ],
+                None,
+            ),
+            // Double asterisks
+            (
+                "21",
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                        flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                    },
+                ],
+                None,
+            ),
+            (
+                r#"{"g": {"a": "a1", "b": 20.08, "c": false}}"#,
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                        flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                    },
+                ],
+                Some("false"),
+            ),
+            (
+                r#"[{"a": "a1", "b": 20.08, "c": false}, true]"#,
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                        flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                    },
+                ],
+                Some("false"),
+            ),
+        ];
         for (i, (js, exprs, expected)) in test_cases.drain(..).enumerate() {
             let j = js.parse();
             assert!(j.is_ok(), "#{} expect parse ok but got {:?}", i, j);
@@ -184,12 +213,14 @@ mod test {
                 None => None,
             };
             let got = j.extract(&exprs[..]);
-            assert_eq!(got,
-                       expected,
-                       "#{} expect {:?}, but got {:?}",
-                       i,
-                       expected,
-                       got);
+            assert_eq!(
+                got,
+                expected,
+                "#{} expect {:?}, but got {:?}",
+                i,
+                expected,
+                got
+            );
         }
     }
 }

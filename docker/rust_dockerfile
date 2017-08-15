@@ -44,14 +44,13 @@ RUN go get golang.org/x/tools/go/gcimporter15 \
 	&& go get github.com/golang/lint/golint
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2017-08-09 -y \
-	&& /root/.cargo/bin/rustup default nightly-2017-08-09
+	&& /root/.cargo/bin/rustup default nightly-2017-08-09 \
+	&& cargo install --vers 0.2.1 --force rustfmt-nightly
 
 # cache dep package
 RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/master.tar.gz \
-	&& curl -L http://download.pingcap.org/rustfmt-v0.6.0-linux-amd64.tar.gz -o /root/rustfmt-v0.6.0-linux-amd64.tar.gz \
 	&& cd /root && tar xf master.tar.gz && cd tikv-master && /root/.cargo/bin/cargo fetch \
-	&& cd /root && tar xzf rustfmt-v0.6.0-linux-amd64.tar.gz -C /root/.cargo/bin --strip-components=1 \
-	&& cd /root && rm -rf master.tar.gz tikv-master rustfmt-v0.6.0-linux-amd64.tar.gz
+	&& cd /root && rm -rf master.tar.gz tikv-master
 
 ENV PATH /root/.cargo/bin/:$PATH
 ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
