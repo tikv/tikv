@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{Histogram, exponential_buckets};
+use prometheus::{exponential_buckets, Histogram};
 
 lazy_static! {
     pub static ref PD_SEND_MSG_HISTOGRAM: Histogram =

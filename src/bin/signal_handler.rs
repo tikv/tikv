@@ -16,7 +16,7 @@
 mod imp {
     use std::{ptr, slice};
     use std::sync::Arc;
-    use libc::{self, c_void, c_char};
+    use libc::{self, c_char, c_void};
 
     use rocksdb::DB;
     use prometheus::{self, Encoder, TextEncoder};
@@ -27,9 +27,11 @@ mod imp {
 
     extern "C" {
         #[cfg_attr(target_os = "macos", link_name = "je_malloc_stats_print")]
-        fn malloc_stats_print(write_cb: extern "C" fn(*mut c_void, *const c_char),
-                              cbopaque: *mut c_void,
-                              opts: *const c_char);
+        fn malloc_stats_print(
+            write_cb: extern "C" fn(*mut c_void, *const c_char),
+            cbopaque: *mut c_void,
+            opts: *const c_char,
+        );
     }
 
     extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
@@ -44,9 +46,11 @@ mod imp {
     fn print_malloc_stats() {
         let mut buf = Vec::new();
         unsafe {
-            malloc_stats_print(write_cb,
-                               &mut buf as *mut Vec<u8> as *mut c_void,
-                               ptr::null())
+            malloc_stats_print(
+                write_cb,
+                &mut buf as *mut Vec<u8> as *mut c_void,
+                ptr::null(),
+            )
         }
         info!("{}", String::from_utf8_lossy(&buf));
     }
@@ -54,7 +58,7 @@ mod imp {
     // TODO: remove backup_path from configuration
     pub fn handle_signal(engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
-        use nix::sys::signal::{SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2};
+        use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {
@@ -74,7 +78,8 @@ mod imp {
                     for name in engine.cf_names() {
                         let handler = engine.cf_handle(name).unwrap();
                         if let Some(v) =
-                               engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
+                            engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY)
+                        {
                             info!("{}", v)
                         }
                     }

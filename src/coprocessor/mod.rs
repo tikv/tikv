@@ -24,7 +24,7 @@ use std::result;
 use std::time::Instant;
 use std::error;
 
-use storage::{txn, engine, mvcc};
+use storage::{engine, mvcc, txn};
 
 quick_error! {
     #[derive(Debug)]
@@ -66,7 +66,12 @@ impl From<engine::Error> for Error {
 impl From<txn::Error> for Error {
     fn from(e: txn::Error) -> Error {
         match e {
-            txn::Error::Mvcc(mvcc::Error::KeyIsLocked { primary, ts, key, ttl }) => {
+            txn::Error::Mvcc(mvcc::Error::KeyIsLocked {
+                primary,
+                ts,
+                key,
+                ttl,
+            }) => {
                 let mut info = LockInfo::new();
                 info.set_primary_lock(primary);
                 info.set_lock_version(ts);
@@ -79,5 +84,5 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{Host as EndPointHost, RequestTask, SINGLE_GROUP, REQ_TYPE_SELECT,
-                         REQ_TYPE_INDEX, REQ_TYPE_DAG, Task as EndPointTask};
+pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask, REQ_TYPE_DAG,
+                         REQ_TYPE_INDEX, REQ_TYPE_SELECT, SINGLE_GROUP};

@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{SystemTime, Duration};
-use std::thread::{self, JoinHandle, Builder};
+use std::time::{Duration, SystemTime};
+use std::thread::{self, Builder, JoinHandle};
 use std::sync::mpsc::{self, Sender};
 use std::ops::{Add, Sub};
 use std::cmp::Ordering;
 
-use time::{Timespec, Duration as TimeDuration};
+use time::{Duration as TimeDuration, Timespec};
 
 /// Convert Duration to milliseconds.
 #[inline]
@@ -94,25 +94,26 @@ pub struct Monitor {
 
 impl Monitor {
     pub fn new<D, N>(on_jumped: D, now: N) -> Monitor
-        where D: Fn() + Send + 'static,
-              N: Fn() -> SystemTime + Send + 'static
+    where
+        D: Fn() + Send + 'static,
+        N: Fn() -> SystemTime + Send + 'static,
     {
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
             .name(thd_name!("time-monitor-worker"))
-            .spawn(move || {
-                while let Err(_) = rx.try_recv() {
-                    let before = now();
-                    thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
+            .spawn(move || while let Err(_) = rx.try_recv() {
+                let before = now();
+                thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
 
-                    let after = now();
-                    if let Err(e) = after.duration_since(before) {
-                        error!("system time jumped back, {:?} -> {:?}, err {:?}",
-                               before,
-                               after,
-                               e);
-                        on_jumped()
-                    }
+                let after = now();
+                if let Err(e) = after.duration_since(before) {
+                    error!(
+                        "system time jumped back, {:?} -> {:?}, err {:?}",
+                        before,
+                        after,
+                        e
+                    );
+                    on_jumped()
                 }
             })
             .unwrap();
@@ -149,24 +150,14 @@ impl Drop for Monitor {
     }
 }
 
-#[inline]
-fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
-    if later >= earlier {
-        Duration::new((later.sec - earlier.sec) as u64,
-                      (later.nsec - earlier.nsec) as u32)
-    } else {
-        panic!("system time jumped back, {:.9} -> {:.9}",
-               earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
-               later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64);
-    }
-}
-
 /// `monotonic_raw_now` returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
 use self::inner::monotonic_now;
 use self::inner::monotonic_coarse_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+const MILLISECOND_PER_SECOND: i64 = 1_000;
+const NANOSECONDS_PER_MILLISECOND: i32 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
@@ -218,8 +209,10 @@ mod inner {
         };
         let errno = unsafe { libc::clock_gettime(clock, &mut t) };
         if errno != 0 {
-            panic!("failed to get monotonic raw locktime, err {}",
-                   io::Error::last_os_error());
+            panic!(
+                "failed to get monotonic raw locktime, err {}",
+                io::Error::last_os_error()
+            );
         }
         Timespec::new(t.tv_sec, t.tv_nsec as _)
     }
@@ -228,7 +221,7 @@ mod inner {
 /// A measurement of a monotonically increasing clock.
 /// It's similar and meat to replace `std::time::Instant`,
 /// for providing extra features.
-#[derive(Copy, Clone, Debug, Eq)]
+#[derive(Copy, Clone, Debug)]
 pub enum Instant {
     Monotonic(Timespec),
     MonotonicCoarse(Timespec),
@@ -247,44 +240,82 @@ impl Instant {
         match *self {
             Instant::Monotonic(t) => {
                 let now = monotonic_now();
-                elapsed_duration(now, t)
+                Instant::elapsed_duration(now, t)
             }
             Instant::MonotonicCoarse(t) => {
                 let now = monotonic_coarse_now();
-                elapsed_duration(now, t)
+                Instant::elapsed_duration_coarse(now, t)
             }
         }
     }
 
     pub fn duration_since(&self, earlier: Instant) -> Duration {
-        let later = self.get_timespec();
-        let earlier = earlier.get_timespec();
-        elapsed_duration(later, earlier)
+        match (*self, earlier) {
+            (Instant::Monotonic(later), Instant::Monotonic(earlier)) => {
+                Instant::elapsed_duration(later, earlier)
+            }
+            (Instant::MonotonicCoarse(later), Instant::MonotonicCoarse(earlier)) => {
+                Instant::elapsed_duration_coarse(later, earlier)
+            }
+            _ => {
+                panic!("duration between different types of Instants");
+            }
+        }
     }
 
-    fn get_timespec(&self) -> Timespec {
-        match *self {
-            Instant::Monotonic(t) |
-            Instant::MonotonicCoarse(t) => t,
+    fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
+        if later >= earlier {
+            (later - earlier).to_std().unwrap()
+        } else {
+            panic!(
+                "system time jumped back, {:.9} -> {:.9}",
+                earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
+                later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
+            );
+        }
+    }
+
+    // It is different from `elapsed_duration`, the resolution here is millisecond.
+    // The processors in an SMP system do not start all at exactly the same time
+    // and therefore the timer registers are typically running at an offset.
+    // Use millisecond resolution for ignoring the error.
+    fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
+        let later_ms =
+            later.sec * MILLISECOND_PER_SECOND + (later.nsec / NANOSECONDS_PER_MILLISECOND) as i64;
+        let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND +
+            (earlier.nsec / NANOSECONDS_PER_MILLISECOND) as i64;
+        if later_ms >= earlier_ms {
+            Duration::from_millis((later_ms - earlier_ms) as u64)
+        } else {
+            panic!(
+                "system time jumped back, {:.3} -> {:.3}",
+                earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
+                later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
+            );
         }
     }
 }
 
 impl PartialEq for Instant {
     fn eq(&self, other: &Instant) -> bool {
-        self.get_timespec().eq(&other.get_timespec())
-    }
-}
-
-impl Ord for Instant {
-    fn cmp(&self, other: &Instant) -> Ordering {
-        self.get_timespec().cmp(&other.get_timespec())
+        match (*self, *other) {
+            (Instant::Monotonic(this), Instant::Monotonic(other)) |
+            (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => this.eq(&other),
+            _ => false,
+        }
     }
 }
 
 impl PartialOrd for Instant {
     fn partial_cmp(&self, other: &Instant) -> Option<Ordering> {
-        self.get_timespec().partial_cmp(&other.get_timespec())
+        match (*self, *other) {
+            (Instant::Monotonic(this), Instant::Monotonic(other)) |
+            (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => {
+                this.partial_cmp(&other)
+            }
+            // The Order of different types of Instants is meaningless.
+            _ => None,
+        }
     }
 }
 
@@ -324,7 +355,7 @@ impl Sub<Instant> for Instant {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, Duration};
+    use std::time::{Duration, SystemTime};
     use std::thread;
     use std::ops::Sub;
     use std::f64;
@@ -337,19 +368,15 @@ mod tests {
     fn test_time_monitor() {
         let jumped = Arc::new(AtomicBool::new(false));
         let triggered = AtomicBool::new(false);
-        let now = move || {
-            if !triggered.load(Ordering::SeqCst) {
-                triggered.store(true, Ordering::SeqCst);
-                SystemTime::now()
-            } else {
-                SystemTime::now().sub(Duration::from_secs(2))
-            }
+        let now = move || if !triggered.load(Ordering::SeqCst) {
+            triggered.store(true, Ordering::SeqCst);
+            SystemTime::now()
+        } else {
+            SystemTime::now().sub(Duration::from_secs(2))
         };
 
         let jumped2 = jumped.clone();
-        let on_jumped = move || {
-            jumped2.store(true, Ordering::SeqCst);
-        };
+        let on_jumped = move || { jumped2.store(true, Ordering::SeqCst); };
 
         let _m = Monitor::new(on_jumped, now);
         thread::sleep(Duration::from_secs(1));
@@ -379,10 +406,12 @@ mod tests {
         ];
         for (early_time, late_time) in pairs {
             // The monotonic clocktime must be strictly monotonic increasing.
-            assert!(late_time >= early_time,
-                    "expect late time {:?} >= early time {:?}",
-                    late_time,
-                    early_time);
+            assert!(
+                late_time >= early_time,
+                "expect late time {:?} >= early time {:?}",
+                late_time,
+                early_time
+            );
         }
     }
 
@@ -423,5 +452,23 @@ mod tests {
         // Add Duration.
         assert_eq!(late_raw + zero, late_raw);
         assert_eq!(late_coarse + zero, late_coarse);
+
+        // PartialEq and PartialOrd
+        let ts = Timespec::new(1, 1);
+        let now1 = Instant::Monotonic(ts);
+        let now2 = Instant::MonotonicCoarse(ts);
+        assert_ne!(now1, now2);
+        assert_eq!(now1.partial_cmp(&now2), None);
+    }
+
+    #[test]
+    fn test_coarse_instant_on_smp() {
+        for i in 0..100000 {
+            let now = Instant::now_coarse();
+            if i % 100 == 0 {
+                thread::yield_now();
+            }
+            now.elapsed();
+        }
     }
 }

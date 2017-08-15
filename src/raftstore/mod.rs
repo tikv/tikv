@@ -15,4 +15,4 @@
 pub mod store;
 pub mod errors;
 pub mod coprocessor;
-pub use self::errors::{Result, Error};
+pub use self::errors::{Error, Result};

@@ -69,7 +69,7 @@ pub fn convert_float_to_int(fval: f64, lower_bound: i64, upper_bound: i64, tp: u
 pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
-    if val < 0 as f64 {
+    if val < 0f64 {
         return overflow!(val, tp);
     }
 
@@ -82,11 +82,12 @@ pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64>
 /// `float_to_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
 /// a new float64 according to `flen` and `decimal`.
 /// TODO port tests from tidb(tidb haven't implemented now)
-pub fn float_to_float_with_specified_tp(ctx: &EvalContext,
-                                        f: f64,
-                                        flen: u8,
-                                        decimal: u8)
-                                        -> Result<f64> {
+pub fn float_to_float_with_specified_tp(
+    ctx: &EvalContext,
+    f: f64,
+    flen: u8,
+    decimal: u8,
+) -> Result<f64> {
     let dec = try!(Decimal::from_f64(f));
     let ret = try!(dec.convert_to(ctx, flen, decimal));
     ret.as_f64()
@@ -109,7 +110,8 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
             return Ok(0);
         }
 
-        r = trimed.take_while(|&&c| c >= b'0' && c <= b'9')
+        r = trimed
+            .take_while(|&&c| c >= b'0' && c <= b'9')
             .fold(r, |l, &r| l * 10 + (r - b'0') as i64);
         if negative {
             r = -r;
@@ -132,7 +134,8 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
             return Ok(0);
         }
 
-        r = trimed.take_while(|&&c| c >= b'0' && c <= b'9')
+        r = trimed
+            .take_while(|&&c| c >= b'0' && c <= b'9')
             .fold(r, |l, &r| l * 10 + (r - b'0') as u64);
     }
     Ok(r)
@@ -156,15 +159,13 @@ pub fn bytes_to_uint(ctx: &EvalContext, bytes: &[u8]) -> Result<u64> {
 
 fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
     let f = match std::str::from_utf8(bytes) {
-        Ok(s) => {
-            match s.trim().parse::<f64>() {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("failed to parse float from {}: {}", s, e);
-                    0.0
-                }
+        Ok(s) => match s.trim().parse::<f64>() {
+            Ok(f) => f,
+            Err(e) => {
+                error!("failed to parse float from {}: {}", s, e);
+                0.0
             }
-        }
+        },
         Err(e) => {
             error!("failed to convert bytes to str: {:?}", e);
             0.0
@@ -263,14 +264,12 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
         match c {
             '.' => dot_idx = Some(i),
             'e' | 'E' => e_idx = Some(i),
-            '0'...'9' => {
-                if e_idx.is_none() {
-                    if dot_idx.is_none() {
-                        int_cnt += 1;
-                    }
-                    digits_cnt += 1;
+            '0'...'9' => if e_idx.is_none() {
+                if dot_idx.is_none() {
+                    int_cnt += 1;
                 }
-            }
+                digits_cnt += 1;
+            },
             _ => (),
         }
     }
@@ -326,7 +325,7 @@ const MAX_ZERO_COUNT: i64 = 20;
 #[cfg(test)]
 mod test {
     use std::f64::EPSILON;
-    use std::{f64, i64, u64, isize};
+    use std::{isize, f64, i64, u64};
 
     use chrono::FixedOffset;
 
@@ -409,26 +408,28 @@ mod test {
 
     #[test]
     fn test_handle_truncate() {
-        let ctxs = vec![EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: true,
-                            truncate_as_warning: true,
-                        },
-                        EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: true,
-                            truncate_as_warning: false,
-                        },
-                        EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: false,
-                            truncate_as_warning: true,
-                        },
-                        EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: false,
-                            truncate_as_warning: false,
-                        }];
+        let ctxs = vec![
+            EvalContext {
+                tz: FixedOffset::east(0),
+                ignore_truncate: true,
+                truncate_as_warning: true,
+            },
+            EvalContext {
+                tz: FixedOffset::east(0),
+                ignore_truncate: true,
+                truncate_as_warning: false,
+            },
+            EvalContext {
+                tz: FixedOffset::east(0),
+                ignore_truncate: false,
+                truncate_as_warning: true,
+            },
+            EvalContext {
+                tz: FixedOffset::east(0),
+                ignore_truncate: false,
+                truncate_as_warning: false,
+            },
+        ];
 
         for ctx in &ctxs {
             assert!(super::handle_truncate(ctx, false).is_ok());
@@ -442,20 +443,22 @@ mod test {
 
     #[test]
     fn test_get_valid_float_prefix() {
-        let cases = vec![("-100", "-100"),
-                         ("1abc", "1"),
-                         ("-1-1", "-1"),
-                         ("+1+1", "+1"),
-                         ("123..34", "123."),
-                         ("123.23E-10", "123.23E-10"),
-                         ("1.1e1.3", "1.1e1"),
-                         ("11e1.3", "11e1"),
-                         ("1.1e-13a", "1.1e-13"),
-                         ("1.", "1."),
-                         (".1", ".1"),
-                         ("", "0"),
-                         ("123e+", "123"),
-                         ("123.e", "123.")];
+        let cases = vec![
+            ("-100", "-100"),
+            ("1abc", "1"),
+            ("-1-1", "-1"),
+            ("+1+1", "+1"),
+            ("123..34", "123."),
+            ("123.23E-10", "123.23E-10"),
+            ("1.1e1.3", "1.1e1"),
+            ("11e1.3", "11e1"),
+            ("1.1e-13a", "1.1e-13"),
+            ("1.", "1."),
+            (".1", ".1"),
+            ("", "0"),
+            ("123e+", "123"),
+            ("123.e", "123."),
+        ];
 
         let ctx = EvalContext {
             tz: FixedOffset::east(0),
@@ -479,16 +482,18 @@ mod test {
 
     #[test]
     fn test_valid_get_valid_int_prefix() {
-        let cases = vec![(".1", "0"),
-                         (".0", "0"),
-                         ("123", "123"),
-                         ("123e1", "1230"),
-                         ("123.1e2", "12310"),
-                         ("123.45e5", "12345000"),
-                         ("123.45678e5", "12345678"),
-                         ("123.456789e5", "12345678"),
-                         ("-123.45678e5", "-12345678"),
-                         ("+123.45678e5", "+12345678")];
+        let cases = vec![
+            (".1", "0"),
+            (".0", "0"),
+            ("123", "123"),
+            ("123e1", "1230"),
+            ("123.1e2", "12310"),
+            ("123.45e5", "12345000"),
+            ("123.45678e5", "12345678"),
+            ("123.456789e5", "12345678"),
+            ("-123.45678e5", "-12345678"),
+            ("+123.45678e5", "+12345678"),
+        ];
 
         for (i, e) in cases {
             let o = super::float_str_to_int_string(i);
@@ -557,8 +562,12 @@ mod test {
             assert_eq!(i, exp);
         }
 
-        let illegal_cases =
-            vec!["9223372036854775808", "-9223372036854775809", "18446744073709551615", "-1.23"];
+        let illegal_cases = vec![
+            "9223372036854775808",
+            "-9223372036854775809",
+            "18446744073709551615",
+            "-1.23",
+        ];
         for case in illegal_cases {
             let dec: Decimal = case.parse().unwrap();
             let ret = dec_to_i64(dec);

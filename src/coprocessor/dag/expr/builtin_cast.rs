@@ -14,16 +14,16 @@
 // FIXME(shirly): remove following later
 #![allow(dead_code)]
 
-use std::{i64, u64, str};
+use std::{str, i64, u64};
 
-use coprocessor::codec::{Datum, mysql};
-use coprocessor::codec::mysql::{Decimal, Time, Duration, Json};
+use coprocessor::codec::{mysql, Datum};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use coprocessor::codec::mysql::decimal::RoundMode;
-use coprocessor::codec::convert::{self, convert_int_to_uint, convert_float_to_int,
-                                  convert_float_to_uint};
+use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint,
+                                  convert_int_to_uint};
 use coprocessor::codec::mysql::types;
 
-use super::{FnCall, StatementContext, Result};
+use super::{FnCall, Result, StatementContext};
 
 impl FnCall {
     pub fn cast_int_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -45,10 +45,11 @@ impl FnCall {
         }
     }
 
-    pub fn cast_decimal_as_int(&self,
-                               ctx: &StatementContext,
-                               row: &[Datum])
-                               -> Result<Option<i64>> {
+    pub fn cast_decimal_as_int(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<i64>> {
         let val = try!(self.children[0].eval_decimal(ctx, row));
         if val.is_none() {
             return Ok(None);
@@ -99,10 +100,11 @@ impl FnCall {
         Ok(Some(res))
     }
 
-    pub fn cast_duration_as_int(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<i64>> {
+    pub fn cast_duration_as_int(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<i64>> {
         let val = try!(self.children[0].eval_duration(ctx, row));
         if val.is_none() {
             return Ok(None);
@@ -142,10 +144,11 @@ impl FnCall {
         self.children[0].eval_real(ctx, row)
     }
 
-    pub fn cast_decimal_as_real(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<f64>> {
+    pub fn cast_decimal_as_real(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<f64>> {
         let val = try!(self.children[0].eval_decimal(ctx, row));
         if val.is_none() {
             return Ok(None);
@@ -170,8 +173,12 @@ impl FnCall {
         if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
             return Ok(Some(res));
         }
-        let ret =
-            try!(convert::float_to_float_with_specified_tp(ctx, res, flen as u8, decimal as u8));
+        let ret = try!(convert::float_to_float_with_specified_tp(
+            ctx,
+            res,
+            flen as u8,
+            decimal as u8
+        ));
         Ok(Some(ret))
     }
 
@@ -179,10 +186,11 @@ impl FnCall {
         unimplemented!()
     }
 
-    pub fn cast_duration_as_real(&self,
-                                 ctx: &StatementContext,
-                                 row: &[Datum])
-                                 -> Result<Option<f64>> {
+    pub fn cast_duration_as_real(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<f64>> {
         unimplemented!()
     }
 
@@ -190,10 +198,11 @@ impl FnCall {
         unimplemented!()
     }
 
-    pub fn cast_int_as_decimal(&self,
-                               ctx: &StatementContext,
-                               row: &[Datum])
-                               -> Result<Option<Decimal>> {
+    pub fn cast_int_as_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Decimal>> {
         let val = try!(self.children[0].eval_int(ctx, row));
         if val.is_none() {
             return Ok(None);
@@ -215,242 +224,276 @@ impl FnCall {
         Ok(Some(res))
     }
 
-    pub fn cast_real_as_decimal(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<Decimal>> {
+    pub fn cast_real_as_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Decimal>> {
         unimplemented!()
     }
 
-    pub fn cast_decimal_as_decimal(&self,
-                                   ctx: &StatementContext,
-                                   row: &[Datum])
-                                   -> Result<Option<Decimal>> {
+    pub fn cast_decimal_as_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Decimal>> {
         unimplemented!()
     }
 
-    pub fn cast_str_as_decimal(&self,
-                               ctx: &StatementContext,
-                               row: &[Datum])
-                               -> Result<Option<Decimal>> {
+    pub fn cast_str_as_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Decimal>> {
         unimplemented!()
     }
 
-    pub fn cast_time_as_decimal(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<Decimal>> {
+    pub fn cast_time_as_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Decimal>> {
         unimplemented!()
     }
 
-    pub fn cast_duration_as_decimal(&self,
-                                    ctx: &StatementContext,
-                                    row: &[Datum])
-                                    -> Result<Option<Decimal>> {
+    pub fn cast_duration_as_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Decimal>> {
         unimplemented!()
     }
 
 
-    pub fn cast_json_as_decimal(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<Decimal>> {
+    pub fn cast_json_as_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Decimal>> {
         unimplemented!()
     }
 
-    pub fn cast_int_as_str(&self,
-                           ctx: &StatementContext,
-                           row: &[Datum])
-                           -> Result<Option<Vec<u8>>> {
+    pub fn cast_int_as_str(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
-    pub fn cast_real_as_str(&self,
-                            ctx: &StatementContext,
-                            row: &[Datum])
-                            -> Result<Option<Vec<u8>>> {
+    pub fn cast_real_as_str(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
-    pub fn cast_decimal_as_str(&self,
-                               ctx: &StatementContext,
-                               row: &[Datum])
-                               -> Result<Option<Vec<u8>>> {
+    pub fn cast_decimal_as_str(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
-    pub fn cast_str_as_str(&self,
-                           ctx: &StatementContext,
-                           row: &[Datum])
-                           -> Result<Option<Vec<u8>>> {
+    pub fn cast_str_as_str(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
-    pub fn cast_time_as_str(&self,
-                            ctx: &StatementContext,
-                            row: &[Datum])
-                            -> Result<Option<Vec<u8>>> {
+    pub fn cast_time_as_str(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
-    pub fn cast_duration_as_str(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<Vec<u8>>> {
+    pub fn cast_duration_as_str(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
-    pub fn cast_json_as_str(&self,
-                            ctx: &StatementContext,
-                            row: &[Datum])
-                            -> Result<Option<Vec<u8>>> {
+    pub fn cast_json_as_str(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
-    pub fn cast_int_as_time(&self,
-                            ctx: &StatementContext,
-                            row: &[Datum])
-                            -> Result<Option<Vec<Time>>> {
+    pub fn cast_int_as_time(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Time>>> {
         unimplemented!()
     }
 
-    pub fn cast_real_as_time(&self,
-                             ctx: &StatementContext,
-                             row: &[Datum])
-                             -> Result<Option<Vec<Time>>> {
+    pub fn cast_real_as_time(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Time>>> {
         unimplemented!()
     }
 
-    pub fn cast_decimal_as_time(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<Vec<Time>>> {
+    pub fn cast_decimal_as_time(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Time>>> {
         unimplemented!()
     }
 
-    pub fn cast_str_as_time(&self,
-                            ctx: &StatementContext,
-                            row: &[Datum])
-                            -> Result<Option<Vec<Time>>> {
+    pub fn cast_str_as_time(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Time>>> {
         unimplemented!()
     }
 
-    pub fn cast_time_as_time(&self,
-                             ctx: &StatementContext,
-                             row: &[Datum])
-                             -> Result<Option<Vec<Time>>> {
+    pub fn cast_time_as_time(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Time>>> {
         unimplemented!()
     }
 
-    pub fn cast_duration_as_time(&self,
-                                 ctx: &StatementContext,
-                                 row: &[Datum])
-                                 -> Result<Option<Vec<Time>>> {
+    pub fn cast_duration_as_time(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Time>>> {
         unimplemented!()
     }
 
-    pub fn cast_json_as_time(&self,
-                             ctx: &StatementContext,
-                             row: &[Datum])
-                             -> Result<Option<Vec<Time>>> {
+    pub fn cast_json_as_time(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Time>>> {
         unimplemented!()
     }
 
-    pub fn cast_int_as_duration(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<Vec<Duration>>> {
+    pub fn cast_int_as_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Duration>>> {
         unimplemented!()
     }
 
-    pub fn cast_real_as_duration(&self,
-                                 ctx: &StatementContext,
-                                 row: &[Datum])
-                                 -> Result<Option<Vec<Duration>>> {
+    pub fn cast_real_as_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Duration>>> {
         unimplemented!()
     }
 
-    pub fn cast_decimal_as_duration(&self,
-                                    ctx: &StatementContext,
-                                    row: &[Datum])
-                                    -> Result<Option<Vec<Duration>>> {
+    pub fn cast_decimal_as_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Duration>>> {
         unimplemented!()
     }
 
-    pub fn cast_str_as_duration(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<Vec<Duration>>> {
+    pub fn cast_str_as_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Duration>>> {
         unimplemented!()
     }
 
-    pub fn cast_time_as_duration(&self,
-                                 ctx: &StatementContext,
-                                 row: &[Datum])
-                                 -> Result<Option<Vec<Duration>>> {
+    pub fn cast_time_as_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Duration>>> {
         unimplemented!()
     }
 
-    pub fn cast_duration_as_duration(&self,
-                                     ctx: &StatementContext,
-                                     row: &[Datum])
-                                     -> Result<Option<Vec<Duration>>> {
+    pub fn cast_duration_as_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Duration>>> {
         unimplemented!()
     }
 
-    pub fn cast_json_as_duration(&self,
-                                 ctx: &StatementContext,
-                                 row: &[Datum])
-                                 -> Result<Option<Vec<Duration>>> {
+    pub fn cast_json_as_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Duration>>> {
         unimplemented!()
     }
 
-    pub fn cast_int_as_json(&self,
-                            ctx: &StatementContext,
-                            row: &[Datum])
-                            -> Result<Option<Vec<Json>>> {
+    pub fn cast_int_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
         unimplemented!()
     }
 
-    pub fn cast_real_as_json(&self,
-                             ctx: &StatementContext,
-                             row: &[Datum])
-                             -> Result<Option<Vec<Json>>> {
+    pub fn cast_real_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
         unimplemented!()
     }
 
-    pub fn cast_decimal_as_json(&self,
-                                ctx: &StatementContext,
-                                row: &[Datum])
-                                -> Result<Option<Vec<Json>>> {
+    pub fn cast_decimal_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
         unimplemented!()
     }
 
-    pub fn cast_str_as_json(&self,
-                            ctx: &StatementContext,
-                            row: &[Datum])
-                            -> Result<Option<Vec<Json>>> {
+    pub fn cast_str_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
         unimplemented!()
     }
 
-    pub fn cast_time_as_json(&self,
-                             ctx: &StatementContext,
-                             row: &[Datum])
-                             -> Result<Option<Vec<Json>>> {
+    pub fn cast_time_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
         unimplemented!()
     }
 
-    pub fn cast_duration_as_json(&self,
-                                 ctx: &StatementContext,
-                                 row: &[Datum])
-                                 -> Result<Option<Vec<Json>>> {
+    pub fn cast_duration_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
         unimplemented!()
     }
 
-    pub fn cast_json_as_json(&self,
-                             ctx: &StatementContext,
-                             row: &[Datum])
-                             -> Result<Option<Vec<Json>>> {
+    pub fn cast_json_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
         unimplemented!()
     }
 }

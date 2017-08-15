@@ -17,7 +17,7 @@ use cluster::*;
 use node::new_node_cluster;
 use server::new_server_cluster;
 
-use rocksdb::{DB, WriteBatch, Writable};
+use rocksdb::{Writable, WriteBatch, DB};
 use tikv::raftstore::store::*;
 
 use super::print_result;
@@ -42,10 +42,12 @@ fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>, initial_kvs: &[(Vec<u
 }
 
 fn print_set_progress(tag: &str, ncnt: usize, vlen: usize) {
-    printf!("benching Set on {},\tnodes: {}, value len: {:4}\t...",
-            tag,
-            ncnt,
-            vlen);
+    printf!(
+        "benching Set on {},\tnodes: {}, value len: {:4}\t...",
+        tag,
+        ncnt,
+        vlen
+    );
 }
 
 fn print_other_progress(tag: &str, action: &str, ncnt: usize) {
@@ -94,8 +96,9 @@ fn bench_delete<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
 }
 
 fn bench_raft_cluster<T, F>(factory: F, tag: &'static str)
-    where T: Simulator,
-          F: Fn(u64, usize) -> Cluster<T>
+where
+    T: Simulator,
+    F: Fn(u64, usize) -> Cluster<T>,
 {
     let node_cnts = vec![1, 3, 5];
     let bytes_lens = vec![8, 128, 1024, 4096];

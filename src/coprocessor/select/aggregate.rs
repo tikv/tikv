@@ -24,12 +24,10 @@ pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
         ExprType::Count => Ok(box Count { c: 0 }),
         ExprType::First => Ok(box First { e: None }),
         ExprType::Sum => Ok(box Sum { res: None }),
-        ExprType::Avg => {
-            Ok(box Avg {
-                sum: Sum { res: None },
-                cnt: 0,
-            })
-        }
+        ExprType::Avg => Ok(box Avg {
+            sum: Sum { res: None },
+            cnt: 0,
+        }),
         ExprType::Max => Ok(box Extremum::new(Ordering::Less)),
         ExprType::Min => Ok(box Extremum::new(Ordering::Greater)),
         et => Err(box_err!("unsupport AggrExprType: {:?}", et)),
@@ -75,7 +73,10 @@ impl AggrFunc for First {
             return Ok(());
         }
         if args.len() != 1 {
-            return Err(box_err!("Wrong number of args for AggFuncFirstRow: {}", args.len()));
+            return Err(box_err!(
+                "Wrong number of args for AggFuncFirstRow: {}",
+                args.len()
+            ));
         }
         self.e = args.pop();
         Ok(())
@@ -97,7 +98,10 @@ impl Sum {
     /// return false means the others is skipped.
     fn add_asssign(&mut self, ctx: &EvalContext, mut args: Vec<Datum>) -> Result<bool> {
         if args.len() != 1 {
-            return Err(box_err!("sum only support one column, but got {}", args.len()));
+            return Err(box_err!(
+                "sum only support one column, but got {}",
+                args.len()
+            ));
         }
         let a = args.pop().unwrap();
         if a == Datum::Null {
@@ -166,7 +170,10 @@ impl Extremum {
 impl AggrFunc for Extremum {
     fn update(&mut self, ctx: &EvalContext, mut args: Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
-            return Err(box_err!("max/min only support one column, but got {}", args.len()));
+            return Err(box_err!(
+                "max/min only support one column, but got {}",
+                args.len()
+            ));
         }
         if args[0] == Datum::Null {
             return Ok(());

@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::boxed::FnBox;
 use std::net::SocketAddr;
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
 use kvproto::metapb;
@@ -85,7 +85,9 @@ impl<T: PdClient> Runner<T> {
         let pd_client = self.pd_client.clone();
         let s = box_try!(pd_client.get_store(store_id));
         if s.get_state() == metapb::StoreState::Tombstone {
-            RESOLVE_STORE_COUNTER.with_label_values(&["tombstone"]).inc();
+            RESOLVE_STORE_COUNTER
+                .with_label_values(&["tombstone"])
+                .inc();
             return Err(box_err!("store {} has been removed", store_id));
         }
         let addr = s.get_address().to_owned();
@@ -119,7 +121,8 @@ impl PdStoreAddrResolver {
 }
 
 pub fn new_resolver<T>(pd_client: Arc<T>) -> Result<(Worker<Task>, PdStoreAddrResolver)>
-    where T: PdClient + 'static
+where
+    T: PdClient + 'static,
 {
     let mut worker = Worker::new("store address resolve worker");
 
@@ -128,7 +131,9 @@ pub fn new_resolver<T>(pd_client: Arc<T>) -> Result<(Worker<Task>, PdStoreAddrRe
         store_addrs: HashMap::default(),
     };
     box_try!(worker.start(runner));
-    let resolver = PdStoreAddrResolver { sched: worker.scheduler() };
+    let resolver = PdStoreAddrResolver {
+        sched: worker.scheduler(),
+    };
     Ok((worker, resolver))
 }
 
@@ -147,7 +152,7 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::time::{Instant, Duration};
+    use std::time::{Duration, Instant};
     use std::ops::Sub;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -155,7 +160,7 @@ mod tests {
 
     use kvproto::pdpb;
     use kvproto::metapb;
-    use pd::{PdClient, Result, PdFuture, RegionStat};
+    use pd::{PdClient, PdFuture, RegionStat, Result};
     use util;
     use util::collections::HashMap;
 
@@ -199,16 +204,18 @@ mod tests {
         fn get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
             unimplemented!();
         }
-        fn region_heartbeat(&self,
-                            _: metapb::Region,
-                            _: metapb::Peer,
-                            _: RegionStat)
-                            -> PdFuture<()> {
+        fn region_heartbeat(
+            &self,
+            _: metapb::Region,
+            _: metapb::Peer,
+            _: RegionStat,
+        ) -> PdFuture<()> {
             unimplemented!();
         }
 
         fn handle_region_heartbeat_response<F>(&self, _: u64, _: F) -> PdFuture<()>
-            where F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static
+        where
+            F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
         {
             unimplemented!()
         }
