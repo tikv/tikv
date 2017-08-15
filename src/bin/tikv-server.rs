@@ -168,7 +168,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         Some(store_sendch),
         cfg.raft_store.use_sst_file_snapshot,
     );
-
     let mut server = Server::new(
         &cfg.server,
         cfg.raft_store.region_split_size.0 as usize,
@@ -211,7 +210,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     server
         .start(&cfg.server)
         .unwrap_or_else(|e| exit_with_err(e));
-
     signal_handler::handle_signal(engine, &cfg.rocksdb.backup_dir);
 
     // Stop.

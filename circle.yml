@@ -15,7 +15,6 @@ machine:
     RUST_TEST_THREADS: 1
     RUST_BACKTRACE: 1
     RUSTFLAGS: "-Dwarnings"
-    RUSTFMT_VERSION: "v0.6.0"
   pre:
     - |
       sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;

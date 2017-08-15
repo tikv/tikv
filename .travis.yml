@@ -14,7 +14,7 @@ matrix:
   include:
     - os: linux
       rust: nightly-2017-08-09
-      env: COMPILER=g++-4.8 RUSTFMT_VERSION=v0.6.0 CXX=g++-4.8
+      env: COMPILER=g++-4.8 CXX=g++-4.8
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
