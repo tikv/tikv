@@ -36,12 +36,12 @@ impl FnCall {
             return Ok(None);
         }
         let val = val.unwrap();
-        if !mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
-            let res = try!(convert_float_to_int(val, i64::MIN, i64::MAX, types::DOUBLE));
-            Ok(Some(res))
-        } else {
+        if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
             let uval = try!(convert_float_to_uint(val, u64::MAX, types::DOUBLE));
             Ok(Some(uval as i64))
+        } else {
+            let res = try!(convert_float_to_int(val, i64::MIN, i64::MAX, types::DOUBLE));
+            Ok(Some(res))
         }
     }
 
@@ -74,15 +74,15 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = val.unwrap();
-
-        if !val.is_empty() && val[0] == b"-"[0] {
+        let val = try!(String::from_utf8(val.unwrap()));
+        let val = val.trim();
+        if val.starts_with('-') {
             // negative
-            let v = try!(convert::bytes_to_int(ctx, &val));
+            let v = try!(convert::bytes_to_int(ctx, val.as_bytes()));
             // TODO: if overflow, don't append this warning
             Ok(Some(v))
         } else {
-            let urs = try!(convert::bytes_to_uint(ctx, &val));
+            let urs = try!(convert::bytes_to_uint(ctx, val.as_bytes()));
             // TODO: process overflow
             Ok(Some(urs as i64))
         }
