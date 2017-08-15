@@ -64,7 +64,6 @@ use super::transport::Transport;
 use super::metrics::*;
 use super::local_metrics::RaftMetrics;
 use prometheus::local::LocalHistogram;
-use util::rocksdb::get_used_size;
 
 type Key = Vec<u8>;
 
@@ -1854,12 +1853,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        stats.set_start_time(self.start_time.sec as u32);
-
         stats.set_applying_snap_count(apply_snapshot_count as u32);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["applying"])
             .set(apply_snapshot_count as f64);
+
+        stats.set_start_time(self.start_time.sec as u32);
 
         // report store write flow to pd
         let engine_total_bytes_written = self.engine
@@ -1879,7 +1878,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let store_info = StoreInfo {
             engine: self.engine.clone(),
-            capacity: self.cfg.capacity,
+            capacity: self.cfg.capacity.0,
         };
 
         let task = PdTask::StoreHeartbeat {

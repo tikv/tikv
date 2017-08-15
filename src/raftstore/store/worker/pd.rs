@@ -33,7 +33,7 @@ use raftstore::store::metrics::*;
 use fs2;
 use super::metrics::*;
 use raftstore::store::store::StoreInfo;
-use super::super::engine_metrics::*;
+use util::rocksdb::*;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
@@ -90,7 +90,9 @@ impl Display for Task {
                 region,
                 peer.get_id()
             ),
-            Task::StoreHeartbeat { ref stats } => write!(f, "store heartbeat stats: {:?}", stats),
+            Task::StoreHeartbeat { ref stats, .. } => {
+                write!(f, "store heartbeat stats: {:?}", stats)
+            }
             Task::ReportSplit {
                 ref left,
                 ref right,
@@ -213,11 +215,12 @@ impl<T: PdClient> Runner<T> {
         };
         stats.set_capacity(capacity);
 
-        stats.used_size += flush_engine_properties_and_get_used_size(store_info.engine.clone());
+        let used_size = stats.get_used_size() + get_engine_used_size(store_info.engine.clone());
+        stats.set_used_size(used_size);
 
 
-        let mut available = if store_info.capacity > stats.used_size {
-            store_info.capacity - stats.used_size
+        let mut available = if capacity > used_size {
+            capacity - used_size
         } else {
             warn!("no available space");
             0
@@ -238,20 +241,9 @@ impl<T: PdClient> Runner<T> {
             .with_label_values(&["available"])
             .set(available as f64);
 
-<<<<<<< HEAD
-        stats.set_start_time(store_info.start_time.sec as u32);
-        stats.set_is_busy(store_info.is_busy);
-
         let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
             error!("store heartbeat failed {:?}", e);
         });
-=======
-        let f = self.pd_client
-            .store_heartbeat(stats)
-            .map_err(|e| {
-                error!("store heartbeat failed {:?}", e);
-            });
->>>>>>> remove some varibles from StoreInfo
         handle.spawn(f);
     }
 
