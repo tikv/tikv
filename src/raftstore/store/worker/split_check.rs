@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Display, Formatter};
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;
 
@@ -22,7 +22,8 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
 
 use raftstore::store::{keys, Msg};
-use raftstore::store::engine::{Iterable, IterOption};
+use raftstore::store::engine::{IterOption, Iterable};
+use raftstore::store::util;
 use raftstore::Result;
 use rocksdb::DBIterator;
 use util::escape;
@@ -60,7 +61,13 @@ impl KeyEntry {
 impl PartialOrd for KeyEntry {
     fn partial_cmp(&self, rhs: &KeyEntry) -> Option<Ordering> {
         // BinaryHeap is max heap, so we have to reverse order to get a min heap.
-        Some(self.key.as_ref().unwrap().cmp(rhs.key.as_ref().unwrap()).reverse())
+        Some(
+            self.key
+                .as_ref()
+                .unwrap()
+                .cmp(rhs.key.as_ref().unwrap())
+                .reverse(),
+        )
     }
 }
 
@@ -76,12 +83,13 @@ struct MergedIterator<'a> {
 }
 
 impl<'a> MergedIterator<'a> {
-    fn new(db: &'a DB,
-           cfs: &[CfName],
-           start_key: &[u8],
-           end_key: &[u8],
-           fill_cache: bool)
-           -> Result<MergedIterator<'a>> {
+    fn new(
+        db: &'a DB,
+        cfs: &[CfName],
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+    ) -> Result<MergedIterator<'a>> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.into_iter().enumerate() {
@@ -119,26 +127,20 @@ impl<'a> MergedIterator<'a> {
 
 /// Split checking task.
 pub struct Task {
-    region_id: u64,
-    epoch: RegionEpoch,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
+    region: Region,
 }
 
 impl Task {
     pub fn new(region: &Region) -> Task {
         Task {
-            region_id: region.get_id(),
-            epoch: region.get_region_epoch().clone(),
-            start_key: keys::enc_start_key(region),
-            end_key: keys::enc_end_key(region),
+            region: region.clone(),
         }
     }
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Split Check Task for {}", self.region_id)
+        write!(f, "Split Check Task for {}", self.region.get_id())
     }
 }
 
@@ -150,11 +152,12 @@ pub struct Runner<C> {
 }
 
 impl<C> Runner<C> {
-    pub fn new(engine: Arc<DB>,
-               ch: RetryableSendCh<Msg, C>,
-               region_max_size: u64,
-               split_size: u64)
-               -> Runner<C> {
+    pub fn new(
+        engine: Arc<DB>,
+        ch: RetryableSendCh<Msg, C>,
+        region_max_size: u64,
+        split_size: u64,
+    ) -> Runner<C> {
         Runner {
             engine: engine,
             ch: ch,
@@ -166,58 +169,83 @@ impl<C> Runner<C> {
 
 impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
-        debug!("[region {}] executing task {} {}",
-               task.region_id,
-               escape(&task.start_key),
-               escape(&task.end_key));
+        let region = &task.region;
+        let region_id = region.get_id();
+
+        // Check approximate size before scanning region.
+        match util::get_region_approximate_size(&self.engine, region) {
+            Ok(size) => {
+                if size < self.region_max_size {
+                    CHECK_SPILT_COUNTER_VEC.with_label_values(&["skip"]).inc();
+                    return;
+                }
+                info!(
+                    "[region {}] approximate size {} >= {}, need to scan region",
+                    region_id,
+                    size,
+                    self.region_max_size
+                );
+            }
+            Err(e) => error!(
+                "[region {}] failed to get approximate size: {}",
+                region_id,
+                e
+            ),
+        }
+
+        let start_key = keys::enc_start_key(region);
+        let end_key = keys::enc_end_key(region);
+        debug!(
+            "[region {}] executing task {} {}",
+            region_id,
+            escape(&start_key),
+            escape(&end_key)
+        );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
         let mut size = 0;
         let mut split_key = vec![];
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        let res = MergedIterator::new(self.engine.as_ref(),
-                                      LARGE_CFS,
-                                      &task.start_key,
-                                      &task.end_key,
-                                      false)
-            .map(|mut iter| {
-                while let Some(e) = iter.next() {
-                    size += e.len() as u64;
-                    if split_key.is_empty() && size > self.split_size {
-                        split_key = e.key.unwrap();
-                    }
-                    if size >= self.region_max_size {
-                        break;
-                    }
+        let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
+            .map(|mut iter| while let Some(e) = iter.next() {
+                size += e.len() as u64;
+                if split_key.is_empty() && size > self.split_size {
+                    split_key = e.key.unwrap();
+                }
+                if size >= self.region_max_size {
+                    break;
                 }
             });
 
         if let Err(e) = res {
-            error!("failed to scan split key of region {}: {:?}",
-                   task.region_id,
-                   e);
+            error!("[region {}] failed to scan split key: {}", region_id, e);
             return;
         }
 
         timer.observe_duration();
 
         if size < self.region_max_size {
-            debug!("[region {}] no need to send for {} < {}",
-                   task.region_id,
-                   size,
-                   self.region_max_size);
+            debug!(
+                "[region {}] no need to send for {} < {}",
+                region_id,
+                size,
+                self.region_max_size
+            );
 
             CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
             return;
         }
-        let res = self.ch.try_send(new_split_check_result(task.region_id, task.epoch, split_key));
+
+        let region_epoch = region.get_region_epoch().clone();
+        let res = self.ch
+            .try_send(new_split_check_result(region_id, region_epoch, split_key));
         if let Err(e) = res {
-            warn!("[region {}] failed to send check result, err {:?}",
-                  task.region_id,
-                  e);
+            warn!("[region {}] failed to send check result: {}", region_id, e);
         }
 
-        CHECK_SPILT_COUNTER_VEC.with_label_values(&["success"]).inc();
+        CHECK_SPILT_COUNTER_VEC
+            .with_label_values(&["success"])
+            .inc();
     }
 }
 
@@ -245,7 +273,9 @@ mod tests {
     #[test]
     fn test_split_check() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
+        let engine = Arc::new(
+            rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
+        );
 
         let mut region = Region::new();
         region.set_id(1);
@@ -277,9 +307,17 @@ mod tests {
             engine.put(&s, &s).unwrap();
         }
 
+        // Approximate size of memtable is inaccurate for small data,
+        // we flush it to SST so we can use the size properties instead.
+        engine.flush(true).unwrap();
+
         runnable.run(Task::new(&region));
         match rx.try_recv() {
-            Ok(Msg::SplitCheckResult { region_id, epoch, split_key }) => {
+            Ok(Msg::SplitCheckResult {
+                region_id,
+                epoch,
+                split_key,
+            }) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(&epoch, region.get_region_epoch());
                 assert_eq!(split_key, keys::data_key(b"0006"));
@@ -295,10 +333,18 @@ mod tests {
                 engine.put_cf(handle, &s, &s).unwrap();
             }
         }
+        for cf in ALL_CFS {
+            let handle = engine.cf_handle(cf).unwrap();
+            engine.flush_cf(handle, true).unwrap();
+        }
 
         runnable.run(Task::new(&region));
         match rx.try_recv() {
-            Ok(Msg::SplitCheckResult { region_id, epoch, split_key }) => {
+            Ok(Msg::SplitCheckResult {
+                region_id,
+                epoch,
+                split_key,
+            }) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(&epoch, region.get_region_epoch());
                 assert_eq!(split_key, keys::data_key(b"0003"));

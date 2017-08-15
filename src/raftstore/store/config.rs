@@ -161,17 +161,23 @@ impl Config {
         }
 
         if self.raft_election_timeout_ticks != 10 {
-            warn!("Election timeout ticks needs to be same across all the cluster, \
-                   otherwise it may lead to inconsistency.");
+            warn!(
+                "Election timeout ticks needs to be same across all the cluster, \
+                 otherwise it may lead to inconsistency."
+            );
         }
 
         if self.raft_election_timeout_ticks <= self.raft_heartbeat_ticks {
-            return Err(box_err!("election tick must be greater than heartbeat tick"));
+            return Err(box_err!(
+                "election tick must be greater than heartbeat tick"
+            ));
         }
 
         if self.raft_log_gc_threshold < 1 {
-            return Err(box_err!("raft log gc threshold must >= 1, not {}",
-                                self.raft_log_gc_threshold));
+            return Err(box_err!(
+                "raft log gc threshold must >= 1, not {}",
+                self.raft_log_gc_threshold
+            ));
         }
 
         if self.raft_log_gc_size_limit.0 == 0 {
@@ -179,18 +185,22 @@ impl Config {
         }
 
         if self.region_max_size.0 < self.region_split_size.0 {
-            return Err(box_err!("region max size {} must >= split size {}",
-                                self.region_max_size.0,
-                                self.region_split_size.0));
+            return Err(box_err!(
+                "region max size {} must >= split size {}",
+                self.region_max_size.0,
+                self.region_split_size.0
+            ));
         }
 
-        let election_timeout = self.raft_base_tick_interval.as_millis() *
-                               self.raft_election_timeout_ticks as u64;
+        let election_timeout =
+            self.raft_base_tick_interval.as_millis() * self.raft_election_timeout_ticks as u64;
         let lease = self.raft_store_max_leader_lease.as_millis() as u64;
         if election_timeout < lease {
-            return Err(box_err!("election timeout {} ms is less than lease {} ms",
-                                election_timeout,
-                                lease));
+            return Err(box_err!(
+                "election timeout {} ms is less than lease {} ms",
+                election_timeout,
+                lease
+            ));
         }
 
         Ok(())

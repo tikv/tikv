@@ -22,7 +22,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::Datum;
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
-use coprocessor::select::xeval::{Evaluator, EvalContext};
+use coprocessor::select::xeval::{EvalContext, Evaluator};
 use coprocessor::{Error, Result};
 
 mod scanner;
@@ -57,9 +57,11 @@ impl ExprColumnRefVisitor {
         if expr.get_tp() == ExprType::ColumnRef {
             let offset = box_try!(expr.get_val().decode_i64()) as usize;
             if offset >= self.cols_len {
-                return Err(Error::Other(box_err!("offset {} overflow, should be less than {}",
-                                                 offset,
-                                                 self.cols_len)));
+                return Err(Error::Other(box_err!(
+                    "offset {} overflow, should be less than {}",
+                    offset,
+                    self.cols_len
+                )));
             }
             self.cols_offset.insert(offset);
         } else {
@@ -101,13 +103,14 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
 }
 
-pub fn inflate_with_col_for_dag(eval: &mut Evaluator,
-                                ctx: &EvalContext,
-                                values: &RowColsDict,
-                                columns: Rc<Vec<ColumnInfo>>,
-                                offsets: &[usize],
-                                h: i64)
-                                -> Result<()> {
+pub fn inflate_with_col_for_dag(
+    eval: &mut Evaluator,
+    ctx: &EvalContext,
+    values: &RowColsDict,
+    columns: Rc<Vec<ColumnInfo>>,
+    offsets: &[usize],
+    h: i64,
+) -> Result<()> {
     for offset in offsets {
         let col = columns.get(*offset).unwrap();
         if let Entry::Vacant(e) = eval.row.entry(*offset as i64) {

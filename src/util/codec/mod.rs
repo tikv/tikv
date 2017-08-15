@@ -64,9 +64,7 @@ impl Error {
             Error::KeyNotFound => Some(Error::KeyNotFound),
             Error::InvalidDataType(ref r) => Some(Error::InvalidDataType(r.clone())),
             Error::Encoding(e) => Some(Error::Encoding(e)),
-            Error::Protobuf(_) |
-            Error::Io(_) |
-            Error::Other(_) => None,
+            Error::Protobuf(_) | Error::Io(_) | Error::Other(_) => None,
         }
     }
 }

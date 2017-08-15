@@ -14,11 +14,11 @@
 
 use std::cmp::Ordering;
 use std::str;
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Display, Formatter};
 
-use chrono::{DateTime, Timelike, Utc, Datelike, FixedOffset, Duration, TimeZone};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc};
 
-use coprocessor::codec::mysql::{self, types, parse_frac, check_fsp};
+use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
 use coprocessor::codec::mysql::Decimal;
 use super::super::{Result, TEN_POW};
 
@@ -41,28 +41,33 @@ fn zero_datetime(tz: &FixedOffset) -> Time {
 
 #[allow(too_many_arguments)]
 #[inline]
-fn ymd_hms_nanos<T: TimeZone>(tz: &T,
-                              year: i32,
-                              month: u32,
-                              day: u32,
-                              hour: u32,
-                              min: u32,
-                              secs: u32,
-                              nanos: u32)
-                              -> Result<DateTime<T>> {
+fn ymd_hms_nanos<T: TimeZone>(
+    tz: &T,
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    min: u32,
+    secs: u32,
+    nanos: u32,
+) -> Result<DateTime<T>> {
     tz.ymd_opt(year, month, day)
         .and_hms_opt(hour, min, secs)
         .single()
-        .and_then(|t| t.checked_add_signed(Duration::nanoseconds(nanos as i64)))
+        .and_then(|t| {
+            t.checked_add_signed(Duration::nanoseconds(nanos as i64))
+        })
         .ok_or_else(|| {
-            box_err!("'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime",
-                     year,
-                     month,
-                     day,
-                     hour,
-                     min,
-                     secs,
-                     nanos)
+            box_err!(
+                "'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime",
+                year,
+                month,
+                day,
+                hour,
+                min,
+                secs,
+                nanos
+            )
         })
 }
 
@@ -197,30 +202,32 @@ impl Time {
                         _ => return Err(box_err!("invalid datetime: {}", s)),
                     }
                 }
-                [year, month, day] => {
-                    (box_try!(year.parse()),
-                     box_try!(month.parse()),
-                     box_try!(day.parse()),
-                     0,
-                     0,
-                     0)
-                }
-                [year, month, day, hour, min, sec] => {
-                    (box_try!(year.parse()),
-                     box_try!(month.parse()),
-                     box_try!(day.parse()),
-                     box_try!(hour.parse()),
-                     box_try!(min.parse()),
-                     box_try!(sec.parse()))
-                }
+                [year, month, day] => (
+                    box_try!(year.parse()),
+                    box_try!(month.parse()),
+                    box_try!(day.parse()),
+                    0,
+                    0,
+                    0,
+                ),
+                [year, month, day, hour, min, sec] => (
+                    box_try!(year.parse()),
+                    box_try!(month.parse()),
+                    box_try!(day.parse()),
+                    box_try!(hour.parse()),
+                    box_try!(min.parse()),
+                    box_try!(sec.parse()),
+                ),
                 [year, month, day, hour, min, sec, frac] => {
                     frac_str = frac;
-                    (box_try!(year.parse()),
-                     box_try!(month.parse()),
-                     box_try!(day.parse()),
-                     box_try!(hour.parse()),
-                     box_try!(min.parse()),
-                     box_try!(sec.parse()))
+                    (
+                        box_try!(year.parse()),
+                        box_try!(month.parse()),
+                        box_try!(day.parse()),
+                        box_try!(hour.parse()),
+                        box_try!(min.parse()),
+                        box_try!(sec.parse()),
+                    )
                 }
                 _ => return Err(box_err!("invalid datetime: {}", s)),
             };
@@ -240,14 +247,16 @@ impl Time {
         if y < 0 || y > 9999 {
             return Err(box_err!("unsupport year: {}", y));
         }
-        let t = try!(ymd_hms_nanos(tz,
-                                   y,
-                                   m,
-                                   d,
-                                   h,
-                                   minute,
-                                   sec,
-                                   frac * TEN_POW[9 - fsp as usize]));
+        let t = try!(ymd_hms_nanos(
+            tz,
+            y,
+            m,
+            d,
+            h,
+            minute,
+            sec,
+            frac * TEN_POW[9 - fsp as usize]
+        ));
         Time::new(t, types::DATETIME as u8, fsp as i8)
     }
 
@@ -271,10 +280,28 @@ impl Time {
         let hour = (hms >> 12) as u32;
         let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
         let t = if tp == types::TIMESTAMP {
-            let t = try!(ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanosec));
+            let t = try!(ymd_hms_nanos(
+                &Utc,
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                nanosec
+            ));
             tz.from_utc_datetime(&t.naive_utc())
         } else {
-            try!(ymd_hms_nanos(tz, year, month, day, hour, minute, second, nanosec))
+            try!(ymd_hms_nanos(
+                tz,
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                nanosec
+            ))
         };
         Time::new(t, tp, fsp as i8)
     }
@@ -356,9 +383,9 @@ mod test {
 
     use std::cmp::Ordering;
 
-    use chrono::{FixedOffset, Duration};
+    use chrono::{Duration, FixedOffset};
 
-    use coprocessor::codec::mysql::{MAX_FSP, UN_SPECIFIED_FSP, types};
+    use coprocessor::codec::mysql::{types, MAX_FSP, UN_SPECIFIED_FSP};
 
     const MIN_OFFSET: i32 = -60 * 24 + 1;
     const MAX_OFFSET: i32 = 60 * 24;
@@ -366,16 +393,36 @@ mod test {
     #[test]
     fn test_parse_datetime() {
         let ok_tables = vec![
-            ("2012-12-31 11:30:45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
-            ("0000-00-00 00:00:00", UN_SPECIFIED_FSP, "0000-00-00 00:00:00"),
-            ("0001-01-01 00:00:00", UN_SPECIFIED_FSP, "0001-01-01 00:00:00"),
+            (
+                "2012-12-31 11:30:45",
+                UN_SPECIFIED_FSP,
+                "2012-12-31 11:30:45",
+            ),
+            (
+                "0000-00-00 00:00:00",
+                UN_SPECIFIED_FSP,
+                "0000-00-00 00:00:00",
+            ),
+            (
+                "0001-01-01 00:00:00",
+                UN_SPECIFIED_FSP,
+                "0001-01-01 00:00:00",
+            ),
             ("00-12-31 11:30:45", UN_SPECIFIED_FSP, "2000-12-31 11:30:45"),
             ("12-12-31 11:30:45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
             ("2012-12-31", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
             ("20121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
             ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
-            ("2012^12^31 11+30+45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
-            ("2012^12^31T11+30+45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            (
+                "2012^12^31 11+30+45",
+                UN_SPECIFIED_FSP,
+                "2012-12-31 11:30:45",
+            ),
+            (
+                "2012^12^31T11+30+45",
+                UN_SPECIFIED_FSP,
+                "2012-12-31 11:30:45",
+            ),
             ("2012-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
             ("12-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
             ("20121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
@@ -399,10 +446,11 @@ mod test {
                 if utc_t.is_zero() {
                     assert_eq!(t, utc_t);
                 } else {
-                    let exp_t = Time::new(utc_t.time - Duration::seconds(offset as i64),
-                                          utc_t.tp,
-                                          utc_t.fsp as i8)
-                        .unwrap();
+                    let exp_t = Time::new(
+                        utc_t.time - Duration::seconds(offset as i64),
+                        utc_t.tp,
+                        utc_t.fsp as i8,
+                    ).unwrap();
                     assert_eq!(exp_t, t);
                 }
             }
@@ -440,15 +488,17 @@ mod test {
                 let tz = FixedOffset::east(offset);
                 let t = Time::parse_datetime(s, fsp, &tz).unwrap();
                 let packed = t.to_packed_u64();
-                let reverted_datetime = Time::from_packed_u64(packed, types::DATETIME, fsp, &tz)
-                    .unwrap();
+                let reverted_datetime =
+                    Time::from_packed_u64(packed, types::DATETIME, fsp, &tz).unwrap();
                 assert_eq!(reverted_datetime, t);
                 assert_eq!(reverted_datetime.to_packed_u64(), packed);
 
-                let reverted_timestamp = Time::from_packed_u64(packed, types::TIMESTAMP, fsp, &tz)
-                    .unwrap();
-                assert_eq!(reverted_timestamp.time,
-                           reverted_datetime.time + Duration::seconds(offset as i64));
+                let reverted_timestamp =
+                    Time::from_packed_u64(packed, types::TIMESTAMP, fsp, &tz).unwrap();
+                assert_eq!(
+                    reverted_timestamp.time,
+                    reverted_datetime.time + Duration::seconds(offset as i64)
+                );
                 assert_eq!(reverted_timestamp.to_packed_u64(), packed);
             }
         }
@@ -459,12 +509,37 @@ mod test {
         let cases = vec![
             ("12-12-31 11:30:45", 0, "20121231113045", "20121231"),
             ("12-12-31 11:30:45", 6, "20121231113045.000000", "20121231"),
-            ("12-12-31 11:30:45.123", 6, "20121231113045.123000", "20121231"),
+            (
+                "12-12-31 11:30:45.123",
+                6,
+                "20121231113045.123000",
+                "20121231",
+            ),
             ("12-12-31 11:30:45.123345", 0, "20121231113045", "20121231"),
-            ("12-12-31 11:30:45.123345", 3, "20121231113045.123", "20121231"),
-            ("12-12-31 11:30:45.123345", 5, "20121231113045.12335", "20121231"),
-            ("12-12-31 11:30:45.123345", 6, "20121231113045.123345", "20121231"),
-            ("12-12-31 11:30:45.1233457", 6, "20121231113045.123346", "20121231"),
+            (
+                "12-12-31 11:30:45.123345",
+                3,
+                "20121231113045.123",
+                "20121231",
+            ),
+            (
+                "12-12-31 11:30:45.123345",
+                5,
+                "20121231113045.12335",
+                "20121231",
+            ),
+            (
+                "12-12-31 11:30:45.123345",
+                6,
+                "20121231113045.123345",
+                "20121231",
+            ),
+            (
+                "12-12-31 11:30:45.1233457",
+                6,
+                "20121231113045.123346",
+                "20121231",
+            ),
             ("12-12-31 11:30:45.823345", 0, "20121231113046", "20121231"),
         ];
 
@@ -487,11 +562,27 @@ mod test {
     #[test]
     fn test_compare() {
         let cases = vec![
-            ("2011-10-10 11:11:11", "2011-10-10 11:11:11", Ordering::Equal),
-            ("2011-10-10 11:11:11.123456", "2011-10-10 11:11:11.1", Ordering::Greater),
-            ("2011-10-10 11:11:11", "2011-10-10 11:11:11.123", Ordering::Less),
+            (
+                "2011-10-10 11:11:11",
+                "2011-10-10 11:11:11",
+                Ordering::Equal,
+            ),
+            (
+                "2011-10-10 11:11:11.123456",
+                "2011-10-10 11:11:11.1",
+                Ordering::Greater,
+            ),
+            (
+                "2011-10-10 11:11:11",
+                "2011-10-10 11:11:11.123",
+                Ordering::Less,
+            ),
             ("0000-00-00 00:00:00", "2011-10-10 11:11:11", Ordering::Less),
-            ("0000-00-00 00:00:00", "0000-00-00 00:00:00", Ordering::Equal),
+            (
+                "0000-00-00 00:00:00",
+                "0000-00-00 00:00:00",
+                Ordering::Equal,
+            ),
         ];
 
         for (l, r, exp) in cases {
@@ -508,12 +599,23 @@ mod test {
     #[test]
     fn test_parse_datetime_format() {
         let cases = vec![
-            ("2011-11-11 10:10:10.123456", vec!["2011", "11", "11", "10", "10", "10", "123456"]),
-            ("  2011-11-11 10:10:10.123456  ",
-             vec!["2011", "11", "11", "10", "10", "10", "123456"]),
+            (
+                "2011-11-11 10:10:10.123456",
+                vec!["2011", "11", "11", "10", "10", "10", "123456"],
+            ),
+            (
+                "  2011-11-11 10:10:10.123456  ",
+                vec!["2011", "11", "11", "10", "10", "10", "123456"],
+            ),
             ("2011-11-11 10", vec!["2011", "11", "11", "10"]),
-            ("2011-11-11T10:10:10.123456", vec!["2011", "11", "11", "10", "10", "10", "123456"]),
-            ("2011:11:11T10:10:10.123456", vec!["2011", "11", "11", "10", "10", "10", "123456"]),
+            (
+                "2011-11-11T10:10:10.123456",
+                vec!["2011", "11", "11", "10", "10", "10", "123456"],
+            ),
+            (
+                "2011:11:11T10:10:10.123456",
+                vec!["2011", "11", "11", "10", "10", "10", "123456"],
+            ),
             ("xx2011-11-11 10:10:10", vec![]),
             ("T10:10:10", vec![]),
             ("2011-11-11x", vec![]),

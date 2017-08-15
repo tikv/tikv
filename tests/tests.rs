@@ -22,7 +22,6 @@
 #![feature(fnbox)]
 #![allow(new_without_default)]
 #![feature(const_fn)]
-
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
 
@@ -68,8 +67,10 @@ fn _0_ci_setup() {
 #[test]
 fn _1_check_system_requirement() {
     if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
-        panic!("To run test, please make sure the maximum number of open file descriptors not \
-                less than 2000: {:?}",
-               e);
+        panic!(
+            "To run test, please make sure the maximum number of open file descriptors not \
+             less than 2000: {:?}",
+            e
+        );
     }
 }

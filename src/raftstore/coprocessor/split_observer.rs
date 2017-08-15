@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
+use super::{Coprocessor, ObserverContext, RegionObserver, Result as CopResult};
 use coprocessor::codec::table;
 use util::codec::bytes::{encode_bytes, BytesDecoder};
 
-use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
 use std::result::Result as StdResult;
 
 /// `SplitObserver` adjusts the split key so that it won't separate
@@ -41,7 +41,8 @@ impl SplitObserver {
         // or meta_key + version
         let table_prefix_len = table::TABLE_PREFIX.len() + table::ID_LEN;
         if key.starts_with(table::TABLE_PREFIX) && key.len() > table::PREFIX_LEN + table::ID_LEN &&
-           key[table_prefix_len..].starts_with(table::RECORD_PREFIX_SEP) {
+            key[table_prefix_len..].starts_with(table::RECORD_PREFIX_SEP)
+        {
             // row key, truncate to handle
             key.truncate(table::PREFIX_LEN + table::ID_LEN);
         }
@@ -66,9 +67,11 @@ impl RegionObserver for SplitObserver {
             return Ok(());
         }
         if !req.has_split() {
-            box_try!(Err("cmd_type is Split but it doesn't have split request, message maybe \
-                          corrupted!"
-                .to_owned()));
+            box_try!(Err(
+                "cmd_type is Split but it doesn't have split request, message maybe \
+                 corrupted!"
+                    .to_owned()
+            ));
         }
         if let Err(e) = self.on_split(ctx, req.mut_split()) {
             error!("failed to handle split req: {:?}", e);
@@ -84,7 +87,7 @@ mod test {
     use raftstore::coprocessor::ObserverContext;
     use raftstore::coprocessor::RegionObserver;
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
+    use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
     use coprocessor::codec::{datum, table, Datum};
     use util::codec::number::NumberEncoder;
     use util::codec::bytes::encode_bytes;
@@ -188,8 +191,9 @@ mod test {
         observer.pre_admin(&mut ctx, &mut req).unwrap();
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
-        expect_key =
-            encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f");
+        expect_key = encode_bytes(
+            b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f",
+        );
         key = expect_key.clone();
         key.extend_from_slice(b"\x80\x00\x00\x00\x00\x00\x00\xd3");
         req = new_split_request(&key);

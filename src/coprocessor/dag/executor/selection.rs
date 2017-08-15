@@ -18,10 +18,10 @@ use tipb::schema::ColumnInfo;
 use tipb::expression::Expr;
 
 use coprocessor::metrics::*;
-use coprocessor::select::xeval::{Evaluator, EvalContext};
+use coprocessor::select::xeval::{EvalContext, Evaluator};
 use coprocessor::Result;
 
-use super::{Row, Executor, ExprColumnRefVisitor, inflate_with_col_for_dag};
+use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
 pub struct SelectionExecutor<'a> {
     conditions: Vec<Expr>,
@@ -32,11 +32,12 @@ pub struct SelectionExecutor<'a> {
 }
 
 impl<'a> SelectionExecutor<'a> {
-    pub fn new(mut meta: Selection,
-               ctx: Rc<EvalContext>,
-               columns_info: Rc<Vec<ColumnInfo>>,
-               src: Box<Executor + 'a>)
-               -> Result<SelectionExecutor<'a>> {
+    pub fn new(
+        mut meta: Selection,
+        ctx: Rc<EvalContext>,
+        columns_info: Rc<Vec<ColumnInfo>>,
+        src: Box<Executor + 'a>,
+    ) -> Result<SelectionExecutor<'a>> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
         try!(visitor.batch_visit(&conditions));
@@ -56,12 +57,14 @@ impl<'a> Executor for SelectionExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = try!(self.src.next()) {
             let mut evaluator = Evaluator::default();
-            try!(inflate_with_col_for_dag(&mut evaluator,
-                                          &self.ctx,
-                                          &row.data,
-                                          self.cols.clone(),
-                                          &self.related_cols_offset,
-                                          row.handle));
+            try!(inflate_with_col_for_dag(
+                &mut evaluator,
+                &self.ctx,
+                &row.data,
+                self.cols.clone(),
+                &self.related_cols_offset,
+                row.handle
+            ));
             for expr in &self.conditions {
                 let val = box_try!(evaluator.eval(&self.ctx, expr));
                 if !box_try!(val.into_bool(&self.ctx)).unwrap_or(false) {
@@ -85,12 +88,12 @@ mod tests {
 
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::Datum;
-    use storage::{Statistics, SnapshotStore};
+    use storage::{SnapshotStore, Statistics};
     use util::codec::number::NumberEncoder;
 
     use super::*;
     use super::super::topn::test::gen_table_data;
-    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::scanner::test::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
 
     fn new_const_expr() -> Expr {
@@ -130,16 +133,48 @@ mod tests {
     #[test]
     fn test_selection_executor_simple() {
         let tid = 1;
-        let cis = vec![new_col_info(1, types::LONG_LONG),
-                       new_col_info(2, types::VARCHAR),
-                       new_col_info(3, types::NEW_DECIMAL)];
-        let raw_data = vec![vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
-                            vec![Datum::I64(2), Datum::Bytes(b"b".to_vec()), Datum::Dec(7.into())],
-                            vec![Datum::I64(3), Datum::Bytes(b"b".to_vec()), Datum::Dec(8.into())],
-                            vec![Datum::I64(4), Datum::Bytes(b"d".to_vec()), Datum::Dec(3.into())],
-                            vec![Datum::I64(5), Datum::Bytes(b"f".to_vec()), Datum::Dec(5.into())],
-                            vec![Datum::I64(6), Datum::Bytes(b"e".to_vec()), Datum::Dec(9.into())],
-                            vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::Dec(6.into())]];
+        let cis = vec![
+            new_col_info(1, types::LONG_LONG),
+            new_col_info(2, types::VARCHAR),
+            new_col_info(3, types::NEW_DECIMAL),
+        ];
+        let raw_data = vec![
+            vec![
+                Datum::I64(1),
+                Datum::Bytes(b"a".to_vec()),
+                Datum::Dec(7.into()),
+            ],
+            vec![
+                Datum::I64(2),
+                Datum::Bytes(b"b".to_vec()),
+                Datum::Dec(7.into()),
+            ],
+            vec![
+                Datum::I64(3),
+                Datum::Bytes(b"b".to_vec()),
+                Datum::Dec(8.into()),
+            ],
+            vec![
+                Datum::I64(4),
+                Datum::Bytes(b"d".to_vec()),
+                Datum::Dec(3.into()),
+            ],
+            vec![
+                Datum::I64(5),
+                Datum::Bytes(b"f".to_vec()),
+                Datum::Dec(5.into()),
+            ],
+            vec![
+                Datum::I64(6),
+                Datum::Bytes(b"e".to_vec()),
+                Datum::Dec(9.into()),
+            ],
+            vec![
+                Datum::I64(7),
+                Datum::Bytes(b"f".to_vec()),
+                Datum::Dec(6.into()),
+            ],
+        ];
 
         let table_data = gen_table_data(tid, &cis, &raw_data);
         let mut test_store = TestStore::new(&table_data);
@@ -163,11 +198,12 @@ mod tests {
         let expr = new_const_expr();
         selection.mut_conditions().push(expr);
 
-        let mut selection_executor = SelectionExecutor::new(selection,
-                                                            Rc::new(EvalContext::default()),
-                                                            Rc::new(cis),
-                                                            Box::new(inner_table_scan))
-            .unwrap();
+        let mut selection_executor = SelectionExecutor::new(
+            selection,
+            Rc::new(EvalContext::default()),
+            Rc::new(cis),
+            Box::new(inner_table_scan),
+        ).unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
@@ -183,16 +219,20 @@ mod tests {
     #[test]
     fn test_selection_executor_condition() {
         let tid = 1;
-        let cis = vec![new_col_info(1, types::LONG_LONG),
-                       new_col_info(2, types::VARCHAR),
-                       new_col_info(3, types::LONG_LONG)];
-        let raw_data = vec![vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::I64(7)],
-                            vec![Datum::I64(2), Datum::Bytes(b"b".to_vec()), Datum::I64(7)],
-                            vec![Datum::I64(3), Datum::Bytes(b"b".to_vec()), Datum::I64(8)],
-                            vec![Datum::I64(4), Datum::Bytes(b"d".to_vec()), Datum::I64(3)],
-                            vec![Datum::I64(5), Datum::Bytes(b"f".to_vec()), Datum::I64(5)],
-                            vec![Datum::I64(6), Datum::Bytes(b"e".to_vec()), Datum::I64(9)],
-                            vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::I64(6)]];
+        let cis = vec![
+            new_col_info(1, types::LONG_LONG),
+            new_col_info(2, types::VARCHAR),
+            new_col_info(3, types::LONG_LONG),
+        ];
+        let raw_data = vec![
+            vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::I64(7)],
+            vec![Datum::I64(2), Datum::Bytes(b"b".to_vec()), Datum::I64(7)],
+            vec![Datum::I64(3), Datum::Bytes(b"b".to_vec()), Datum::I64(8)],
+            vec![Datum::I64(4), Datum::Bytes(b"d".to_vec()), Datum::I64(3)],
+            vec![Datum::I64(5), Datum::Bytes(b"f".to_vec()), Datum::I64(5)],
+            vec![Datum::I64(6), Datum::Bytes(b"e".to_vec()), Datum::I64(9)],
+            vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::I64(6)],
+        ];
 
         let table_data = gen_table_data(tid, &cis, &raw_data);
         let mut test_store = TestStore::new(&table_data);
@@ -215,19 +255,23 @@ mod tests {
         let expr = new_col_gt_u64_expr(2, 5);
         selection.mut_conditions().push(expr);
 
-        let mut selection_executor = SelectionExecutor::new(selection,
-                                                            Rc::new(EvalContext::default()),
-                                                            Rc::new(cis),
-                                                            Box::new(inner_table_scan))
-            .unwrap();
+        let mut selection_executor = SelectionExecutor::new(
+            selection,
+            Rc::new(EvalContext::default()),
+            Rc::new(cis),
+            Box::new(inner_table_scan),
+        ).unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
             selection_rows.push(row);
         }
 
-        let expect_row_handles =
-            raw_data.iter().filter(|r| r[2].i64() > 5).map(|r| r[0].i64()).collect::<Vec<_>>();
+        let expect_row_handles = raw_data
+            .iter()
+            .filter(|r| r[2].i64() > 5)
+            .map(|r| r[0].i64())
+            .collect::<Vec<_>>();
         assert!(expect_row_handles.len() < raw_data.len());
         assert_eq!(selection_rows.len(), expect_row_handles.len());
         let result_row = selection_rows.iter().map(|r| r.handle).collect::<Vec<_>>();
