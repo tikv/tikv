@@ -17,14 +17,15 @@ use std::cmp::Ordering;
 use tipb::expression::ScalarFuncSig;
 
 use coprocessor::codec::{datum, mysql, Datum};
-use super::{StatementContext, Result, FnCall};
+use super::{FnCall, Result, StatementContext};
 
 impl FnCall {
-    pub fn compare_int(&self,
-                       ctx: &StatementContext,
-                       row: &[Datum],
-                       sig: ScalarFuncSig)
-                       -> Result<Option<i64>> {
+    pub fn compare_int(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+        sig: ScalarFuncSig,
+    ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_int(ctx, row));
         let rhs = try!(self.children[1].eval_int(ctx, row));
         match (lhs, rhs) {
@@ -47,15 +48,16 @@ impl FnCall {
                 Some(0)
             } else {
                 None
-            })
+            }),
         }
     }
 
-    pub fn compare_real(&self,
-                        ctx: &StatementContext,
-                        row: &[Datum],
-                        sig: ScalarFuncSig)
-                        -> Result<Option<i64>> {
+    pub fn compare_real(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+        sig: ScalarFuncSig,
+    ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_real(ctx, row));
         let rhs = try!(self.children[1].eval_real(ctx, row));
         match (lhs, rhs) {
@@ -68,8 +70,9 @@ impl FnCall {
                     ScalarFuncSig::GTReal => ordering == Ordering::Greater,
                     ScalarFuncSig::GEReal => ordering != Ordering::Less,
                     ScalarFuncSig::NEReal => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQReal |
-                    ScalarFuncSig::NullEQReal => ordering == Ordering::Equal,
+                    ScalarFuncSig::EQReal | ScalarFuncSig::NullEQReal => {
+                        ordering == Ordering::Equal
+                    }
                     _ => unreachable!(),
                 } as i64))
             }
@@ -77,15 +80,16 @@ impl FnCall {
                 Some(0)
             } else {
                 None
-            })
+            }),
         }
     }
 
-    pub fn compare_decimal(&self,
-                           ctx: &StatementContext,
-                           row: &[Datum],
-                           sig: ScalarFuncSig)
-                           -> Result<Option<i64>> {
+    pub fn compare_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+        sig: ScalarFuncSig,
+    ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_decimal(ctx, row));
         let rhs = try!(self.children[1].eval_decimal(ctx, row));
         match (lhs, rhs) {
@@ -98,8 +102,9 @@ impl FnCall {
                     ScalarFuncSig::GTDecimal => ordering == Ordering::Greater,
                     ScalarFuncSig::GEDecimal => ordering != Ordering::Less,
                     ScalarFuncSig::NEDecimal => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQDecimal |
-                    ScalarFuncSig::NullEQDecimal => ordering == Ordering::Equal,
+                    ScalarFuncSig::EQDecimal | ScalarFuncSig::NullEQDecimal => {
+                        ordering == Ordering::Equal
+                    }
                     _ => unreachable!(),
                 } as i64))
             }
@@ -107,15 +112,16 @@ impl FnCall {
                 Some(0)
             } else {
                 None
-            })
+            }),
         }
     }
 
-    pub fn compare_string(&self,
-                          ctx: &StatementContext,
-                          row: &[Datum],
-                          sig: ScalarFuncSig)
-                          -> Result<Option<i64>> {
+    pub fn compare_string(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+        sig: ScalarFuncSig,
+    ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_string(ctx, row));
         let rhs = try!(self.children[1].eval_string(ctx, row));
         match (lhs, rhs) {
@@ -128,8 +134,9 @@ impl FnCall {
                     ScalarFuncSig::GTString => ordering == Ordering::Greater,
                     ScalarFuncSig::GEString => ordering != Ordering::Less,
                     ScalarFuncSig::NEString => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQString |
-                    ScalarFuncSig::NullEQString => ordering == Ordering::Equal,
+                    ScalarFuncSig::EQString | ScalarFuncSig::NullEQString => {
+                        ordering == Ordering::Equal
+                    }
                     _ => unreachable!(),
                 } as i64))
             }
@@ -137,15 +144,16 @@ impl FnCall {
                 Some(0)
             } else {
                 None
-            })
+            }),
         }
     }
 
-    pub fn compare_time(&self,
-                        ctx: &StatementContext,
-                        row: &[Datum],
-                        sig: ScalarFuncSig)
-                        -> Result<Option<i64>> {
+    pub fn compare_time(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+        sig: ScalarFuncSig,
+    ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_time(ctx, row));
         let rhs = try!(self.children[1].eval_time(ctx, row));
         match (lhs, rhs) {
@@ -158,8 +166,9 @@ impl FnCall {
                     ScalarFuncSig::GTTime => ordering == Ordering::Greater,
                     ScalarFuncSig::GETime => ordering != Ordering::Less,
                     ScalarFuncSig::NETime => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQTime |
-                    ScalarFuncSig::NullEQTime => ordering == Ordering::Equal,
+                    ScalarFuncSig::EQTime | ScalarFuncSig::NullEQTime => {
+                        ordering == Ordering::Equal
+                    }
                     _ => unreachable!(),
                 } as i64))
             }
@@ -167,15 +176,16 @@ impl FnCall {
                 Some(0)
             } else {
                 None
-            })
+            }),
         }
     }
 
-    pub fn compare_duration(&self,
-                            ctx: &StatementContext,
-                            row: &[Datum],
-                            sig: ScalarFuncSig)
-                            -> Result<Option<i64>> {
+    pub fn compare_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+        sig: ScalarFuncSig,
+    ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_duration(ctx, row));
         let rhs = try!(self.children[1].eval_duration(ctx, row));
         match (lhs, rhs) {
@@ -188,8 +198,9 @@ impl FnCall {
                     ScalarFuncSig::GTDuration => ordering == Ordering::Greater,
                     ScalarFuncSig::GEDuration => ordering != Ordering::Less,
                     ScalarFuncSig::NEDuration => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQDuration |
-                    ScalarFuncSig::NullEQDuration => ordering == Ordering::Equal,
+                    ScalarFuncSig::EQDuration | ScalarFuncSig::NullEQDuration => {
+                        ordering == Ordering::Equal
+                    }
                     _ => unreachable!(),
                 } as i64))
             }
@@ -197,15 +208,16 @@ impl FnCall {
                 Some(0)
             } else {
                 None
-            })
+            }),
         }
     }
 
-    pub fn compare_json(&self,
-                        ctx: &StatementContext,
-                        row: &[Datum],
-                        sig: ScalarFuncSig)
-                        -> Result<Option<i64>> {
+    pub fn compare_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+        sig: ScalarFuncSig,
+    ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_json(ctx, row));
         let rhs = try!(self.children[1].eval_json(ctx, row));
         match (lhs, rhs) {
@@ -218,8 +230,9 @@ impl FnCall {
                     ScalarFuncSig::GTJson => ordering == Ordering::Greater,
                     ScalarFuncSig::GEJson => ordering != Ordering::Less,
                     ScalarFuncSig::NEJson => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQJson |
-                    ScalarFuncSig::NullEQJson => ordering == Ordering::Equal,
+                    ScalarFuncSig::EQJson | ScalarFuncSig::NullEQJson => {
+                        ordering == Ordering::Equal
+                    }
                     _ => unreachable!(),
                 } as i64))
             }
@@ -227,17 +240,18 @@ impl FnCall {
                 Some(0)
             } else {
                 None
-            })
+            }),
         }
     }
 }
 
 #[inline]
-fn cmp_i64_with_unsigned_flag(lhs: i64,
-                              lhs_unsigned: bool,
-                              rhs: i64,
-                              rhs_unsigned: bool)
-                              -> Ordering {
+fn cmp_i64_with_unsigned_flag(
+    lhs: i64,
+    lhs_unsigned: bool,
+    rhs: i64,
+    rhs_unsigned: bool,
+) -> Ordering {
     match (lhs_unsigned, rhs_unsigned) {
         (false, false) => lhs.cmp(&rhs),
         (true, true) => {
@@ -245,20 +259,16 @@ fn cmp_i64_with_unsigned_flag(lhs: i64,
             let rhs = rhs as u64;
             lhs.cmp(&rhs)
         }
-        (true, false) => {
-            if rhs < 0 || lhs as u64 > i64::MAX as u64 {
-                Ordering::Greater
-            } else {
-                lhs.cmp(&rhs)
-            }
-        }
-        (false, true) => {
-            if lhs < 0 || rhs as u64 > i64::MAX as u64 {
-                Ordering::Less
-            } else {
-                lhs.cmp(&rhs)
-            }
-        }
+        (true, false) => if rhs < 0 || lhs as u64 > i64::MAX as u64 {
+            Ordering::Greater
+        } else {
+            lhs.cmp(&rhs)
+        },
+        (false, true) => if lhs < 0 || rhs as u64 > i64::MAX as u64 {
+            Ordering::Less
+        } else {
+            lhs.cmp(&rhs)
+        },
     }
 }
 
@@ -273,7 +283,13 @@ mod test {
             (5, false, 3, false, Ordering::Greater),
             (u64::MAX as i64, false, 5 as i64, false, Ordering::Less),
 
-            (u64::MAX as i64, true, (u64::MAX - 1) as i64, true, Ordering::Greater),
+            (
+                u64::MAX as i64,
+                true,
+                (u64::MAX - 1) as i64,
+                true,
+                Ordering::Greater,
+            ),
             (u64::MAX as i64, true, 5 as i64, true, Ordering::Greater),
 
             (5, true, i64::MIN, false, Ordering::Greater),
