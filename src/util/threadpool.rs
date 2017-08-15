@@ -165,8 +165,8 @@ where
 }
 
 pub trait Context: Send {
-    fn on_task_started(&self, worker_ctx: &mut Self);
-    fn on_task_finished(&self, worker_ctx: &mut Self);
+    fn on_task_started(&mut self, worker_ctx: &mut Self);
+    fn on_task_finished(&mut self, worker_ctx: &mut Self);
 }
 
 pub trait ContextFactory<Ctx: Context> {
@@ -304,14 +304,14 @@ where
         let &(ref lock, ref cvar) = &*self.task_pool;
         let mut task_pool = lock.lock().unwrap();
         if prev_ctx.is_some() {
-            let ctx = prev_ctx.unwrap();
+            let mut ctx = prev_ctx.unwrap();
             ctx.on_task_finished(&mut self.ctx);
         }
         loop {
             if task_pool.is_stopped() {
                 return None;
             }
-            if let Some(task) = task_pool.pop_task() {
+            if let Some(mut task) = task_pool.pop_task() {
                 task.ctx.on_task_started(&mut self.ctx);
                 return Some(task);
             }
@@ -334,8 +334,8 @@ mod test {
     unsafe impl Send for DummyContext {}
 
     impl Context for DummyContext {
-        fn on_task_started(&self, _: &mut DummyContext) {}
-        fn on_task_finished(&self, _: &mut DummyContext) {}
+        fn on_task_started(&mut self, _: &mut DummyContext) {}
+        fn on_task_finished(&mut self, _: &mut DummyContext) {}
     }
 
     struct DummyContextFactory {}
@@ -415,10 +415,10 @@ mod test {
         unsafe impl Send for TestContext {}
 
         impl Context for TestContext {
-            fn on_task_started(&self, _: &mut Self) {
+            fn on_task_started(&mut self, _: &mut Self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
             }
-            fn on_task_finished(&self, _: &mut Self) {
+            fn on_task_finished(&mut self, _: &mut Self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
                 self.tx.send(self.counter.load(Ordering::SeqCst)).unwrap();
             }

@@ -80,8 +80,8 @@ struct DummyContext {}
 unsafe impl Send for DummyContext {}
 
 impl Context for DummyContext {
-    fn on_task_started(&self, _: &mut Self) {}
-    fn on_task_finished(&self, _: &mut Self) {}
+    fn on_task_started(&mut self, _: &mut Self) {}
+    fn on_task_finished(&mut self, _: &mut Self) {}
 }
 
 struct DummyContextFactory {}
