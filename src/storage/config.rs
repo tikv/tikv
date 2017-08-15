@@ -29,7 +29,7 @@ const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 1000;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
-    pub raft_data_dir: String,
+    pub raft_db_path: String,
     pub gc_ratio_threshold: f64,
     pub scheduler_notify_capacity: usize,
     pub scheduler_messages_per_tick: usize,
@@ -43,7 +43,7 @@ impl Default for Config {
         let total_cpu = sys_info::cpu_num().unwrap();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
-            raft_data_dir: String::new(),
+            raft_db_path: String::new(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             scheduler_notify_capacity: DEFAULT_SCHED_CAPACITY,
             scheduler_messages_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
@@ -59,13 +59,8 @@ impl Config {
         if self.data_dir != DEFAULT_DATA_DIR {
             self.data_dir = try!(config::canonicalize_path(&self.data_dir))
         }
-        if !self.raft_data_dir.is_empty() {
-            self.raft_data_dir = try!(config::canonicalize_path(&self.raft_data_dir));
-            if self.data_dir == self.raft_data_dir {
-                return Err(
-                    "storage.data_dir and storage.raft_data_dir should not equal".into(),
-                );
-            }
+        if !self.raft_db_path.is_empty() {
+            self.raft_db_path = try!(config::canonicalize_path(&self.raft_db_path));
         }
         Ok(())
     }

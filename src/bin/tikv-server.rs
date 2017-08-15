@@ -148,13 +148,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
     // Create engine, storage.
-    let db_opts = cfg.rocksdb.build_opt();
-    let cfs_opts = cfg.rocksdb.build_cf_opts();
-    let engine = Arc::new(
-        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), db_opts, cfs_opts)
+    let kv_db_opts = cfg.rocksdb.build_opt();
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+    let kv_engine = Arc::new(
+        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| exit_with_msg(s)),
     );
-    let mut storage = create_raft_storage(raft_router.clone(), engine.clone(), &cfg.storage)
+    let mut storage = create_raft_storage(raft_router.clone(), kv_engine.clone(), &cfg.storage)
         .unwrap_or_else(|e| exit_with_err(e));
 
     // Create pd client, snapshot manager, server.
@@ -178,10 +178,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let trans = server.transport();
 
     // Create raft engine.
-    let raft_db_path = if cfg.storage.raft_data_dir.is_empty() {
+    let raft_db_path = if cfg.storage.raft_db_path.is_empty() {
         store_path.join(Path::new("raft"))
     } else {
-        Path::new(&cfg.storage.raft_data_dir).to_path_buf()
+        Path::new(&cfg.storage.raft_db_path).to_path_buf()
     };
     let raft_db_opts = cfg.raftdb.build_opt();
     let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
@@ -194,7 +194,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     );
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
-    let engines = Engines::new(engine.clone(), raft_engine.clone());
+    let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
     node.start(event_loop, engines, trans, snap_mgr, snap_status_receiver)
         .unwrap_or_else(|e| exit_with_err(e));
     initial_metric(&cfg.metric, Some(node.id()));
@@ -206,7 +206,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     }
 
     let mut metrics_flusher = MetricsFlusher::new(
-        engine.clone(),
+        kv_engine.clone(),
         raft_engine.clone(),
         Duration::from_millis(DEFAULT_FLUSER_INTERVAL),
     );
@@ -220,7 +220,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     server
         .start(&cfg.server)
         .unwrap_or_else(|e| exit_with_err(e));
-    signal_handler::handle_signal(engine, &cfg.rocksdb.backup_dir);
+    signal_handler::handle_signal(kv_engine, &cfg.rocksdb.backup_dir);
 
     // Stop.
     server.stop().unwrap_or_else(|e| exit_with_err(e));

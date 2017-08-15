@@ -300,7 +300,7 @@ impl Default for DbConfig {
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
-            enable_pipelined_write: true,
+            enable_pipelined_write: false,
             backup_dir: "".to_owned(),
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -440,6 +440,7 @@ pub struct RaftDbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
+    pub allow_concurrent_memtable_write: bool,
     pub defaultcf: RaftDefaultCfConfig,
 }
 
@@ -465,7 +466,8 @@ impl Default for RaftDbConfig {
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
-            enable_pipelined_write: true,
+            enable_pipelined_write: false,
+            allow_concurrent_memtable_write: false,
             defaultcf: RaftDefaultCfConfig::default(),
         }
     }
@@ -512,6 +514,7 @@ impl RaftDbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
         opts
     }
 
@@ -612,22 +615,30 @@ impl TiKvConfig {
                 Path::new(&self.storage.data_dir).join("backup").display()
             );
         }
+
+        let store_path = Path::new(&self.storage.data_dir);
+        let kv_rocksdb_dir = store_path.join(Path::new("db"));
+        let kv_db_path = try!(config::path_str(kv_rocksdb_dir.as_path()));
+        if kv_db_path == self.storage.raft_db_path {
+            return Err(
+                "storage.raft_db_path can not same with storage.data_dir/db".into(),
+            );
+        }
         if !self.rocksdb.wal_dir.is_empty() &&
             (self.rocksdb.wal_dir == self.raftdb.wal_dir ||
-                self.rocksdb.wal_dir == self.storage.raft_data_dir)
+                self.rocksdb.wal_dir == self.storage.raft_db_path)
         {
             return Err(
-                "please check rocksdb.wal_dir, can not equal to storage.raft_data_dir or \
+                "please check rocksdb.wal_dir, can not equal to storage.raft_db_path or \
                  raftdb.wal_dir"
                     .into(),
             );
         }
         if !self.raftdb.wal_dir.is_empty() &&
-            (self.rocksdb.wal_dir == self.raftdb.wal_dir ||
-                self.raftdb.wal_dir == self.storage.data_dir)
+            (self.rocksdb.wal_dir == self.raftdb.wal_dir || self.raftdb.wal_dir == kv_db_path)
         {
             return Err(
-                "please check raftdb.wal_dir, can not equal to storage.data_dir or \
+                "please check raftdb.wal_dir, can not equal to storage.data_dir/db or \
                  rocksdb.wal_dir"
                     .into(),
             );

@@ -79,9 +79,9 @@ pub struct Engines {
 }
 
 impl Engines {
-    pub fn new(engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
+    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
         Engines {
-            engine: engine,
+            engine: kv_engine,
             raft_engine: raft_engine,
         }
     }
@@ -257,7 +257,7 @@ impl<T, C> Store<T, C> {
         let mut applying_count = 0;
 
         let t = Instant::now();
-        let mut wb = WriteBatch::new();
+        let mut kv_wb = WriteBatch::new();
         let mut raft_wb = WriteBatch::new();
         try!(engine.scan(start_key, end_key, false, &mut |key, value| {
             let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
@@ -276,7 +276,7 @@ impl<T, C> Store<T, C> {
                     region,
                     self.store_id()
                 );
-                self.clear_stale_meta(&mut wb, &mut raft_wb, region);
+                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, region);
                 return Ok(true);
             }
             if local_state.get_state() == PeerState::Applying {
@@ -308,8 +308,8 @@ impl<T, C> Store<T, C> {
             Ok(true)
         }));
 
-        if !wb.is_empty() {
-            self.engine.write(wb).unwrap();
+        if !kv_wb.is_empty() {
+            self.engine.write(kv_wb).unwrap();
         }
 
         if !raft_wb.is_empty() {
@@ -333,7 +333,7 @@ impl<T, C> Store<T, C> {
 
     fn clear_stale_meta(
         &mut self,
-        wb: &mut WriteBatch,
+        kv_wb: &mut WriteBatch,
         raft_wb: &mut WriteBatch,
         region: &metapb::Region,
     ) {
@@ -345,14 +345,14 @@ impl<T, C> Store<T, C> {
         };
 
         peer_storage::clear_meta(
-            wb,
+            kv_wb,
             raft_wb,
             &self.raft_engine,
             region.get_id(),
             &raft_state,
             true,
         ).unwrap();
-        peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
+        peer_storage::write_peer_state(kv_wb, region, PeerState::Tombstone).unwrap();
     }
 
     /// `clear_stale_data` clean up all possible garbage data.
@@ -1041,7 +1041,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
         let mut region_proposals = Vec::with_capacity(pending_count);
-        let (wb, raft_wb, append_res) = {
+        let (kv_wb, raft_wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
@@ -1051,7 +1051,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
-            (ctx.wb, ctx.raft_wb, ctx.ready_res)
+            (ctx.kv_wb, ctx.raft_wb, ctx.ready_res)
         };
 
         if !region_proposals.is_empty() {
@@ -1065,13 +1065,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
         // otherwise, if program restart happen between two write, raft log will be removed,
         // but region state may not changed in disk.
-        if !wb.is_empty() {
+        if !kv_wb.is_empty() {
             // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log);
-            self.engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
-                panic!("{} failed to save append state result: {:?}", self.tag, e);
-            });
+            self.engine.write_opt(kv_wb, &write_opts).unwrap_or_else(
+                |e| {
+                    panic!("{} failed to save append state result: {:?}", self.tag, e);
+                },
+            );
         }
 
         if !raft_wb.is_empty() {
@@ -1893,7 +1895,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let disk_stats = match fs2::statvfs(self.engine.path()) {
             Err(e) => {
                 error!(
-                    "{} get disk stat for rocksdb {} failed: {}",
+                    "{} get disk stat for kv rocksdb {} failed: {}",
                     self.tag,
                     self.engine.path(),
                     e

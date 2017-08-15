@@ -28,7 +28,7 @@ use kvproto::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
                              RegionLocalState};
 use util::worker::Scheduler;
-use util::{self, escape};
+use util;
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use raftstore::{Error, Result};
 use super::worker::RegionTask;
@@ -334,16 +334,14 @@ impl InvokeContext {
     pub fn save_snapshot_raft_state_to(
         &self,
         snapshot_index: u64,
-        wb: &mut WriteBatch,
+        kv_wb: &mut WriteBatch,
     ) -> Result<()> {
         let mut snapshot_raft_state = self.raft_state.clone();
-        if snapshot_index < snapshot_raft_state.get_hard_state().get_commit() {
-            snapshot_raft_state
-                .mut_hard_state()
-                .set_commit(snapshot_index);
-        }
+        snapshot_raft_state
+            .mut_hard_state()
+            .set_commit(snapshot_index);
         snapshot_raft_state.set_last_index(snapshot_index);
-        try!(wb.put_msg(
+        try!(kv_wb.put_msg(
             &keys::snapshot_raft_state_key(self.region_id),
             &snapshot_raft_state
         ));
@@ -351,11 +349,8 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_apply_state_to(&self, wb: &mut WriteBatch) -> Result<()> {
-        try!(wb.put_msg(
-            &keys::apply_state_key(self.region_id),
-            &self.apply_state
-        ));
+    pub fn save_apply_state_to(&self, kv_wb: &mut WriteBatch) -> Result<()> {
+        try!(kv_wb.put_msg(&keys::apply_state_key(self.region_id), &self.apply_state));
         Ok(())
     }
 }
@@ -367,10 +362,9 @@ pub fn recover_from_applying_state(engine: &DB, raft_engine: &DB, region_id: u64
             Some(state) => state,
             None => {
                 return Err(box_err!(
-                    "[region {}] failed to get raftstate from kv engine {}, \
+                    "[region {}] failed to get raftstate from kv engine, \
                      when recover from applying state",
-                    region_id,
-                    escape(&snapshot_raft_state_key)
+                    region_id
                 ));
             }
         };
@@ -381,6 +375,12 @@ pub fn recover_from_applying_state(engine: &DB, raft_engine: &DB, region_id: u64
         None => RaftLocalState::new(),
     };
 
+    // if we recv append log when applying snapshot, last_index in raft_local_state will
+    // larger than snapshot_index. since raft_local_state is written to raft engine, and
+    // raft write_batch is written after kv write_batch, raft_local_state may wrong if
+    // restart happen between the two write. so we copy raft_local_state to kv engine
+    // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
+    // after restart, we need check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
         try!(raft_engine.put_msg(&raft_state_key, &snapshot_raft_state));
     }
@@ -461,11 +461,7 @@ impl PeerStorage {
         tag: String,
         stats: Rc<RefCell<CacheQueryStats>>,
     ) -> Result<PeerStorage> {
-        debug!(
-            "creating storage on {} for {:?}",
-            raft_engine.path(),
-            region
-        );
+        debug!("creating storage on {} for {:?}", engine.path(), region);
         let raft_state = try!(init_raft_state(&raft_engine, region));
         let apply_state = try!(init_apply_state(&engine, region));
         if raft_state.get_last_index() < apply_state.get_applied_index() {
@@ -866,7 +862,7 @@ impl PeerStorage {
         &mut self,
         ctx: &mut InvokeContext,
         snap: &Snapshot,
-        wb: &WriteBatch,
+        kv_wb: &WriteBatch,
         raft_wb: &WriteBatch,
     ) -> Result<()> {
         info!("{} begin to apply snapshot", self.tag);
@@ -887,10 +883,10 @@ impl PeerStorage {
 
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
-            try!(self.clear_meta(wb, raft_wb));
+            try!(self.clear_meta(kv_wb, raft_wb));
         }
 
-        try!(write_peer_state(wb, &region, PeerState::Applying));
+        try!(write_peer_state(kv_wb, &region, PeerState::Applying));
 
         let last_index = snap.get_metadata().get_index();
 
@@ -917,10 +913,10 @@ impl PeerStorage {
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
-    pub fn clear_meta(&mut self, wb: &WriteBatch, raft_wb: &WriteBatch) -> Result<()> {
+    pub fn clear_meta(&mut self, kv_wb: &WriteBatch, raft_wb: &WriteBatch) -> Result<()> {
         let region_id = self.get_region_id();
         try!(clear_meta(
-            wb,
+            kv_wb,
             raft_wb,
             &self.raft_engine,
             region_id,
@@ -1088,7 +1084,7 @@ impl PeerStorage {
             try!(self.apply_snapshot(
                 &mut ctx,
                 &ready.snapshot,
-                &ready_ctx.wb,
+                &ready_ctx.kv_wb,
                 &ready_ctx.raft_wb
             ));
             last_index(&ctx.raft_state)
@@ -1119,13 +1115,13 @@ impl PeerStorage {
                 // in case of recv raft log after snapshot.
                 try!(ctx.save_snapshot_raft_state_to(
                     snapshot_index,
-                    &mut ready_ctx.wb
+                    &mut ready_ctx.kv_wb
                 ));
             }
         }
 
         if ctx.apply_state != self.apply_state {
-            try!(ctx.save_apply_state_to(&mut ready_ctx.wb));
+            try!(ctx.save_apply_state_to(&mut ready_ctx.kv_wb));
         }
 
         Ok(ctx)
@@ -1169,7 +1165,7 @@ impl PeerStorage {
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_meta(
-    wb: &WriteBatch,
+    kv_wb: &WriteBatch,
     raft_wb: &WriteBatch,
     raft_engine: &DB,
     region_id: u64,
@@ -1177,8 +1173,8 @@ pub fn clear_meta(
     is_stale_meta: bool,
 ) -> Result<()> {
     let t = Instant::now();
-    try!(wb.delete(&keys::region_state_key(region_id)));
-    try!(wb.delete(&keys::apply_state_key(region_id)));
+    try!(kv_wb.delete(&keys::region_state_key(region_id)));
+    try!(kv_wb.delete(&keys::apply_state_key(region_id)));
 
     let raft_count = if is_stale_meta {
         try!(clear_raft_data(raft_wb, raft_engine, region_id))
@@ -1317,7 +1313,7 @@ pub fn do_snapshot(
 
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region local state first.
-pub fn write_initial_state<T: Mutable>(wb: &T, raft_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_state<T: Mutable>(kv_wb: &T, raft_wb: &T, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::new();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -1333,14 +1329,14 @@ pub fn write_initial_state<T: Mutable>(wb: &T, raft_wb: &T, region_id: u64) -> R
         .set_term(RAFT_INIT_LOG_TERM);
 
     try!(raft_wb.put_msg(&keys::raft_state_key(region_id), &raft_state));
-    try!(wb.put_msg(&keys::apply_state_key(region_id), &apply_state));
+    try!(kv_wb.put_msg(&keys::apply_state_key(region_id), &apply_state));
 
     Ok(())
 }
 
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region local state first.
-pub fn write_initial_apply_state<T: Mutable>(wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_apply_state<T: Mutable>(kv_wb: &T, region_id: u64) -> Result<()> {
     let mut apply_state = RaftApplyState::new();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
     apply_state
@@ -1350,12 +1346,12 @@ pub fn write_initial_apply_state<T: Mutable>(wb: &T, region_id: u64) -> Result<(
         .mut_truncated_state()
         .set_term(RAFT_INIT_LOG_TERM);
 
-    try!(wb.put_msg(&keys::apply_state_key(region_id), &apply_state));
+    try!(kv_wb.put_msg(&keys::apply_state_key(region_id), &apply_state));
     Ok(())
 }
 
 pub fn write_peer_state<T: Mutable>(
-    w: &T,
+    kv_wb: &T,
     region: &metapb::Region,
     state: PeerState,
 ) -> Result<()> {
@@ -1363,7 +1359,7 @@ pub fn write_peer_state<T: Mutable>(
     let mut region_state = RegionLocalState::new();
     region_state.set_state(state);
     region_state.set_region(region.clone());
-    try!(w.put_msg(&keys::region_state_key(region_id), &region_state));
+    try!(kv_wb.put_msg(&keys::region_state_key(region_id), &region_state));
     Ok(())
 }
 
@@ -1434,7 +1430,7 @@ mod test {
 
     fn new_storage_from_ents(sched: Scheduler<RegionTask>, ents: &[Entry]) -> PeerStorage {
         let mut store = new_storage(sched);
-        let mut wb = WriteBatch::new();
+        let mut kv_wb = WriteBatch::new();
         let mut raft_wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
         store.append(&mut ctx, &ents[1..], &mut raft_wb).expect("");
@@ -1446,9 +1442,9 @@ mod test {
             .set_term(ents[0].get_term());
         ctx.apply_state
             .set_applied_index(ents.last().unwrap().get_index());
-        ctx.save_apply_state_to(&mut wb).unwrap();
+        ctx.save_apply_state_to(&mut kv_wb).unwrap();
         store.raft_engine.write(raft_wb).expect("");
-        store.engine.write(wb).expect("");
+        store.engine.write(kv_wb).expect("");
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1553,10 +1549,10 @@ mod test {
 
         assert_eq!(6, get_meta_key_count(&store));
 
-        let wb = WriteBatch::new();
+        let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        store.clear_meta(&wb, &raft_wb).unwrap();
-        store.engine.write(wb).unwrap();
+        store.clear_meta(&kv_wb, &raft_wb).unwrap();
+        store.engine.write(kv_wb).unwrap();
         store.raft_engine.write(raft_wb).unwrap();
 
         assert_eq!(0, get_meta_key_count(&store));
@@ -1658,9 +1654,9 @@ mod test {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
             }
             if res.is_ok() {
-                let mut wb = WriteBatch::new();
-                ctx.save_apply_state_to(&mut wb).unwrap();
-                store.engine.write(wb).expect("");
+                let mut kv_wb = WriteBatch::new();
+                ctx.save_apply_state_to(&mut kv_wb).unwrap();
+                store.engine.write(kv_wb).expect("");
             }
         }
     }
@@ -1720,7 +1716,7 @@ mod test {
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
 
         let mut ctx = InvokeContext::new(&s);
-        let mut wb = WriteBatch::new();
+        let mut kv_wb = WriteBatch::new();
         let mut raft_wb = WriteBatch::new();
         s.append(&mut ctx, &[new_entry(6, 5), new_entry(7, 5)], &mut raft_wb)
             .unwrap();
@@ -1731,17 +1727,17 @@ mod test {
         ctx.raft_state.set_last_index(7);
         ctx.apply_state.set_applied_index(7);
         ctx.save_raft_state_to(&mut raft_wb).unwrap();
-        ctx.save_apply_state_to(&mut wb).unwrap();
-        s.engine.write(wb).unwrap();
+        ctx.save_apply_state_to(&mut kv_wb).unwrap();
+        s.engine.write(kv_wb).unwrap();
         s.raft_engine.write(raft_wb).unwrap();
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);
         let term = s.term(7).unwrap();
         compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
-        wb = WriteBatch::new();
-        ctx.save_apply_state_to(&mut wb).unwrap();
-        s.engine.write(wb).unwrap();
+        kv_wb = WriteBatch::new();
+        ctx.save_apply_state_to(&mut kv_wb).unwrap();
+        s.engine.write(kv_wb).unwrap();
         s.apply_state = ctx.apply_state;
         let (tx, rx) = channel();
         tx.send(snap.clone()).unwrap();
@@ -1996,9 +1992,10 @@ mod test {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let wb = WriteBatch::new();
+        let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        s2.apply_snapshot(&mut ctx, &snap1, &wb, &raft_wb).unwrap();
+        s2.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+            .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
         assert_eq!(ctx.raft_state.get_last_index(), 6);
@@ -2012,9 +2009,10 @@ mod test {
         validate_cache(&s3, &ents[1..]);
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let wb = WriteBatch::new();
+        let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        s3.apply_snapshot(&mut ctx, &snap1, &wb, &raft_wb).unwrap();
+        s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+            .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
         assert_eq!(ctx.raft_state.get_last_index(), 6);

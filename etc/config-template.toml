@@ -39,7 +39,7 @@ labels = {}
 # set the path to rocksdb directory.
 data-dir = "/tmp/tikv/store"
 # set the path to raft rocksdb directory, default value is data-dir/raft
-# raft-data-dir = "/tmp/tikv/store/raft"
+# raft-db-path = "/tmp/tikv/store/raft"
 
 # notify capacity of scheduler's channel
 # scheduler-notify-capacity = 10240

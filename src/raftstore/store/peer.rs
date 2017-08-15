@@ -141,7 +141,7 @@ impl ProposalQueue {
 }
 
 pub struct ReadyContext<'a, T: 'a> {
-    pub wb: WriteBatch,
+    pub kv_wb: WriteBatch,
     pub raft_wb: WriteBatch,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
@@ -151,7 +151,7 @@ pub struct ReadyContext<'a, T: 'a> {
 impl<'a, T> ReadyContext<'a, T> {
     pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
-            wb: WriteBatch::new(),
+            kv_wb: WriteBatch::new(),
             raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             metrics: metrics,
             trans: t,
@@ -390,11 +390,11 @@ impl Peer {
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
-        let wb = WriteBatch::new();
+        let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        try!(self.mut_store().clear_meta(&wb, &raft_wb));
-        try!(write_peer_state(&wb, &region, PeerState::Tombstone));
-        try!(self.engine.write(wb));
+        try!(self.mut_store().clear_meta(&kv_wb, &raft_wb));
+        try!(write_peer_state(&kv_wb, &region, PeerState::Tombstone));
+        try!(self.engine.write(kv_wb));
         try!(self.raft_engine.write(raft_wb));
 
         if self.get_store().is_initialized() {

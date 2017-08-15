@@ -594,6 +594,10 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<Error>> {
     Ok(format!("{}", try!(p.canonicalize()).display()))
 }
 
+pub fn path_str(path: &Path) -> Result<String, Box<Error>> {
+    Ok(format!("{}", try!(path.canonicalize()).display()))
+}
+
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
     use std::mem;
