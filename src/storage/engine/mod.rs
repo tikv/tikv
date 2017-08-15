@@ -47,7 +47,7 @@ pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 pub type BatchResults<T> = Vec<Option<(CbContext, Result<T>)>>;
 pub type BatchCallback<T> = Box<FnBox(BatchResults<T>) + Send>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
 }

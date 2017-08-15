@@ -302,7 +302,7 @@ pub struct DbConfig {
     pub info_log_max_size: ReadableSize,
     pub info_log_roll_time: ReadableDuration,
     pub info_log_dir: String,
-    pub rate_bytes_per_sec: i64,
+    pub rate_bytes_per_sec: ReadableSize,
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
@@ -332,7 +332,7 @@ impl Default for DbConfig {
             info_log_max_size: ReadableSize::kb(0),
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_dir: "".to_owned(),
-            rate_bytes_per_sec: 0,
+            rate_bytes_per_sec: ReadableSize::kb(0),
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
@@ -374,8 +374,8 @@ impl DbConfig {
                        e);
             })
         }
-        if self.rate_bytes_per_sec > 0 {
-            opts.set_ratelimiter(self.rate_bytes_per_sec);
+        if self.rate_bytes_per_sec.0 > 0 {
+            opts.set_ratelimiter(self.rate_bytes_per_sec.0 as i64);
         }
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
