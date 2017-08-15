@@ -154,15 +154,18 @@ impl Drop for Monitor {
 pub use self::inner::monotonic_raw_now;
 use self::inner::monotonic_now;
 use self::inner::monotonic_coarse_now;
+use self::inner::CORASE_ERROR;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
-const NANOSECONDS_PER_MILLISECOND: i32 = 1_000_000;
+const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
     use time::{self, Timespec};
     use super::NANOSECONDS_PER_SECOND;
+
+    pub const CORASE_ERROR: &i64 = &1;
 
     pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
@@ -189,6 +192,7 @@ mod inner {
     use std::io;
     use time::Timespec;
     use libc;
+    use super::NANOSECONDS_PER_MILLISECOND;
 
     pub fn monotonic_raw_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_RAW)
@@ -210,11 +214,22 @@ mod inner {
         let errno = unsafe { libc::clock_gettime(clock, &mut t) };
         if errno != 0 {
             panic!(
-                "failed to get monotonic raw locktime, err {}",
+                "failed to get clocktime, err {}",
                 io::Error::last_os_error()
             );
         }
         Timespec::new(t.tv_sec, t.tv_nsec as _)
+    }
+
+    lazy_static! {
+        pub static ref CORASE_ERROR: i64 = {
+            let mut t = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            assert_eq!(unsafe { libc::clock_getres(libc::CLOCK_MONOTONIC_COARSE, &mut t) }, 0);
+            t.tv_nsec / NANOSECONDS_PER_MILLISECOND
+        };
     }
 }
 
@@ -281,11 +296,12 @@ impl Instant {
     // Use millisecond resolution for ignoring the error.
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
         let later_ms =
-            later.sec * MILLISECOND_PER_SECOND + (later.nsec / NANOSECONDS_PER_MILLISECOND) as i64;
+            later.sec * MILLISECOND_PER_SECOND + later.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
         let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND +
-            (earlier.nsec / NANOSECONDS_PER_MILLISECOND) as i64;
-        if later_ms >= earlier_ms {
-            Duration::from_millis((later_ms - earlier_ms) as u64)
+            earlier.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
+        let dur = later_ms - earlier_ms;
+        if dur > -*CORASE_ERROR {
+            Duration::from_millis(if dur > 0 { dur as u64 } else { 0 })
         } else {
             panic!(
                 "system time jumped back, {:.3} -> {:.3}",
