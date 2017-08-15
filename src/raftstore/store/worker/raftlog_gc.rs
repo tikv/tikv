@@ -17,9 +17,9 @@ use util::worker::Runnable;
 use util::rocksdb;
 use storage::CF_RAFT;
 
-use rocksdb::{DB, WriteBatch, Writable};
+use rocksdb::{Writable, WriteBatch, DB};
 use std::sync::Arc;
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Display, Formatter};
 use std::error;
 use std::sync::mpsc::Sender;
 
@@ -36,11 +36,13 @@ pub struct TaskRes {
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f,
-               "GC Raft Log Task [region: {}, from: {}, to: {}]",
-               self.region_id,
-               self.start_idx,
-               self.end_idx)
+        write!(
+            f,
+            "GC Raft Log Task [region: {}, from: {}, to: {}]",
+            self.region_id,
+            self.start_idx,
+            self.end_idx
+        )
     }
 }
 
@@ -66,12 +68,13 @@ impl Runner {
     }
 
     /// Do the gc job and return the count of log collected.
-    fn gc_raft_log(&mut self,
-                   engine: Arc<DB>,
-                   region_id: u64,
-                   start_idx: u64,
-                   end_idx: u64)
-                   -> Result<u64, Error> {
+    fn gc_raft_log(
+        &mut self,
+        engine: Arc<DB>,
+        region_id: u64,
+        start_idx: u64,
+        end_idx: u64,
+    ) -> Result<u64, Error> {
         let mut first_idx = start_idx;
         if first_idx == 0 {
             let start_key = keys::raft_log_key(region_id, 0);
@@ -99,15 +102,23 @@ impl Runner {
         if self.ch.is_none() {
             return;
         }
-        self.ch.as_ref().unwrap().send(TaskRes { collected: collected }).unwrap();
+        self.ch
+            .as_ref()
+            .unwrap()
+            .send(TaskRes {
+                collected: collected,
+            })
+            .unwrap();
     }
 }
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
-        debug!("[region {}] execute gc log to {}",
-               task.region_id,
-               task.end_idx);
+        debug!(
+            "[region {}] execute gc log to {}",
+            task.region_id,
+            task.end_idx
+        );
         match self.gc_raft_log(task.engine, task.region_id, task.start_idx, task.end_idx) {
             Err(e) => {
                 error!("[region {}] failed to gc: {:?}", task.region_id, e);
@@ -149,42 +160,52 @@ mod test {
         }
         db.write(wb).unwrap();
 
-        let tbls = vec![(Task {
-                            engine: db.clone(),
-                            region_id: region_id,
-                            start_idx: 0,
-                            end_idx: 10,
-                        },
-                         10,
-                         (0, 10),
-                         (10, 100)),
-                        (Task {
-                            engine: db.clone(),
-                            region_id: region_id,
-                            start_idx: 0,
-                            end_idx: 50,
-                        },
-                         40,
-                         (0, 50),
-                         (50, 100)),
-                        (Task {
-                            engine: db.clone(),
-                            region_id: region_id,
-                            start_idx: 50,
-                            end_idx: 50,
-                        },
-                         0,
-                         (0, 50),
-                         (50, 100)),
-                        (Task {
-                            engine: db.clone(),
-                            region_id: region_id,
-                            start_idx: 50,
-                            end_idx: 60,
-                        },
-                         10,
-                         (0, 60),
-                         (60, 100))];
+        let tbls = vec![
+            (
+                Task {
+                    engine: db.clone(),
+                    region_id: region_id,
+                    start_idx: 0,
+                    end_idx: 10,
+                },
+                10,
+                (0, 10),
+                (10, 100),
+            ),
+            (
+                Task {
+                    engine: db.clone(),
+                    region_id: region_id,
+                    start_idx: 0,
+                    end_idx: 50,
+                },
+                40,
+                (0, 50),
+                (50, 100),
+            ),
+            (
+                Task {
+                    engine: db.clone(),
+                    region_id: region_id,
+                    start_idx: 50,
+                    end_idx: 50,
+                },
+                0,
+                (0, 50),
+                (50, 100),
+            ),
+            (
+                Task {
+                    engine: db.clone(),
+                    region_id: region_id,
+                    start_idx: 50,
+                    end_idx: 60,
+                },
+                10,
+                (0, 60),
+                (60, 100),
+            ),
+        ];
 
         for (task, expected_collectd, not_exist_range, exist_range) in tbls {
             runner.run(task);

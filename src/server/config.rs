@@ -93,13 +93,18 @@ impl Config {
             self.advertise_addr = self.addr.clone();
         }
         if self.advertise_addr.starts_with("0.") {
-            return Err(box_err!("invalid advertise-addr: {:?}", self.advertise_addr));
+            return Err(box_err!(
+                "invalid advertise-addr: {:?}",
+                self.advertise_addr
+            ));
         }
 
         if self.end_point_concurrency == 0 {
-            return Err(box_err!("server.server.end-point-concurrency: {} is invalid, \
-                                 shouldn't be 0",
-                                self.end_point_concurrency));
+            return Err(box_err!(
+                "server.server.end-point-concurrency: {} is invalid, \
+                 shouldn't be 0",
+                self.end_point_concurrency
+            ));
         }
 
         for (k, v) in &self.labels {
@@ -113,9 +118,11 @@ impl Config {
 
 fn validate_label(s: &str, tp: &str) -> Result<()> {
     let report_err = || {
-        box_err!("store label {}: {:?} not match ^[a-z0-9]([a-z0-9-._]*[a-z0-9])?",
-                 tp,
-                 s)
+        box_err!(
+            "store label {}: {:?} not match ^[a-z0-9]([a-z0-9-._]*[a-z0-9])?",
+            tp,
+            s
+        )
     };
     if s.is_empty() {
         return Err(report_err());
@@ -169,27 +176,13 @@ mod tests {
 
     #[test]
     fn test_store_labels() {
-        let invalid_cases = vec![
-            "",
-            "123*",
-            ".123",
-            "Cab",
-            "abC",
-            "💖",
-        ];
+        let invalid_cases = vec!["", "123*", ".123", "Cab", "abC", "💖"];
 
         for case in invalid_cases {
             assert!(validate_label(case, "dummy").is_err());
         }
 
-        let valid_cases = vec![
-            "a",
-            "0",
-            "a.1-2",
-            "b_1.2",
-            "cab-012",
-            "3ac.8b2",
-        ];
+        let valid_cases = vec!["a", "0", "a.1-2", "b_1.2", "cab-012", "3ac.8b2"];
 
         for case in valid_cases {
             validate_label(case, "dummy").unwrap();

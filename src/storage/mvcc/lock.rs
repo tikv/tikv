@@ -13,12 +13,12 @@
 
 use byteorder::ReadBytesExt;
 use storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use util::codec::number::{NumberEncoder, NumberDecoder, MAX_VAR_U64_LEN};
+use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 use super::{Error, Result};
 use super::super::types::Value;
 
-#[derive(Debug,Clone,Copy,PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
     Put,
     Delete,
@@ -66,12 +66,13 @@ pub struct Lock {
 }
 
 impl Lock {
-    pub fn new(lock_type: LockType,
-               primary: Vec<u8>,
-               ts: u64,
-               ttl: u64,
-               short_value: Option<Value>)
-               -> Lock {
+    pub fn new(
+        lock_type: LockType,
+        primary: Vec<u8>,
+        ts: u64,
+        ttl: u64,
+        short_value: Option<Value>,
+    ) -> Lock {
         Lock {
             lock_type: lock_type,
             primary: primary,
@@ -82,9 +83,9 @@ impl Lock {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN +
-                                       SHORT_VALUE_MAX_LEN +
-                                       2);
+        let mut b = Vec::with_capacity(
+            1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2,
+        );
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
         b.encode_var_u64(self.ts).unwrap();
@@ -115,16 +116,20 @@ impl Lock {
         }
 
         let flag = try!(b.read_u8());
-        assert_eq!(flag,
-                   SHORT_VALUE_PREFIX,
-                   "invalid flag [{:?}] in write",
-                   flag);
+        assert_eq!(
+            flag,
+            SHORT_VALUE_PREFIX,
+            "invalid flag [{:?}] in write",
+            flag
+        );
 
         let len = try!(b.read_u8());
         if len as usize != b.len() {
-            panic!("short value len [{}] not equal to content len [{}]",
-                   len,
-                   b.len());
+            panic!(
+                "short value len [{}] not equal to content len [{}]",
+                len,
+                b.len()
+            );
         }
 
         Ok(Lock::new(lock_type, primary, ts, ttl, Some(b.to_vec())))
@@ -139,47 +144,66 @@ mod tests {
     #[test]
     fn test_lock_type() {
         let (key, value) = (b"key", b"value");
-        let mut tests =
-            vec![(Mutation::Put((make_key(key), value.to_vec())), LockType::Put, FLAG_PUT),
-                 (Mutation::Delete(make_key(key)), LockType::Delete, FLAG_DELETE),
-                 (Mutation::Lock(make_key(key)), LockType::Lock, FLAG_LOCK)];
+        let mut tests = vec![
+            (
+                Mutation::Put((make_key(key), value.to_vec())),
+                LockType::Put,
+                FLAG_PUT,
+            ),
+            (
+                Mutation::Delete(make_key(key)),
+                LockType::Delete,
+                FLAG_DELETE,
+            ),
+            (Mutation::Lock(make_key(key)), LockType::Lock, FLAG_LOCK),
+        ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
             let lt = LockType::from_mutation(&mutation);
-            assert_eq!(lt,
-                       lock_type,
-                       "#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
-                       i,
-                       mutation,
-                       lock_type,
-                       lt);
+            assert_eq!(
+                lt,
+                lock_type,
+                "#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
+                i,
+                mutation,
+                lock_type,
+                lt
+            );
             let f = lock_type.to_u8();
-            assert_eq!(f,
-                       flag,
-                       "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
-                       i,
-                       lock_type,
-                       flag,
-                       f);
+            assert_eq!(
+                f,
+                flag,
+                "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
+                i,
+                lock_type,
+                flag,
+                f
+            );
             let lt = LockType::from_u8(flag).unwrap();
-            assert_eq!(lt,
-                       lock_type,
-                       "#{}, expect from_u8({:?}) returns {:?}, but got {:?})",
-                       i,
-                       flag,
-                       lock_type,
-                       lt);
+            assert_eq!(
+                lt,
+                lock_type,
+                "#{}, expect from_u8({:?}) returns {:?}, but got {:?})",
+                i,
+                flag,
+                lock_type,
+                lt
+            );
         }
     }
 
     #[test]
     fn test_lock() {
         // Test `Lock::to_bytes()` and `Lock::parse()` works as a pair.
-        let mut locks = vec![Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None),
-                             Lock::new(LockType::Delete,
-                                       b"pk".to_vec(),
-                                       1,
-                                       10,
-                                       Some(b"short_value".to_vec()))];
+        let mut locks = vec![
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None),
+            Lock::new(
+                LockType::Delete,
+                b"pk".to_vec(),
+                1,
+                10,
+                Some(b"short_value".to_vec()),
+            ),
+        ];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
             let l = Lock::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
@@ -189,11 +213,13 @@ mod tests {
         // Test `Lock::parse()` handles incorrect input.
         assert!(Lock::parse(b"").is_err());
 
-        let lock = Lock::new(LockType::Lock,
-                             b"pk".to_vec(),
-                             1,
-                             10,
-                             Some(b"short_value".to_vec()));
+        let lock = Lock::new(
+            LockType::Lock,
+            b"pk".to_vec(),
+            1,
+            10,
+            Some(b"short_value".to_vec()),
+        );
         let v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
     }

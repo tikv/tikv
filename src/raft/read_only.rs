@@ -29,7 +29,7 @@ use std::collections::VecDeque;
 
 use kvproto::eraftpb::Message;
 
-use super::{HashSet, HashMap};
+use super::{HashMap, HashSet};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ReadOnlyOption {

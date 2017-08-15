@@ -41,7 +41,8 @@ pub fn err_resp(e: Error, term: u64) -> RaftCmdResponse {
 }
 
 pub fn message_error<E>(err: E) -> RaftCmdResponse
-    where E: Into<Box<error::Error + Send + Sync>>
+where
+    E: Into<Box<error::Error + Send + Sync>>,
 {
     new_error(Error::Other(err.into()))
 }

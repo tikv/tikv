@@ -14,14 +14,14 @@
 //! Core data types.
 
 use std::hash::{Hash, Hasher};
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Display, Formatter};
 use std::u64;
 
-use util::{escape, codec};
-use util::codec::number::{self, NumberEncoder, NumberDecoder};
+use util::{codec, escape};
+use util::codec::number::{self, NumberDecoder, NumberEncoder};
 use util::codec::bytes::BytesDecoder;
 
-use storage::mvcc::{Write, Lock};
+use storage::mvcc::{Lock, Write};
 
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
