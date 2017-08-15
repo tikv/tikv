@@ -12,25 +12,26 @@
 // limitations under the License.
 
 
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use std::str;
 
-use rocksdb::{DB, Writable, WriteBatch};
-use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
+use rocksdb::{Writable, WriteBatch, DB};
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use threadpool::ThreadPool;
 
 use util::worker::Runnable;
 use util::{escape, rocksdb};
-use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption};
-use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
-                                     JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
-use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyOptions, keys,
-                       Peekable};
+use raftstore::store::engine::{IterOption, Iterable, Mutable, Snapshot};
+use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING,
+                                     JOB_STATUS_FAILED, JOB_STATUS_FINISHED, JOB_STATUS_PENDING,
+                                     JOB_STATUS_RUNNING};
+use raftstore::store::{self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey,
+                       SnapManager};
 use raftstore::store::snap::{Error, Result};
 
 use super::metrics::*;
@@ -72,13 +73,17 @@ impl Display for Task {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
-            Task::Destroy { region_id, ref start_key, ref end_key } => {
-                write!(f,
-                       "Destroy {} [{}, {})",
-                       region_id,
-                       escape(start_key),
-                       escape(end_key))
-            }
+            Task::Destroy {
+                region_id,
+                ref start_key,
+                ref end_key,
+            } => write!(
+                f,
+                "Destroy {} [{}, {})",
+                region_id,
+                escape(start_key),
+                escape(end_key)
+            ),
         }
     }
 }
@@ -97,18 +102,27 @@ impl SnapContext {
         let raft_db = self.raft_db.clone();
         let raw_snap = Snapshot::new(self.db.clone());
 
-        let snap = box_try!(store::do_snapshot(self.mgr.clone(), &raft_db, &raw_snap, region_id));
+        let snap = box_try!(store::do_snapshot(
+            self.mgr.clone(),
+            &raft_db,
+            &raw_snap,
+            region_id
+        ));
         if let Err(e) = notifier.try_send(snap) {
-            info!("[region {}] failed to notify snap result, maybe leadership has changed, \
-                   ignore: {:?}",
-                  region_id,
-                  e);
+            info!(
+                "[region {}] failed to notify snap result, maybe leadership has changed, \
+                 ignore: {:?}",
+                region_id,
+                e
+            );
         }
         Ok(())
     }
 
     fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
-        SNAP_COUNTER_VEC.with_label_values(&["generate", "all"]).inc();
+        SNAP_COUNTER_VEC
+            .with_label_values(&["generate", "all"])
+            .inc();
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
         let timer = gen_histogram.start_timer();
 
@@ -117,15 +131,18 @@ impl SnapContext {
             return;
         }
 
-        SNAP_COUNTER_VEC.with_label_values(&["generate", "success"]).inc();
+        SNAP_COUNTER_VEC
+            .with_label_values(&["generate", "success"])
+            .inc();
         timer.observe_duration();
     }
 
-    fn delete_all_in_range(&self,
-                           start_key: &[u8],
-                           end_key: &[u8],
-                           abort: &AtomicUsize)
-                           -> Result<()> {
+    fn delete_all_in_range(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        abort: &AtomicUsize,
+    ) -> Result<()> {
         let mut wb = WriteBatch::new();
         let mut size_cnt = 0;
         for cf in self.db.cf_names() {
@@ -173,7 +190,12 @@ impl SnapContext {
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState = match box_try!(self.db.get_msg(&region_key)) {
             Some(state) => state,
-            None => return Err(box_err!("failed to get region_state from {}", escape(&region_key))),
+            None => {
+                return Err(box_err!(
+                    "failed to get region_state from {}",
+                    escape(&region_key)
+                ))
+            }
         };
 
         // clear up origin data.
@@ -185,7 +207,12 @@ impl SnapContext {
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match box_try!(self.db.get_msg(&state_key)) {
             Some(state) => state,
-            None => return Err(box_err!("failed to get raftstate from {}", escape(&state_key))),
+            None => {
+                return Err(box_err!(
+                    "failed to get raftstate from {}",
+                    escape(&state_key)
+                ))
+            }
         };
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
@@ -213,9 +240,11 @@ impl SnapContext {
         box_try!(wb.put_msg(&region_key, &region_state));
         box_try!(wb.delete(&keys::snapshot_raft_state_key(region_id)));
         box_try!(self.db.write(wb));
-        info!("[region {}] apply new data takes {:?}",
-              region_id,
-              timer.elapsed());
+        info!(
+            "[region {}] apply new data takes {:?}",
+            region_id,
+            timer.elapsed()
+        );
         Ok(())
     }
 
@@ -232,9 +261,13 @@ impl SnapContext {
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);
-                assert_eq!(status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
-                           JOB_STATUS_CANCELLING);
-                SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"]).inc();
+                assert_eq!(
+                    status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
+                    JOB_STATUS_CANCELLING
+                );
+                SNAP_COUNTER_VEC
+                    .with_label_values(&["apply", "abort"])
+                    .inc();
             }
             Err(e) => {
                 error!("failed to apply snap: {:?}!!!", e);
@@ -247,16 +280,20 @@ impl SnapContext {
     }
 
     fn handle_destroy(&mut self, region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
-        info!("[region {}] deleting data in [{}, {})",
-              region_id,
-              escape(&start_key),
-              escape(&end_key));
+        info!(
+            "[region {}] deleting data in [{}, {})",
+            region_id,
+            escape(&start_key),
+            escape(&end_key)
+        );
         let status = AtomicUsize::new(JOB_STATUS_PENDING);
         if let Err(e) = self.delete_all_in_range(&start_key, &end_key, &status) {
-            error!("failed to delete data in [{}, {}): {:?}",
-                   escape(&start_key),
-                   escape(&end_key),
-                   e);
+            error!(
+                "failed to delete data in [{}, {}): {:?}",
+                escape(&start_key),
+                escape(&end_key),
+                e
+            );
         }
     }
 }
@@ -283,16 +320,22 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Gen { region_id, notifier } => {
+            Task::Gen {
+                region_id,
+                notifier,
+            } => {
                 // It safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
-                self.pool.execute(move || ctx.handle_gen(region_id, notifier))
+                self.pool
+                    .execute(move || ctx.handle_gen(region_id, notifier))
             }
             Task::Apply { region_id, status } => self.ctx.handle_apply(region_id, status),
-            Task::Destroy { region_id, start_key, end_key } => {
-                self.ctx.handle_destroy(region_id, start_key, end_key)
-            }
+            Task::Destroy {
+                region_id,
+                start_key,
+                end_key,
+            } => self.ctx.handle_destroy(region_id, start_key, end_key),
         }
     }
 }

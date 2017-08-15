@@ -19,10 +19,10 @@ use std::sync::atomic::*;
 use std::time::*;
 use std::collections::HashSet;
 
-use kvproto::eraftpb::{MessageType, ConfChangeType};
+use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::CmdType;
-use kvproto::raft_serverpb::{RaftMessage, RaftLocalState};
+use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::Peekable;
@@ -57,20 +57,25 @@ impl Filter<RaftMessage> for LeaseReadFilter {
 }
 
 // Issue a read request on the specified peer.
-fn read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
-                              peer: Peer,
-                              region: Region,
-                              key: &[u8],
-                              timeout: Duration)
-                              -> Result<Vec<u8>> {
-    let mut request = new_request(region.get_id(),
-                                  region.get_region_epoch().clone(),
-                                  vec![new_get_cmd(key)],
-                                  false);
+fn read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: Peer,
+    region: Region,
+    key: &[u8],
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        false,
+    );
     request.mut_header().set_peer(peer);
     let mut resp = try!(cluster.call_command(request, timeout));
     if resp.get_header().has_error() {
-        return Err(Error::Other(box_err!(resp.mut_header().take_error().take_message())));
+        return Err(Error::Other(
+            box_err!(resp.mut_header().take_error().take_message()),
+        ));
     }
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
@@ -79,34 +84,40 @@ fn read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
     Ok(get.take_value())
 }
 
-fn must_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
-                                   peer: Peer,
-                                   region: Region,
-                                   key: &[u8],
-                                   value: &[u8]) {
+fn must_read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: Peer,
+    region: Region,
+    key: &[u8],
+    value: &[u8],
+) {
     let timeout = Duration::from_secs(1);
     match read_on_peer(cluster, peer, region, key, timeout) {
-        Ok(v) => {
-            if v != value {
-                panic!("read key {}, expect value {}, got {}",
-                       escape(key),
-                       escape(value),
-                       escape(&v))
-            }
-        }
+        Ok(v) => if v != value {
+            panic!(
+                "read key {}, expect value {}, got {}",
+                escape(key),
+                escape(value),
+                escape(&v)
+            )
+        },
         Err(e) => panic!("failed to read for key {}, err {:?}", escape(key), e),
     }
 }
 
-fn must_error_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
-                                         peer: Peer,
-                                         region: Region,
-                                         key: &[u8],
-                                         timeout: Duration) {
+fn must_error_read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: Peer,
+    region: Region,
+    key: &[u8],
+    timeout: Duration,
+) {
     if let Ok(value) = read_on_peer(cluster, peer, region, key, timeout) {
-        panic!("key {}, expect error but got {}",
-               escape(key),
-               escape(&value));
+        panic!(
+            "key {}, expect error but got {}",
+            escape(key),
+            escape(&value)
+        );
     }
 }
 
@@ -223,7 +234,7 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
 
     let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0 *
-                           cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     let node_id = 3u64;
     let store_id = 3u64;
     let peer = new_peer(store_id, node_id);
@@ -244,11 +255,13 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(election_timeout * 2);
 
     // Issue a read request and check the value on response.
-    must_error_read_on_peer(cluster,
-                            peer.clone(),
-                            region.clone(),
-                            key,
-                            Duration::from_secs(1));
+    must_error_read_on_peer(
+        cluster,
+        peer.clone(),
+        region.clone(),
+        key,
+        Duration::from_secs(1),
+    );
 }
 
 #[test]
@@ -305,9 +318,11 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     assert_eq!(detector.ctx.rl().len(), 0);
 
     // Drop MsgTimeoutNow to `peer3` so that the leader transfer procedure would abort later.
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(region_id, peer3_store_id)
-        .msg_type(MessageType::MsgTimeoutNow)
-        .direction(Direction::Recv)));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region_id, peer3_store_id)
+            .msg_type(MessageType::MsgTimeoutNow)
+            .direction(Direction::Recv),
+    ));
 
     // Issue a transfer leader request to transfer leader from `peer` to `peer3`.
     cluster.transfer_leader(region_id, peer3);
@@ -368,10 +383,12 @@ fn test_node_callback_when_destroyed() {
     let req = new_admin_request(1, &epoch, cc);
     // so the leader can't commit the conf change yet.
     let block = Arc::new(AtomicBool::new(true));
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, leader.get_store_id())
-        .msg_type(MessageType::MsgAppendResponse)
-        .direction(Direction::Recv)
-        .when(block.clone())));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, leader.get_store_id())
+            .msg_type(MessageType::MsgAppendResponse)
+            .direction(Direction::Recv)
+            .when(block.clone()),
+    ));
     let mut filter = LeaseReadFilter::default();
     filter.take = true;
     // so the leader can't perform read index.
@@ -382,10 +399,16 @@ fn test_node_callback_when_destroyed() {
     let get = new_get_cmd(b"k1");
     let req = new_request(1, epoch, vec![get], true);
     block.store(false, Ordering::SeqCst);
-    let resp = cluster.call_command_on_leader(req, Duration::from_secs(3)).unwrap();
-    assert!(!filter.ctx.rl().is_empty(),
-            "read index should be performed");
-    assert!(resp.get_header().get_error().has_region_not_found(),
-            "{:?}",
-            resp);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(
+        !filter.ctx.rl().is_empty(),
+        "read index should be performed"
+    );
+    assert!(
+        resp.get_header().get_error().has_region_not_found(),
+        "{:?}",
+        resp
+    );
 }

@@ -62,7 +62,9 @@ impl Config {
         if !self.raft_data_dir.is_empty() {
             self.raft_data_dir = try!(config::canonicalize_path(&self.raft_data_dir));
             if self.data_dir == self.raft_data_dir {
-                return Err("storage.data_dir and storage.raft_data_dir should not equal".into());
+                return Err(
+                    "storage.data_dir and storage.raft_data_dir should not equal".into(),
+                );
             }
         }
         Ok(())

@@ -22,7 +22,7 @@ use rocksdb::DB;
 use tempdir::TempDir;
 use futures::Future;
 
-use tikv::raftstore::{Result, Error};
+use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::*;
 use tikv::config::TiKvConfig;
 use tikv::storage::ALL_CFS;
@@ -33,7 +33,7 @@ use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::errorpb::Error as PbError;
 use tikv::pd::PdClient;
-use tikv::util::{HandyRwLock, escape, rocksdb};
+use tikv::util::{escape, rocksdb, HandyRwLock};
 use tikv::util::transport::SendCh;
 use super::pd::TestPdClient;
 use tikv::raftstore::store::keys::data_key;
@@ -50,19 +50,21 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(&mut self,
-                node_id: u64,
-                cfg: TiKvConfig,
-                engine: Arc<DB>,
-                raft_engine: Arc<DB>)
-                -> u64;
+    fn run_node(
+        &mut self,
+        node_id: u64,
+        cfg: TiKvConfig,
+        engine: Arc<DB>,
+        raft_engine: Arc<DB>,
+    ) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
-    fn call_command_on_node(&self,
-                            node_id: u64,
-                            request: RaftCmdRequest,
-                            timeout: Duration)
-                            -> Result<RaftCmdResponse>;
+    fn call_command_on_node(
+        &self,
+        node_id: u64,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
@@ -92,12 +94,13 @@ pub struct Cluster<T: Simulator> {
 
 impl<T: Simulator> Cluster<T> {
     // Create the default Store cluster.
-    pub fn new(id: u64,
-               count: usize,
-               cfs: &[&str],
-               sim: Arc<RwLock<T>>,
-               pd_client: Arc<TestPdClient>)
-               -> Cluster<T> {
+    pub fn new(
+        id: u64,
+        count: usize,
+        cfs: &[&str],
+        sim: Arc<RwLock<T>>,
+        pd_client: Arc<TestPdClient>,
+    ) -> Cluster<T> {
         let mut c = Cluster {
             cfg: new_tikv_config(id),
             leaders: HashMap::new(),
@@ -126,11 +129,13 @@ impl<T: Simulator> Cluster<T> {
         kv_cfs.extend_from_slice(ALL_CFS);
         kv_cfs.extend_from_slice(cfs);
         for item in &self.paths {
-            let engine = Arc::new(rocksdb::new_engine(item.path().to_str().unwrap(), &kv_cfs)
-                .unwrap());
+            let engine = Arc::new(
+                rocksdb::new_engine(item.path().to_str().unwrap(), &kv_cfs).unwrap(),
+            );
             let raft_path = item.path().join(Path::new("raft"));
-            let raft_engine = Arc::new(rocksdb::new_engine(raft_path.to_str().unwrap(), &[])
-                .unwrap());
+            let raft_engine = Arc::new(
+                rocksdb::new_engine(raft_path.to_str().unwrap(), &[]).unwrap(),
+            );
             self.dbs.push(Engines::new(engine, raft_engine));
         }
     }
@@ -139,10 +144,12 @@ impl<T: Simulator> Cluster<T> {
         if self.engines.is_empty() {
             let mut sim = self.sim.wl();
             for engines in &self.dbs {
-                let node_id = sim.run_node(0,
-                                           self.cfg.clone(),
-                                           engines.engine.clone(),
-                                           engines.raft_engine.clone());
+                let node_id = sim.run_node(
+                    0,
+                    self.cfg.clone(),
+                    engines.engine.clone(),
+                    engines.raft_engine.clone(),
+                );
                 self.engines.insert(node_id, engines.clone());
             }
         } else {
@@ -172,10 +179,12 @@ impl<T: Simulator> Cluster<T> {
     pub fn run_node(&mut self, node_id: u64) {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
-        self.sim.wl().run_node(node_id,
-                               self.cfg.clone(),
-                               engines.engine,
-                               engines.raft_engine);
+        self.sim.wl().run_node(
+            node_id,
+            self.cfg.clone(),
+            engines.engine,
+            engines.raft_engine,
+        );
         debug!("node {} started", node_id);
     }
 
@@ -197,12 +206,16 @@ impl<T: Simulator> Cluster<T> {
         self.sim.wl().send_raft_msg(msg)
     }
 
-    pub fn call_command_on_node(&self,
-                                node_id: u64,
-                                request: RaftCmdRequest,
-                                timeout: Duration)
-                                -> Result<RaftCmdResponse> {
-        match self.sim.rl().call_command_on_node(node_id, request.clone(), timeout) {
+    pub fn call_command_on_node(
+        &self,
+        node_id: u64,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        match self.sim
+            .rl()
+            .call_command_on_node(node_id, request.clone(), timeout)
+        {
             Err(e) => {
                 warn!("failed to call command {:?}: {:?}", request, e);
                 Err(e)
@@ -211,10 +224,11 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn call_command(&self,
-                        request: RaftCmdRequest,
-                        timeout: Duration)
-                        -> Result<RaftCmdResponse> {
+    pub fn call_command(
+        &self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
         match self.sim.rl().call_command(request.clone(), timeout) {
             Err(e) => {
                 warn!("failed to call command {:?}: {:?}", request, e);
@@ -224,10 +238,11 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn call_command_on_leader(&mut self,
-                                  mut request: RaftCmdRequest,
-                                  timeout: Duration)
-                                  -> Result<RaftCmdResponse> {
+    pub fn call_command_on_leader(
+        &mut self,
+        mut request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
         let mut retry_cnt = 0;
         let region_id = request.get_header().get_region_id();
         loop {
@@ -242,8 +257,10 @@ impl<T: Simulator> Cluster<T> {
             };
             if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
                 retry_cnt += 1;
-                warn!("{:?} is no longer leader, let's retry",
-                      request.get_header().get_peer());
+                warn!(
+                    "{:?} is no longer leader, let's retry",
+                    request.get_header().get_peer()
+                );
                 continue;
             }
             return Ok(resp);
@@ -264,14 +281,21 @@ impl<T: Simulator> Cluster<T> {
             .get_region_by_id(region_id)
             .wait()
             .unwrap()
-            .map(|region| region.get_peers().into_iter().map(|p| p.get_store_id()).collect())
+            .map(|region| {
+                region
+                    .get_peers()
+                    .into_iter()
+                    .map(|p| p.get_store_id())
+                    .collect()
+            })
     }
 
     pub fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
         // To get region leader, we don't care real peer id, so use 0 instead.
         let peer = new_peer(store_id, 0);
         let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-        let mut resp = self.call_command(find_leader, Duration::from_secs(5)).unwrap();
+        let mut resp = self.call_command(find_leader, Duration::from_secs(5))
+            .unwrap();
         let mut region_leader = resp.take_status_response().take_region_leader();
         // NOTE: node id can't be 0.
         if self.valid_leader_id(region_id, region_leader.get_leader().get_store_id()) {
@@ -409,7 +433,9 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
 
         for &id in self.engines.keys() {
-            self.pd_client.put_store(new_store(id, "".to_owned())).unwrap();
+            self.pd_client
+                .put_store(new_store(id, "".to_owned()))
+                .unwrap();
         }
     }
 
@@ -435,9 +461,11 @@ impl<T: Simulator> Cluster<T> {
             }
         }
 
-        panic!("need at lease {} qualified stores, but only got {}",
-               half + 1,
-               qualified_cnt);
+        panic!(
+            "need at lease {} qualified stores, but only got {}",
+            half + 1,
+            qualified_cnt
+        );
     }
 
     pub fn shutdown(&mut self) {
@@ -485,19 +513,22 @@ impl<T: Simulator> Cluster<T> {
         true
     }
 
-    pub fn request(&mut self,
-                   key: &[u8],
-                   reqs: Vec<Request>,
-                   read_quorum: bool,
-                   timeout: Duration)
-                   -> RaftCmdResponse {
+    pub fn request(
+        &mut self,
+        key: &[u8],
+        reqs: Vec<Request>,
+        read_quorum: bool,
+        timeout: Duration,
+    ) -> RaftCmdResponse {
         for _ in 0..20 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
-            let req = new_request(region_id,
-                                  region.take_region_epoch(),
-                                  reqs.clone(),
-                                  read_quorum);
+            let req = new_request(
+                region_id,
+                region.take_region_epoch(),
+                reqs.clone(),
+                read_quorum,
+            );
             let result = self.call_command_on_leader(req, timeout);
 
             if let Err(Error::Timeout(_)) = result {
@@ -550,10 +581,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn get_impl(&mut self, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
-        let mut resp = self.request(key,
-                                    vec![new_get_cmd(key)],
-                                    read_quorum,
-                                    Duration::from_secs(5));
+        let mut resp = self.request(
+            key,
+            vec![new_get_cmd(key)],
+            read_quorum,
+            Duration::from_secs(5),
+        );
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -572,10 +605,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        let resp = self.request(key,
-                                vec![new_put_cf_cmd(cf, key, value)],
-                                false,
-                                Duration::from_secs(5));
+        let resp = self.request(
+            key,
+            vec![new_put_cf_cmd(cf, key, value)],
+            false,
+            Duration::from_secs(5),
+        );
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -584,10 +619,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError> {
-        let resp = self.request(key,
-                                vec![new_put_cf_cmd("default", key, value)],
-                                false,
-                                Duration::from_secs(5));
+        let resp = self.request(
+            key,
+            vec![new_put_cf_cmd("default", key, value)],
+            false,
+            Duration::from_secs(5),
+        );
         if resp.get_header().has_error() {
             Err(resp.get_header().get_error().clone())
         } else {
@@ -600,10 +637,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_delete_cf(&mut self, cf: &str, key: &[u8]) {
-        let resp = self.request(key,
-                                vec![new_delete_cmd(cf, key)],
-                                false,
-                                Duration::from_secs(5));
+        let resp = self.request(
+            key,
+            vec![new_delete_cmd(cf, key)],
+            false,
+            Duration::from_secs(5),
+        );
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -616,10 +655,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
-        let resp = self.request(start,
-                                vec![new_delete_range_cmd(cf, start, end)],
-                                false,
-                                Duration::from_secs(5));
+        let resp = self.request(
+            start,
+            vec![new_delete_range_cmd(cf, start, end)],
+            false,
+            Duration::from_secs(5),
+        );
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -672,10 +713,12 @@ impl<T: Simulator> Cluster<T> {
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
         let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
-        assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCmdType::TransferLeader,
-                   "{:?}",
-                   resp);
+        assert_eq!(
+            resp.get_admin_response().get_cmd_type(),
+            AdminCmdType::TransferLeader,
+            "{:?}",
+            resp
+        );
     }
 
     pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
@@ -710,13 +753,15 @@ impl<T: Simulator> Cluster<T> {
         // Now we can't control split easily in pd, so here we use store send channel
         // directly to send the AskSplit request.
         let leader = self.leader_of_region(region.get_id()).unwrap();
-        let ch = self.sim.rl().get_store_sendch(leader.get_store_id()).unwrap();
-        ch.try_send(Msg::SplitCheckResult {
-                region_id: region.get_id(),
-                epoch: region.get_region_epoch().clone(),
-                split_key: data_key(split_key),
-            })
+        let ch = self.sim
+            .rl()
+            .get_store_sendch(leader.get_store_id())
             .unwrap();
+        ch.try_send(Msg::SplitCheckResult {
+            region_id: region.get_id(),
+            epoch: region.get_region_epoch().clone(),
+            split_key: data_key(split_key),
+        }).unwrap();
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
@@ -730,14 +775,17 @@ impl<T: Simulator> Cluster<T> {
             }
 
             if self.pd_client.check_split(region, split_key) &&
-               self.pd_client.get_split_count() > split_count {
+                self.pd_client.get_split_count() > split_count
+            {
                 return;
             }
 
             if try_cnt > 250 {
-                panic!("region {:?} has not been split by {:?}",
-                       region,
-                       escape(split_key));
+                panic!(
+                    "region {:?} has not been split by {:?}",
+                    region,
+                    escape(split_key)
+                );
             }
             try_cnt += 1;
             sleep_ms(20);
@@ -750,17 +798,20 @@ impl<T: Simulator> Cluster<T> {
         loop {
             let find_leader =
                 new_status_request(region_id, new_peer(store_id, 0), new_region_leader_cmd());
-            let resp = self.call_command(find_leader, Duration::from_secs(5)).unwrap();
+            let resp = self.call_command(find_leader, Duration::from_secs(5))
+                .unwrap();
 
             if !is_error_response(&resp) {
                 return;
             }
 
             if try_cnt > 250 {
-                panic!("region {} doesn't exist on store {} after {} tries",
-                       region_id,
-                       store_id,
-                       try_cnt);
+                panic!(
+                    "region {} doesn't exist on store {} after {} tries",
+                    region_id,
+                    store_id,
+                    try_cnt
+                );
             }
             try_cnt += 1;
             sleep_ms(20);
@@ -773,12 +824,15 @@ impl<T: Simulator> Cluster<T> {
         loop {
             let peer = new_peer(store_id, 0);
             let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-            let resp = self.call_command(find_leader, Duration::from_secs(5)).unwrap();
+            let resp = self.call_command(find_leader, Duration::from_secs(5))
+                .unwrap();
 
             if is_error_response(&resp) {
-                assert!(resp.get_header().get_error().has_region_not_found(),
-                        "unexpected error resp: {:?}",
-                        resp);
+                assert!(
+                    resp.get_header().get_error().has_region_not_found(),
+                    "unexpected error resp: {:?}",
+                    resp
+                );
                 break;
             }
             if timer.elapsed() > Duration::from_secs(60) {

@@ -12,14 +12,14 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Display, Formatter};
 
 use futures::Future;
 use tokio_core::reactor::Handle;
 
 use kvproto::metapb;
 use kvproto::eraftpb::ConfChangeType;
-use kvproto::raft_cmdpb::{RaftCmdRequest, AdminRequest, AdminCmdType};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::pdpb;
 
@@ -64,25 +64,35 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::AskSplit { ref region, ref split_key, .. } => {
-                write!(f,
-                       "ask split region {} with key {}",
-                       region.get_id(),
-                       escape(split_key))
-            }
-            Task::Heartbeat { ref region, ref peer, .. } => {
-                write!(f,
-                       "heartbeat for region {:?}, leader {}",
-                       region,
-                       peer.get_id())
-            }
+            Task::AskSplit {
+                ref region,
+                ref split_key,
+                ..
+            } => write!(
+                f,
+                "ask split region {} with key {}",
+                region.get_id(),
+                escape(split_key)
+            ),
+            Task::Heartbeat {
+                ref region,
+                ref peer,
+                ..
+            } => write!(
+                f,
+                "heartbeat for region {:?}, leader {}",
+                region,
+                peer.get_id()
+            ),
             Task::StoreHeartbeat { ref stats } => write!(f, "store heartbeat stats: {:?}", stats),
-            Task::ReportSplit { ref left, ref right } => {
-                write!(f, "report split left {:?}, right {:?}", left, right)
-            }
-            Task::ValidatePeer { ref region, ref peer } => {
-                write!(f, "validate peer {:?} with region {:?}", peer, region)
-            }
+            Task::ReportSplit {
+                ref left,
+                ref right,
+            } => write!(f, "report split left {:?}, right {:?}", left, right),
+            Task::ValidatePeer {
+                ref region,
+                ref peer,
+            } => write!(f, "validate peer {:?} with region {:?}", peer, region),
         }
     }
 }
@@ -104,92 +114,110 @@ impl<T: PdClient> Runner<T> {
         }
     }
 
-    fn handle_ask_split(&self,
-                        handle: &Handle,
-                        region: metapb::Region,
-                        split_key: Vec<u8>,
-                        peer: metapb::Peer,
-                        right_derive: bool) {
-        PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "all"]).inc();
+    fn handle_ask_split(
+        &self,
+        handle: &Handle,
+        region: metapb::Region,
+        split_key: Vec<u8>,
+        peer: metapb::Peer,
+        right_derive: bool,
+    ) {
+        PD_REQ_COUNTER_VEC
+            .with_label_values(&["ask split", "all"])
+            .inc();
 
         let ch = self.ch.clone();
-        let f = self.pd_client
-            .ask_split(region.clone())
-            .then(move |resp| {
-                match resp {
-                    Ok(mut resp) => {
-                        info!("[region {}] try to split with new region id {} for region {:?}",
-                              region.get_id(),
-                              resp.get_new_region_id(),
-                              region);
-                        PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "success"]).inc();
+        let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
+            match resp {
+                Ok(mut resp) => {
+                    info!(
+                        "[region {}] try to split with new region id {} for region {:?}",
+                        region.get_id(),
+                        resp.get_new_region_id(),
+                        region
+                    );
+                    PD_REQ_COUNTER_VEC
+                        .with_label_values(&["ask split", "success"])
+                        .inc();
 
-                        let req = new_split_region_request(split_key,
-                                                           resp.get_new_region_id(),
-                                                           resp.take_new_peer_ids(),
-                                                           right_derive);
-                        send_admin_request(ch, region, peer, req);
-                    }
-                    Err(e) => {
-                        debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
-                    }
+                    let req = new_split_region_request(
+                        split_key,
+                        resp.get_new_region_id(),
+                        resp.take_new_peer_ids(),
+                        right_derive,
+                    );
+                    send_admin_request(ch, region, peer, req);
                 }
-                Ok(())
-            });
+                Err(e) => {
+                    debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
+                }
+            }
+            Ok(())
+        });
         handle.spawn(f)
     }
 
-    fn handle_heartbeat(&self,
-                        handle: &Handle,
-                        region: metapb::Region,
-                        peer: metapb::Peer,
-                        region_stat: RegionStat) {
-        PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
+    fn handle_heartbeat(
+        &self,
+        handle: &Handle,
+        region: metapb::Region,
+        peer: metapb::Peer,
+        region_stat: RegionStat,
+    ) {
+        PD_REQ_COUNTER_VEC
+            .with_label_values(&["heartbeat", "all"])
+            .inc();
 
         // Now we use put region protocol for heartbeat.
         let f = self.pd_client
             .region_heartbeat(region.clone(), peer.clone(), region_stat)
             .map_err(move |e| {
-                debug!("[region {}] failed to send heartbeat: {:?}",
-                       region.get_id(),
-                       e);
+                debug!(
+                    "[region {}] failed to send heartbeat: {:?}",
+                    region.get_id(),
+                    e
+                );
             });
         handle.spawn(f);
     }
 
     fn handle_store_heartbeat(&self, handle: &Handle, stats: pdpb::StoreStats) {
-        let f = self.pd_client
-            .store_heartbeat(stats)
-            .map_err(|e| {
-                error!("store heartbeat failed {:?}", e);
-            });
+        let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
+            error!("store heartbeat failed {:?}", e);
+        });
         handle.spawn(f);
     }
 
     fn handle_report_split(&self, handle: &Handle, left: metapb::Region, right: metapb::Region) {
-        PD_REQ_COUNTER_VEC.with_label_values(&["report split", "all"]).inc();
+        PD_REQ_COUNTER_VEC
+            .with_label_values(&["report split", "all"])
+            .inc();
 
-        let f = self.pd_client
-            .report_split(left, right)
-            .then(move |resp| {
-                match resp {
-                    Ok(_) => {
-                        PD_REQ_COUNTER_VEC.with_label_values(&["report split", "success"]).inc();
-                    }
-                    Err(e) => {
-                        error!("report split failed {:?}", e);
-                    }
+        let f = self.pd_client.report_split(left, right).then(move |resp| {
+            match resp {
+                Ok(_) => {
+                    PD_REQ_COUNTER_VEC
+                        .with_label_values(&["report split", "success"])
+                        .inc();
                 }
-                Ok(())
-            });
+                Err(e) => {
+                    error!("report split failed {:?}", e);
+                }
+            }
+            Ok(())
+        });
         handle.spawn(f);
     }
 
-    fn handle_validate_peer(&self,
-                            handle: &Handle,
-                            local_region: metapb::Region,
-                            peer: metapb::Peer) {
-        PD_REQ_COUNTER_VEC.with_label_values(&["get region", "all"]).inc();
+    fn handle_validate_peer(
+        &self,
+        handle: &Handle,
+        local_region: metapb::Region,
+        peer: metapb::Peer,
+    ) {
+        PD_REQ_COUNTER_VEC
+            .with_label_values(&["get region", "all"])
+            .inc();
 
         let ch = self.ch.clone();
         let f = self.pd_client.get_region_by_id(local_region.get_id()).then(move |resp| {
@@ -249,38 +277,52 @@ impl<T: PdClient> Runner<T> {
         let store_id = self.store_id;
         let f = self.pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
-                PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
+                PD_REQ_COUNTER_VEC
+                    .with_label_values(&["heartbeat", "success"])
+                    .inc();
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
 
                 if resp.has_change_peer() {
-                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]).inc();
+                    PD_HEARTBEAT_COUNTER_VEC
+                        .with_label_values(&["change peer"])
+                        .inc();
 
                     let mut change_peer = resp.take_change_peer();
-                    info!("[region {}] try to change peer {:?} {:?}",
-                          region_id,
-                          change_peer.get_change_type(),
-                          change_peer.get_peer());
-                    let req = new_change_peer_request(change_peer.get_change_type().into(),
-                                                      change_peer.take_peer());
+                    info!(
+                        "[region {}] try to change peer {:?} {:?}",
+                        region_id,
+                        change_peer.get_change_type(),
+                        change_peer.get_peer()
+                    );
+                    let req = new_change_peer_request(
+                        change_peer.get_change_type().into(),
+                        change_peer.take_peer(),
+                    );
                     send_admin_request_raw(&ch, region_id, epoch, peer, req);
                 } else if resp.has_transfer_leader() {
-                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["transfer leader"]).inc();
+                    PD_HEARTBEAT_COUNTER_VEC
+                        .with_label_values(&["transfer leader"])
+                        .inc();
 
                     let mut transfer_leader = resp.take_transfer_leader();
-                    info!("[region {}] try to transfer leader from {:?} to {:?}",
-                          region_id,
-                          peer,
-                          transfer_leader.get_peer());
+                    info!(
+                        "[region {}] try to transfer leader from {:?} to {:?}",
+                        region_id,
+                        peer,
+                        transfer_leader.get_peer()
+                    );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     send_admin_request_raw(&ch, region_id, epoch, peer, req)
                 }
             })
             .map_err(|e| panic!("unexpected error: {:?}", e))
             .map(move |_| {
-                info!("[store {}] region heartbeat response handler exit.",
-                      store_id)
+                info!(
+                    "[store {}] region heartbeat response handler exit.",
+                    store_id
+                )
             });
         handle.spawn(f);
         self.is_hb_receiver_scheduled = true;
@@ -296,25 +338,32 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         }
 
         match task {
-            Task::AskSplit { region, split_key, peer, right_derive } => {
-                self.handle_ask_split(handle, region, split_key, peer, right_derive)
-            }
-            Task::Heartbeat { region,
-                              peer,
-                              down_peers,
-                              pending_peers,
-                              written_bytes,
-                              written_keys,
-                              approximate_size } => {
-                self.handle_heartbeat(handle,
-                                      region,
-                                      peer,
-                                      RegionStat::new(down_peers,
-                                                      pending_peers,
-                                                      written_bytes,
-                                                      written_keys,
-                                                      approximate_size))
-            }
+            Task::AskSplit {
+                region,
+                split_key,
+                peer,
+                right_derive,
+            } => self.handle_ask_split(handle, region, split_key, peer, right_derive),
+            Task::Heartbeat {
+                region,
+                peer,
+                down_peers,
+                pending_peers,
+                written_bytes,
+                written_keys,
+                approximate_size,
+            } => self.handle_heartbeat(
+                handle,
+                region,
+                peer,
+                RegionStat::new(
+                    down_peers,
+                    pending_peers,
+                    written_bytes,
+                    written_keys,
+                    approximate_size,
+                ),
+            ),
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(handle, stats),
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
@@ -330,11 +379,12 @@ fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> A
     req
 }
 
-fn new_split_region_request(split_key: Vec<u8>,
-                            new_region_id: u64,
-                            peer_ids: Vec<u64>,
-                            right_derive: bool)
-                            -> AdminRequest {
+fn new_split_region_request(
+    split_key: Vec<u8>,
+    new_region_id: u64,
+    peer_ids: Vec<u64>,
+    right_derive: bool,
+) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::Split);
     req.mut_split().set_split_key(split_key);
@@ -351,20 +401,24 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     req
 }
 
-fn send_admin_request(ch: SendCh<Msg>,
-                      mut region: metapb::Region,
-                      peer: metapb::Peer,
-                      request: AdminRequest) {
+fn send_admin_request(
+    ch: SendCh<Msg>,
+    mut region: metapb::Region,
+    peer: metapb::Peer,
+    request: AdminRequest,
+) {
     let region_id = region.get_id();
     let epoch = region.take_region_epoch();
     send_admin_request_raw(&ch, region_id, epoch, peer, request)
 }
 
-fn send_admin_request_raw(ch: &SendCh<Msg>,
-                          region_id: u64,
-                          epoch: metapb::RegionEpoch,
-                          peer: metapb::Peer,
-                          request: AdminRequest) {
+fn send_admin_request_raw(
+    ch: &SendCh<Msg>,
+    region_id: u64,
+    epoch: metapb::RegionEpoch,
+    peer: metapb::Peer,
+    request: AdminRequest,
+) {
     let cmd_type = request.get_cmd_type();
 
     let mut req = RaftCmdRequest::new();
@@ -375,18 +429,22 @@ fn send_admin_request_raw(ch: &SendCh<Msg>,
     req.set_admin_request(request);
 
     if let Err(e) = ch.try_send(Msg::new_raft_cmd(req, Box::new(|_| {}))) {
-        error!("[region {}] send {:?} request err {:?}",
-               region_id,
-               cmd_type,
-               e);
+        error!(
+            "[region {}] send {:?} request err {:?}",
+            region_id,
+            cmd_type,
+            e
+        );
     }
 }
 
 // send a raft message to destroy the specified stale peer
-fn send_destroy_peer_message(ch: SendCh<Msg>,
-                             local_region: metapb::Region,
-                             peer: metapb::Peer,
-                             pd_region: metapb::Region) {
+fn send_destroy_peer_message(
+    ch: SendCh<Msg>,
+    local_region: metapb::Region,
+    peer: metapb::Peer,
+    pd_region: metapb::Region,
+) {
     let mut message = RaftMessage::new();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());
@@ -394,8 +452,10 @@ fn send_destroy_peer_message(ch: SendCh<Msg>,
     message.set_region_epoch(pd_region.get_region_epoch().clone());
     message.set_is_tombstone(true);
     if let Err(e) = ch.try_send(Msg::RaftMessage(message)) {
-        error!("send gc peer request to region {} err {:?}",
-               local_region.get_id(),
-               e)
+        error!(
+            "send gc peer request to region {} err {:?}",
+            local_region.get_id(),
+            e
+        )
     }
 }

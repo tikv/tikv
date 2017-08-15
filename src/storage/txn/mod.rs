@@ -18,7 +18,7 @@ mod latch;
 use std::error;
 use std::io::Error as IoError;
 
-pub use self::scheduler::{Scheduler, Msg, GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
+pub use self::scheduler::{Msg, Scheduler, GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::store::{SnapshotStore, StoreScanner};
 
 quick_error! {
@@ -70,15 +70,14 @@ impl Error {
             Error::Engine(ref e) => e.maybe_clone().map(Error::Engine),
             Error::Codec(ref e) => e.maybe_clone().map(Error::Codec),
             Error::Mvcc(ref e) => e.maybe_clone().map(Error::Mvcc),
-            Error::InvalidTxnTso { start_ts, commit_ts } => {
-                Some(Error::InvalidTxnTso {
-                    start_ts: start_ts,
-                    commit_ts: commit_ts,
-                })
-            }
-            Error::Other(_) |
-            Error::ProtoBuf(_) |
-            Error::Io(_) => None,
+            Error::InvalidTxnTso {
+                start_ts,
+                commit_ts,
+            } => Some(Error::InvalidTxnTso {
+                start_ts: start_ts,
+                commit_ts: commit_ts,
+            }),
+            Error::Other(_) | Error::ProtoBuf(_) | Error::Io(_) => None,
         }
     }
 }

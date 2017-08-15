@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{Result, Write, Read, BufRead, ErrorKind};
+use std::io::{BufRead, ErrorKind, Read, Result, Write};
 use std::fmt::{self, Debug, Formatter};
 use alloc::raw_vec::RawVec;
-use std::{cmp, ptr, slice, mem};
+use std::{cmp, mem, ptr, slice};
 
 use util::escape;
 
@@ -193,9 +193,11 @@ impl PipeBuffer {
                     if self.end >= self.start {
                         self.end = self.start - 1;
                     }
-                    ptr::copy(source,
-                              self.buf.ptr().offset(self.start as isize),
-                              right_len);
+                    ptr::copy(
+                        source,
+                        self.buf.ptr().offset(self.start as isize),
+                        right_len,
+                    );
                 }
             }
         }
@@ -334,7 +336,7 @@ impl PartialEq for PipeBuffer {
             mem::swap(&mut r1, &mut r2);
         }
         l1 == &l2[..l1.len()] && r1[..l2.len() - l1.len()] == l2[l1.len()..] &&
-        &r1[l2.len() - l1.len()..] == r2
+            &r1[l2.len() - l1.len()..] == r2
     }
 }
 
@@ -351,11 +353,13 @@ impl<'a> PartialEq<&'a [u8]> for PipeBuffer {
 
 impl Debug for PipeBuffer {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f,
-               "PipeBuffer [start: {}, end: {}, buf: {}]",
-               self.start,
-               self.end,
-               escape(unsafe { self.buf_as_slice() }))
+        write!(
+            f,
+            "PipeBuffer [start: {}, end: {}, buf: {}]",
+            self.start,
+            self.end,
+            escape(unsafe { self.buf_as_slice() })
+        )
     }
 }
 
@@ -509,12 +513,14 @@ mod tests {
                     if shrink > l {
                         assert_eq!(s, expect.as_slice());
                     } else {
-                        assert_eq!(s,
-                                   &expect[..shrink],
-                                   "l: {} pos: {} shrink: {}",
-                                   l,
-                                   pos,
-                                   shrink);
+                        assert_eq!(
+                            s,
+                            &expect[..shrink],
+                            "l: {} pos: {} shrink: {}",
+                            l,
+                            pos,
+                            shrink
+                        );
                     }
                 }
             }

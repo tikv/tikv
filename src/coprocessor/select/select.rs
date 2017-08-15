@@ -14,28 +14,28 @@
 use std::usize;
 use std::time::Instant;
 use std::rc::Rc;
-use tipb::select::{SelectRequest, SelectResponse, Chunk, RowMeta};
+use tipb::select::{Chunk, RowMeta, SelectRequest, SelectResponse};
 use tipb::schema::ColumnInfo;
-use tipb::expression::{Expr, ExprType, ByItem};
+use tipb::expression::{ByItem, Expr, ExprType};
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
-use kvproto::coprocessor::{Response, KeyRange};
+use kvproto::coprocessor::{KeyRange, Response};
 
-use coprocessor::codec::{table, datum, mysql};
+use coprocessor::codec::{datum, mysql, table};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::codec::datum::Datum;
 use coprocessor::metrics::*;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{REQ_TYPE_SELECT, REQ_TYPE_INDEX, SINGLE_GROUP, BATCH_ROW_COUNT,
-                            check_if_outdated, is_point, prefix_next, get_chunk, get_pk,
-                            to_pb_error};
+use coprocessor::endpoint::{check_if_outdated, get_chunk, get_pk, is_point, prefix_next,
+                            to_pb_error, BATCH_ROW_COUNT, REQ_TYPE_INDEX, REQ_TYPE_SELECT,
+                            SINGLE_GROUP};
 use util::{escape, Either};
 use util::time::duration_to_ms;
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::codec::number::NumberDecoder;
-use storage::{SnapshotStore, Key, ScanMode, Statistics};
+use storage::{Key, ScanMode, SnapshotStore, Statistics};
 
-use super::xeval::{Evaluator, EvalContext};
+use super::xeval::{EvalContext, Evaluator};
 use super::aggregate::{self, AggrFunc};
 use super::topn_heap::TopNHeap;
 
@@ -49,11 +49,12 @@ pub struct SelectContext<'a> {
 }
 
 impl<'a> SelectContext<'a> {
-    pub fn new(sel: SelectRequest,
-               snap: SnapshotStore<'a>,
-               deadline: Instant,
-               statistics: &'a mut Statistics)
-               -> Result<SelectContext<'a>> {
+    pub fn new(
+        sel: SelectRequest,
+        snap: SnapshotStore<'a>,
+        deadline: Instant,
+        statistics: &'a mut Statistics,
+    ) -> Result<SelectContext<'a>> {
         Ok(SelectContext {
             core: try!(SelectContextCore::new(sel)),
             snap: snap,
@@ -79,16 +80,14 @@ impl<'a> SelectContext<'a> {
                 let data = box_try!(sel_resp.write_to_bytes());
                 resp.set_data(data);
             }
-            Err(e) => {
-                if let Error::Other(_) = e {
-                    sel_resp.set_error(to_pb_error(&e));
-                    resp.set_data(box_try!(sel_resp.write_to_bytes()));
-                    resp.set_other_error(format!("{}", e));
-                    COPR_REQ_ERROR.with_label_values(&["other"]).inc();
-                } else {
-                    return Err(e);
-                }
-            }
+            Err(e) => if let Error::Other(_) = e {
+                sel_resp.set_error(to_pb_error(&e));
+                resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                resp.set_other_error(format!("{}", e));
+                COPR_REQ_ERROR.with_label_values(&["other"]).inc();
+            } else {
+                return Err(e);
+            },
         }
         Ok(resp)
     }
@@ -101,9 +100,11 @@ impl<'a> SelectContext<'a> {
             }
             let timer = Instant::now();
             let row_cnt = try!(self.get_rows_from_range(ran));
-            debug!("fetch {} rows takes {} ms",
-                   row_cnt,
-                   duration_to_ms(timer.elapsed()));
+            debug!(
+                "fetch {} rows takes {} ms",
+                row_cnt,
+                duration_to_ms(timer.elapsed())
+            );
             collected += row_cnt;
             try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
         }
@@ -127,8 +128,10 @@ impl<'a> SelectContext<'a> {
         let mut row_count = 0;
         if is_point(&range) {
             CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
-            let value = match try!(self.snap
-                .get(&Key::from_raw(range.get_start()), &mut self.statistics)) {
+            let value = match try!(
+                self.snap
+                    .get(&Key::from_raw(range.get_start()), &mut self.statistics)
+            ) {
                 None => return Ok(0),
                 Some(v) => v,
             };
@@ -150,14 +153,16 @@ impl<'a> SelectContext<'a> {
             } else {
                 None
             };
-            let mut scanner = try!(self.snap.scanner(if self.core.desc_scan {
-                                                         ScanMode::Backward
-                                                     } else {
-                                                         ScanMode::Forward
-                                                     },
-                                                     self.key_only(),
-                                                     upper_bound,
-                                                     self.statistics));
+            let mut scanner = try!(self.snap.scanner(
+                if self.core.desc_scan {
+                    ScanMode::Backward
+                } else {
+                    ScanMode::Forward
+                },
+                self.key_only(),
+                upper_bound,
+                self.statistics
+            ));
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
@@ -172,10 +177,12 @@ impl<'a> SelectContext<'a> {
                     None => break,
                 };
                 if range.get_start() > key.as_slice() || range.get_end() <= key.as_slice() {
-                    debug!("key: {} out of range [{}, {})",
-                           escape(&key),
-                           escape(range.get_start()),
-                           escape(range.get_end()));
+                    debug!(
+                        "key: {} out of range [{}, {})",
+                        escape(&key),
+                        escape(range.get_start()),
+                        escape(range.get_end())
+                    );
                     break;
                 }
                 let h = box_try!(table::decode_handle(&key));
@@ -225,14 +232,16 @@ impl<'a> SelectContext<'a> {
         } else {
             None
         };
-        let mut scanner = try!(self.snap.scanner(if self.core.desc_scan {
-                                                     ScanMode::Backward
-                                                 } else {
-                                                     ScanMode::Forward
-                                                 },
-                                                 self.key_only(),
-                                                 upper_bound,
-                                                 self.statistics));
+        let mut scanner = try!(self.snap.scanner(
+            if self.core.desc_scan {
+                ScanMode::Backward
+            } else {
+                ScanMode::Forward
+            },
+            self.key_only(),
+            upper_bound,
+            self.statistics
+        ));
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
                 try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
@@ -247,10 +256,12 @@ impl<'a> SelectContext<'a> {
                 None => break,
             };
             if r.get_start() > key.as_slice() || r.get_end() <= key.as_slice() {
-                debug!("key: {} out of range [{}, {})",
-                       escape(&key),
-                       escape(r.get_start()),
-                       escape(r.get_end()));
+                debug!(
+                    "key: {} out of range [{}, {})",
+                    escape(&key),
+                    escape(r.get_start()),
+                    escape(r.get_end())
+                );
                 break;
             }
             seek_key = if self.core.desc_scan {
@@ -326,14 +337,22 @@ impl SelectContextCore {
             let mut cond_col_map = HashMap::default();
             if sel.has_field_where() {
                 COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
-                try!(collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
+                try!(collect_col_in_expr(
+                    &mut cond_col_map,
+                    select_cols,
+                    sel.get_field_where()
+                ));
             }
             let mut aggr_cols_map = HashMap::default();
             for aggr in sel.get_aggregates() {
                 try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, aggr));
             }
             for item in sel.get_group_by() {
-                try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, item.get_expr()));
+                try!(collect_col_in_expr(
+                    &mut aggr_cols_map,
+                    select_cols,
+                    item.get_expr()
+                ));
             }
             if !aggr_cols_map.is_empty() {
                 for cond_col in cond_col_map.keys() {
@@ -346,7 +365,11 @@ impl SelectContextCore {
             // get topn cols
             let mut topn_col_map = HashMap::default();
             for item in sel.get_order_by() {
-                try!(collect_col_in_expr(&mut topn_col_map, select_cols, item.get_expr()))
+                try!(collect_col_in_expr(
+                    &mut topn_col_map,
+                    select_cols,
+                    item.get_expr()
+                ))
             }
             topn_cols = topn_col_map.into_iter().map(|(_, v)| v).collect();
             order_by_cols.extend_from_slice(sel.get_order_by())
@@ -374,12 +397,14 @@ impl SelectContextCore {
 
         let mut pk_col = None;
         let cols = if sel.has_table_info() {
-            Either::Left(sel.get_table_info()
-                .get_columns()
-                .iter()
-                .filter(|c| !c.get_pk_handle())
-                .map(|c| c.get_column_id())
-                .collect())
+            Either::Left(
+                sel.get_table_info()
+                    .get_columns()
+                    .iter()
+                    .filter(|c| !c.get_pk_handle())
+                    .map(|c| c.get_column_id())
+                    .collect(),
+            )
         } else {
             let cols = sel.get_index_info().get_columns();
             if cols.last().map_or(false, |c| c.get_pk_handle()) {
@@ -389,14 +414,19 @@ impl SelectContextCore {
         };
 
         let aggr = if !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty() {
-            COPR_EXECUTOR_COUNT.with_label_values(&["aggregation"]).inc();
+            COPR_EXECUTOR_COUNT
+                .with_label_values(&["aggregation"])
+                .inc();
             true
         } else {
             false
         };
 
         Ok(SelectContextCore {
-            ctx: Rc::new(box_try!(EvalContext::new(sel.get_time_zone_offset(), sel.get_flags()))),
+            ctx: Rc::new(box_try!(EvalContext::new(
+                sel.get_time_zone_offset(),
+                sel.get_flags()
+            ))),
             aggr: aggr,
             aggr_cols: aggr_cols,
             topn_cols: topn_cols,
@@ -446,14 +476,26 @@ impl SelectContextCore {
         if !self.sel.has_field_where() {
             return Ok(false);
         }
-        try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.cond_cols, h));
+        try!(inflate_with_col(
+            &mut self.eval,
+            &self.ctx,
+            values,
+            &self.cond_cols,
+            h
+        ));
         let res = box_try!(self.eval.eval(&self.ctx, self.sel.get_field_where()));
         let b = box_try!(res.into_bool(&self.ctx));
         Ok(b.map_or(true, |v| !v))
     }
 
     fn collect_topn_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
-        try!(inflate_with_col(&mut self.eval, &self.ctx, &values, &self.topn_cols, h));
+        try!(inflate_with_col(
+            &mut self.eval,
+            &self.ctx,
+            &values,
+            &self.topn_cols,
+            h
+        ));
         let mut sort_keys = Vec::with_capacity(self.sel.get_order_by().len());
         // parse order by
         for col in self.sel.get_order_by() {
@@ -461,11 +503,13 @@ impl SelectContextCore {
             sort_keys.push(v);
         }
 
-        self.topn_heap.as_mut().unwrap().try_add_row(h,
-                                                     values,
-                                                     sort_keys,
-                                                     self.order_cols.clone(),
-                                                     self.ctx.clone())
+        self.topn_heap.as_mut().unwrap().try_add_row(
+            h,
+            values,
+            sort_keys,
+            self.order_cols.clone(),
+            self.ctx.clone(),
+        )
     }
 
     fn get_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
@@ -483,13 +527,23 @@ impl SelectContextCore {
                 continue;
             }
             if col.get_pk_handle() {
-                box_try!(datum::encode_to(chunk.mut_rows_data(), &[get_pk(col, h)], false));
+                box_try!(datum::encode_to(
+                    chunk.mut_rows_data(),
+                    &[get_pk(col, h)],
+                    false
+                ));
             } else if col.has_default_val() {
-                chunk.mut_rows_data().extend_from_slice(col.get_default_val());
+                chunk
+                    .mut_rows_data()
+                    .extend_from_slice(col.get_default_val());
             } else if mysql::has_not_null_flag(col.get_flag() as u64) {
                 return Err(box_err!("column {} of {} is missing", col_id, h));
             } else {
-                box_try!(datum::encode_to(chunk.mut_rows_data(), &[Datum::Null], false));
+                box_try!(datum::encode_to(
+                    chunk.mut_rows_data(),
+                    &[Datum::Null],
+                    false
+                ));
             }
         }
         let mut meta = RowMeta::new();
@@ -514,7 +568,13 @@ impl SelectContextCore {
     }
 
     fn aggregate(&mut self, h: i64, values: &RowColsDict) -> Result<()> {
-        try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.aggr_cols, h));
+        try!(inflate_with_col(
+            &mut self.eval,
+            &self.ctx,
+            values,
+            &self.aggr_cols,
+            h
+        ));
         let gk = Rc::new(try!(self.get_group_key()));
         let aggr_exprs = self.sel.get_aggregates();
         match self.gk_aggrs.entry(gk.clone()) {
@@ -556,8 +616,9 @@ impl SelectContextCore {
     /// Rows: groupKey1, count1, value2, count3, value3
     ///       groupKey2, count1, value2, count3, value3
     fn aggr_rows(&mut self) -> Result<()> {
-        self.chunks = Vec::with_capacity((self.gk_aggrs.len() + BATCH_ROW_COUNT - 1) /
-                                         BATCH_ROW_COUNT);
+        self.chunks = Vec::with_capacity(
+            (self.gk_aggrs.len() + BATCH_ROW_COUNT - 1) / BATCH_ROW_COUNT,
+        );
         // Each aggregate partial result will be converted to two datum.
         let mut row_data = Vec::with_capacity(1 + 2 * self.sel.get_aggregates().len());
         for gk in self.gks.drain(..) {
@@ -580,10 +641,11 @@ impl SelectContextCore {
     }
 }
 
-fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
-                       col_meta: &[ColumnInfo],
-                       expr: &Expr)
-                       -> Result<()> {
+fn collect_col_in_expr(
+    cols: &mut HashMap<i64, ColumnInfo>,
+    col_meta: &[ColumnInfo],
+    expr: &Expr,
+) -> Result<()> {
     if expr.get_tp() == ExprType::ColumnRef {
         let i = box_try!(expr.get_val().decode_i64());
         if let Entry::Vacant(e) = cols.entry(i) {
@@ -603,13 +665,15 @@ fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
 }
 
 #[inline]
-fn inflate_with_col<'a, T>(eval: &mut Evaluator,
-                           ctx: &EvalContext,
-                           values: &RowColsDict,
-                           cols: T,
-                           h: i64)
-                           -> Result<()>
-    where T: IntoIterator<Item = &'a ColumnInfo>
+fn inflate_with_col<'a, T>(
+    eval: &mut Evaluator,
+    ctx: &EvalContext,
+    values: &RowColsDict,
+    cols: T,
+    h: i64,
+) -> Result<()>
+where
+    T: IntoIterator<Item = &'a ColumnInfo>,
 {
     for col in cols {
         let col_id = col.get_column_id();

@@ -36,13 +36,14 @@ pub struct SortRow {
 }
 
 impl SortRow {
-    fn new(handle: i64,
-           data: RowColsDict,
-           key: Vec<Datum>,
-           order_cols: Rc<Vec<ByItem>>,
-           ctx: Rc<EvalContext>,
-           err: Rc<RefCell<Option<String>>>)
-           -> SortRow {
+    fn new(
+        handle: i64,
+        data: RowColsDict,
+        key: Vec<Datum>,
+        order_cols: Rc<Vec<ByItem>>,
+        ctx: Rc<EvalContext>,
+        err: Rc<RefCell<Option<String>>>,
+    ) -> SortRow {
         SortRow {
             handle: handle,
             data: data,
@@ -117,13 +118,14 @@ impl TopNHeap {
         Ok(())
     }
 
-    pub fn try_add_row(&mut self,
-                       handle: i64,
-                       data: RowColsDict,
-                       values: Vec<Datum>,
-                       order_cols: Rc<Vec<ByItem>>,
-                       ctx: Rc<EvalContext>)
-                       -> Result<()> {
+    pub fn try_add_row(
+        &mut self,
+        handle: i64,
+        data: RowColsDict,
+        values: Vec<Datum>,
+        order_cols: Rc<Vec<ByItem>>,
+        ctx: Rc<EvalContext>,
+    ) -> Result<()> {
         let row = SortRow::new(handle, data, values, order_cols, ctx, self.err.clone());
         // push into heap when heap is not full
         if self.rows.len() < self.limit {
@@ -177,7 +179,7 @@ impl PartialOrd for SortRow {
 mod tests {
     use std::rc::Rc;
 
-    use tipb::expression::{Expr, ExprType, ByItem};
+    use tipb::expression::{ByItem, Expr, ExprType};
 
     use util::collections::HashMap;
     use util::codec::number::*;
@@ -207,32 +209,100 @@ mod tests {
         let mut topn_heap = TopNHeap::new(5).unwrap();
         let test_data = vec![
             (1, String::from("data1"), Datum::Null, Datum::I64(1)),
-            (2, String::from("data2"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
-            (5, String::from("data5"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(6)),
-            (6, String::from("data6"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(4)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+            (
+                2,
+                String::from("data2"),
+                Datum::Bytes(b"name:0".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                3,
+                String::from("data3"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                4,
+                String::from("data4"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                5,
+                String::from("data5"),
+                Datum::Bytes(b"name:0".to_vec()),
+                Datum::I64(6),
+            ),
+            (
+                6,
+                String::from("data6"),
+                Datum::Bytes(b"name:0".to_vec()),
+                Datum::I64(4),
+            ),
+            (
+                7,
+                String::from("data7"),
+                Datum::Bytes(b"name:7".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                8,
+                String::from("data8"),
+                Datum::Bytes(b"name:8".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                9,
+                String::from("data9"),
+                Datum::Bytes(b"name:9".to_vec()),
+                Datum::I64(2),
+            ),
         ];
 
         let exp = vec![
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+            (
+                9,
+                String::from("data9"),
+                Datum::Bytes(b"name:9".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                8,
+                String::from("data8"),
+                Datum::Bytes(b"name:8".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                7,
+                String::from("data7"),
+                Datum::Bytes(b"name:7".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                3,
+                String::from("data3"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                4,
+                String::from("data4"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(2),
+            ),
         ];
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
-            topn_heap.try_add_row(handle as i64,
-                             row_data,
-                             cur_key,
-                             order_cols.clone(),
-                             ctx.clone())
+            topn_heap
+                .try_add_row(
+                    handle as i64,
+                    row_data,
+                    cur_key,
+                    order_cols.clone(),
+                    ctx.clone(),
+                )
                 .unwrap();
         }
         let result = topn_heap.into_sorted_vec().unwrap();
@@ -255,27 +325,36 @@ mod tests {
 
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
-        topn_heap.try_add_row(0 as i64, row_data, std_key, order_cols.clone(), ctx.clone())
+        topn_heap
+            .try_add_row(0 as i64, row_data, std_key, order_cols.clone(), ctx.clone())
             .unwrap();
 
         let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
         let row_data2 = RowColsDict::new(HashMap::default(), b"name:2".to_vec());
-        topn_heap.try_add_row(0 as i64,
-                         row_data2,
-                         std_key2,
-                         order_cols.clone(),
-                         ctx.clone())
+        topn_heap
+            .try_add_row(
+                0 as i64,
+                row_data2,
+                std_key2,
+                order_cols.clone(),
+                ctx.clone(),
+            )
             .unwrap();
 
         let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
         let row_data3 = RowColsDict::new(HashMap::default(), b"name:3".to_vec());
 
-        assert!(topn_heap.try_add_row(0 as i64,
-                         row_data3,
-                         bad_key1,
-                         order_cols.clone(),
-                         ctx.clone())
-            .is_err());
+        assert!(
+            topn_heap
+                .try_add_row(
+                    0 as i64,
+                    row_data3,
+                    bad_key1,
+                    order_cols.clone(),
+                    ctx.clone()
+                )
+                .is_err()
+        );
 
         assert!(topn_heap.into_sorted_vec().is_err());
     }
@@ -289,29 +368,82 @@ mod tests {
         let ctx = Rc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(10).unwrap();
         let test_data = vec![
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+            (
+                3,
+                String::from("data3"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                4,
+                String::from("data4"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                7,
+                String::from("data7"),
+                Datum::Bytes(b"name:7".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                8,
+                String::from("data8"),
+                Datum::Bytes(b"name:8".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                9,
+                String::from("data9"),
+                Datum::Bytes(b"name:9".to_vec()),
+                Datum::I64(2),
+            ),
         ];
 
         let exp = vec![
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+            (
+                9,
+                String::from("data9"),
+                Datum::Bytes(b"name:9".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                8,
+                String::from("data8"),
+                Datum::Bytes(b"name:8".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                7,
+                String::from("data7"),
+                Datum::Bytes(b"name:7".to_vec()),
+                Datum::I64(2),
+            ),
+            (
+                3,
+                String::from("data3"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                4,
+                String::from("data4"),
+                Datum::Bytes(b"name:3".to_vec()),
+                Datum::I64(2),
+            ),
         ];
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
-            topn_heap.try_add_row(handle as i64,
-                             row_data,
-                             cur_key,
-                             order_cols.clone(),
-                             ctx.clone())
+            topn_heap
+                .try_add_row(
+                    handle as i64,
+                    row_data,
+                    cur_key,
+                    order_cols.clone(),
+                    ctx.clone(),
+                )
                 .unwrap();
         }
 
