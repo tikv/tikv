@@ -11,12 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod compare;
+
 use std::io;
 use std::convert::TryFrom;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::Datum;
 use util;
@@ -91,8 +93,76 @@ impl Expression {
         })
     }
 
+    fn get_tp(&self) -> &FieldType {
+        match *self {
+            Expression::Constant(ref c) => &c.tp,
+            Expression::ColumnRef(ref c) => &c.tp,
+            Expression::ScalarFn(ref c) => &c.tp,
+        }
+    }
+
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+        match *self {
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::LTInt |
+                ScalarFuncSig::LEInt |
+                ScalarFuncSig::GTInt |
+                ScalarFuncSig::GEInt |
+                ScalarFuncSig::EQInt |
+                ScalarFuncSig::NEInt |
+                ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, f.sig),
+
+                ScalarFuncSig::LTReal |
+                ScalarFuncSig::LEReal |
+                ScalarFuncSig::GTReal |
+                ScalarFuncSig::GEReal |
+                ScalarFuncSig::EQReal |
+                ScalarFuncSig::NEReal |
+                ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, f.sig),
+
+                ScalarFuncSig::LTDecimal |
+                ScalarFuncSig::LEDecimal |
+                ScalarFuncSig::GTDecimal |
+                ScalarFuncSig::GEDecimal |
+                ScalarFuncSig::EQDecimal |
+                ScalarFuncSig::NEDecimal |
+                ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, f.sig),
+
+                ScalarFuncSig::LTString |
+                ScalarFuncSig::LEString |
+                ScalarFuncSig::GTString |
+                ScalarFuncSig::GEString |
+                ScalarFuncSig::EQString |
+                ScalarFuncSig::NEString |
+                ScalarFuncSig::NullEQString => f.compare_string(ctx, row, f.sig),
+
+                ScalarFuncSig::LTTime |
+                ScalarFuncSig::LETime |
+                ScalarFuncSig::GTTime |
+                ScalarFuncSig::GETime |
+                ScalarFuncSig::EQTime |
+                ScalarFuncSig::NETime |
+                ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, f.sig),
+
+                ScalarFuncSig::LTDuration |
+                ScalarFuncSig::LEDuration |
+                ScalarFuncSig::GTDuration |
+                ScalarFuncSig::GEDuration |
+                ScalarFuncSig::EQDuration |
+                ScalarFuncSig::NEDuration |
+                ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, f.sig),
+
+                ScalarFuncSig::LTJson |
+                ScalarFuncSig::LEJson |
+                ScalarFuncSig::GTJson |
+                ScalarFuncSig::GEJson |
+                ScalarFuncSig::EQJson |
+                ScalarFuncSig::NEJson |
+                ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, f.sig),
+                _ => Err(Error::Other("Unknown signature")),
+            },
+            _ => unimplemented!(),
+        }
     }
 
     fn eval_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -115,12 +185,8 @@ impl Expression {
         unimplemented!()
     }
 
-    fn get_tp(&self) -> &FieldType {
-        match *self {
-            Expression::Constant(ref c) => &c.tp,
-            Expression::ColumnRef(ref c) => &c.tp,
-            Expression::ScalarFn(ref c) => &c.tp,
-        }
+    fn eval_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
+        unimplemented!()
     }
 }
 
@@ -190,7 +256,6 @@ impl TryFrom<Expr> for Expression {
         }
     }
 }
-
 
 #[test]
 fn test_smoke() {
