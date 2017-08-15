@@ -17,7 +17,6 @@ use sys_info;
 
 use util::config;
 
-pub const DEFAULT_DATA_DIR: &'static str = "";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
@@ -41,7 +40,7 @@ impl Default for Config {
     fn default() -> Config {
         let total_cpu = sys_info::cpu_num().unwrap();
         Config {
-            data_dir: DEFAULT_DATA_DIR.to_owned(),
+            data_dir: "".to_owned(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             scheduler_notify_capacity: DEFAULT_SCHED_CAPACITY,
             scheduler_messages_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
@@ -54,9 +53,11 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
-        if self.data_dir != DEFAULT_DATA_DIR {
-            self.data_dir = try!(config::canonicalize_path(&self.data_dir))
+        if self.data_dir.is_empty() {
+            return Err(From::from("data dir can not be empty"));
         }
+
+        self.data_dir = try!(config::canonicalize_path(&self.data_dir));
         Ok(())
     }
 }

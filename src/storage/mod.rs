@@ -30,7 +30,7 @@ pub mod config;
 pub mod types;
 mod metrics;
 
-pub use self::config::{Config, DEFAULT_DATA_DIR};
+pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cursor,
                        Error as EngineError, ScanMode, Statistics, CFStatistics};
 pub use self::engine::raftkv::RaftKv;

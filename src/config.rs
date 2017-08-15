@@ -23,7 +23,7 @@ use sys_info;
 use server::Config as ServerConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
-use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, DEFAULT_DATA_DIR};
+use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use util::config::{self, ReadableDuration, ReadableSize, KB, MB, GB, compression_type_level_serde};
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
 use util::rocksdb::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -485,7 +485,7 @@ impl Default for TiKvConfig {
 impl TiKvConfig {
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
         try!(self.storage.validate());
-        if self.rocksdb.backup_dir.is_empty() && self.storage.data_dir != DEFAULT_DATA_DIR {
+        if self.rocksdb.backup_dir.is_empty() {
             self.rocksdb.backup_dir =
                 format!("{}",
                         Path::new(&self.storage.data_dir).join("backup").display());

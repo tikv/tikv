@@ -37,7 +37,7 @@ labels = {}
 
 [storage]
 # set the path to rocksdb directory.
-data-dir = "/tmp/tikv/store"
+# data-dir = "/tmp/tikv/store"
 # notify capacity of scheduler's channel
 # scheduler-notify-capacity = 10240
 
