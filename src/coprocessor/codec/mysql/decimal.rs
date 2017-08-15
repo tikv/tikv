@@ -1013,9 +1013,9 @@ impl Decimal {
         }
 
         let tmp = self.clone();
-        let ret = self.round(frac as i8, RoundMode::HalfEven).unwrap();
+        let ret = self.round(decimal as i8, RoundMode::HalfEven).unwrap();
         // TODO: process over_flow
-        if !ret.is_zero() && frac > decimal && !ret.eq(&tmp) {
+        if !ret.is_zero() && frac > decimal && ret != tmp {
             // TODO handle InInsertStmt in ctx
             try!(convert::handle_truncate(ctx, true));
         }
