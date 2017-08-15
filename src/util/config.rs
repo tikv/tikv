@@ -19,10 +19,10 @@ use std::str::{self, FromStr};
 use std::ascii::AsciiExt;
 use std::time::Duration;
 use std::net::{SocketAddrV4, SocketAddrV6};
-use std::ops::{Mul, Div};
+use std::ops::{Div, Mul};
 
 use url;
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::{self, Unexpected, Visitor};
 
 use util;
@@ -52,14 +52,15 @@ quick_error! {
 pub mod compression_type_level_serde {
     use std::fmt;
 
-    use serde::{Serializer, Deserializer};
-    use serde::de::{SeqAccess, Visitor, Error, Unexpected};
+    use serde::{Deserializer, Serializer};
+    use serde::de::{Error, SeqAccess, Unexpected, Visitor};
     use serde::ser::SerializeSeq;
 
     use rocksdb::DBCompressionType;
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
+    where
+        S: Serializer,
     {
         let mut s = try!(serializer.serialize_seq(Some(ts.len())));
         for t in ts {
@@ -80,7 +81,8 @@ pub mod compression_type_level_serde {
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[DBCompressionType; 7], D::Error>
-        where D: Deserializer<'de>
+    where
+        D: Deserializer<'de>,
     {
         struct SeqVisitor;
         impl<'de> Visitor<'de> for SeqVisitor {
@@ -91,14 +93,17 @@ pub mod compression_type_level_serde {
             }
 
             fn visit_seq<S>(self, mut seq: S) -> Result<[DBCompressionType; 7], S::Error>
-                where S: SeqAccess<'de>
+            where
+                S: SeqAccess<'de>,
             {
                 let mut seqs = [DBCompressionType::No; 7];
                 let mut i = 0;
                 while let Some(value) = try!(seq.next_element::<String>()) {
                     if i == 7 {
-                        return Err(S::Error::invalid_value(Unexpected::Str(&value),
-                                                           &"only 7 compression types"));
+                        return Err(S::Error::invalid_value(
+                            Unexpected::Str(&value),
+                            &"only 7 compression types",
+                        ));
                     }
                     seqs[i] = match &*value.trim().to_lowercase() {
                         "no" => DBCompressionType::No,
@@ -111,8 +116,10 @@ pub mod compression_type_level_serde {
                         "zstd-not-final" => DBCompressionType::ZstdNotFinal,
                         "disable" => DBCompressionType::Disable,
                         _ => {
-                            return Err(S::Error::invalid_value(Unexpected::Str(&value),
-                                                               &"invalid compression type"))
+                            return Err(S::Error::invalid_value(
+                                Unexpected::Str(&value),
+                                &"invalid compression type",
+                            ))
                         }
                     };
                     i += 1;
@@ -133,16 +140,17 @@ pub mod order_map_serde {
     use std::hash::Hash;
     use std::marker::PhantomData;
 
-    use serde::{Serialize, Serializer, Deserialize, Deserializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde::de::{MapAccess, Visitor};
     use serde::ser::SerializeMap;
 
     use util::collections::HashMap;
 
     pub fn serialize<S, K, V>(m: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer,
-              K: Serialize + Hash + Eq,
-              V: Serialize
+    where
+        S: Serializer,
+        K: Serialize + Hash + Eq,
+        V: Serialize,
     {
         let mut s = try!(serializer.serialize_map(Some(m.len())));
         for (k, v) in m {
@@ -152,17 +160,19 @@ pub mod order_map_serde {
     }
 
     pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
-        where D: Deserializer<'de>,
-              K: Deserialize<'de> + Eq + Hash,
-              V: Deserialize<'de>
+    where
+        D: Deserializer<'de>,
+        K: Deserialize<'de> + Eq + Hash,
+        V: Deserialize<'de>,
     {
         struct MapVisitor<K, V> {
             phantom: PhantomData<HashMap<K, V>>,
         }
 
         impl<'de, K, V> Visitor<'de> for MapVisitor<K, V>
-            where K: Deserialize<'de> + Eq + Hash,
-                  V: Deserialize<'de>
+        where
+            K: Deserialize<'de> + Eq + Hash,
+            V: Deserialize<'de>,
         {
             type Value = HashMap<K, V>;
 
@@ -171,7 +181,8 @@ pub mod order_map_serde {
             }
 
             fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
-                where M: MapAccess<'de>
+            where
+                M: MapAccess<'de>,
             {
                 let mut map = HashMap::with_capacity(access.size_hint().unwrap_or(0));
                 while let Some((key, value)) = access.next_entry()? {
@@ -181,7 +192,9 @@ pub mod order_map_serde {
             }
         }
 
-        deserializer.deserialize_map(MapVisitor { phantom: PhantomData })
+        deserializer.deserialize_map(MapVisitor {
+            phantom: PhantomData,
+        })
     }
 }
 
@@ -333,7 +346,8 @@ impl Mul<u64> for ReadableSize {
 
 impl Serialize for ReadableSize {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
+    where
+        S: Serializer,
     {
         let size = self.0;
         let mut buffer = String::new();
@@ -358,7 +372,8 @@ impl Serialize for ReadableSize {
 
 impl<'de> Deserialize<'de> for ReadableSize {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where D: Deserializer<'de>
+    where
+        D: Deserializer<'de>,
     {
         struct SizeVisitor;
 
@@ -370,7 +385,8 @@ impl<'de> Deserialize<'de> for ReadableSize {
             }
 
             fn visit_i64<E>(self, size: i64) -> Result<ReadableSize, E>
-                where E: de::Error
+            where
+                E: de::Error,
             {
                 if size >= 0 {
                     self.visit_u64(size as u64)
@@ -380,13 +396,15 @@ impl<'de> Deserialize<'de> for ReadableSize {
             }
 
             fn visit_u64<E>(self, size: u64) -> Result<ReadableSize, E>
-                where E: de::Error
+            where
+                E: de::Error,
             {
                 Ok(ReadableSize(size))
             }
 
             fn visit_str<E>(self, size_str: &str) -> Result<ReadableSize, E>
-                where E: de::Error
+            where
+                E: de::Error,
             {
                 let err_msg = "valid size, only KB, MB, GB, TB, PB are supported.";
                 let size_str = size_str.trim();
@@ -439,7 +457,10 @@ impl ReadableDuration {
     }
 
     pub fn millis(millis: u64) -> ReadableDuration {
-        ReadableDuration(Duration::new(millis / 1000, (millis % 1000) as u32 * 1_000_000))
+        ReadableDuration(Duration::new(
+            millis / 1000,
+            (millis % 1000) as u32 * 1_000_000,
+        ))
     }
 
     pub fn minutes(minutes: u64) -> ReadableDuration {
@@ -461,7 +482,8 @@ impl ReadableDuration {
 
 impl Serialize for ReadableDuration {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
+    where
+        S: Serializer,
     {
         let mut dur = util::time::duration_to_ms(self.0);
         let mut buffer = String::new();
@@ -489,7 +511,8 @@ impl Serialize for ReadableDuration {
 
 impl<'de> Deserialize<'de> for ReadableDuration {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where D: Deserializer<'de>
+    where
+        D: Deserializer<'de>,
     {
         struct DurVisitor;
 
@@ -501,7 +524,8 @@ impl<'de> Deserialize<'de> for ReadableDuration {
             }
 
             fn visit_str<E>(self, dur_str: &str) -> Result<ReadableDuration, E>
-                where E: de::Error
+            where
+                E: de::Error,
             {
                 let dur_str = dur_str.trim();
                 if !dur_str.is_ascii() {
@@ -527,8 +551,10 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                         u
                     };
                     if unit >= last_unit {
-                        return Err(E::invalid_value(Unexpected::Str(dur_str),
-                                                    &"h, m, s, ms should occur in giving order."));
+                        return Err(E::invalid_value(
+                            Unexpected::Str(dur_str),
+                            &"h, m, s, ms should occur in giving order.",
+                        ));
                     }
                     // do we need to check 12h360m?
                     let number_str = unsafe { str::from_utf8_unchecked(first) };
@@ -542,8 +568,10 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                     return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg));
                 }
                 if dur.is_sign_negative() {
-                    return Err(E::invalid_value(Unexpected::Str(dur_str),
-                                                &"duration should be positive."));
+                    return Err(E::invalid_value(
+                        Unexpected::Str(dur_str),
+                        &"duration should be positive.",
+                    ));
                 }
                 let secs = dur as u64 / SECOND as u64;
                 let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
@@ -591,10 +619,12 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
         if err == 0 {
             return Ok(());
         }
-        Err(ConfigError::Limit(format!("the maximum number of open file descriptors is too \
-                                        small, got {}, expect greater or equal to {}",
-                                       prev_limit,
-                                       expect)))
+        Err(ConfigError::Limit(format!(
+            "the maximum number of open file descriptors is too \
+             small, got {}, expect greater or equal to {}",
+            prev_limit,
+            expect
+        )))
     }
 }
 
@@ -614,18 +644,23 @@ mod check_kernel {
     pub type Checker = Fn(i64, i64) -> bool;
 
     // pub for tests.
-    pub fn check_kernel_params(param_path: &str,
-                               expect: i64,
-                               checker: Box<Checker>)
-                               -> Result<(), ConfigError> {
+    pub fn check_kernel_params(
+        param_path: &str,
+        expect: i64,
+        checker: Box<Checker>,
+    ) -> Result<(), ConfigError> {
         let mut buffer = String::new();
-        try!(fs::File::open(param_path)
-            .and_then(|mut f| f.read_to_string(&mut buffer))
-            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+        try!(
+            fs::File::open(param_path)
+                .and_then(|mut f| f.read_to_string(&mut buffer))
+                .map_err(|e| {
+                    ConfigError::Limit(format!("check_kernel_params failed {}", e))
+                })
+        );
 
-        let got = try!(buffer.trim_matches('\n')
-            .parse::<i64>()
-            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+        let got = try!(buffer.trim_matches('\n').parse::<i64>().map_err(|e| {
+            ConfigError::Limit(format!("check_kernel_params failed {}", e))
+        }));
 
         let mut param = String::new();
         // skip 3, ["", "proc", "sys", ...]
@@ -636,10 +671,12 @@ mod check_kernel {
         param.pop();
 
         if !checker(got, expect) {
-            return Err(ConfigError::Limit(format!("kernel parameters {} got {}, expect {}",
-                                                  param,
-                                                  got,
-                                                  expect)));
+            return Err(ConfigError::Limit(format!(
+                "kernel parameters {} got {}, expect {}",
+                param,
+                got,
+                expect
+            )));
         }
 
         info!("kernel parameters {}: {}", param, got);
@@ -655,11 +692,19 @@ mod check_kernel {
     pub fn check_kernel() -> Vec<ConfigError> {
         let params: Vec<(&str, i64, Box<Checker>)> = vec![
             // Check net.core.somaxconn.
-            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| got >= expect),
+            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| {
+                got >= expect
+            }),
             // Check net.ipv4.tcp_syncookies.
-            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| got == expect),
+            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| {
+                got == expect
+            }),
             // Check vm.swappiness.
-            ("/proc/sys/vm/swappiness", 0, box |got, expect| got == expect),
+            (
+                "/proc/sys/vm/swappiness",
+                0,
+                box |got, expect| got == expect,
+            ),
         ];
 
         let mut errors = Vec::with_capacity(params.len());
@@ -702,12 +747,14 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     }
 
     // Check Port.
-    let port: u16 = try!(parts[1]
-        .parse()
-        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))));
+    let port: u16 = try!(parts[1].parse().map_err(|_| {
+        ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
+    }));
     // Port = 0 is invalid.
     if port == 0 {
-        return Err(ConfigError::Address(format!("invalid addr, port can not be 0: {:?}", addr)));
+        return Err(ConfigError::Address(
+            format!("invalid addr, port can not be 0: {:?}", addr),
+        ));
     }
 
     // Check Host.
@@ -764,7 +811,9 @@ mod test {
             (11 * PB, "11PB"),
         ];
         for (size, exp) in legal_cases {
-            let c = SizeHolder { s: ReadableSize(size) };
+            let c = SizeHolder {
+                s: ReadableSize(size),
+            };
             let res_str = toml::to_string(&c).unwrap();
             let exp_str = format!("s = {:?}\n", exp);
             assert_eq!(res_str, exp_str);
@@ -772,7 +821,9 @@ mod test {
             assert_eq!(res_size.s.0, size);
         }
 
-        let c = SizeHolder { s: ReadableSize(512) };
+        let c = SizeHolder {
+            s: ReadableSize(512),
+        };
         let res_str = toml::to_string(&c).unwrap();
         assert_eq!(res_str, "s = 512\n");
         let res_size: SizeHolder = toml::from_str(&res_str).unwrap();
@@ -796,15 +847,7 @@ mod test {
             assert_eq!(res.s.0, exp);
         }
 
-        let illegal_cases = vec![
-            "0.5kb",
-            "0.5kB",
-            "0.5Kb",
-            "0.5k",
-            "0.5g",
-            "gb",
-            "1b",
-        ];
+        let illegal_cases = vec!["0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "gb", "1b"];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
@@ -874,7 +917,9 @@ mod test {
             (3600 + 2, 5, "1h2s5ms"),
         ];
         for (secs, ms, exp) in legal_cases {
-            let d = DurHolder { d: ReadableDuration(Duration::new(secs, ms * 1_000_000)) };
+            let d = DurHolder {
+                d: ReadableDuration(Duration::new(secs, ms * 1_000_000)),
+            };
             let res_str = toml::to_string(&d).unwrap();
             let exp_str = format!("d = {:?}\n", exp);
             assert_eq!(res_str, exp_str);
@@ -882,23 +927,14 @@ mod test {
             assert_eq!(res_dur.d.0, d.d.0);
         }
 
-        let decode_cases = vec![
-            (" 0.5 h2m ", 3600 / 2 + 2 * 60, 0),
-        ];
+        let decode_cases = vec![(" 0.5 h2m ", 3600 / 2 + 2 * 60, 0)];
         for (src, secs, ms) in decode_cases {
             let src = format!("d = {:?}", src);
             let res: DurHolder = toml::from_str(&src).unwrap();
             assert_eq!(res.d.0, Duration::new(secs, ms * 1_000_000));
         }
 
-        let illegal_cases = vec![
-            "1H",
-            "1M",
-            "1S",
-            "1MS",
-            "1h1h",
-            "h",
-        ];
+        let illegal_cases = vec!["1H", "1M", "1S", "1MS", "1h1h", "h"];
         for src in illegal_cases {
             let src_str = format!("d = {:?}", src);
             assert!(toml::from_str::<DurHolder>(&src_str).is_err(), "{}", src);
@@ -942,29 +978,41 @@ mod test {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(toml::from_str::<CompressionTypeHolder>(r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
-        ]"#)
-            .is_err());
+        ]"#
+            ).is_err()
+        );
         // value is wrong.
-        assert!(toml::from_str::<CompressionTypeHolder>(r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
-        ]"#)
-            .is_err());
+        ]"#
+            ).is_err()
+        );
     }
 
     #[test]
     fn test_canonicalize_path() {
         let tmp_dir = TempDir::new("test-canonicalize").unwrap();
-        let path1 = format!("{}",
-                            tmp_dir.path().to_path_buf().join("test1.dump").display());
+        let path1 = format!(
+            "{}",
+            tmp_dir.path().to_path_buf().join("test1.dump").display()
+        );
         let res_path1 = canonicalize_path(&path1).unwrap();
         assert!(Path::new(&path1).exists());
-        assert_eq!(Path::new(&res_path1),
-                   Path::new(&path1).canonicalize().unwrap());
+        assert_eq!(
+            Path::new(&res_path1),
+            Path::new(&path1).canonicalize().unwrap()
+        );
 
-        let path2 = format!("{}",
-                            tmp_dir.path().to_path_buf().join("test2.dump").display());
+        let path2 = format!(
+            "{}",
+            tmp_dir.path().to_path_buf().join("test2.dump").display()
+        );
         {
             File::create(&path2).unwrap();
         }
@@ -980,9 +1028,19 @@ mod test {
 
         // The range of vm.swappiness is from 0 to 100.
         let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![
-            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got == expect), false),
+            (
+                "/proc/sys/vm/swappiness",
+                i64::MAX,
+                Box::new(|got, expect| got == expect),
+                false,
+            ),
 
-            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got < expect), true),
+            (
+                "/proc/sys/vm/swappiness",
+                i64::MAX,
+                Box::new(|got, expect| got < expect),
+                true,
+            ),
         ];
 
         for (path, expect, checker, is_ok) in table {
@@ -993,38 +1051,38 @@ mod test {
     #[test]
     fn test_check_addrs() {
         let table = vec![
-            ("127.0.0.1:8080",true),
-            ("[::1]:8080",true),
-            ("localhost:8080",true),
-            ("pingcap.com:8080",true),
-            ("funnydomain:8080",true),
+            ("127.0.0.1:8080", true),
+            ("[::1]:8080", true),
+            ("localhost:8080", true),
+            ("pingcap.com:8080", true),
+            ("funnydomain:8080", true),
 
-            ("127.0.0.1",false),
-            ("[::1]",false),
-            ("localhost",false),
-            ("pingcap.com",false),
-            ("funnydomain",false),
-            ("funnydomain:",false),
+            ("127.0.0.1", false),
+            ("[::1]", false),
+            ("localhost", false),
+            ("pingcap.com", false),
+            ("funnydomain", false),
+            ("funnydomain:", false),
 
-            ("root@google.com:8080",false),
-            ("http://google.com:8080",false),
-            ("google.com:8080/path",false),
-            ("http://google.com:8080/path",false),
-            ("http://google.com:8080/path?lang=en",false),
-            ("http://google.com:8080/path?lang=en#top",false),
+            ("root@google.com:8080", false),
+            ("http://google.com:8080", false),
+            ("google.com:8080/path", false),
+            ("http://google.com:8080/path", false),
+            ("http://google.com:8080/path?lang=en", false),
+            ("http://google.com:8080/path?lang=en#top", false),
 
-            ("ftp://ftp.is.co.za/rfc/rfc1808.txt",false),
-            ("http://www.ietf.org/rfc/rfc2396.txt",false),
-            ("ldap://[2001:db8::7]/c=GB?objectClass?one",false),
-            ("mailto:John.Doe@example.com",false),
-            ("news:comp.infosystems.www.servers.unix",false),
-            ("tel:+1-816-555-1212",false),
-            ("telnet://192.0.2.16:80/",false),
-            ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2",false),
+            ("ftp://ftp.is.co.za/rfc/rfc1808.txt", false),
+            ("http://www.ietf.org/rfc/rfc2396.txt", false),
+            ("ldap://[2001:db8::7]/c=GB?objectClass?one", false),
+            ("mailto:John.Doe@example.com", false),
+            ("news:comp.infosystems.www.servers.unix", false),
+            ("tel:+1-816-555-1212", false),
+            ("telnet://192.0.2.16:80/", false),
+            ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2", false),
 
-            (":8080",false),
-            ("8080",false),
-            ("8080:",false),
+            (":8080", false),
+            ("8080", false),
+            ("8080:", false),
         ];
 
         for (addr, is_ok) in table {

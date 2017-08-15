@@ -40,23 +40,23 @@ extern crate tokio_core;
 extern crate grpcio as grpc;
 
 #[allow(dead_code)]
-#[path="../../tests/util.rs"]
+#[path = "../../tests/util.rs"]
 mod test_util;
 #[allow(dead_code)]
-#[path="../../tests/raftstore/util.rs"]
+#[path = "../../tests/raftstore/util.rs"]
 mod util;
 #[allow(dead_code)]
-#[path="../../tests/raftstore/cluster.rs"]
+#[path = "../../tests/raftstore/cluster.rs"]
 mod cluster;
-#[path="../../tests/raftstore/node.rs"]
+#[path = "../../tests/raftstore/node.rs"]
 mod node;
-#[path="../../tests/raftstore/server.rs"]
+#[path = "../../tests/raftstore/server.rs"]
 mod server;
 #[allow(dead_code)]
-#[path="../../tests/raftstore/pd.rs"]
+#[path = "../../tests/raftstore/pd.rs"]
 mod pd;
 #[allow(dead_code)]
-#[path="../../tests/raftstore/transport_simulate.rs"]
+#[path = "../../tests/raftstore/transport_simulate.rs"]
 mod transport_simulate;
 
 use test::BenchSamples;
@@ -91,9 +91,11 @@ fn print_result(smp: BenchSamples) {
 
 fn main() {
     if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
-        panic!("To run bench, please make sure the maximum number of open file descriptors not \
-                less than 4096: {:?}",
-               e);
+        panic!(
+            "To run bench, please make sure the maximum number of open file descriptors not \
+             less than 4096: {:?}",
+            e
+        );
     }
     // TODO allow user to specify flag to just bench some cases.
     raftstore::bench_raftstore();

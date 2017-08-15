@@ -17,8 +17,8 @@ use std::net::SocketAddr;
 
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
-use futures::{Future, Sink, Stream, stream};
-use grpc::{Environment, ChannelBuilder, WriteFlags};
+use futures::{stream, Future, Sink, Stream};
+use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
@@ -27,7 +27,7 @@ const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
 const INITIAL_BUFFER_CAP: usize = 1024;
 
 use util::collections::HashMap;
-use super::{Error, Result, Config};
+use super::{Config, Error, Result};
 use super::metrics::*;
 
 struct Conn {
@@ -55,25 +55,33 @@ impl Conn {
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
         let (sink, _) = client.raft();
-        client.spawn(rx_close.map_err(|_| ())
-            .select(sink.sink_map_err(Error::from)
-                .send_all(rx.map(|msgs: Vec<(RaftMessage, WriteFlags)>| {
-                        stream::iter::<_, _, ()>(msgs.into_iter().map(Ok))
-                    })
-                    .flatten()
-                    .map_err(|_| Error::Sink))
-                .then(move |r| {
-                    alive.store(false, Ordering::SeqCst);
-                    r
-                })
+        client.spawn(
+            rx_close
+                .map_err(|_| ())
+                .select(
+                    sink.sink_map_err(Error::from)
+                        .send_all(
+                            rx.map(|msgs: Vec<(RaftMessage, WriteFlags)>| {
+                                stream::iter::<_, _, ()>(msgs.into_iter().map(Ok))
+                            }).flatten()
+                                .map_err(|_| Error::Sink),
+                        )
+                        .then(move |r| {
+                            alive.store(false, Ordering::SeqCst);
+                            r
+                        })
+                        .map(|_| ())
+                        .map_err(move |e| {
+                            let store = store_id.to_string();
+                            REPORT_FAILURE_MSG_COUNTER
+                                .with_label_values(&["unreachable", &*store])
+                                .inc();
+                            warn!("send raftmessage to {} failed: {:?}", addr, e);
+                        }),
+                )
                 .map(|_| ())
-                .map_err(move |e| {
-                    let store = store_id.to_string();
-                    REPORT_FAILURE_MSG_COUNTER.with_label_values(&["unreachable", &*store]).inc();
-                    warn!("send raftmessage to {} failed: {:?}", addr, e);
-                }))
-            .map(|_| ())
-            .map_err(|_| ()));
+                .map_err(|_| ()),
+        );
         Conn {
             stream: tx,
             buffer: Some(Vec::with_capacity(INITIAL_BUFFER_CAP)),
@@ -115,7 +123,10 @@ impl RaftClient {
 
     pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
         let mut conn = self.get_conn(addr, msg.region_id, store_id);
-        conn.buffer.as_mut().unwrap().push((msg, WriteFlags::default().buffer_hint(true)));
+        conn.buffer
+            .as_mut()
+            .unwrap()
+            .push((msg, WriteFlags::default().buffer_hint(true)));
         Ok(())
     }
 
@@ -140,9 +151,11 @@ impl RaftClient {
             let mut msgs = conn.buffer.take().unwrap();
             msgs.last_mut().unwrap().1 = WriteFlags::default();
             if let Err(e) = UnboundedSender::send(&conn.stream, msgs) {
-                error!("server: drop conn with tikv endpoint {} flush conn error: {:?}",
-                       addr,
-                       e);
+                error!(
+                    "server: drop conn with tikv endpoint {} flush conn error: {:?}",
+                    addr,
+                    e
+                );
 
                 if let Some(addr_current) = addrs.remove(&store_id) {
                     if addr_current != addr {

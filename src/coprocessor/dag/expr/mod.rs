@@ -14,9 +14,9 @@
 use std::io;
 use std::convert::TryFrom;
 
-use tipb::expression::{Expr, ExprType, ScalarFuncSig, FieldType};
+use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{Duration, Time, Decimal, MAX_FSP};
+use coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::Datum;
 use util;
@@ -132,46 +132,35 @@ impl TryFrom<Expr> for Expression {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
-            ExprType::Int64 => {
-                expr.get_val()
-                    .decode_i64()
-                    .map(Datum::I64)
-                    .map(|e| Expression::new_const(e, tp))
-                    .map_err(Error::from)
-            }
-            ExprType::Uint64 => {
-                expr.get_val()
-                    .decode_u64()
-                    .map(Datum::U64)
-                    .map(|e| Expression::new_const(e, tp))
-                    .map_err(Error::from)
-            }
+            ExprType::Int64 => expr.get_val()
+                .decode_i64()
+                .map(Datum::I64)
+                .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
+            ExprType::Uint64 => expr.get_val()
+                .decode_u64()
+                .map(Datum::U64)
+                .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
             ExprType::String | ExprType::Bytes => {
                 Ok(Expression::new_const(Datum::Bytes(expr.take_val()), tp))
             }
-            ExprType::Float32 |
-            ExprType::Float64 => {
-                expr.get_val()
-                    .decode_f64()
-                    .map(Datum::F64)
-                    .map(|e| Expression::new_const(e, tp))
-                    .map_err(Error::from)
-            }
-            ExprType::MysqlDuration => {
-                expr.get_val()
-                    .decode_i64()
-                    .and_then(|n| Duration::from_nanos(n, MAX_FSP))
-                    .map(Datum::Dur)
-                    .map(|e| Expression::new_const(e, tp))
-                    .map_err(Error::from)
-            }
-            ExprType::MysqlDecimal => {
-                expr.get_val()
-                    .decode_decimal()
-                    .map(Datum::Dec)
-                    .map(|e| Expression::new_const(e, tp))
-                    .map_err(Error::from)
-            }
+            ExprType::Float32 | ExprType::Float64 => expr.get_val()
+                .decode_f64()
+                .map(Datum::F64)
+                .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
+            ExprType::MysqlDuration => expr.get_val()
+                .decode_i64()
+                .and_then(|n| Duration::from_nanos(n, MAX_FSP))
+                .map(Datum::Dur)
+                .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
+            ExprType::MysqlDecimal => expr.get_val()
+                .decode_decimal()
+                .map(Datum::Dec)
+                .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
             // TODO(andelf): fn sig verification
             ExprType::ScalarFunc => {
                 let sig = expr.get_sig();
@@ -188,17 +177,15 @@ impl TryFrom<Expr> for Expression {
                         })
                     })
             }
-            ExprType::ColumnRef => {
-                expr.get_val()
-                    .decode_i64()
-                    .map(|i| {
-                        Expression::ColumnRef(Column {
-                            offset: i as usize,
-                            tp: tp,
-                        })
+            ExprType::ColumnRef => expr.get_val()
+                .decode_i64()
+                .map(|i| {
+                    Expression::ColumnRef(Column {
+                        offset: i as usize,
+                        tp: tp,
                     })
-                    .map_err(Error::from)
-            }
+                })
+                .map_err(Error::from),
             unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
         }
     }

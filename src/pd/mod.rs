@@ -18,7 +18,7 @@ mod client;
 mod util;
 
 pub mod errors;
-pub use self::errors::{Result, Error};
+pub use self::errors::{Error, Result};
 pub use self::client::RpcClient;
 pub use self::util::validate_endpoints;
 
@@ -38,12 +38,13 @@ pub struct RegionStat {
 }
 
 impl RegionStat {
-    pub fn new(down_peers: Vec<pdpb::PeerStats>,
-               pending_peers: Vec<metapb::Peer>,
-               written_bytes: u64,
-               written_keys: u64,
-               approximate_size: u64)
-               -> RegionStat {
+    pub fn new(
+        down_peers: Vec<pdpb::PeerStats>,
+        pending_peers: Vec<metapb::Peer>,
+        written_bytes: u64,
+        written_keys: u64,
+        approximate_size: u64,
+    ) -> RegionStat {
         RegionStat {
             down_peers: down_peers,
             pending_peers: pending_peers,
@@ -113,17 +114,19 @@ pub trait PdClient: Send + Sync {
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>>;
 
     // Leader for a region will use this to heartbeat Pd.
-    fn region_heartbeat(&self,
-                        region: metapb::Region,
-                        leader: metapb::Peer,
-                        region_stat: RegionStat)
-                        -> PdFuture<()>;
+    fn region_heartbeat(
+        &self,
+        region: metapb::Region,
+        leader: metapb::Peer,
+        region_stat: RegionStat,
+    ) -> PdFuture<()>;
 
     // Get a stream of region heartbeat response.
     //
     // Please note that this method should only be called once.
     fn handle_region_heartbeat_response<F>(&self, store_id: u64, f: F) -> PdFuture<()>
-        where F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static;
+    where
+        F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static;
 
     // Ask pd for split, pd will returns the new split region id.
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;

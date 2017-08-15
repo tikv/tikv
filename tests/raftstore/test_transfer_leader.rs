@@ -25,9 +25,10 @@ use super::server::new_server_cluster;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
-    let reserved_time =
-        Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval.as_millis() *
-                              cluster.cfg.raft_store.raft_heartbeat_ticks as u64);
+    let reserved_time = Duration::from_millis(
+        cluster.cfg.raft_store.raft_base_tick_interval.as_millis() *
+            cluster.cfg.raft_store.raft_heartbeat_ticks as u64,
+    );
     cluster.run();
 
     // transfer leader to (2, 2)
@@ -48,10 +49,12 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(reserved_time);
     assert_eq!(cluster.query_leader(3, 1), Some(new_peer(3, 3)));
 
-    let mut req = new_request(region.get_id(),
-                              region.take_region_epoch(),
-                              vec![new_put_cmd(b"k3", b"v3")],
-                              false);
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![new_put_cmd(b"k3", b"v3")],
+        false,
+    );
     req.mut_header().set_peer(new_peer(3, 3));
     // transfer leader to (4, 4)
     cluster.must_transfer_leader(1, new_peer(4, 4));
@@ -82,10 +85,12 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // call command on this leader directly, must successfully.
     let mut region = cluster.get_region(b"");
-    let mut req = new_request(region.get_id(),
-                              region.take_region_epoch(),
-                              vec![new_get_cmd(b"k")],
-                              false);
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![new_get_cmd(b"k")],
+        false,
+    );
 
     for id in 1..4 {
         // select a new leader to transfer
@@ -113,7 +118,9 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(cluster.leader_of_region(1), Some(new_peer(id, id)));
         req.mut_header().set_peer(new_peer(id, id));
         debug!("requesting {:?}", req);
-        let resp = cluster.call_command(req.clone(), Duration::from_secs(5)).unwrap();
+        let resp = cluster
+            .call_command(req.clone(), Duration::from_secs(5))
+            .unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
     }
@@ -153,9 +160,11 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     // will stay at snapshot.
     cluster.add_send_filter(DefaultFilterFactory::<SnapshotFilter>::default());
     // don't allow leader transfer succeed if it is actually triggered.
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
-        .msg_type(MessageType::MsgTimeoutNow)
-        .direction(Direction::Recv)));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .msg_type(MessageType::MsgTimeoutNow)
+            .direction(Direction::Recv),
+    ));
 
     pd_client.must_add_peer(r1, new_peer(3, 3));
     // a just added peer needs wait a couple of ticks, it'll communicate with leader

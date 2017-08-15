@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{DB, Writable, WriteBatch};
-use kvproto::raft_serverpb::{StoreIdent, RegionLocalState};
+use rocksdb::{Writable, WriteBatch, DB};
+use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 use kvproto::metapb;
 use raftstore::Result;
 use super::keys;
@@ -27,14 +27,10 @@ const INIT_EPOCH_CONF_VER: u64 = 1;
 // check no any data in range [start_key, end_key)
 fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
     let mut count: u32 = 0;
-    try!(engine.scan_cf(cf,
-                        start_key,
-                        end_key,
-                        false,
-                        &mut |_, _| {
-                            count += 1;
-                            Ok(false)
-                        }));
+    try!(engine.scan_cf(cf, start_key, end_key, false, &mut |_, _| {
+        count += 1;
+        Ok(false)
+    }));
 
     Ok(count == 0)
 }
@@ -43,7 +39,12 @@ fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Re
 pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::new();
 
-    if !try!(is_range_empty(engine, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)) {
+    if !try!(is_range_empty(
+        engine,
+        CF_DEFAULT,
+        keys::MIN_KEY,
+        keys::MAX_KEY
+    )) {
         return Err(box_err!("store is not empty and has already had data."));
     }
 
@@ -90,11 +91,12 @@ pub fn clear_prepare_bootstrap_state(engine: &DB) -> Result<()> {
 }
 
 // Prepare bootstrap.
-pub fn prepare_bootstrap(engine: &DB,
-                         store_id: u64,
-                         region_id: u64,
-                         peer_id: u64)
-                         -> Result<metapb::Region> {
+pub fn prepare_bootstrap(
+    engine: &DB,
+    store_id: u64,
+    region_id: u64,
+    peer_id: u64,
+) -> Result<metapb::Region> {
     let mut region = metapb::Region::new();
     region.set_id(region_id);
     region.set_start_key(keys::EMPTY_KEY.to_vec());
@@ -132,22 +134,48 @@ mod tests {
         assert!(bootstrap_store(&engine, 1, 1).is_err());
 
         assert!(prepare_bootstrap(&engine, 1, 1, 1).is_ok());
-        assert!(engine.get_value(&keys::region_state_key(1)).unwrap().is_some());
-        assert!(engine.get_value(&keys::prepare_bootstrap_key()).unwrap().is_some());
-        assert!(engine.get_value_cf(CF_RAFT, &keys::raft_state_key(1)).unwrap().is_some());
-        assert!(engine.get_value_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().is_some());
+        assert!(
+            engine
+                .get_value(&keys::region_state_key(1))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            engine
+                .get_value(&keys::prepare_bootstrap_key())
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            engine
+                .get_value_cf(CF_RAFT, &keys::raft_state_key(1))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            engine
+                .get_value_cf(CF_RAFT, &keys::apply_state_key(1))
+                .unwrap()
+                .is_some()
+        );
 
         assert!(clear_prepare_bootstrap_state(&engine).is_ok());
         assert!(clear_prepare_bootstrap(&engine, 1).is_ok());
-        assert!(is_range_empty(&engine,
-                               CF_DEFAULT,
-                               &keys::region_meta_prefix(1),
-                               &keys::region_meta_prefix(2))
-            .unwrap());
-        assert!(is_range_empty(&engine,
-                               CF_RAFT,
-                               &keys::region_raft_prefix(1),
-                               &keys::region_raft_prefix(2))
-            .unwrap());
+        assert!(
+            is_range_empty(
+                &engine,
+                CF_DEFAULT,
+                &keys::region_meta_prefix(1),
+                &keys::region_meta_prefix(2)
+            ).unwrap()
+        );
+        assert!(
+            is_range_empty(
+                &engine,
+                CF_RAFT,
+                &keys::region_raft_prefix(1),
+                &keys::region_raft_prefix(2)
+            ).unwrap()
+        );
     }
 }

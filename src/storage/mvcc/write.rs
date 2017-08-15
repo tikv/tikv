@@ -12,13 +12,13 @@
 // limitations under the License.
 
 use byteorder::ReadBytesExt;
-use util::codec::number::{NumberEncoder, NumberDecoder, MAX_VAR_U64_LEN};
-use storage::{SHORT_VALUE_PREFIX, SHORT_VALUE_MAX_LEN};
+use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
+use storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use super::lock::LockType;
 use super::{Error, Result};
 use super::super::types::Value;
 
-#[derive(Debug,Clone,Copy,PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
     Put,
     Delete,
@@ -99,16 +99,20 @@ impl Write {
         }
 
         let flag = try!(b.read_u8());
-        assert_eq!(flag,
-                   SHORT_VALUE_PREFIX,
-                   "invalid flag [{:?}] in write",
-                   flag);
+        assert_eq!(
+            flag,
+            SHORT_VALUE_PREFIX,
+            "invalid flag [{:?}] in write",
+            flag
+        );
 
         let len = try!(b.read_u8());
         if len as usize != b.len() {
-            panic!("short value len [{}] not equal to content len [{}]",
-                   len,
-                   b.len());
+            panic!(
+                "short value len [{}] not equal to content len [{}]",
+                len,
+                b.len()
+            );
         }
         Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
     }
@@ -121,45 +125,55 @@ mod tests {
 
     #[test]
     fn test_write_type() {
-        let mut tests = vec![(Some(LockType::Put), WriteType::Put, FLAG_PUT),
-                             (Some(LockType::Delete), WriteType::Delete, FLAG_DELETE),
-                             (Some(LockType::Lock), WriteType::Lock, FLAG_LOCK),
-                             (None, WriteType::Rollback, FLAG_ROLLBACK)];
+        let mut tests = vec![
+            (Some(LockType::Put), WriteType::Put, FLAG_PUT),
+            (Some(LockType::Delete), WriteType::Delete, FLAG_DELETE),
+            (Some(LockType::Lock), WriteType::Lock, FLAG_LOCK),
+            (None, WriteType::Rollback, FLAG_ROLLBACK),
+        ];
         for (i, (lock_type, write_type, flag)) in tests.drain(..).enumerate() {
             if lock_type.is_some() {
                 let wt = WriteType::from_lock_type(lock_type.unwrap());
-                assert_eq!(wt,
-                           write_type,
-                           "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",
-                           i,
-                           lock_type,
-                           write_type,
-                           wt);
+                assert_eq!(
+                    wt,
+                    write_type,
+                    "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",
+                    i,
+                    lock_type,
+                    write_type,
+                    wt
+                );
             }
             let f = write_type.to_u8();
-            assert_eq!(f,
-                       flag,
-                       "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
-                       i,
-                       write_type,
-                       flag,
-                       f);
+            assert_eq!(
+                f,
+                flag,
+                "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
+                i,
+                write_type,
+                flag,
+                f
+            );
             let wt = WriteType::from_u8(flag).unwrap();
-            assert_eq!(wt,
-                       write_type,
-                       "#{}, expect from_u8({:?}) returns {:?}, but got {:?}",
-                       i,
-                       flag,
-                       write_type,
-                       wt);
+            assert_eq!(
+                wt,
+                write_type,
+                "#{}, expect from_u8({:?}) returns {:?}, but got {:?}",
+                i,
+                flag,
+                write_type,
+                wt
+            );
         }
     }
 
     #[test]
     fn test_write() {
         // Test `Write::to_bytes()` and `Write::parse()` works as a pair.
-        let mut writes = vec![Write::new(WriteType::Put, 0, None),
-                              Write::new(WriteType::Delete, 0, Some(b"short_value".to_vec()))];
+        let mut writes = vec![
+            Write::new(WriteType::Put, 0, None),
+            Write::new(WriteType::Delete, 0, Some(b"short_value".to_vec())),
+        ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.to_bytes();
             let w = Write::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));

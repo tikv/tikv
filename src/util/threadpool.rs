@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::usize;
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
 use std::collections::VecDeque;
@@ -20,8 +20,8 @@ use std::cmp::Ordering;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::fmt::{self, Write, Debug, Formatter};
-use std::sync::mpsc::{Sender, Receiver, channel};
+use std::fmt::{self, Debug, Formatter, Write};
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
@@ -44,7 +44,8 @@ impl<T: Debug> Debug for Task<T> {
 
 impl<T> Task<T> {
     fn new<F>(gid: T, job: F) -> Task<T>
-        where F: FnOnce() + Send + 'static
+    where
+        F: FnOnce() + Send + 'static,
     {
         Task {
             id: 0,
@@ -88,7 +89,9 @@ pub struct FifoQueue<T> {
 
 impl<T: Hash + Ord + Send + Clone + Debug> FifoQueue<T> {
     pub fn new() -> FifoQueue<T> {
-        FifoQueue { queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY) }
+        FifoQueue {
+            queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY),
+        }
     }
 }
 
@@ -120,8 +123,9 @@ struct TaskPool<Q, T> {
 }
 
 impl<Q, T> TaskPool<Q, T>
-    where Q: ScheduleQueue<T>,
-          T: Debug
+where
+    Q: ScheduleQueue<T>,
+    T: Debug,
 {
     fn new(queue: Q, jobs: Receiver<Task<T>>) -> TaskPool<Q, T> {
         TaskPool {
@@ -181,8 +185,9 @@ pub struct ThreadPool<Q, T> {
 }
 
 impl<Q, T> ThreadPool<Q, T>
-    where Q: ScheduleQueue<T> + Send + 'static,
-          T: Hash + Send + Clone + 'static + Debug
+where
+    Q: ScheduleQueue<T> + Send + 'static,
+    T: Hash + Send + Clone + 'static + Debug,
 {
     pub fn new(name: String, num_threads: usize, queue: Q) -> ThreadPool<Q, T> {
         assert!(num_threads >= 1);
@@ -213,7 +218,8 @@ impl<Q, T> ThreadPool<Q, T>
     }
 
     pub fn execute<F>(&mut self, gid: T, job: F)
-        where F: FnOnce() + Send + 'static
+    where
+        F: FnOnce() + Send + 'static,
     {
         let task = Task::new(gid, job);
         self.sender.send(task).unwrap();
@@ -254,12 +260,14 @@ struct Worker<Q, T> {
 }
 
 impl<Q, T> Worker<Q, T>
-    where Q: ScheduleQueue<T>,
-          T: Debug
+where
+    Q: ScheduleQueue<T>,
+    T: Debug,
 {
-    fn new(task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>,
-           task_count: Arc<AtomicUsize>)
-           -> Worker<Q, T> {
+    fn new(
+        task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>,
+        task_count: Arc<AtomicUsize>,
+    ) -> Worker<Q, T> {
         Worker {
             task_pool: task_pool,
             task_count: task_count,
@@ -306,7 +314,7 @@ impl<Q, T> Worker<Q, T>
 
 #[cfg(test)]
 mod test {
-    use super::{ThreadPool, Task, ScheduleQueue, FifoQueue};
+    use super::{FifoQueue, ScheduleQueue, Task, ThreadPool};
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Mutex};
@@ -337,9 +345,7 @@ mod test {
 
         for gid in 0..10 {
             let sender = jtx.clone();
-            task_pool.execute(gid, move || {
-                sender.send(gid).unwrap();
-            });
+            task_pool.execute(gid, move || { sender.send(gid).unwrap(); });
         }
 
         for _ in 0..10 {
@@ -381,8 +387,10 @@ mod test {
             frx.recv_timeout(timeout).unwrap();
             let left_num = task_pool.get_task_count();
             // current task may be still running.
-            assert!(left_num == task_num || left_num == task_num - 1,
-                    format!("left_num {},task_num {}", left_num, task_num));
+            assert!(
+                left_num == task_num || left_num == task_num - 1,
+                format!("left_num {},task_num {}", left_num, task_num)
+            );
             task_num -= 1;
         }
         task_pool.stop().unwrap();
