@@ -156,7 +156,23 @@ impl FnCall {
     }
 
     pub fn cast_str_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        unimplemented!()
+        if self.children[0].is_hybrid_type() {
+            return self.children[0].eval_real(ctx, row);
+        }
+        let val = try!(self.children[0].eval_string(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let val = val.unwrap();
+        let res = try!(convert::bytes_to_f64(ctx, &val));
+        let flen = self.tp.get_flen();
+        let decimal = self.tp.get_decimal();
+        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+            return Ok(Some(res));
+        }
+        let ret =
+            try!(convert::float_to_float_with_specified_tp(ctx, res, flen as u8, decimal as u8));
+        Ok(Some(ret))
     }
 
     pub fn cast_time_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {

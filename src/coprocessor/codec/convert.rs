@@ -79,6 +79,19 @@ pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64>
     Ok(val as u64)
 }
 
+/// `float_to_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
+/// a new float64 according to `flen` and `decimal`.
+/// TODO port tests from tidb(tidb haven't implemented now)
+pub fn float_to_float_with_specified_tp(ctx: &EvalContext,
+                                        f: f64,
+                                        flen: u8,
+                                        decimal: u8)
+                                        -> Result<f64> {
+    let dec = try!(Decimal::from_f64(f));
+    let ret = try!(dec.convert_to(ctx, flen, decimal));
+    ret.as_f64()
+}
+
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
 /// Note that it does NOT handle overflow.
