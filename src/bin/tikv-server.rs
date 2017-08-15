@@ -57,6 +57,7 @@ use std::path::Path;
 use std::sync::{mpsc, Arc};
 use std::io::Read;
 use std::env;
+use std::time::Duration;
 
 use clap::{App, Arg, ArgMatches};
 use fs2::FileExt;
@@ -73,6 +74,7 @@ use tikv::server::resolve;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
+use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERVAL};
 
 fn exit_with_err<E: Error>(e: E) -> ! {
     exit_with_msg(format!("{:?}", e))
@@ -192,6 +194,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         panic!("failed to start storage, error = {:?}", e);
     }
 
+    let mut metrics_flusher = MetricsFlusher::new(
+        engine.clone(),
+        Duration::from_millis(DEFAULT_FLUSER_INTERVAL),
+    );
+
+    // Start metrics flusher
+    if let Err(e) = metrics_flusher.start() {
+        error!("failed to start metrics flusher, error = {:?}", e);
+    }
+
     // Run server.
     server
         .start(&cfg.server)
@@ -200,6 +212,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     // Stop.
     server.stop().unwrap_or_else(|e| exit_with_err(e));
+
+    metrics_flusher.stop();
+
     node.stop().unwrap_or_else(|e| exit_with_err(e));
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!("ignore failure when stopping resolver: {:?}", e);
