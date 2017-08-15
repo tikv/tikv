@@ -12,13 +12,20 @@
 // limitations under the License.
 
 pub mod properties;
+pub mod engine_metrics;
+pub mod metrics_flusher;
+
+pub use self::metrics_flusher::MetricsFlusher;
 
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
-use storage::CF_DEFAULT;
+use storage::{ALL_CFS, CF_DEFAULT};
 use rocksdb::{ColumnFamilyOptions, DBCompressionType, DBOptions, SliceTransform, DB};
 use rocksdb::rocksdb::supported_compression;
+use util::rocksdb::engine_metrics::{ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
+use util::rocksdb;
 
 pub use rocksdb::CFHandle;
 
@@ -189,6 +196,26 @@ fn db_exist(path: &str) -> bool {
     // but db has not been created, DB::list_column_families will failed and we can cleanup
     // the directory by this indication.
     fs::read_dir(&path).unwrap().next().is_some()
+}
+
+pub fn get_used_size(engine: Arc<DB>) -> u64 {
+    let mut used_size: u64 = 0;
+    for cf in ALL_CFS {
+        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+        let cf_used_size = engine
+            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+            .expect("rocksdb is too old, missing total-sst-files-size property");
+
+        used_size += cf_used_size;
+
+        // For memtable
+        if let Some(mem_table) =
+            engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
+        {
+            used_size += mem_table;
+        }
+    }
+    used_size
 }
 
 pub struct FixedSuffixSliceTransform {
