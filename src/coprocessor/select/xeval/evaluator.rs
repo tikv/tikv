@@ -16,7 +16,7 @@ use std::ascii::AsciiExt;
 use std::str;
 
 use chrono::FixedOffset;
-use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
 use util::is_even;
 use util::codec::number::NumberDecoder;
@@ -680,6 +680,7 @@ pub mod test {
     use util::codec::number::{self, NumberEncoder};
     use coprocessor::codec::{datum, Datum};
     use coprocessor::codec::mysql::{self, Decimal, DecimalEncoder, Duration, MAX_FSP};
+    use tipb::expression::FieldType;
 
     use std::i32;
 
