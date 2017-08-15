@@ -18,7 +18,7 @@ use std::{str, i64, u64};
 use std::ascii::AsciiExt;
 
 use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time};
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint,
                                   convert_int_to_uint};
@@ -237,13 +237,7 @@ impl FnCall {
             let uval = try!(convert_int_to_uint(val, u64::MAX, types::LONG_LONG));
             Decimal::from(uval)
         };
-        let flen = field_type.get_flen();
-        let decimal = field_type.get_decimal();
-        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
-            return Ok(Some(res));
-        }
-        let res = try!(res.convert_to(ctx, flen as u8, decimal as u8));
-        Ok(Some(res))
+        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_real_as_decimal(
@@ -251,7 +245,12 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Decimal>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_real(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let res = try!(Decimal::from_f64(val.unwrap()));
+        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_decimal_as_decimal(
@@ -259,7 +258,13 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Decimal>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_decimal(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(
+            try!(self.produce_dec_with_specified_tp(ctx, val.unwrap())),
+        ))
     }
 
     pub fn cast_str_as_decimal(
@@ -267,7 +272,22 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Decimal>> {
-        unimplemented!()
+        if self.children[0].is_hybrid_type() {
+            return self.children[0].eval_decimal(ctx, row);
+        }
+        let val = try!(self.children[0].eval_string(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let bs = val.unwrap();
+        let dec = match try!(Decimal::from_bytes(&bs)) {
+            Res::Ok(d) | Res::Overflow(d) => d,
+            Res::Truncated(d) => {
+                try!(convert::handle_truncate(ctx, true));
+                d
+            }
+        };
+        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
 
     pub fn cast_time_as_decimal(
@@ -275,7 +295,12 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Decimal>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_time(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let dec = try!(val.unwrap().to_decimal());
+        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
 
     pub fn cast_duration_as_decimal(
@@ -283,7 +308,12 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Decimal>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_duration(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let dec = try!(val.unwrap().to_decimal());
+        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
 
 
@@ -292,7 +322,14 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Decimal>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_json(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let val = try!(val.unwrap().cast_to_real());
+        let des = try!(Decimal::from_f64(val));
+        // TODO: why we don't need process flen & decimal here?
+        Ok(Some(des))
     }
 
     pub fn cast_int_as_str(
@@ -517,5 +554,19 @@ impl FnCall {
         row: &[Datum],
     ) -> Result<Option<Vec<Json>>> {
         unimplemented!()
+    }
+
+    fn produce_dec_with_specified_tp(
+        &self,
+        ctx: &StatementContext,
+        val: Decimal,
+    ) -> Result<Decimal> {
+        let flen = self.tp.get_flen();
+        let decimal = self.tp.get_decimal();
+        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+            return Ok(val);
+        }
+        let res = try!(val.convert_to(ctx, flen as u8, decimal as u8));
+        Ok(res)
     }
 }

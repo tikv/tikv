@@ -1475,6 +1475,11 @@ impl Decimal {
         Ok(f)
     }
 
+    pub fn from_bytes(b: &[u8]) -> Result<Res<Decimal>> {
+        let s = try!(str::from_utf8(b));
+        Decimal::from_str(s, WORD_BUF_LEN)
+    }
+
     fn from_str(s: &str, word_buf_len: u8) -> Result<Res<Decimal>> {
         let mut bs = s.trim_left().as_bytes();
         if bs.is_empty() {
