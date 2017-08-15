@@ -19,7 +19,7 @@ use tipb::executor::Limit;
 use coprocessor::Result;
 use coprocessor::metrics::*;
 
-use super::{Row, Executor};
+use super::{Executor, Row};
 
 pub struct LimitExecutor<'a> {
     limit: u64,
@@ -60,25 +60,30 @@ mod test {
 
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::Datum;
-    use storage::{Statistics, SnapshotStore};
+    use storage::{SnapshotStore, Statistics};
 
     use super::*;
     use super::super::table_scan::TableScanExecutor;
-    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::scanner::test::{get_range, new_col_info, TestStore};
     use super::super::topn::test::gen_table_data;
 
     #[test]
     fn test_limit_executor() {
         // prepare data and store
         let tid = 1;
-        let cis = vec![new_col_info(1, types::LONG_LONG), new_col_info(2, types::VARCHAR)];
-        let raw_data = vec![vec![Datum::I64(1), Datum::Bytes(b"a".to_vec())],
-                            vec![Datum::I64(2), Datum::Bytes(b"b".to_vec())],
-                            vec![Datum::I64(3), Datum::Bytes(b"c".to_vec())],
-                            vec![Datum::I64(4), Datum::Bytes(b"d".to_vec())],
-                            vec![Datum::I64(5), Datum::Bytes(b"e".to_vec())],
-                            vec![Datum::I64(6), Datum::Bytes(b"f".to_vec())],
-                            vec![Datum::I64(7), Datum::Bytes(b"g".to_vec())]];
+        let cis = vec![
+            new_col_info(1, types::LONG_LONG),
+            new_col_info(2, types::VARCHAR),
+        ];
+        let raw_data = vec![
+            vec![Datum::I64(1), Datum::Bytes(b"a".to_vec())],
+            vec![Datum::I64(2), Datum::Bytes(b"b".to_vec())],
+            vec![Datum::I64(3), Datum::Bytes(b"c".to_vec())],
+            vec![Datum::I64(4), Datum::Bytes(b"d".to_vec())],
+            vec![Datum::I64(5), Datum::Bytes(b"e".to_vec())],
+            vec![Datum::I64(6), Datum::Bytes(b"f".to_vec())],
+            vec![Datum::I64(7), Datum::Bytes(b"g".to_vec())],
+        ];
         let table_data = gen_table_data(tid, &cis, &raw_data);
         let mut test_store = TestStore::new(&table_data);
         // init table scan meta

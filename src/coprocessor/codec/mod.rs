@@ -11,10 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use util::codec::{Result, Error};
+pub use util::codec::{Error, Result};
 
-const TEN_POW: &'static [u32] =
-    &[1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000];
+const TEN_POW: &'static [u32] = &[
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+];
 
 /// A shortcut to box an error.
 macro_rules! invalid_type {

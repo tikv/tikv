@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use tikv::util::HandyRwLock;
 use tikv::storage::engine::*;
-use tikv::storage::{Key, CfName, CF_DEFAULT, CF_RAFT, CFStatistics};
+use tikv::storage::{CFStatistics, CfName, Key, CF_DEFAULT, CF_RAFT};
 use tikv::util::codec::bytes;
 use tikv::util::escape;
 use kvproto::kvrpcpb::Context;
@@ -116,9 +116,7 @@ pub fn make_key(k: &[u8]) -> Key {
 
 fn mut_batch_snapshot(batch: Vec<Context>, engine: &Engine) -> BatchResults<Box<Snapshot>> {
     let (tx, rx) = channel();
-    let on_finished = box move |snapshots| {
-        tx.send(snapshots).unwrap();
-    };
+    let on_finished = box move |snapshots| { tx.send(snapshots).unwrap(); };
     engine.async_batch_snapshot(batch, on_finished).unwrap();
     rx.recv().unwrap()
 }
@@ -128,7 +126,9 @@ fn must_put(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) {
 }
 
 fn must_put_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
-    engine.put_cf(ctx, cf, make_key(key), value.to_vec()).unwrap();
+    engine
+        .put_cf(ctx, cf, make_key(key), value.to_vec())
+        .unwrap();
 }
 
 fn must_delete(ctx: &Context, engine: &Engine, key: &[u8]) {
@@ -169,38 +169,54 @@ fn assert_none_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8]) {
 
 fn assert_seek(ctx: &Context, engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+    let mut iter = snapshot
+        .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
     iter.seek(&make_key(key), &mut statistics).unwrap();
-    assert_eq!((iter.key(), iter.value()),
-               (&*bytes::encode_bytes(pair.0), pair.1));
+    assert_eq!(
+        (iter.key(), iter.value()),
+        (&*bytes::encode_bytes(pair.0), pair.1)
+    );
 }
 
 fn assert_seek_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot.iter_cf(cf, IterOption::default(), ScanMode::Mixed)
+    let mut iter = snapshot
+        .iter_cf(cf, IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
     iter.seek(&make_key(key), &mut statistics).unwrap();
-    assert_eq!((iter.key(), iter.value()),
-               (&*bytes::encode_bytes(pair.0), pair.1));
+    assert_eq!(
+        (iter.key(), iter.value()),
+        (&*bytes::encode_bytes(pair.0), pair.1)
+    );
 }
 
 fn assert_near_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
     let mut statistics = CFStatistics::default();
-    assert!(cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
-            escape(key));
-    assert_eq!((cursor.key(), cursor.value()),
-               (&*bytes::encode_bytes(pair.0), pair.1));
+    assert!(
+        cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
+        escape(key)
+    );
+    assert_eq!(
+        (cursor.key(), cursor.value()),
+        (&*bytes::encode_bytes(pair.0), pair.1)
+    );
 }
 
 fn assert_near_reverse_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
     let mut statistics = CFStatistics::default();
-    assert!(cursor.near_reverse_seek(&make_key(key), &mut statistics).unwrap(),
-            escape(key));
-    assert_eq!((cursor.key(), cursor.value()),
-               (&*bytes::encode_bytes(pair.0), pair.1));
+    assert!(
+        cursor
+            .near_reverse_seek(&make_key(key), &mut statistics)
+            .unwrap(),
+        escape(key)
+    );
+    assert_eq!(
+        (cursor.key(), cursor.value()),
+        (&*bytes::encode_bytes(pair.0), pair.1)
+    );
 }
 
 fn get_put(ctx: &Context, engine: &Engine) {
@@ -212,16 +228,26 @@ fn get_put(ctx: &Context, engine: &Engine) {
 }
 
 fn batch(ctx: &Context, engine: &Engine) {
-    engine.write(ctx,
-               vec![Modify::Put(CF_DEFAULT, make_key(b"x"), b"1".to_vec()),
-                    Modify::Put(CF_DEFAULT, make_key(b"y"), b"2".to_vec())])
+    engine
+        .write(
+            ctx,
+            vec![
+                Modify::Put(CF_DEFAULT, make_key(b"x"), b"1".to_vec()),
+                Modify::Put(CF_DEFAULT, make_key(b"y"), b"2".to_vec()),
+            ],
+        )
         .unwrap();
     assert_has(ctx, engine, b"x", b"1");
     assert_has(ctx, engine, b"y", b"2");
 
-    engine.write(ctx,
-               vec![Modify::Delete(CF_DEFAULT, make_key(b"x")),
-                    Modify::Delete(CF_DEFAULT, make_key(b"y"))])
+    engine
+        .write(
+            ctx,
+            vec![
+                Modify::Delete(CF_DEFAULT, make_key(b"x")),
+                Modify::Delete(CF_DEFAULT, make_key(b"y")),
+            ],
+        )
         .unwrap();
     assert_none(ctx, engine, b"y");
     assert_none(ctx, engine, b"y");
@@ -235,7 +261,8 @@ fn seek(ctx: &Context, engine: &Engine) {
     assert_seek(ctx, engine, b"y", (b"z", b"2"));
     assert_seek(ctx, engine, b"x\x00", (b"z", b"2"));
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+    let mut iter = snapshot
+        .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
     assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
@@ -247,7 +274,8 @@ fn near_seek(ctx: &Context, engine: &Engine) {
     must_put(ctx, engine, b"x", b"1");
     must_put(ctx, engine, b"z", b"2");
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+    let mut cursor = snapshot
+        .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
     assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
     assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
@@ -256,7 +284,9 @@ fn near_seek(ctx: &Context, engine: &Engine) {
     assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
     assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
     let mut statistics = CFStatistics::default();
-    assert!(!cursor.near_seek(&make_key(b"z\x00"), &mut statistics).unwrap());
+    assert!(!cursor
+        .near_seek(&make_key(b"z\x00"), &mut statistics)
+        .unwrap());
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
 }

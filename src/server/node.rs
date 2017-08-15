@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::process;
@@ -20,26 +20,27 @@ use std::process;
 use mio::EventLoop;
 use rocksdb::DB;
 
-use pd::{INVALID_ID, PdClient, Error as PdError};
+use pd::{Error as PdError, PdClient, INVALID_ID};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
-use raftstore::store::{self, Msg, SnapshotStatusMsg, StoreChannel, Store, Config as StoreConfig,
-                       keys, Peekable, Transport, SnapManager};
+use raftstore::store::{self, keys, Config as StoreConfig, Msg, Peekable, SnapManager,
+                       SnapshotStatusMsg, Store, StoreChannel, Transport};
 use super::Result;
-use super::config::Config;
-use storage::{Storage, RaftKv};
+use server::Config as ServerConfig;
+use storage::{Config as StorageConfig, RaftKv, Storage};
 use super::transport::RaftStoreRouter;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
-    where S: RaftStoreRouter + 'static
+pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &StorageConfig) -> Result<Storage>
+where
+    S: RaftStoreRouter + 'static,
 {
     let engine = box RaftKv::new(db, router);
-    let store = try!(Storage::from_engine(engine, &cfg.storage));
+    let store = try!(Storage::from_engine(engine, cfg));
     Ok(store)
 }
 
@@ -47,14 +48,18 @@ fn check_region_epoch(region: &metapb::Region, other: &metapb::Region) -> Result
     let epoch = region.get_region_epoch();
     let other_epoch = other.get_region_epoch();
     if epoch.get_conf_ver() != other_epoch.get_conf_ver() {
-        return Err(box_err!("region conf_ver inconsist: {} with {}",
-                            epoch.get_conf_ver(),
-                            other_epoch.get_conf_ver()));
+        return Err(box_err!(
+            "region conf_ver inconsist: {} with {}",
+            epoch.get_conf_ver(),
+            other_epoch.get_conf_ver()
+        ));
     }
     if epoch.get_version() != other_epoch.get_version() {
-        return Err(box_err!("region version inconsist: {} with {}",
-                            epoch.get_version(),
-                            other_epoch.get_version()));
+        return Err(box_err!(
+            "region version inconsist: {} with {}",
+            epoch.get_version(),
+            other_epoch.get_version()
+        ));
     }
     Ok(())
 }
@@ -72,13 +77,17 @@ pub struct Node<C: PdClient + 'static> {
 }
 
 impl<C> Node<C>
-    where C: PdClient
+where
+    C: PdClient,
 {
-    pub fn new<T>(event_loop: &mut EventLoop<Store<T, C>>,
-                  cfg: &Config,
-                  pd_client: Arc<C>)
-                  -> Node<C>
-        where T: Transport + 'static
+    pub fn new<T>(
+        event_loop: &mut EventLoop<Store<T, C>>,
+        cfg: &ServerConfig,
+        store_cfg: &StoreConfig,
+        pd_client: Arc<C>,
+    ) -> Node<C>
+    where
+        T: Transport + 'static,
     {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
@@ -101,21 +110,23 @@ impl<C> Node<C>
         Node {
             cluster_id: cfg.cluster_id,
             store: store,
-            store_cfg: cfg.raft_store.clone(),
+            store_cfg: store_cfg.clone(),
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
         }
     }
 
-    pub fn start<T>(&mut self,
-                    event_loop: EventLoop<Store<T, C>>,
-                    engine: Arc<DB>,
-                    trans: T,
-                    snap_mgr: SnapManager,
-                    snap_status_receiver: Receiver<SnapshotStatusMsg>)
-                    -> Result<()>
-        where T: Transport + 'static
+    pub fn start<T>(
+        &mut self,
+        event_loop: EventLoop<Store<T, C>>,
+        engine: Arc<DB>,
+        trans: T,
+        snap_mgr: SnapManager,
+        snap_status_receiver: Receiver<SnapshotStatusMsg>,
+    ) -> Result<()>
+    where
+        T: Transport + 'static,
     {
         let bootstrapped = try!(self.check_cluster_bootstrapped());
         let mut store_id = try!(self.check_store(&engine));
@@ -123,11 +134,13 @@ impl<C> Node<C>
             store_id = try!(self.bootstrap_store(&engine));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
-            return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped, \
-                                 maybe you connected a wrong PD or need to remove the TiKV data \
-                                 and start again",
-                                store_id,
-                                self.cluster_id));
+            return Err(box_err!(
+                "store {} is not empty, but cluster {} is not bootstrapped, \
+                 maybe you connected a wrong PD or need to remove the TiKV data \
+                 and start again",
+                store_id,
+                self.cluster_id
+            ));
         }
 
         self.store.set_id(store_id);
@@ -140,14 +153,15 @@ impl<C> Node<C>
         }
 
         // inform pd.
-        try!(self.pd_client
-            .put_store(self.store.clone()));
-        try!(self.start_store(event_loop,
-                              store_id,
-                              engine,
-                              trans,
-                              snap_mgr,
-                              snap_status_receiver));
+        try!(self.pd_client.put_store(self.store.clone()));
+        try!(self.start_store(
+            event_loop,
+            store_id,
+            engine,
+            trans,
+            snap_mgr,
+            snap_status_receiver
+        ));
         Ok(())
     }
 
@@ -169,10 +183,12 @@ impl<C> Node<C>
 
         let ident = res.unwrap();
         if ident.get_cluster_id() != self.cluster_id {
-            error!("cluster ID mismatch: local_id {} remote_id {}. \
-            you are trying to connect to another cluster, please reconnect to the correct PD",
-                   ident.get_cluster_id(),
-                   self.cluster_id);
+            error!(
+                "cluster ID mismatch: local_id {} remote_id {}. \
+                 you are trying to connect to another cluster, please reconnect to the correct PD",
+                ident.get_cluster_id(),
+                self.cluster_id
+            );
             process::exit(1);
         }
 
@@ -200,16 +216,25 @@ impl<C> Node<C>
 
     pub fn prepare_bootstrap_cluster(&self, engine: &DB, store_id: u64) -> Result<metapb::Region> {
         let region_id = try!(self.alloc_id());
-        info!("alloc first region id {} for cluster {}, store {}",
-              region_id,
-              self.cluster_id,
-              store_id);
+        info!(
+            "alloc first region id {} for cluster {}, store {}",
+            region_id,
+            self.cluster_id,
+            store_id
+        );
         let peer_id = try!(self.alloc_id());
-        info!("alloc first peer id {} for first region {}",
-              peer_id,
-              region_id);
+        info!(
+            "alloc first peer id {} for first region {}",
+            peer_id,
+            region_id
+        );
 
-        let region = try!(store::prepare_bootstrap(engine, store_id, region_id, peer_id));
+        let region = try!(store::prepare_bootstrap(
+            engine,
+            store_id,
+            region_id,
+            peer_id
+        ));
         Ok(region)
     }
 
@@ -227,7 +252,10 @@ impl<C> Node<C>
                         try!(check_region_epoch(&region, &first_region));
                         try!(store::clear_prepare_bootstrap_state(engine));
                     } else {
-                        try!(store::clear_prepare_bootstrap(engine, first_region.get_id()));
+                        try!(store::clear_prepare_bootstrap(
+                            engine,
+                            first_region.get_id()
+                        ));
                     }
                     return Ok(());
                 }
@@ -236,7 +264,9 @@ impl<C> Node<C>
                     warn!("check cluster prepare bootstrapped failed: {:?}", e);
                 }
             }
-            thread::sleep(Duration::from_secs(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS));
+            thread::sleep(Duration::from_secs(
+                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
+            ));
         }
         Err(box_err!("check cluster prepare bootstrapped failed"))
     }
@@ -267,20 +297,24 @@ impl<C> Node<C>
                     warn!("check cluster bootstrapped failed: {:?}", e);
                 }
             }
-            thread::sleep(Duration::from_secs(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS));
+            thread::sleep(Duration::from_secs(
+                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
+            ));
         }
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    fn start_store<T>(&mut self,
-                      mut event_loop: EventLoop<Store<T, C>>,
-                      store_id: u64,
-                      db: Arc<DB>,
-                      trans: T,
-                      snap_mgr: SnapManager,
-                      snapshot_status_receiver: Receiver<SnapshotStatusMsg>)
-                      -> Result<()>
-        where T: Transport + 'static
+    fn start_store<T>(
+        &mut self,
+        mut event_loop: EventLoop<Store<T, C>>,
+        store_id: u64,
+        db: Arc<DB>,
+        trans: T,
+        snap_mgr: SnapManager,
+        snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
+    ) -> Result<()>
+    where
+        T: Transport + 'static,
     {
         info!("start raft store {} thread", store_id);
 

@@ -21,9 +21,8 @@
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![recursion_limit="100"]
+#![recursion_limit = "100"]
 #![feature(ascii_ctype)]
-
 #![allow(module_inception)]
 #![allow(should_implement_trait)]
 #![allow(large_enum_variant)]
@@ -78,11 +77,12 @@ extern crate sys_info;
 
 #[macro_use]
 pub mod util;
+pub mod config;
 pub mod raft;
 pub mod storage;
-
-pub use storage::Storage;
 pub mod raftstore;
 pub mod pd;
 pub mod server;
 pub mod coprocessor;
+
+pub use storage::Storage;

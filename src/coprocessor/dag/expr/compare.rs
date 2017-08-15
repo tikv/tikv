@@ -28,13 +28,7 @@ impl FnCall {
         let lhs = try!(self.children[0].eval_int(ctx, row));
         let rhs = try!(self.children[1].eval_int(ctx, row));
         match (lhs, rhs) {
-            (None, _) | (_, None) => {
-                if sig == ScalarFuncSig::NullEQInt {
-                    Ok(Some(1))
-                } else {
-                    Ok(None)
-                }
-            }
+            (None, None) if sig == ScalarFuncSig::NullEQInt => Ok(Some(1)),
             (Some(lhs), Some(rhs)) => {
                 let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
                 let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
@@ -49,6 +43,7 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
+            _ => Ok(None),
         }
     }
 
@@ -60,13 +55,7 @@ impl FnCall {
         let lhs = try!(self.children[0].eval_real(ctx, row));
         let rhs = try!(self.children[1].eval_real(ctx, row));
         match (lhs, rhs) {
-            (None, _) | (_, None) => {
-                if sig == ScalarFuncSig::NullEQReal {
-                    Ok(Some(1))
-                } else {
-                    Ok(None)
-                }
-            }
+            (None, None) if sig == ScalarFuncSig::NullEQReal => Ok(Some(1)),
             (Some(lhs), Some(rhs)) => {
                 let ordering = try!(datum::cmp_f64(lhs, rhs));
                 Ok(Some(match sig {
@@ -80,6 +69,7 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
+            _ => Ok(None),
         }
     }
 
@@ -91,13 +81,7 @@ impl FnCall {
         let lhs = try!(self.children[0].eval_decimal(ctx, row));
         let rhs = try!(self.children[1].eval_decimal(ctx, row));
         match (lhs, rhs) {
-            (None, _) | (_, None) => {
-                if sig == ScalarFuncSig::NullEQDecimal {
-                    Ok(Some(1))
-                } else {
-                    Ok(None)
-                }
-            }
+            (None, None) if sig == ScalarFuncSig::NullEQDecimal => Ok(Some(1)),
             (Some(lhs), Some(rhs)) => {
                 let ordering = lhs.cmp(&rhs);
                 Ok(Some(match sig {
@@ -111,6 +95,7 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
+            _ => Ok(None)
         }
     }
 
@@ -122,13 +107,7 @@ impl FnCall {
         let lhs = try!(self.children[0].eval_string(ctx, row));
         let rhs = try!(self.children[1].eval_string(ctx, row));
         match (lhs, rhs) {
-            (None, _) | (_, None) => {
-                if sig == ScalarFuncSig::NullEQString {
-                    Ok(Some(1))
-                } else {
-                    Ok(None)
-                }
-            }
+            (None, None) if sig == ScalarFuncSig::NullEQString => Ok(Some(1)),
             (Some(lhs), Some(rhs)) => {
                 let ordering = lhs.cmp(&rhs);
                 Ok(Some(match sig {
@@ -142,6 +121,7 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
+            _ => Ok(None)
         }
     }
 
@@ -153,13 +133,7 @@ impl FnCall {
         let lhs = try!(self.children[0].eval_time(ctx, row));
         let rhs = try!(self.children[1].eval_time(ctx, row));
         match (lhs, rhs) {
-            (None, _) | (_, None) => {
-                if sig == ScalarFuncSig::NullEQTime {
-                    Ok(Some(1))
-                } else {
-                    Ok(None)
-                }
-            }
+            (None, None) if sig == ScalarFuncSig::NullEQTime => Ok(Some(1)),
             (Some(lhs), Some(rhs)) => {
                 let ordering = lhs.cmp(&rhs);
                 Ok(Some(match sig {
@@ -173,6 +147,7 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
+            _ => Ok(None)
         }
     }
 
@@ -184,13 +159,7 @@ impl FnCall {
         let lhs = try!(self.children[0].eval_duration(ctx, row));
         let rhs = try!(self.children[1].eval_duration(ctx, row));
         match (lhs, rhs) {
-            (None, _) | (_, None) => {
-                if sig == ScalarFuncSig::NullEQDuration {
-                    Ok(Some(1))
-                } else {
-                    Ok(None)
-                }
-            }
+            (None, None) if sig == ScalarFuncSig::NullEQDuration => Ok(Some(1)),
             (Some(lhs), Some(rhs)) => {
                 let ordering = lhs.cmp(&rhs);
                 Ok(Some(match sig {
@@ -204,6 +173,7 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
+            _ => Ok(None)
         }
     }
 
@@ -215,13 +185,7 @@ impl FnCall {
         let lhs = try!(self.children[0].eval_json(ctx, row));
         let rhs = try!(self.children[1].eval_json(ctx, row));
         match (lhs, rhs) {
-            (None, _) | (_, None) => {
-                if sig == ScalarFuncSig::NullEQJson {
-                    Ok(Some(1))
-                } else {
-                    Ok(None)
-                }
-            }
+            (None, None) if sig == ScalarFuncSig::NullEQJson => Ok(Some(1)),
             (Some(lhs), Some(rhs)) => {
                 let ordering = lhs.cmp(&rhs);
                 Ok(Some(match sig {
@@ -235,6 +199,7 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
+            _ => Ok(None)
         }
     }
 }

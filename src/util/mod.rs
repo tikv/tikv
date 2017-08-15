@@ -15,7 +15,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io;
 use std::{slice, thread};
-use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -41,17 +41,19 @@ pub mod file_log;
 pub mod metrics;
 pub mod threadpool;
 pub mod collections;
-pub mod properties;
 pub mod time;
 
-#[cfg(target_os="linux")]
+pub use self::rocksdb::properties;
+
+#[cfg(target_os = "linux")]
 mod thread_metrics;
 
 pub const NO_LIMIT: u64 = u64::MAX;
 
 pub fn get_limit_at_size<'a, T, I>(entries: I, max: u64) -> usize
-    where T: Message + Clone,
-          I: IntoIterator<Item = &'a T>
+where
+    T: Message + Clone,
+    I: IntoIterator<Item = &'a T>,
 {
     let mut iter = entries.into_iter();
     // If max is NO_LIMIT, we can return directly.
@@ -101,7 +103,9 @@ pub struct DefaultRng {
 
 impl DefaultRng {
     fn new() -> DefaultRng {
-        DefaultRng { rng: rand::thread_rng() }
+        DefaultRng {
+            rng: rand::thread_rng(),
+        }
     }
 }
 
@@ -273,7 +277,10 @@ impl<'a, T: 'a, V: 'a, E> TryInsertWith<'a, V, E> for Entry<'a, T, V> {
 }
 
 pub fn get_tag_from_thread_name() -> Option<String> {
-    thread::current().name().and_then(|name| name.split("::").skip(1).last()).map(From::from)
+    thread::current()
+        .name()
+        .and_then(|name| name.split("::").skip(1).last())
+        .map(From::from)
 }
 
 /// `DeferContext` will invoke the wrapped closure when dropped.
@@ -331,9 +338,11 @@ pub fn build_info() -> (String, String, String) {
     let raw = include_str!(concat!(env!("OUT_DIR"), "/build-info.txt"));
     let mut parts = raw.split('\n');
 
-    (parts.next().unwrap_or("None").to_owned(),
-     parts.next().unwrap_or("None").to_owned(),
-     parts.next().unwrap_or("None").to_owned())
+    (
+        parts.next().unwrap_or("None").to_owned(),
+        parts.next().unwrap_or("None").to_owned(),
+        parts.next().unwrap_or("None").to_owned(),
+    )
 }
 
 /// `print_tikv_info` prints the tikv version information to the standard output.
@@ -347,10 +356,11 @@ pub fn print_tikv_info() {
 }
 
 /// `run_prometheus` runs a background prometheus client.
-pub fn run_prometheus(interval: Duration,
-                      address: &str,
-                      job: &str)
-                      -> Option<thread::JoinHandle<()>> {
+pub fn run_prometheus(
+    interval: Duration,
+    address: &str,
+    job: &str,
+) -> Option<thread::JoinHandle<()>> {
     if interval == Duration::from_secs(0) {
         return None;
     }
@@ -359,30 +369,30 @@ pub fn run_prometheus(interval: Duration,
     let address = address.to_owned();
     let handler = thread::Builder::new()
         .name("promepusher".to_owned())
-        .spawn(move || {
-            loop {
-                let metric_familys = prometheus::gather();
+        .spawn(move || loop {
+            let metric_familys = prometheus::gather();
 
-                let res = prometheus::push_metrics(&job,
-                                                   prometheus::hostname_grouping_key(),
-                                                   &address,
-                                                   metric_familys);
-                if let Err(e) = res {
-                    error!("fail to push metrics: {}", e);
-                }
-
-                thread::sleep(interval);
+            let res = prometheus::push_metrics(
+                &job,
+                prometheus::hostname_grouping_key(),
+                &address,
+                metric_familys,
+            );
+            if let Err(e) = res {
+                error!("fail to push metrics: {}", e);
             }
+
+            thread::sleep(interval);
         })
         .unwrap();
 
     Some(handler)
 }
 
-#[cfg(target_os="linux")]
+#[cfg(target_os = "linux")]
 pub use self::thread_metrics::monitor_threads;
 
-#[cfg(not(target_os="linux"))]
+#[cfg(not(target_os = "linux"))]
 pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
     Ok(())
 }
@@ -418,7 +428,8 @@ impl<T> RingQueue<T> {
     }
 
     pub fn swap_remove_front<F>(&mut self, f: F) -> Option<T>
-        where F: FnMut(&T) -> bool
+    where
+        F: FnMut(&T) -> bool,
     {
         if let Some(pos) = self.buf.iter().position(f) {
             self.buf.swap_remove_front(pos)
@@ -430,7 +441,10 @@ impl<T> RingQueue<T> {
 
 // `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
 pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
-    a.iter().filter(|x| b.iter().find(|y| y == x).is_none()).map(|x| *x).collect()
+    a.iter()
+        .filter(|x| b.iter().find(|y| y == x).is_none())
+        .map(|x| *x)
+        .collect()
 }
 
 #[inline]
@@ -441,7 +455,7 @@ pub fn is_even(n: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::*;
-    use std::net::{SocketAddr, AddrParseError};
+    use std::net::{AddrParseError, SocketAddr};
     use std::rc::Rc;
     use std::cmp;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -463,10 +477,7 @@ mod tests {
             assert_eq!(to_socket_addr(addr).is_ok(), ok);
         }
 
-        let tbls = vec![
-            ("localhost:80", false),
-            ("127.0.0.1:80", true),
-        ];
+        let tbls = vec![("localhost:80", false), ("127.0.0.1:80", true)];
 
         for (addr, ok) in tbls {
             let ret: Result<SocketAddr, AddrParseError> = addr.parse();
@@ -542,7 +553,7 @@ mod tests {
             (vec![e.clone(); 10], NO_LIMIT, 10),
             (vec![e.clone(); 10], size, 1),
             (vec![e.clone(); 10], size + 1, 1),
-            (vec![e.clone(); 10], 2 * size , 2),
+            (vec![e.clone(); 10], 2 * size, 2),
             (vec![e.clone(); 10], 10 * size - 1, 9),
             (vec![e.clone(); 10], 10 * size, 10),
             (vec![e.clone(); 10], 10 * size + 1, 10),
@@ -576,13 +587,15 @@ mod tests {
                         res.extend_from_slice(p1);
                         res.extend_from_slice(p2);
                         let exp: Vec<_> = (low..high).collect();
-                        assert_eq!(res,
-                                   exp,
-                                   "[{}, {}) in {:?} with first: {}",
-                                   low,
-                                   high,
-                                   v,
-                                   first);
+                        assert_eq!(
+                            res,
+                            exp,
+                            "[{}, {}) in {:?} with first: {}",
+                            low,
+                            high,
+                            v,
+                            first
+                        );
                     }
                 }
             }

@@ -18,11 +18,11 @@ mod metrics;
 mod future;
 
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle, Builder};
+use std::thread::{self, Builder, JoinHandle};
 use std::io;
-use std::fmt::{self, Formatter, Display, Debug};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Sender, Receiver, SendError};
+use std::sync::mpsc::{self, Receiver, SendError, Sender};
 use std::error::Error;
 
 use util::time::SlowTimer;
@@ -88,10 +88,11 @@ pub struct Scheduler<T> {
 }
 
 impl<T: Display> Scheduler<T> {
-    fn new<S: Into<String>>(name: S,
-                            counter: AtomicUsize,
-                            sender: Sender<Option<T>>)
-                            -> Scheduler<T> {
+    fn new<S: Into<String>>(
+        name: S,
+        counter: AtomicUsize,
+        sender: Sender<Option<T>>,
+    ) -> Scheduler<T> {
         Scheduler {
             name: Arc::new(name.into()),
             counter: Arc::new(counter),
@@ -145,8 +146,9 @@ pub struct Worker<T: Display> {
 }
 
 fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
-    where R: BatchRunnable<T> + Send + 'static,
-          T: Display + Send + 'static
+where
+    R: BatchRunnable<T> + Send + 'static,
+    T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut keep_going = true;
@@ -168,7 +170,9 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
             }
         }
         counter.fetch_sub(buffer.len(), Ordering::SeqCst);
-        PENDING_TASKS.with_label_values(&[&name]).sub(buffer.len() as f64);
+        PENDING_TASKS
+            .with_label_values(&[&name])
+            .sub(buffer.len() as f64);
         runner.run_batch(&mut buffer);
         buffer.clear();
     }
@@ -192,7 +196,8 @@ impl<T: Display + Send + 'static> Worker<T> {
     }
 
     pub fn start_batch<R>(&mut self, runner: R, batch_size: usize) -> Result<(), io::Error>
-        where R: BatchRunnable<T> + Send + 'static
+    where
+        R: BatchRunnable<T> + Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.scheduler.name);
@@ -203,9 +208,11 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
-        let h = try!(Builder::new()
-            .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size)));
+        let h = try!(
+            Builder::new()
+                .name(thd_name!(self.scheduler.name.as_ref()))
+                .spawn(move || poll(runner, rx, counter, batch_size))
+        );
         self.handle = Some(h);
         Ok(())
     }

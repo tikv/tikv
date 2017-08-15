@@ -14,7 +14,7 @@
 #[cfg(feature = "mem-profiling")]
 mod imp {
     use std::ffi::CString;
-    use std::{ptr, env};
+    use std::{env, ptr};
 
     use jemallocator;
     use libc::c_char;
@@ -34,7 +34,9 @@ mod imp {
         /// the guard is dropped.
         #[inline]
         unsafe fn get_mut_ptr(&mut self) -> *mut c_char {
-            self.0.as_mut().map_or(ptr::null_mut(), |v| v.as_mut_ptr() as *mut c_char)
+            self.0
+                .as_mut()
+                .map_or(ptr::null_mut(), |v| v.as_mut_ptr() as *mut c_char)
         }
     }
 

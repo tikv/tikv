@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
 use tikv::util::rocksdb::get_cf_handle;
+use tikv::util::config::*;
 use rocksdb::DB;
 use protobuf;
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
@@ -26,7 +27,8 @@ use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 
 fn get_msg_cf_or_default<M>(engine: &DB, cf: &str, key: &[u8]) -> M
-    where M: protobuf::Message + protobuf::MessageStatic
+where
+    M: protobuf::Message + protobuf::MessageStatic,
 {
     engine.get_msg_cf(cf, key).unwrap().unwrap_or_default()
 }
@@ -56,10 +58,11 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     panic!("after inserting 1000 entries, compaction is still not finished.");
 }
 
-fn check_compacted(engines: &HashMap<u64, Arc<DB>>,
-                   before_states: &HashMap<u64, RaftTruncatedState>,
-                   compact_count: u64)
-                   -> bool {
+fn check_compacted(
+    engines: &HashMap<u64, Arc<DB>>,
+    before_states: &HashMap<u64, RaftTruncatedState>,
+    compact_count: u64,
+) -> bool {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
     let mut compacted_idx = HashMap::new();
 
@@ -100,7 +103,7 @@ fn check_compacted(engines: &HashMap<u64, Arc<DB>>,
 fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = 20 * 1024 * 1024;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
@@ -156,7 +159,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     let gc_limit: u64 = 100;
     cluster.cfg.raft_store.raft_log_gc_count_limit = gc_limit;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 100; // 100 ms
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
@@ -212,7 +215,7 @@ fn test_node_compact_many_times() {
 
 fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 100000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = 2 * 1024 * 1024;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(2);
     cluster.run();
     cluster.stop_node(1);
 

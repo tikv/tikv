@@ -70,8 +70,10 @@ impl PdMocker for LeaderChange {
             return Some(Err("not leader".to_owned()));
         }
 
-        info!("[LeaderChange] get_members: {:?}",
-              inner.resps[inner.r.idx % inner.resps.len()]);
+        info!(
+            "[LeaderChange] get_members: {:?}",
+            inner.resps[inner.r.idx % inner.resps.len()]
+        );
         Some(Ok(inner.resps[inner.r.idx % inner.resps.len()].clone()))
     }
 
@@ -81,8 +83,10 @@ impl PdMocker for LeaderChange {
         if now.duration_since(inner.r.ts) > LeaderChange::get_leader_interval() {
             inner.r.idx += 1;
             inner.r.ts = now;
-            debug!("[LeaderChange] change leader to {:?}",
-                   inner.resps[inner.r.idx % inner.resps.len()].get_leader());
+            debug!(
+                "[LeaderChange] change leader to {:?}",
+                inner.resps[inner.r.idx % inner.resps.len()].get_leader()
+            );
         }
 
         Some(Err("not leader".to_owned()))
