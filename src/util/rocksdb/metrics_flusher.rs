@@ -39,18 +39,19 @@ impl MetricsFlusher {
     }
 
     pub fn start(&mut self) -> Result<(), io::Error> {
-        let engine = self.engine.clone();
+        let db = self.engine.clone();
         let (tx, rx) = mpsc::channel();
         let interval = self.interval;
         self.sender = Some(tx);
-        let h = try!(Builder::new().name(thd_name!("flush metrics")).spawn(
-            move || {
-                let db = engine;
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                    flush_metrics(&db);
-                }
-            }
-        ));
+        let h = try!(
+            Builder::new()
+                .name(thd_name!("rocksb-metrics-flusher"))
+                .spawn(move || {
+                    while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
+                        flush_metrics(&db);
+                    }
+                })
+        );
 
         self.handle = Some(h);
         Ok(())
