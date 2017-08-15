@@ -18,6 +18,7 @@ mod compare;
 
 use std::io;
 use std::convert::TryFrom;
+use std::string::FromUtf8Error;
 
 use tipb::expression::{DataType, Expr, ExprType, FieldType, ScalarFuncSig};
 
@@ -26,6 +27,7 @@ use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::Datum;
 use util;
 use util::codec::number::NumberDecoder;
+use util::codec::Error as CError;
 
 pub use coprocessor::select::xeval::EvalContext as StatementContext;
 
@@ -56,6 +58,12 @@ quick_error! {
             description(desc)
             display("error {}", desc)
         }
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(err: FromUtf8Error) -> Error {
+        Error::Codec(CError::Encoding(err.utf8_error().into()))
     }
 }
 

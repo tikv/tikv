@@ -1133,10 +1133,9 @@ impl Decimal {
                 RoundMode::Ceiling => {
                     // If any word after scale is not zero, do increment.
                     // e.g ceiling 3.0001 to scale 1, gets 3.1
-                    let idx = to_idx + frac_word_cnt as i8 + frac_words_to;
+                    let idx = to_idx + frac_word_cnt as i8 - frac_words_to;
                     if idx > to_idx {
-                        let start = if to_idx < 0 { 0 } else { to_idx as usize + 1 };
-                        res.word_buf[start..(idx as usize + 1)]
+                        res.word_buf[(to_idx + 1) as usize..(idx as usize + 1)]
                             .iter()
                             .any(|c| *c != 0)
                     } else {
@@ -1589,7 +1588,7 @@ impl Decimal {
 
     pub fn is_zero(&self) -> bool {
         let len = word_cnt!(self.int_cnt) + word_cnt!(self.frac_cnt);
-        !self.word_buf[0..len as usize].iter().any(|&x| x != 0)
+        self.word_buf[0..len as usize].iter().all(|&x| x == 0)
     }
 }
 

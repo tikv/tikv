@@ -15,6 +15,7 @@
 #![allow(dead_code)]
 
 use std::{str, i64, u64};
+use std::ascii::AsciiExt;
 
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::{Decimal, Duration, Time};
@@ -36,12 +37,12 @@ impl FnCall {
             return Ok(None);
         }
         let val = val.unwrap();
-        if !mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
-            let res = try!(convert_float_to_int(val, i64::MIN, i64::MAX, types::DOUBLE));
-            Ok(Some(res))
-        } else {
+        if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
             let uval = try!(convert_float_to_uint(val, u64::MAX, types::DOUBLE));
             Ok(Some(uval as i64))
+        } else {
+            let res = try!(convert_float_to_int(val, i64::MIN, i64::MAX, types::DOUBLE));
+            Ok(Some(res))
         }
     }
 
@@ -75,8 +76,12 @@ impl FnCall {
             return Ok(None);
         }
         let val = val.unwrap();
-
-        if !val.is_empty() && val[0] == b"-"[0] {
+        let negative_flag = b'-';
+        let is_negative = match val.iter().skip_while(|x| x.is_ascii_whitespace()).next() {
+            Some(&negative_flag) => true,
+            _ => false,
+        };
+        if is_negative {
             // negative
             let v = try!(convert::bytes_to_int(ctx, &val));
             // TODO: if overflow, don't append this warning
