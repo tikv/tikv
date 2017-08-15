@@ -15,7 +15,7 @@
 #![allow(deprecated)]
 
 use std::collections::VecDeque;
-use std::hash::{Hash, SipHasher as DefaultHasher, Hasher};
+use std::hash::{Hash, Hasher, SipHasher as DefaultHasher};
 use std::usize;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
@@ -34,7 +34,9 @@ struct Latch {
 impl Latch {
     /// Creates a latch with an empty waiting queue.
     pub fn new() -> Latch {
-        Latch { waiting: VecDeque::new() }
+        Latch {
+            waiting: VecDeque::new(),
+        }
     }
 }
 
@@ -90,7 +92,8 @@ impl Latches {
 
     /// Creates a lock which specifies all the required latches for a command.
     pub fn gen_lock<H>(&self, keys: &[H]) -> Lock
-        where H: Hash
+    where
+        H: Hash,
     {
         // prevent from deadlock, so we sort and deduplicate the index
         let mut slots: Vec<usize> = keys.iter().map(|x| self.calc_slot(x)).collect();
@@ -111,14 +114,12 @@ impl Latches {
 
             let front = latch.waiting.front().cloned();
             match front {
-                Some(cid) => {
-                    if cid == who {
-                        acquired_count += 1;
-                    } else {
-                        latch.waiting.push_back(who);
-                        break;
-                    }
-                }
+                Some(cid) => if cid == who {
+                    acquired_count += 1;
+                } else {
+                    latch.waiting.push_back(who);
+                    break;
+                },
                 None => {
                     latch.waiting.push_back(who);
                     acquired_count += 1;
@@ -149,7 +150,8 @@ impl Latches {
 
     /// Calculates the slot ID by hashing the `key`.
     fn calc_slot<H>(&self, key: &H) -> usize
-        where H: Hash
+    where
+        H: Hash,
     {
         let mut s = DefaultHasher::new();
         key.hash(&mut s);

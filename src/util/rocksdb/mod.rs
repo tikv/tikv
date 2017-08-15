@@ -17,7 +17,7 @@ use std::fs;
 use std::path::Path;
 
 use storage::CF_DEFAULT;
-use rocksdb::{DB, ColumnFamilyOptions, DBOptions, SliceTransform, DBCompressionType};
+use rocksdb::{ColumnFamilyOptions, DBCompressionType, DBOptions, SliceTransform, DB};
 use rocksdb::rocksdb::supported_compression;
 
 pub use rocksdb::CFHandle;
@@ -25,12 +25,16 @@ pub use rocksdb::CFHandle;
 use super::cfs_diff;
 
 // Zlib and bzip2 are too slow.
-const COMPRESSION_PRIORITY: [DBCompressionType; 3] =
-    [DBCompressionType::Lz4, DBCompressionType::Snappy, DBCompressionType::Zstd];
+const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
+    DBCompressionType::Lz4,
+    DBCompressionType::Snappy,
+    DBCompressionType::Zstd,
+];
 
 pub fn get_fastest_supported_compression_type() -> DBCompressionType {
     let all_supported_compression = supported_compression();
-    *COMPRESSION_PRIORITY.into_iter()
+    *COMPRESSION_PRIORITY
+        .into_iter()
         .find(|c| all_supported_compression.contains(c))
         .unwrap_or(&DBCompressionType::No)
 }
@@ -50,11 +54,12 @@ pub fn open(path: &str, cfs: &[&str]) -> Result<DB, String> {
     open_opt(opts, path, cfs.to_vec(), cfs_opts)
 }
 
-pub fn open_opt(opts: DBOptions,
-                path: &str,
-                cfs: Vec<&str>,
-                cfs_opts: Vec<ColumnFamilyOptions>)
-                -> Result<DB, String> {
+pub fn open_opt(
+    opts: DBOptions,
+    path: &str,
+    cfs: Vec<&str>,
+    cfs_opts: Vec<ColumnFamilyOptions>,
+) -> Result<DB, String> {
     DB::open_cf(opts, path, cfs, cfs_opts)
 }
 
@@ -82,10 +87,11 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     new_engine_opt(path, db_opts, cfs_opts)
 }
 
-fn check_and_open(path: &str,
-                  mut db_opt: DBOptions,
-                  cfs_opts: Vec<CFOptions>)
-                  -> Result<DB, String> {
+fn check_and_open(
+    path: &str,
+    mut db_opt: DBOptions,
+    cfs_opts: Vec<CFOptions>,
+) -> Result<DB, String> {
     // If db not exist, create it.
     if !db_exist(path) {
         db_opt.create_if_missing(true);
@@ -153,8 +159,17 @@ fn check_and_open(path: &str,
 
     // Create needed column families not existed yet.
     for cf in cfs_diff(&needed, &existed) {
-        try!(db.create_cf(cf,
-                          cfs_opts.iter().find(|x| x.cf == cf).unwrap().options.clone()));
+        try!(
+            db.create_cf(
+                cf,
+                cfs_opts
+                    .iter()
+                    .find(|x| x.cf == cf)
+                    .unwrap()
+                    .options
+                    .clone()
+            )
+        );
     }
 
     Ok(db)
@@ -182,7 +197,9 @@ pub struct FixedSuffixSliceTransform {
 
 impl FixedSuffixSliceTransform {
     pub fn new(suffix_len: usize) -> FixedSuffixSliceTransform {
-        FixedSuffixSliceTransform { suffix_len: suffix_len }
+        FixedSuffixSliceTransform {
+            suffix_len: suffix_len,
+        }
     }
 }
 
@@ -208,7 +225,9 @@ pub struct FixedPrefixSliceTransform {
 
 impl FixedPrefixSliceTransform {
     pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
-        FixedPrefixSliceTransform { prefix_len: prefix_len }
+        FixedPrefixSliceTransform {
+            prefix_len: prefix_len,
+        }
     }
 }
 
@@ -244,7 +263,7 @@ impl SliceTransform for NoopSliceTransform {
 
 #[cfg(test)]
 mod tests {
-    use rocksdb::{DB, DBOptions, ColumnFamilyOptions};
+    use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
     use tempdir::TempDir;
     use storage::CF_DEFAULT;
     use super::{check_and_open, CFOptions};
@@ -260,8 +279,10 @@ mod tests {
         column_families_must_eq(path_str, vec![CF_DEFAULT]);
 
         // add cf1.
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                            CFOptions::new("cf1", ColumnFamilyOptions::new())];
+        let cfs_opts = vec![
+            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+            CFOptions::new("cf1", ColumnFamilyOptions::new()),
+        ];
         check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
         column_families_must_eq(path_str, vec![CF_DEFAULT, "cf1"]);
 

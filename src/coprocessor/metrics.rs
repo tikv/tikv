@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{HistogramVec, CounterVec, GaugeVec, exponential_buckets};
+use prometheus::{exponential_buckets, CounterVec, GaugeVec, HistogramVec};
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec =

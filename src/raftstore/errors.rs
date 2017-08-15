@@ -156,14 +156,22 @@ impl Into<errorpb::Error> for Error {
             }
             Error::RaftEntryTooLarge(region_id, entry_size) => {
                 errorpb.mut_raft_entry_too_large().set_region_id(region_id);
-                errorpb.mut_raft_entry_too_large().set_entry_size(entry_size);
+                errorpb
+                    .mut_raft_entry_too_large()
+                    .set_entry_size(entry_size);
             }
             Error::StoreNotMatch(..) => errorpb.set_store_not_match(errorpb::StoreNotMatch::new()),
             Error::KeyNotInRegion(key, region) => {
                 errorpb.mut_key_not_in_region().set_key(key);
-                errorpb.mut_key_not_in_region().set_region_id(region.get_id());
-                errorpb.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
-                errorpb.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
+                errorpb
+                    .mut_key_not_in_region()
+                    .set_region_id(region.get_id());
+                errorpb
+                    .mut_key_not_in_region()
+                    .set_start_key(region.get_start_key().to_vec());
+                errorpb
+                    .mut_key_not_in_region()
+                    .set_end_key(region.get_end_key().to_vec());
             }
             Error::StaleEpoch(_, new_regions) => {
                 let mut e = errorpb::StaleEpoch::new();

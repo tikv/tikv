@@ -1,6 +1,6 @@
 use std::thread::sleep;
 use std::sync::mpsc;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 use tikv::util::HandyRwLock;
 use tikv::util::config::*;
@@ -21,10 +21,12 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<
         sleep(Duration::from_millis(10));
         peers = cluster.get_down_peers();
     }
-    panic!("got {:?}, want {} peers which should include {:?}",
-           peers,
-           count,
-           peer);
+    panic!(
+        "got {:?}, want {} peers which should include {:?}",
+        peers,
+        count,
+        peer
+    );
 }
 
 fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -65,8 +67,9 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     // new leader should reset all down peer list.
     wait_down_peers(cluster, 0, None);
     wait_down_peers(cluster, 1, Some(1));
-    assert!(cluster.get_down_peers()[&1].get_down_seconds() <
-            down_secs + timer.elapsed().as_secs());
+    assert!(
+        cluster.get_down_peers()[&1].get_down_seconds() < down_secs + timer.elapsed().as_secs()
+    );
 
     // Ensure that node will not reuse the previous peer heartbeats.
     cluster.must_transfer_leader(1, leader);
@@ -97,7 +100,10 @@ fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
 
     let (tx, _) = mpsc::channel();
-    cluster.sim.wl().add_recv_filter(2, box DropSnapshotFilter::new(tx));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(2, box DropSnapshotFilter::new(tx));
 
     pd_client.must_add_peer(region_id, new_peer(2, 2));
 
@@ -129,9 +135,11 @@ fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
             return;
         }
         if tried_times > 100 {
-            panic!("pending peer {:?} still exists after {} tries.",
-                   pending_peers,
-                   tried_times);
+            panic!(
+                "pending peer {:?} still exists after {} tries.",
+                pending_peers,
+                tried_times
+            );
         }
     }
 }

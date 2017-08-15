@@ -29,7 +29,7 @@ fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(stats.get_region_count(), 2);
 
-    let value = vec![0;1024];
+    let value = vec![0; 1024];
     for i in 0..1000 {
         let last_available = stats.get_available();
         cluster.must_put(format!("k{}", i).as_bytes(), &value);
