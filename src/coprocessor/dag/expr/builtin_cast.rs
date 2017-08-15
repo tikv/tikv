@@ -15,6 +15,7 @@
 #![allow(dead_code)]
 
 use std::{str, i64, u64};
+use std::ascii::AsciiExt;
 
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::{Decimal, Duration, Time};
@@ -74,15 +75,19 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = try!(String::from_utf8(val.unwrap()));
-        let val = val.trim();
-        if val.starts_with('-') {
+        let val = val.unwrap();
+        let negative_flag = b'-';
+        let is_negative = match val.iter().skip_while(|x| x.is_ascii_whitespace()).next() {
+            Some(&negative_flag) => true,
+            _ => false,
+        };
+        if is_negative {
             // negative
-            let v = try!(convert::bytes_to_int(ctx, val.as_bytes()));
+            let v = try!(convert::bytes_to_int(ctx, &val));
             // TODO: if overflow, don't append this warning
             Ok(Some(v))
         } else {
-            let urs = try!(convert::bytes_to_uint(ctx, val.as_bytes()));
+            let urs = try!(convert::bytes_to_uint(ctx, &val));
             // TODO: process overflow
             Ok(Some(urs as i64))
         }
