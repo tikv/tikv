@@ -15,7 +15,6 @@
 #![feature(slice_patterns)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
 // TODO: remove this once rust-lang/rust#43268 is resolved.
@@ -55,11 +54,11 @@ use std::process;
 use std::fs::File;
 use std::usize;
 use std::path::Path;
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::io::Read;
 use std::env;
 
-use clap::{Arg, App, ArgMatches};
+use clap::{App, Arg, ArgMatches};
 use fs2::FileExt;
 
 use tikv::config::{MetricConfig, TiKvConfig};
@@ -68,11 +67,11 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
-use tikv::server::{DEFAULT_CLUSTER_ID, Server, Node, create_raft_storage};
+use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
 use tikv::raftstore::store::{self, SnapManager};
-use tikv::pd::{RpcClient, PdClient};
+use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 
 fn exit_with_err<E: Error>(e: E) -> ! {
@@ -133,13 +132,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     let f = File::create(lock_path).unwrap_or_else(|e| exit_with_err(e));
     if f.try_lock_exclusive().is_err() {
-        exit_with_msg(format!("lock {:?} failed, maybe another instance is using this directory.",
-                              store_path));
+        exit_with_msg(format!(
+            "lock {:?} failed, maybe another instance is using this directory.",
+            store_path
+        ));
     }
 
     // Initialize raftstore channels.
-    let mut event_loop = store::create_event_loop(&cfg.raft_store)
-        .unwrap_or_else(|e| exit_with_err(e));
+    let mut event_loop =
+        store::create_event_loop(&cfg.raft_store).unwrap_or_else(|e| exit_with_err(e));
     let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
@@ -147,39 +148,42 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     // Create engine, storage.
     let opts = cfg.rocksdb.build_opt();
     let cfs_opts = cfg.rocksdb.build_cf_opts();
-    let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
-                                                           .unwrap(),
-                                                       opts,
-                                                       cfs_opts)
-        .unwrap_or_else(|s| exit_with_msg(s)));
+    let engine = Arc::new(
+        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), opts, cfs_opts)
+            .unwrap_or_else(|s| exit_with_msg(s)),
+    );
     let mut storage = create_raft_storage(raft_router.clone(), engine.clone(), &cfg.storage)
         .unwrap_or_else(|e| exit_with_err(e));
 
     // Create pd client, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
-    let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
-        .unwrap_or_else(|e| exit_with_err(e));
-    let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
-                                    Some(store_sendch),
-                                    cfg.raft_store.use_sst_file_snapshot);
-    let mut server = Server::new(&cfg.server,
-                                 cfg.raft_store.region_split_size.0 as usize,
-                                 storage.clone(),
-                                 raft_router,
-                                 snap_status_sender,
-                                 resolver,
-                                 snap_mgr.clone())
-        .unwrap_or_else(|e| exit_with_err(e));
+    let (mut worker, resolver) =
+        resolve::new_resolver(pd_client.clone()).unwrap_or_else(|e| exit_with_err(e));
+    let snap_mgr = SnapManager::new(
+        snap_path.as_path().to_str().unwrap().to_owned(),
+        Some(store_sendch),
+        cfg.raft_store.use_sst_file_snapshot,
+    );
+    let mut server = Server::new(
+        &cfg.server,
+        cfg.raft_store.region_split_size.0 as usize,
+        storage.clone(),
+        raft_router,
+        snap_status_sender,
+        resolver,
+        snap_mgr.clone(),
+    ).unwrap_or_else(|e| exit_with_err(e));
     let trans = server.transport();
 
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
-    node.start(event_loop,
-               engine.clone(),
-               trans,
-               snap_mgr,
-               snap_status_receiver)
-        .unwrap_or_else(|e| exit_with_err(e));
+    node.start(
+        event_loop,
+        engine.clone(),
+        trans,
+        snap_mgr,
+        snap_status_receiver,
+    ).unwrap_or_else(|e| exit_with_err(e));
     initial_metric(&cfg.metric, Some(node.id()));
 
     // Start storage.
@@ -189,7 +193,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     }
 
     // Run server.
-    server.start(&cfg.server).unwrap_or_else(|e| exit_with_err(e));
+    server
+        .start(&cfg.server)
+        .unwrap_or_else(|e| exit_with_err(e));
     signal_handler::handle_signal(engine, &cfg.rocksdb.backup_dir);
 
     // Stop.
@@ -227,7 +233,8 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
 
     if let Some(labels_vec) = matches.values_of("labels") {
         let mut labels = HashMap::new();
-        labels_vec.map(|s| {
+        labels_vec
+            .map(|s| {
                 let mut parts = s.split('=');
                 let key = parts.next().unwrap().to_owned();
                 let value = match parts.next() {
@@ -252,87 +259,113 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
 fn main() {
     let long_version: String = {
         let (hash, time, rust_ver) = util::build_info();
-        format!("{}\nGit Commit Hash: {}\nUTC Build Time:  {}\nRust Version:    {}",
-                crate_version!(),
-                hash,
-                time,
-                rust_ver)
+        format!(
+            "{}\nGit Commit Hash: {}\nUTC Build Time:  {}\nRust Version:    {}",
+            crate_version!(),
+            hash,
+            time,
+            rust_ver
+        )
     };
     let matches = App::new("TiKV")
         .long_version(long_version.as_ref())
         .author("PingCAP Inc. <info@pingcap.com>")
-        .about("A Distributed transactional key-value database powered by Rust and Raft")
-        .arg(Arg::with_name("config")
-            .short("C")
-            .long("config")
-            .value_name("FILE")
-            .help("Sets config file")
-            .takes_value(true))
-        .arg(Arg::with_name("addr")
-            .short("A")
-            .long("addr")
-            .takes_value(true)
-            .value_name("IP:PORT")
-            .help("Sets listening address"))
-        .arg(Arg::with_name("advertise-addr")
-            .long("advertise-addr")
-            .takes_value(true)
-            .value_name("IP:PORT")
-            .help("Sets advertise listening address for client communication"))
-        .arg(Arg::with_name("log-level")
-            .short("L")
-            .long("log-level")
-            .alias("log")
-            .takes_value(true)
-            .value_name("LEVEL")
-            .possible_values(&["trace", "debug", "info", "warn", "error", "off"])
-            .help("Sets log level"))
-        .arg(Arg::with_name("log-file")
-            .short("f")
-            .long("log-file")
-            .takes_value(true)
-            .value_name("FILE")
-            .help("Sets log file")
-            .long_help("Sets log file. If not set, output log to stderr"))
-        .arg(Arg::with_name("data-dir")
-            .long("data-dir")
-            .short("s")
-            .alias("store")
-            .takes_value(true)
-            .value_name("PATH")
-            .help("Sets the path to store directory"))
-        .arg(Arg::with_name("capacity")
-            .long("capacity")
-            .takes_value(true)
-            .value_name("CAPACITY")
-            .help("Sets the store capacity")
-            .long_help("Sets the store capacity. If not set, use entire partition"))
-        .arg(Arg::with_name("pd-endpoints")
-            .long("pd-endpoints")
-            .aliases(&["pd", "pd-endpoint"])
-            .takes_value(true)
-            .value_name("PD_URL")
-            .multiple(true)
-            .use_delimiter(true)
-            .require_delimiter(true)
-            .value_delimiter(",")
-            .help("Sets PD endpoints")
-            .long_help("Sets PD endpoints. Uses `,` to separate multiple PDs"))
-        .arg(Arg::with_name("labels")
-            .long("labels")
-            .alias("label")
-            .takes_value(true)
-            .value_name("KEY=VALUE")
-            .multiple(true)
-            .use_delimiter(true)
-            .require_delimiter(true)
-            .value_delimiter(",")
-            .help("Sets server labels")
-            .long_help("Sets server labels. Uses `,` to separate kv pairs, like \
-                        `zone=cn,disk=ssd`"))
-        .arg(Arg::with_name("print-sample-config")
-            .long("print-sample-config")
-            .help("Print a sample config to stdout"))
+        .about(
+            "A Distributed transactional key-value database powered by Rust and Raft",
+        )
+        .arg(
+            Arg::with_name("config")
+                .short("C")
+                .long("config")
+                .value_name("FILE")
+                .help("Sets config file")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("addr")
+                .short("A")
+                .long("addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Sets listening address"),
+        )
+        .arg(
+            Arg::with_name("advertise-addr")
+                .long("advertise-addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Sets advertise listening address for client communication"),
+        )
+        .arg(
+            Arg::with_name("log-level")
+                .short("L")
+                .long("log-level")
+                .alias("log")
+                .takes_value(true)
+                .value_name("LEVEL")
+                .possible_values(&["trace", "debug", "info", "warn", "error", "off"])
+                .help("Sets log level"),
+        )
+        .arg(
+            Arg::with_name("log-file")
+                .short("f")
+                .long("log-file")
+                .takes_value(true)
+                .value_name("FILE")
+                .help("Sets log file")
+                .long_help("Sets log file. If not set, output log to stderr"),
+        )
+        .arg(
+            Arg::with_name("data-dir")
+                .long("data-dir")
+                .short("s")
+                .alias("store")
+                .takes_value(true)
+                .value_name("PATH")
+                .help("Sets the path to store directory"),
+        )
+        .arg(
+            Arg::with_name("capacity")
+                .long("capacity")
+                .takes_value(true)
+                .value_name("CAPACITY")
+                .help("Sets the store capacity")
+                .long_help("Sets the store capacity. If not set, use entire partition"),
+        )
+        .arg(
+            Arg::with_name("pd-endpoints")
+                .long("pd-endpoints")
+                .aliases(&["pd", "pd-endpoint"])
+                .takes_value(true)
+                .value_name("PD_URL")
+                .multiple(true)
+                .use_delimiter(true)
+                .require_delimiter(true)
+                .value_delimiter(",")
+                .help("Sets PD endpoints")
+                .long_help("Sets PD endpoints. Uses `,` to separate multiple PDs"),
+        )
+        .arg(
+            Arg::with_name("labels")
+                .long("labels")
+                .alias("label")
+                .takes_value(true)
+                .value_name("KEY=VALUE")
+                .multiple(true)
+                .use_delimiter(true)
+                .require_delimiter(true)
+                .value_delimiter(",")
+                .help("Sets server labels")
+                .long_help(
+                    "Sets server labels. Uses `,` to separate kv pairs, like \
+                     `zone=cn,disk=ssd`",
+                ),
+        )
+        .arg(
+            Arg::with_name("print-sample-config")
+                .long("print-sample-config")
+                .help("Print a sample config to stdout"),
+        )
         .get_matches();
 
     if matches.is_present("print-sample-config") {
@@ -341,20 +374,23 @@ fn main() {
         process::exit(0);
     }
 
-    let mut config = matches.value_of("config").map_or_else(TiKvConfig::default, |path| {
-        File::open(&path)
-            .map_err::<Box<Error>, _>(|e| Box::new(e))
-            .and_then(|mut f| {
-                let mut s = String::new();
-                try!(f.read_to_string(&mut s));
-                let c = try!(toml::from_str(&s));
-                Ok(c)
-            })
-            .unwrap_or_else(|e| {
-                eprintln!("{:?}", e);
-                process::exit(-1);
-            })
-    });
+    let mut config = matches.value_of("config").map_or_else(
+        TiKvConfig::default,
+        |path| {
+            File::open(&path)
+                .map_err::<Box<Error>, _>(|e| Box::new(e))
+                .and_then(|mut f| {
+                    let mut s = String::new();
+                    try!(f.read_to_string(&mut s));
+                    let c = try!(toml::from_str(&s));
+                    Ok(c)
+                })
+                .unwrap_or_else(|e| {
+                    eprintln!("{:?}", e);
+                    process::exit(-1);
+                })
+        },
+    );
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
@@ -370,14 +406,17 @@ fn main() {
 
     panic_hook::set_exit_hook();
 
-    info!("using config: {}",
-          serde_json::to_string_pretty(&config).unwrap());
+    info!(
+        "using config: {}",
+        serde_json::to_string_pretty(&config).unwrap()
+    );
 
     // Before any startup, check system configuration.
     check_system_config(&config);
 
     let pd_client = RpcClient::new(&config.pd.endpoints).unwrap_or_else(|e| exit_with_err(e));
-    let cluster_id = pd_client.get_cluster_id()
+    let cluster_id = pd_client
+        .get_cluster_id()
         .unwrap_or_else(|e| exit_with_err(e));
     if cluster_id == DEFAULT_CLUSTER_ID {
         exit_with_msg(format!("cluster id can't be {}", DEFAULT_CLUSTER_ID));

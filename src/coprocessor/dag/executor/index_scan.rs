@@ -17,11 +17,11 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::{table, datum, mysql};
+use coprocessor::codec::{datum, mysql, table};
 use coprocessor::endpoint::prefix_next;
 use coprocessor::metrics::*;
 use coprocessor::Result;
-use storage::{Statistics, SnapshotStore};
+use storage::{SnapshotStore, Statistics};
 
 use super::{Executor, Row};
 use super::scanner::Scanner;
@@ -37,20 +37,19 @@ pub struct IndexScanExecutor<'a> {
 }
 
 impl<'a> IndexScanExecutor<'a> {
-    pub fn new(mut meta: IndexScan,
-               key_ranges: Vec<KeyRange>,
-               store: SnapshotStore<'a>,
-               statistics: &'a mut Statistics)
-               -> IndexScanExecutor<'a> {
+    pub fn new(
+        mut meta: IndexScan,
+        key_ranges: Vec<KeyRange>,
+        store: SnapshotStore<'a>,
+        statistics: &'a mut Statistics,
+    ) -> IndexScanExecutor<'a> {
         let mut pk_col = None;
         let desc = meta.get_desc();
         let mut cols = meta.mut_columns();
         if cols.last().map_or(false, |c| c.get_pk_handle()) {
             pk_col = Some(cols.pop().unwrap());
         }
-        let col_ids = cols.iter()
-            .map(|c| c.get_column_id())
-            .collect();
+        let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
         let scanner = Scanner::new(store, desc, false, statistics);
 
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
@@ -82,9 +81,7 @@ impl<'a> IndexScanExecutor<'a> {
         };
         self.scanner.set_seek_key(Some(seek_key));
 
-        let (mut values, handle) = {
-            box_try!(table::cut_idx_key(key, &self.col_ids))
-        };
+        let (mut values, handle) = { box_try!(table::cut_idx_key(key, &self.col_ids)) };
 
         let handle = if handle.is_none() {
             box_try!(value.as_slice().read_i64::<BigEndian>())
@@ -134,10 +131,10 @@ mod test {
     use coprocessor::codec::datum::{self, Datum};
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
-    use storage::{Statistics, SnapshotStore};
+    use storage::{SnapshotStore, Statistics};
 
     use super::*;
-    use super::super::scanner::test::{Data, TestStore, new_col_info};
+    use super::super::scanner::test::{new_col_info, Data, TestStore};
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
@@ -156,9 +153,11 @@ mod test {
     }
 
     pub fn prepare_index_data(key_number: usize, table_id: i64, index_id: i64) -> Data {
-        let cols = vec![new_col_info(1, types::LONG_LONG),
-                        new_col_info(2, types::VARCHAR),
-                        new_col_info(3, types::NEW_DECIMAL)];
+        let cols = vec![
+            new_col_info(1, types::LONG_LONG),
+            new_col_info(2, types::VARCHAR),
+            new_col_info(3, types::NEW_DECIMAL),
+        ];
 
         let mut kv_data = Vec::new();
         let mut expect_rows = Vec::new();
@@ -169,7 +168,8 @@ mod test {
                 3 => Datum::Dec(handle.into())
             ];
             let mut expect_row = HashMap::default();
-            let mut v: Vec<_> = indice.iter()
+            let mut v: Vec<_> = indice
+                .iter()
                 .map(|(cid, value)| {
                     expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
                     value.clone()
@@ -202,7 +202,9 @@ mod test {
             let mut wrapper = IndexTestWrapper::default();
             let mut cols = wrapper.data.get_index_cols();
             cols.push(wrapper.data.get_col_pk());
-            wrapper.scan.set_columns(RepeatedField::from_vec(cols.clone()));
+            wrapper
+                .scan
+                .set_columns(RepeatedField::from_vec(cols.clone()));
             wrapper.cols = cols;
             wrapper
         }

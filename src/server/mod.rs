@@ -25,12 +25,12 @@ pub mod node;
 pub mod resolve;
 pub mod snap;
 
-pub use self::config::{Config, DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID};
-pub use self::errors::{Result, Error};
+pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
+pub use self::errors::{Error, Result};
 pub use self::server::Server;
-pub use self::transport::{ServerTransport, ServerRaftStoreRouter};
-pub use self::node::{Node, create_raft_storage};
-pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver};
+pub use self::transport::{ServerRaftStoreRouter, ServerTransport};
+pub use self::node::{create_raft_storage, Node};
+pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
 pub type OnResponse = Box<FnBox(Response) + Send>;

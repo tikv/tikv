@@ -15,7 +15,6 @@
 #![feature(test)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
 
@@ -35,7 +34,7 @@ mod writebatch;
 mod serialization;
 
 #[allow(dead_code)]
-#[path="../tests/util.rs"]
+#[path = "../tests/util.rs"]
 mod util;
 
 use test::Bencher;
@@ -45,9 +44,11 @@ use util::KvGenerator;
 #[bench]
 fn _bench_check_requirement(_: &mut test::Bencher) {
     if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
-        panic!("To run bench, please make sure the maximum number of open file descriptors not \
-                less than 4096: {:?}",
-               e);
+        panic!(
+            "To run bench, please make sure the maximum number of open file descriptors not \
+             less than 4096: {:?}",
+            e
+        );
     }
 }
 

@@ -13,8 +13,8 @@
 
 use std::io::{Read, Write};
 
-use super::{Result, Error};
-use util::codec::number::{NumberEncoder, NumberDecoder};
+use super::{Error, Result};
+use util::codec::number::{NumberDecoder, NumberEncoder};
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -35,15 +35,25 @@ pub trait BytesEncoder: NumberEncoder {
             let remain = len - index;
             let mut pad: usize = 0;
             if remain > ENC_GROUP_SIZE {
-                try!(self.write_all(adjust_bytes_order(&key[index..index + ENC_GROUP_SIZE],
-                                                       desc,
-                                                       &mut buf)));
+                try!(self.write_all(adjust_bytes_order(
+                    &key[index..index + ENC_GROUP_SIZE],
+                    desc,
+                    &mut buf
+                )));
             } else {
                 pad = ENC_GROUP_SIZE - remain;
-                try!(self.write_all(adjust_bytes_order(&key[index..], desc, &mut buf)));
-                try!(self.write_all(adjust_bytes_order(&ENC_PADDING[..pad], desc, &mut buf)));
+                try!(self.write_all(
+                    adjust_bytes_order(&key[index..], desc, &mut buf)
+                ));
+                try!(self.write_all(
+                    adjust_bytes_order(&ENC_PADDING[..pad], desc, &mut buf)
+                ));
             }
-            try!(self.write_all(adjust_bytes_order(&[ENC_MARKER - (pad as u8)], desc, &mut buf)));
+            try!(self.write_all(adjust_bytes_order(
+                &[ENC_MARKER - (pad as u8)],
+                desc,
+                &mut buf
+            )));
             index += ENC_GROUP_SIZE;
         }
         Ok(())
@@ -183,40 +193,120 @@ impl<'a> BytesDecoder for &'a [u8] {
     }
 
     fn peak_u8(&self) -> Option<u8> {
-        if self.is_empty() { None } else { Some(self[0]) }
+        if self.is_empty() {
+            None
+        } else {
+            Some(self[0])
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use util::codec::{number, bytes};
+    use util::codec::{bytes, number};
     use std::cmp::Ordering;
 
     #[test]
     fn test_enc_dec_bytes() {
         let pairs = vec![
-            (vec![], vec![0, 0, 0, 0, 0, 0, 0, 0, 247],
-             vec![255, 255, 255, 255, 255, 255, 255, 255, 8]),
-            (vec![0], vec![0, 0, 0, 0, 0, 0, 0, 0, 248],
-             vec![255, 255, 255, 255, 255, 255, 255, 255, 7]),
-            (vec![1, 2, 3], vec![1, 2, 3, 0, 0, 0, 0, 0, 250],
-             vec![254, 253, 252, 255, 255, 255, 255, 255, 5]),
-            (vec![1, 2, 3, 0], vec![1, 2, 3, 0, 0, 0, 0, 0, 251],
-             vec![254, 253, 252, 255, 255, 255, 255, 255, 4]),
-            (vec![1, 2, 3, 4, 5, 6, 7], vec![1, 2, 3, 4, 5, 6, 7, 0, 254],
-             vec![254, 253, 252, 251, 250, 249, 248, 255, 1]),
-            (vec![0, 0, 0, 0, 0, 0, 0, 0],
-             vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
-             vec![255, 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255,
-                  255, 255, 255, 255, 255, 8]),
-            (vec![1, 2, 3, 4, 5, 6, 7, 8],
-             vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
-             vec![254, 253, 252, 251, 250, 249, 248, 247, 0, 255, 255, 255,
-                  255, 255, 255, 255, 255, 8]),
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 9], vec![1, 2, 3, 4, 5, 6, 7, 8, 255,
-                  9, 0, 0, 0, 0, 0, 0, 0, 248], vec![254, 253, 252, 251, 250, 249,
-                  248, 247, 0, 246, 255, 255, 255, 255, 255, 255, 255, 7]),
+            (
+                vec![],
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 247],
+                vec![255, 255, 255, 255, 255, 255, 255, 255, 8],
+            ),
+            (
+                vec![0],
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 248],
+                vec![255, 255, 255, 255, 255, 255, 255, 255, 7],
+            ),
+            (
+                vec![1, 2, 3],
+                vec![1, 2, 3, 0, 0, 0, 0, 0, 250],
+                vec![254, 253, 252, 255, 255, 255, 255, 255, 5],
+            ),
+            (
+                vec![1, 2, 3, 0],
+                vec![1, 2, 3, 0, 0, 0, 0, 0, 251],
+                vec![254, 253, 252, 255, 255, 255, 255, 255, 4],
+            ),
+            (
+                vec![1, 2, 3, 4, 5, 6, 7],
+                vec![1, 2, 3, 4, 5, 6, 7, 0, 254],
+                vec![254, 253, 252, 251, 250, 249, 248, 255, 1],
+            ),
+            (
+                vec![0, 0, 0, 0, 0, 0, 0, 0],
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+                vec![
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    0,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    8,
+                ],
+            ),
+            (
+                vec![1, 2, 3, 4, 5, 6, 7, 8],
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+                vec![
+                    254,
+                    253,
+                    252,
+                    251,
+                    250,
+                    249,
+                    248,
+                    247,
+                    0,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    8,
+                ],
+            ),
+            (
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 9, 0, 0, 0, 0, 0, 0, 0, 248],
+                vec![
+                    254,
+                    253,
+                    252,
+                    251,
+                    250,
+                    249,
+                    248,
+                    247,
+                    0,
+                    246,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    255,
+                    7,
+                ],
+            ),
         ];
 
         for (source, asc, desc) in pairs {
@@ -237,15 +327,17 @@ mod tests {
 
     #[test]
     fn test_dec_bytes_fail() {
-        let invalid_bytes = vec![vec![1, 2, 3, 4],
-                                 vec![0, 0, 0, 0, 0, 0, 0, 247],
-                                 vec![0, 0, 0, 0, 0, 0, 0, 0, 246],
-                                 vec![0, 0, 0, 0, 0, 0, 0, 1, 247],
-                                 vec![1, 2, 3, 4, 5, 6, 7, 8, 0],
-                                 vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1],
-                                 vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8],
-                                 vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 255],
-                                 vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 0]];
+        let invalid_bytes = vec![
+            vec![1, 2, 3, 4],
+            vec![0, 0, 0, 0, 0, 0, 0, 247],
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 246],
+            vec![0, 0, 0, 0, 0, 0, 0, 1, 247],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 0],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 255],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+        ];
 
         for x in invalid_bytes {
             assert!(x.as_slice().decode_bytes(false).is_err());
@@ -254,41 +346,52 @@ mod tests {
 
     #[test]
     fn test_encode_bytes_compare() {
-        let pairs: Vec<(&[u8], &[u8], _)> =
-            vec![(b"", b"\x00", Ordering::Less),
-                 (b"\x00", b"\x00", Ordering::Equal),
-                 (b"\xFF", b"\x00", Ordering::Greater),
-                 (b"\xFF", b"\xFF\x00", Ordering::Less),
-                 (b"a", b"b", Ordering::Less),
-                 (b"a", b"\x00", Ordering::Greater),
-                 (b"\x00", b"\x01", Ordering::Less),
-                 (b"\x00\x01", b"\x00\x00", Ordering::Greater),
-                 (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
-                 (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
+        let pairs: Vec<(&[u8], &[u8], _)> = vec![
+            (b"", b"\x00", Ordering::Less),
+            (b"\x00", b"\x00", Ordering::Equal),
+            (b"\xFF", b"\x00", Ordering::Greater),
+            (b"\xFF", b"\xFF\x00", Ordering::Less),
+            (b"a", b"b", Ordering::Less),
+            (b"a", b"\x00", Ordering::Greater),
+            (b"\x00", b"\x01", Ordering::Less),
+            (b"\x00\x01", b"\x00\x00", Ordering::Greater),
+            (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
+            (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
 
-                 (b"\x00\x00\x00\x00\x00\x00\x00\x00",
-                  b"\x00\x00\x00\x00\x00\x00\x00\x00\x00",
-                  Ordering::Less),
+            (
+                b"\x00\x00\x00\x00\x00\x00\x00\x00",
+                b"\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+                Ordering::Less,
+            ),
 
-                 (b"\x01\x02\x03\x00", b"\x01\x02\x03", Ordering::Greater),
-                 (b"\x01\x03\x03\x04", b"\x01\x03\x03\x05", Ordering::Less),
+            (b"\x01\x02\x03\x00", b"\x01\x02\x03", Ordering::Greater),
+            (b"\x01\x03\x03\x04", b"\x01\x03\x03\x05", Ordering::Less),
 
-                 (b"\x01\x02\x03\x04\x05\x06\x07",
-                  b"\x01\x02\x03\x04\x05\x06\x07\x08",
-                  Ordering::Less),
+            (
+                b"\x01\x02\x03\x04\x05\x06\x07",
+                b"\x01\x02\x03\x04\x05\x06\x07\x08",
+                Ordering::Less,
+            ),
 
-                 (b"\x01\x02\x03\x04\x05\x06\x07\x08\x09",
-                  b"\x01\x02\x03\x04\x05\x06\x07\x08",
-                  Ordering::Greater),
+            (
+                b"\x01\x02\x03\x04\x05\x06\x07\x08\x09",
+                b"\x01\x02\x03\x04\x05\x06\x07\x08",
+                Ordering::Greater,
+            ),
 
-                 (b"\x01\x02\x03\x04\x05\x06\x07\x08\x00",
-                  b"\x01\x02\x03\x04\x05\x06\x07\x08",
-                  Ordering::Greater)];
+            (
+                b"\x01\x02\x03\x04\x05\x06\x07\x08\x00",
+                b"\x01\x02\x03\x04\x05\x06\x07\x08",
+                Ordering::Greater,
+            ),
+        ];
 
         for (x, y, ord) in pairs {
             assert_eq!(encode_bytes(x).cmp(&encode_bytes(y)), ord);
-            assert_eq!(encode_bytes_desc(x).cmp(&encode_bytes_desc(y)),
-                       ord.reverse());
+            assert_eq!(
+                encode_bytes_desc(x).cmp(&encode_bytes_desc(y)),
+                ord.reverse()
+            );
         }
     }
 

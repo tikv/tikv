@@ -71,22 +71,23 @@ pub fn set_exit_hook() {
         if log_enabled!(LogLevel::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
                 Some(s) => *s,
-                None => {
-                    match info.payload().downcast_ref::<String>() {
-                        Some(s) => &s[..],
-                        None => "Box<Any>",
-                    }
-                }
+                None => match info.payload().downcast_ref::<String>() {
+                    Some(s) => &s[..],
+                    None => "Box<Any>",
+                },
             };
             let thread = thread::current();
             let name = thread.name().unwrap_or("<unnamed>");
-            let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line()));
+            let loc = info.location()
+                .map(|l| format!("{}:{}", l.file(), l.line()));
             let bt = Backtrace::new();
-            error!("thread '{}' panicked '{}' at {:?}\n{:?}",
-                   name,
-                   msg,
-                   loc.unwrap_or_else(|| "<unknown>".to_owned()),
-                   bt);
+            error!(
+                "thread '{}' panicked '{}' at {:?}\n{:?}",
+                name,
+                msg,
+                loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                bt
+            );
         } else {
             orig_hook(info);
         }
