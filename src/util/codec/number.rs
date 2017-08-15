@@ -13,7 +13,7 @@
 
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, ErrorKind, Write, Read};
-use std::mem;
+use std::{mem, i64, u64};
 
 use super::{Result, Error};
 
@@ -23,6 +23,10 @@ pub const MAX_VAR_U64_LEN: usize = 10;
 pub const U64_SIZE: usize = 8;
 pub const I64_SIZE: usize = 8;
 pub const F64_SIZE: usize = 8;
+// Positive tag is (TAG_POSITIVE_START + length).
+pub const TAG_POSITIVE_START: u8 = 0xff - 8;
+// Negative tag is (TAG_NEGETIVE_END - length).
+pub const TAG_NEGETIVE_END: u8 = 8;
 
 fn order_encode_i64(v: i64) -> u64 {
     v as u64 ^ SIGN_MARK
@@ -130,6 +134,125 @@ pub trait NumberEncoder: Write {
     fn encode_u64_le(&mut self, v: u64) -> Result<()> {
         self.write_u64::<LittleEndian>(v).map_err(From::from)
     }
+
+    /// The first byte has 256 values, [0, 7] is reserved for negative tags,
+    /// [248, 255] is reserved for larger positive tags,
+    /// So we can store value [0, 239] in a single byte.
+    /// Values cannot be stored in single byte has a tag byte prefix (positiveTagStart+length).
+    /// Larger value encodes to more bytes, has larger tag.
+
+    fn encode_comparable_var_int(&mut self, v: i64) -> Result<()> {
+        if v < 0 {
+            if v >= -0xff {
+                try!(self.write_all(&[TAG_NEGETIVE_END - 1, v as u8]));
+            } else if v >= -0xffff {
+                try!(self.write_all(&[TAG_NEGETIVE_END - 2, (v >> 8) as u8, v as u8]));
+            } else if v >= -0xffffff {
+                try!(self.write_all(&[TAG_NEGETIVE_END - 3, (v>>16) as u8, (v>>8) as u8, v as u8]));
+            } else if v >= -0xffffffff {
+                try!(self.write_all(&[TAG_NEGETIVE_END - 4,
+                                      (v >> 24) as u8,
+                                      (v >> 16) as u8,
+                                      (v >> 8) as u8,
+                                      v as u8]));
+            } else if v >= -0xffffffffff {
+                try!(self.write_all(&[TAG_NEGETIVE_END - 5,
+                                      (v >> 32) as u8,
+                                      (v >> 24) as u8,
+                                      (v >> 16) as u8,
+                                      (v >> 8) as u8,
+                                      v as u8]));
+            } else if v >= -0xffffffffffff {
+                try!(self.write_all(&[TAG_NEGETIVE_END - 6,
+                                      (v >> 40) as u8,
+                                      (v >> 32) as u8,
+                                      (v >> 24) as u8,
+                                      (v >> 16) as u8,
+                                      (v >> 8) as u8,
+                                      v as u8]));
+            } else if v >= -0xffffffffffffff {
+                try!(self.write_all(&[TAG_NEGETIVE_END - 7,
+                                      (v >> 48) as u8,
+                                      (v >> 40) as u8,
+                                      (v >> 32) as u8,
+                                      (v >> 24) as u8,
+                                      (v >> 16) as u8,
+                                      (v >> 8) as u8,
+                                      v as u8]));
+            } else {
+                try!(self.write_all(&[TAG_NEGETIVE_END - 8,
+                                      (v >> 56) as u8,
+                                      (v >> 48) as u8,
+                                      (v >> 40) as u8,
+                                      (v >> 32) as u8,
+                                      (v >> 24) as u8,
+                                      (v >> 16) as u8,
+                                      (v >> 8) as u8,
+                                      v as u8]));
+            }
+            Ok(())
+        } else {
+            self.encode_comparable_var_uint(v as u64)
+        }
+    }
+
+    /// The first byte has 256 values, [0, 7] is reserved for negative tags,
+    /// [248, 255] is reserved for larger positive tags,
+    /// So we can store value [0, 239] in a single byte.
+    /// Values cannot be stored in single byte has a tag byte prefix (positiveTagStart+length).
+    /// Larger value encodes to more bytes, has larger tag.
+    fn encode_comparable_var_uint(&mut self, v: u64) -> Result<()> {
+        if v <= (TAG_POSITIVE_START - TAG_NEGETIVE_END) as u64 {
+            try!(self.write_u8(v as u8 + TAG_NEGETIVE_END));
+        } else if v <= 0xff {
+            try!(self.write_all(&[TAG_POSITIVE_START + 1, v as u8]));
+        } else if v <= 0xffff {
+            try!(self.write_all(&[TAG_POSITIVE_START + 2, (v >> 8) as u8, v as u8]));
+        } else if v <= 0xffffff {
+            try!(self.write_all(&[TAG_POSITIVE_START+3, (v>>16) as u8, (v>>8) as u8, v as u8]));
+        } else if v <= 0xffffffff {
+            try!(self.write_all(&[TAG_POSITIVE_START + 4,
+                                  (v >> 24) as u8,
+                                  (v >> 16) as u8,
+                                  (v >> 8) as u8,
+                                  v as u8]));
+        } else if v <= 0xffffffffff {
+            try!(self.write_all(&[TAG_POSITIVE_START + 5,
+                                  (v >> 32) as u8,
+                                  (v >> 24) as u8,
+                                  (v >> 16) as u8,
+                                  (v >> 8) as u8,
+                                  v as u8]));
+        } else if v <= 0xffffffffffff {
+            try!(self.write_all(&[TAG_POSITIVE_START + 6,
+                                  (v >> 40) as u8,
+                                  (v >> 32) as u8,
+                                  (v >> 24) as u8,
+                                  (v >> 16) as u8,
+                                  (v >> 8) as u8,
+                                  v as u8]));
+        } else if v <= 0xffffffffffffff {
+            try!(self.write_all(&[TAG_POSITIVE_START + 7,
+                                  (v >> 48) as u8,
+                                  (v >> 40) as u8,
+                                  (v >> 32) as u8,
+                                  (v >> 24) as u8,
+                                  (v >> 16) as u8,
+                                  (v >> 8) as u8,
+                                  v as u8]));
+        } else {
+            try!(self.write_all(&[TAG_POSITIVE_START + 8,
+                                  (v >> 56) as u8,
+                                  (v >> 48) as u8,
+                                  (v >> 40) as u8,
+                                  (v >> 32) as u8,
+                                  (v >> 24) as u8,
+                                  (v >> 16) as u8,
+                                  (v >> 8) as u8,
+                                  v as u8]));
+        }
+        Ok(())
+    }
 }
 
 impl<T: Write> NumberEncoder for T {}
@@ -181,6 +304,48 @@ pub trait NumberDecoder: Read {
             s += 7;
             i += 1;
         }
+    }
+
+    fn decode_comparable_var_int(&mut self) -> Result<i64> {
+        let first = try!(self.read_u8());
+        if first >= TAG_NEGETIVE_END && first <= TAG_POSITIVE_START {
+            return Ok((first - TAG_NEGETIVE_END) as i64);
+        }
+        let (mut length, mut v) = if first < TAG_NEGETIVE_END {
+            (TAG_NEGETIVE_END - first, u64::MAX)
+        } else {
+            (first - TAG_POSITIVE_START, 0)
+        };
+        while length > 0 {
+            let c = try!(self.read_u8()) as u64;
+            v = (v << 8) | c;
+            length -= 1;
+        }
+        if first > TAG_POSITIVE_START && v > i64::MAX as u64 {
+            return Err(box_err!("invalid bytes to decode value"));
+        } else if first < TAG_NEGETIVE_END && v <= i64::MAX as u64 {
+            return Err(box_err!("invalid bytes to decode value"));
+        }
+        Ok(v as i64)
+    }
+
+    fn decode_comparable_var_uint(&mut self) -> Result<u64> {
+        let first = try!(self.read_u8());
+        if first < TAG_NEGETIVE_END {
+            return Err(box_err!("invalid bytes to decode value"));
+        }
+
+        if first <= TAG_POSITIVE_START {
+            return Ok(first as u64 - TAG_NEGETIVE_END as u64);
+        }
+        let mut length = first - TAG_POSITIVE_START;
+        let mut v = u64::MIN;
+        while length > 0 {
+            let c = try!(self.read_u8()) as u64;
+            v = (v << 8) | c;
+            length -= 1;
+        }
+        Ok(v)
     }
 
     /// `decode_f64` decodes value encoded by `encode_f64` before.
@@ -466,5 +631,43 @@ mod test {
 
         buf.push(0);
         assert_eq!(0, buf.as_slice().decode_var_u64().unwrap());
+    }
+
+    #[test]
+    fn test_comparable_var_int() {
+        let test_cases = vec![i64::MIN, -1000, -256, -90, 0, 10, 255, 1000, i64::MAX];
+        for case in test_cases {
+            let mut buf = vec![];
+            buf.encode_comparable_var_int(case).unwrap();
+            let get = buf.as_slice().decode_comparable_var_int().unwrap();
+            assert_eq!(case, get, "expect get:{}, while get {}", case, get);
+        }
+    }
+
+    #[test]
+    fn test_comparable_var_uint() {
+        let test_cases = vec![u64::MIN, 10, 255, 1000, u64::MAX];
+        for case in test_cases {
+            let mut buf = vec![];
+            buf.encode_comparable_var_uint(case).unwrap();
+
+            let get = buf.as_slice().decode_comparable_var_uint().unwrap();
+            assert_eq!(case, get, "expect get:{}, while get {}", case, get);
+        }
+    }
+
+    use test::Bencher;
+    use test::black_box;
+
+    #[bench]
+    fn bench_encode_u64(b: &mut Bencher) {
+        let mut buf = vec![];
+        b.iter(|| buf.as_mut_slice().encode_comparable_var_uint(black_box(u64::MAX)));
+    }
+
+    #[bench]
+    fn bench_encode_i64(b: &mut Bencher) {
+        let mut buf = vec![];
+        b.iter(|| buf.as_mut_slice().encode_comparable_var_int(black_box(i64::MIN)));
     }
 }

@@ -528,7 +528,7 @@ impl Store {
 
 fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
     let mut buf = [0; 8];
-    (&mut buf as &mut [u8]).encode_i64(id).unwrap();
+    (&mut buf as &mut [u8]).encode_comparable_var_int(id).unwrap();
     table::encode_row_key(table_id, &buf)
 }
 
