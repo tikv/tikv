@@ -15,10 +15,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use kvproto::metapb::{Store, Region};
+use kvproto::metapb::{Region, Store};
 use kvproto::pdpb::*;
 
-use protobuf::{RepeatedField, Message};
+use protobuf::{Message, RepeatedField};
 
 use super::*;
 
@@ -171,9 +171,10 @@ impl PdMocker for Service {
         }
     }
 
-    fn region_heartbeat(&self,
-                        _: &RegionHeartbeatRequest)
-                        -> Option<Result<RegionHeartbeatResponse>> {
+    fn region_heartbeat(
+        &self,
+        _: &RegionHeartbeatRequest,
+    ) -> Option<Result<RegionHeartbeatResponse>> {
         let mut resp = RegionHeartbeatResponse::new();
         let header = Service::header();
         resp.set_header(header);

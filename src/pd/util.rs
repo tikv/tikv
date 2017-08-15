@@ -18,27 +18,29 @@ use std::time::Instant;
 use std::time::Duration;
 use std::collections::HashSet;
 
-use futures::{Future, BoxFuture, Stream, Async, task, Poll};
+use futures::{task, Async, BoxFuture, Future, Poll, Stream};
 use futures::task::Task;
-use futures::future::{loop_fn, Loop, ok};
+use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
-use grpc::{Environment, ChannelBuilder, Result as GrpcResult, ClientDuplexSender,
-           ClientDuplexReceiver};
+use grpc::{ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+           Result as GrpcResult};
 use tokio_timer::Timer;
 use rand::{self, Rng};
-use kvproto::pdpb::{ResponseHeader, ErrorType, GetMembersRequest, GetMembersResponse, Member,
-                    RegionHeartbeatRequest, RegionHeartbeatResponse};
+use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
+                    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader};
 use kvproto::pdpb_grpc::PdClient;
 use prometheus::HistogramTimer;
 
-use util::{HandyRwLock, Either};
-use pd::{Result, Error, PdFuture};
+use util::{Either, HandyRwLock};
+use pd::{Error, PdFuture, Result};
 use pd::metrics::PD_SEND_MSG_HISTOGRAM;
 
 pub struct Inner {
     env: Arc<Environment>,
-    pub hb_sender: Either<Option<ClientDuplexSender<RegionHeartbeatRequest>>,
-                          UnboundedSender<RegionHeartbeatRequest>>,
+    pub hb_sender: Either<
+        Option<ClientDuplexSender<RegionHeartbeatRequest>>,
+        UnboundedSender<RegionHeartbeatRequest>,
+    >,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Task>,
     pub client: PdClient,
     members: GetMembersResponse,
@@ -90,10 +92,11 @@ pub struct LeaderClient {
 }
 
 impl LeaderClient {
-    pub fn new(env: Arc<Environment>,
-               client: PdClient,
-               members: GetMembersResponse)
-               -> LeaderClient {
+    pub fn new(
+        env: Arc<Environment>,
+        client: PdClient,
+        members: GetMembersResponse,
+    ) -> LeaderClient {
         let (tx, rx) = client.region_heartbeat();
         LeaderClient {
             timer: Timer::default(),
@@ -110,23 +113,24 @@ impl LeaderClient {
     }
 
     pub fn handle_region_heartbeat_response<F>(&self, f: F) -> PdFuture<()>
-        where F: Fn(RegionHeartbeatResponse) + Send + 'static
+    where
+        F: Fn(RegionHeartbeatResponse) + Send + 'static,
     {
         let recv = HeartbeatReceiver {
             receiver: None,
             inner: self.inner.clone(),
         };
         recv.for_each(move |resp| {
-                f(resp);
-                Ok(())
-            })
-            .map_err(|e| panic!("unexpected error: {:?}", e))
+            f(resp);
+            Ok(())
+        }).map_err(|e| panic!("unexpected error: {:?}", e))
             .boxed()
     }
 
     pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
-        where Req: Clone + 'static,
-              F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static
+    where
+        Req: Clone + 'static,
+        F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
     {
         Request {
             reconnect_count: retry,
@@ -156,7 +160,10 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
-            (try!(try_connect_leader(inner.env.clone(), &inner.members)), start)
+            (
+                try!(try_connect_leader(inner.env.clone(), &inner.members)),
+                start,
+            )
         };
 
         {
@@ -195,9 +202,10 @@ pub struct Request<Req, Resp, F> {
 const MAX_REQUEST_COUNT: usize = 5;
 
 impl<Req, Resp, F> Request<Req, Resp, F>
-    where Req: Clone + Send + 'static,
-          Resp: Send + 'static,
-          F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static
+where
+    Req: Clone + Send + 'static,
+    Resp: Send + 'static,
+    F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
     fn reconnect_if_needed(mut self) -> BoxFuture<Self, Self> {
         debug!("reconnect remains: {}", self.reconnect_count);
@@ -216,13 +224,11 @@ impl<Req, Resp, F> Request<Req, Resp, F>
                 self.request_sent = 0;
                 ok(self).boxed()
             }
-            Err(_) => {
-                self.client
-                    .timer
-                    .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
-                    .then(|_| Err(self))
-                    .boxed()
-            }
+            Err(_) => self.client
+                .timer
+                .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
+                .then(|_| Err(self))
+                .boxed(),
         }
     }
 
@@ -275,18 +281,18 @@ impl<Req, Resp, F> Request<Req, Resp, F>
     pub fn execute(self) -> PdFuture<Resp> {
         let ctx = self;
         loop_fn(ctx, |ctx| {
-                ctx.reconnect_if_needed()
-                    .and_then(Self::send_and_receive)
-                    .then(Self::break_or_continue)
-            })
-            .then(Self::post_loop)
+            ctx.reconnect_if_needed()
+                .and_then(Self::send_and_receive)
+                .then(Self::break_or_continue)
+        }).then(Self::post_loop)
             .boxed()
     }
 }
 
 /// Do a request in synchronized fashion.
 pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
-    where F: Fn(&PdClient) -> GrpcResult<R>
+where
+    F: Fn(&PdClient) -> GrpcResult<R>,
 {
     for _ in 0..retry {
         let r = {
@@ -310,9 +316,10 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
     Err(box_err!("fail to request"))
 }
 
-pub fn validate_endpoints(env: Arc<Environment>,
-                          endpoints: &[String])
-                          -> Result<(PdClient, GetMembersResponse)> {
+pub fn validate_endpoints(
+    env: Arc<Environment>,
+    endpoints: &[String],
+) -> Result<(PdClient, GetMembersResponse)> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD endpoints"));
     }
@@ -340,9 +347,11 @@ pub fn validate_endpoints(env: Arc<Environment>,
         let cid = resp.get_header().get_cluster_id();
         if let Some(sample) = cluster_id {
             if sample != cid {
-                return Err(box_err!("PD response cluster_id mismatch, want {}, got {}",
-                                    sample,
-                                    cid));
+                return Err(box_err!(
+                    "PD response cluster_id mismatch, want {}, got {}",
+                    sample,
+                    cid
+                ));
             }
         } else {
             cluster_id = Some(cid);
@@ -375,9 +384,10 @@ fn connect(env: Arc<Environment>, addr: &str) -> Result<(PdClient, GetMembersRes
     }
 }
 
-pub fn try_connect_leader(env: Arc<Environment>,
-                          previous: &GetMembersResponse)
-                          -> Result<(PdClient, GetMembersResponse)> {
+pub fn try_connect_leader(
+    env: Arc<Environment>,
+    previous: &GetMembersResponse,
+) -> Result<(PdClient, GetMembersResponse)> {
     // Try to connect other members.
     // Randomize endpoints.
     let members = previous.get_members();
@@ -395,10 +405,12 @@ pub fn try_connect_leader(env: Arc<Environment>,
                         resp = Some(r);
                         break 'outer;
                     } else {
-                        panic!("{} no longer belongs to cluster {}, it is in {}",
-                               ep,
-                               cluster_id,
-                               new_cluster_id);
+                        panic!(
+                            "{} no longer belongs to cluster {}, it is in {}",
+                            ep,
+                            cluster_id,
+                            new_cluster_id
+                        );
                     }
                 }
                 Err(e) => {

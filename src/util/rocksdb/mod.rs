@@ -13,28 +13,35 @@
 
 pub mod properties;
 pub mod engine_metrics;
-mod metrics_flush;
+mod metrics_flusher;
 
-pub use self::metrics_flush::MetricsFlusher;
+pub use self::metrics_flusher::MetricsFlusher;
 
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
-use storage::CF_DEFAULT;
-use rocksdb::{DB, ColumnFamilyOptions, DBOptions, SliceTransform, DBCompressionType};
+use storage::{ALL_CFS, CF_DEFAULT};
+use rocksdb::{ColumnFamilyOptions, DBCompressionType, DBOptions, SliceTransform, DB};
 use rocksdb::rocksdb::supported_compression;
+use util::rocksdb::engine_metrics::{ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
+use util::rocksdb;
 
 pub use rocksdb::CFHandle;
 
 use super::cfs_diff;
 
 // Zlib and bzip2 are too slow.
-const COMPRESSION_PRIORITY: [DBCompressionType; 3] =
-    [DBCompressionType::Lz4, DBCompressionType::Snappy, DBCompressionType::Zstd];
+const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
+    DBCompressionType::Lz4,
+    DBCompressionType::Snappy,
+    DBCompressionType::Zstd,
+];
 
 pub fn get_fastest_supported_compression_type() -> DBCompressionType {
     let all_supported_compression = supported_compression();
-    *COMPRESSION_PRIORITY.into_iter()
+    *COMPRESSION_PRIORITY
+        .into_iter()
         .find(|c| all_supported_compression.contains(c))
         .unwrap_or(&DBCompressionType::No)
 }
@@ -54,11 +61,12 @@ pub fn open(path: &str, cfs: &[&str]) -> Result<DB, String> {
     open_opt(opts, path, cfs.to_vec(), cfs_opts)
 }
 
-pub fn open_opt(opts: DBOptions,
-                path: &str,
-                cfs: Vec<&str>,
-                cfs_opts: Vec<ColumnFamilyOptions>)
-                -> Result<DB, String> {
+pub fn open_opt(
+    opts: DBOptions,
+    path: &str,
+    cfs: Vec<&str>,
+    cfs_opts: Vec<ColumnFamilyOptions>,
+) -> Result<DB, String> {
     DB::open_cf(opts, path, cfs, cfs_opts)
 }
 
@@ -86,10 +94,11 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     new_engine_opt(path, db_opts, cfs_opts)
 }
 
-fn check_and_open(path: &str,
-                  mut db_opt: DBOptions,
-                  cfs_opts: Vec<CFOptions>)
-                  -> Result<DB, String> {
+fn check_and_open(
+    path: &str,
+    mut db_opt: DBOptions,
+    cfs_opts: Vec<CFOptions>,
+) -> Result<DB, String> {
     // If db not exist, create it.
     if !db_exist(path) {
         db_opt.create_if_missing(true);
@@ -157,8 +166,17 @@ fn check_and_open(path: &str,
 
     // Create needed column families not existed yet.
     for cf in cfs_diff(&needed, &existed) {
-        try!(db.create_cf(cf,
-                          cfs_opts.iter().find(|x| x.cf == cf).unwrap().options.clone()));
+        try!(
+            db.create_cf(
+                cf,
+                cfs_opts
+                    .iter()
+                    .find(|x| x.cf == cf)
+                    .unwrap()
+                    .options
+                    .clone()
+            )
+        );
     }
 
     Ok(db)
@@ -180,13 +198,35 @@ fn db_exist(path: &str) -> bool {
     fs::read_dir(&path).unwrap().next().is_some()
 }
 
+pub fn get_used_size(engine: Arc<DB>) -> u64 {
+    let mut used_size: u64 = 0;
+    for cf in ALL_CFS {
+        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+        let cf_used_size = engine
+            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+            .expect("rocksdb is too old, missing total-sst-files-size property");
+
+        used_size += cf_used_size;
+
+        // For memtable
+        if let Some(mem_table) =
+            engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
+        {
+            used_size += mem_table;
+        }
+    }
+    used_size
+}
+
 pub struct FixedSuffixSliceTransform {
     pub suffix_len: usize,
 }
 
 impl FixedSuffixSliceTransform {
     pub fn new(suffix_len: usize) -> FixedSuffixSliceTransform {
-        FixedSuffixSliceTransform { suffix_len: suffix_len }
+        FixedSuffixSliceTransform {
+            suffix_len: suffix_len,
+        }
     }
 }
 
@@ -212,7 +252,9 @@ pub struct FixedPrefixSliceTransform {
 
 impl FixedPrefixSliceTransform {
     pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
-        FixedPrefixSliceTransform { prefix_len: prefix_len }
+        FixedPrefixSliceTransform {
+            prefix_len: prefix_len,
+        }
     }
 }
 
@@ -248,7 +290,7 @@ impl SliceTransform for NoopSliceTransform {
 
 #[cfg(test)]
 mod tests {
-    use rocksdb::{DB, DBOptions, ColumnFamilyOptions};
+    use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
     use tempdir::TempDir;
     use storage::CF_DEFAULT;
     use super::{check_and_open, CFOptions};
@@ -264,8 +306,10 @@ mod tests {
         column_families_must_eq(path_str, vec![CF_DEFAULT]);
 
         // add cf1.
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                            CFOptions::new("cf1", ColumnFamilyOptions::new())];
+        let cfs_opts = vec![
+            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+            CFOptions::new("cf1", ColumnFamilyOptions::new()),
+        ];
         check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
         column_families_must_eq(path_str, vec![CF_DEFAULT, "cf1"]);
 

@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle, Builder};
+use std::thread::{self, Builder, JoinHandle};
 use std::io;
 use std::fmt::Display;
 
@@ -71,8 +71,9 @@ pub struct Worker<T: Display> {
 
 // TODO: add metrics.
 fn poll<R, T>(mut runner: R, rx: UnboundedReceiver<Option<T>>)
-    where R: Runnable<T> + Send + 'static,
-          T: Display + Send + 'static
+where
+    R: Runnable<T> + Send + 'static,
+    T: Display + Send + 'static,
 {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
@@ -100,7 +101,8 @@ impl<T: Display + Send + 'static> Worker<T> {
 
     /// Start the worker.
     pub fn start<R>(&mut self, runner: R) -> Result<(), io::Error>
-        where R: Runnable<T> + Send + 'static
+    where
+        R: Runnable<T> + Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.scheduler.name);
@@ -110,9 +112,11 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
 
         let rx = receiver.take().unwrap();
-        let h = try!(Builder::new()
-            .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx)));
+        let h = try!(
+            Builder::new()
+                .name(thd_name!(self.scheduler.name.as_ref()))
+                .spawn(move || poll(runner, rx))
+        );
 
         self.handle = Some(h);
         Ok(())
@@ -174,7 +178,9 @@ mod test {
     impl Runnable<u64> for StepRunner {
         fn run(&mut self, step: u64, handle: &Handle) {
             self.ch.send(step).unwrap();
-            let f = self.timer.sleep(Duration::from_millis(step)).map_err(|_| ());
+            let f = self.timer
+                .sleep(Duration::from_millis(step))
+                .map_err(|_| ());
             handle.spawn(f);
         }
 
@@ -187,7 +193,8 @@ mod test {
     fn test_future_worker() {
         let mut worker = Worker::new("test-async-worker");
         let (tx, rx) = mpsc::channel();
-        worker.start(StepRunner {
+        worker
+            .start(StepRunner {
                 timer: Timer::default(),
                 ch: tx,
             })

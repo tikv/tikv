@@ -62,7 +62,8 @@ fn test_pending_snapshot_pause_replication() {
 
     sm.prs.get_mut(&2).unwrap().become_snapshot(11);
 
-    sm.step(new_message(1, 1, MessageType::MsgPropose, 1)).expect("");
+    sm.step(new_message(1, 1, MessageType::MsgPropose, 1))
+        .expect("");
     let msgs = sm.read_messages();
     assert!(msgs.is_empty());
 }

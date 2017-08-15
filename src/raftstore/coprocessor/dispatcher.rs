@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{RegionObserver, ObserverContext, Result};
+use super::{ObserverContext, RegionObserver, Result};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
@@ -57,20 +57,24 @@ impl CoprocessorHost {
     pub fn pre_propose(&self, region: &Region, req: &mut RaftCmdRequest) -> Result<()> {
         let ctx = ObserverContext::new(region);
         if req.has_admin_request() {
-            self.execute_pre_hook(ctx,
-                                  req.mut_admin_request(),
-                                  |o, ctx, q| o.pre_admin(ctx, q))
+            self.execute_pre_hook(
+                ctx,
+                req.mut_admin_request(),
+                |o, ctx, q| o.pre_admin(ctx, q),
+            )
         } else {
             self.execute_pre_hook(ctx, req.mut_requests(), |o, ctx, q| o.pre_query(ctx, q))
         }
     }
 
-    fn execute_pre_hook<Q, H>(&self,
-                              mut ctx: ObserverContext,
-                              req: &mut Q,
-                              mut hook: H)
-                              -> Result<()>
-        where H: FnMut(&RegionObserver, &mut ObserverContext, &mut Q) -> Result<()>
+    fn execute_pre_hook<Q, H>(
+        &self,
+        mut ctx: ObserverContext,
+        req: &mut Q,
+        mut hook: H,
+    ) -> Result<()>
+    where
+        H: FnMut(&RegionObserver, &mut ObserverContext, &mut Q) -> Result<()>,
     {
         for entry in &self.registry.observers {
             try!(hook(entry.observer.as_ref(), &mut ctx, req));
@@ -109,7 +113,7 @@ mod test {
     use protobuf::RepeatedField;
 
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{AdminRequest, Request, RaftCmdRequest};
+    use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, Request};
 
     struct TestCoprocessor {
         bypass: Arc<AtomicBool>,
@@ -118,10 +122,11 @@ mod test {
     }
 
     impl TestCoprocessor {
-        fn new(bypass: Arc<AtomicBool>,
-               called: Arc<AtomicUsize>,
-               return_err: Arc<AtomicBool>)
-               -> TestCoprocessor {
+        fn new(
+            bypass: Arc<AtomicBool>,
+            called: Arc<AtomicUsize>,
+            return_err: Arc<AtomicBool>,
+        ) -> TestCoprocessor {
             TestCoprocessor {
                 bypass: bypass,
                 called: called,
@@ -142,10 +147,11 @@ mod test {
             Ok(())
         }
 
-        fn pre_query(&self,
-                     ctx: &mut ObserverContext,
-                     _: &mut RepeatedField<Request>)
-                     -> Result<()> {
+        fn pre_query(
+            &self,
+            ctx: &mut ObserverContext,
+            _: &mut RepeatedField<Request>,
+        ) -> Result<()> {
             self.called.fetch_add(2, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             if self.return_err.load(Ordering::SeqCst) {

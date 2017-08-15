@@ -15,10 +15,10 @@ extern crate protobuf;
 
 use std::collections::HashMap;
 use test::Bencher;
-use rand::{Rng, thread_rng};
+use rand::{thread_rng, Rng};
 use protobuf::Message;
 use kvproto::eraftpb::Entry;
-use kvproto::raft_cmdpb::{RaftCmdRequest, Request, CmdType};
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
 
 #[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {
@@ -64,9 +64,7 @@ fn bench_encode_one(b: &mut Bencher) {
     let value = gen_rand_str(256);
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
     map.insert(&key, &value);
-    b.iter(|| {
-        encode(&map);
-    });
+    b.iter(|| { encode(&map); });
 }
 
 #[bench]
@@ -76,9 +74,7 @@ fn bench_decode_one(b: &mut Bencher) {
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
     map.insert(&key, &value);
     let data = encode(&map);
-    b.iter(|| {
-        decode(&data);
-    });
+    b.iter(|| { decode(&data); });
 }
 
 #[bench]
@@ -90,9 +86,7 @@ fn bench_encode_two(b: &mut Bencher) {
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
     map.insert(&key_for_lock, &value_for_lock);
     map.insert(&key_for_data, &value_for_data);
-    b.iter(|| {
-        encode(&map);
-    });
+    b.iter(|| { encode(&map); });
 }
 
 #[bench]
@@ -105,7 +99,5 @@ fn bench_decode_two(b: &mut Bencher) {
     map.insert(&key_for_lock, &value_for_lock);
     map.insert(&key_for_data, &value_for_data);
     let data = encode(&map);
-    b.iter(|| {
-        decode(&data);
-    });
+    b.iter(|| { decode(&data); });
 }

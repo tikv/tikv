@@ -51,19 +51,17 @@ const SIZE_LEN: usize = U32_LEN;
 impl Json {
     pub fn as_literal(&self) -> Result<u8> {
         match *self {
-            Json::Boolean(d) => {
-                if d {
-                    Ok(JSON_LITERAL_TRUE)
-                } else {
-                    Ok(JSON_LITERAL_FALSE)
-                }
-            }
+            Json::Boolean(d) => if d {
+                Ok(JSON_LITERAL_TRUE)
+            } else {
+                Ok(JSON_LITERAL_FALSE)
+            },
             Json::None => Ok(JSON_LITERAL_NIL),
-            _ => {
-                Err(invalid_type!("{:?} from {} to literal",
-                                  ERR_CONVERT_FAILED,
-                                  self.to_string()))
-            }
+            _ => Err(invalid_type!(
+                "{:?} from {} to literal",
+                ERR_CONVERT_FAILED,
+                self.to_string()
+            )),
         }
     }
 
@@ -140,7 +138,7 @@ pub trait JsonEncoder: NumberEncoder {
             try!(value_entries.encode_json_item(value, &mut value_offset, &mut encode_values));
         }
         let size = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len +
-                   encode_keys.len() + encode_values.len();
+            encode_keys.len() + encode_values.len();
         try!(self.encode_u32_le(element_count as u32));
         try!(self.encode_u32_le(size as u32));
         try!(self.write_all(key_entries.as_mut()));
@@ -193,11 +191,12 @@ pub trait JsonEncoder: NumberEncoder {
         Ok(())
     }
 
-    fn encode_json_item(&mut self,
-                        data: &Json,
-                        offset: &mut u32,
-                        data_buf: &mut Vec<u8>)
-                        -> Result<()> {
+    fn encode_json_item(
+        &mut self,
+        data: &Json,
+        offset: &mut u32,
+        data_buf: &mut Vec<u8>,
+    ) -> Result<()> {
         let code = data.get_type_code();
         try!(self.write_u8(code));
         match *data {
@@ -406,8 +405,16 @@ mod test {
         let json_uint = Json::U64(30);
         let json_double = Json::Double(3.24);
         let json_str = Json::String(String::from("hello, 世界"));
-        let test_cases =
-            vec![json_nil, json_bool, json_int, json_uint, json_double, json_str, j1, j2];
+        let test_cases = vec![
+            json_nil,
+            json_bool,
+            json_int,
+            json_uint,
+            json_double,
+            json_str,
+            j1,
+            j2,
+        ];
         for json in test_cases {
             let mut data = vec![];
             data.encode_json(&json).unwrap();
@@ -420,7 +427,7 @@ mod test {
 
     #[test]
     fn test_type_code() {
-        let legal_cases = vec!{
+        let legal_cases = vec![
             (r#"{"key":"value"}"#, TYPE_CODE_OBJECT),
             (r#"["d1","d2"]"#, TYPE_CODE_ARRAY),
             (r#"-3"#, TYPE_CODE_I64),
@@ -430,7 +437,7 @@ mod test {
             (r#"null"#, TYPE_CODE_LITERAL),
             (r#"true"#, TYPE_CODE_LITERAL),
             (r#"false"#, TYPE_CODE_LITERAL),
-        };
+        ];
 
         for (json_str, code) in legal_cases {
             let json: Json = json_str.parse().unwrap();

@@ -12,22 +12,22 @@
 // limitations under the License.
 
 use std::usize;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 use std::rc::Rc;
-use std::fmt::{self, Display, Formatter, Debug};
-use tipb::select::{self, SelectRequest, DAGRequest, Chunk};
+use std::fmt::{self, Debug, Display, Formatter};
+use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
 use tipb::schema::ColumnInfo;
 use protobuf::Message as PbMsg;
-use kvproto::coprocessor::{Request, Response, KeyRange};
+use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::CommandPri;
 
 use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
-use util::threadpool::{ThreadPool, FifoQueue};
+use util::threadpool::{FifoQueue, ThreadPool};
 use server::OnResponse;
-use storage::{self, Engine, SnapshotStore, engine, Snapshot, Statistics};
+use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
@@ -79,21 +79,27 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
-            pool: ThreadPool::new(thd_name!("endpoint-normal-pool"),
-                                  concurrency,
-                                  FifoQueue::new()),
-            low_priority_pool: ThreadPool::new(thd_name!("endpoint-low-pool"),
-                                               concurrency,
-                                               FifoQueue::new()),
-            high_priority_pool: ThreadPool::new(thd_name!("endpoint-high-pool"),
-                                                concurrency,
-                                                FifoQueue::new()),
+            pool: ThreadPool::new(
+                thd_name!("endpoint-normal-pool"),
+                concurrency,
+                FifoQueue::new(),
+            ),
+            low_priority_pool: ThreadPool::new(
+                thd_name!("endpoint-low-pool"),
+                concurrency,
+                FifoQueue::new(),
+            ),
+            high_priority_pool: ThreadPool::new(
+                thd_name!("endpoint-high-pool"),
+                concurrency,
+                FifoQueue::new(),
+            ),
         }
     }
 
     fn running_task_count(&self) -> usize {
         self.pool.get_task_count() + self.low_priority_pool.get_task_count() +
-        self.high_priority_pool.get_task_count()
+            self.high_priority_pool.get_task_count()
     }
 }
 
@@ -177,7 +183,8 @@ impl RequestTask {
             return;
         }
         let wait_time = duration_to_sec(self.timer.elapsed());
-        COPR_REQ_WAIT_TIME.with_label_values(&[get_req_type_str(self.req.get_tp())])
+        COPR_REQ_WAIT_TIME
+            .with_label_values(&[get_req_type_str(self.req.get_tp())])
             .observe(wait_time);
         self.wait_time = Some(wait_time);
     }
@@ -187,13 +194,17 @@ impl RequestTask {
 
         let handle_time = duration_to_sec(self.timer.elapsed());
         let type_str = get_req_type_str(self.req.get_tp());
-        COPR_REQ_HISTOGRAM_VEC.with_label_values(&[type_str]).observe(handle_time);
+        COPR_REQ_HISTOGRAM_VEC
+            .with_label_values(&[type_str])
+            .observe(handle_time);
         let wait_time = self.wait_time.unwrap();
-        COPR_REQ_HANDLE_TIME.with_label_values(&[type_str])
+        COPR_REQ_HANDLE_TIME
+            .with_label_values(&[type_str])
             .observe(handle_time - wait_time);
 
 
-        COPR_SCAN_KEYS.with_label_values(&[type_str])
+        COPR_SCAN_KEYS
+            .with_label_values(&[type_str])
             .observe(self.statistics.total_op_count() as f64);
 
         // for (cf, details) in self.statistics.details() {
@@ -204,17 +215,19 @@ impl RequestTask {
         // }
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
-            info!("[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
-                   ranges: {} ({:?})]",
-                  self.req.get_context().get_region_id(),
-                  self.start_ts,
-                  type_str,
-                  handle_time,
-                  wait_time,
-                  self.statistics.total_op_count(),
-                  self.statistics.total_processed(),
-                  self.req.get_ranges().len(),
-                  self.req.get_ranges().get(0));
+            info!(
+                "[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
+                 ranges: {} ({:?})]",
+                self.req.get_context().get_region_id(),
+                self.start_ts,
+                type_str,
+                handle_time,
+                wait_time,
+                self.statistics.total_op_count(),
+                self.statistics.total_processed(),
+                self.req.get_ranges().len(),
+                self.req.get_ranges().get(0)
+            );
         }
     }
 
@@ -225,12 +238,14 @@ impl RequestTask {
 
 impl Display for RequestTask {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f,
-               "request [context {:?}, tp: {}, ranges: {} ({:?})]",
-               self.req.get_context(),
-               self.req.get_tp(),
-               self.req.get_ranges().len(),
-               self.req.get_ranges().get(0))
+        write!(
+            f,
+            "request [context {:?}, tp: {}, ranges: {} ({:?})]",
+            self.req.get_context(),
+            self.req.get_tp(),
+            self.req.get_ranges().len(),
+            self.req.get_ranges().get(0)
+        )
     }
 }
 
@@ -248,9 +263,11 @@ impl BatchRunnable<Task> for Host {
                     }
                     let key = {
                         let ctx = req.req.get_context();
-                        (ctx.get_region_id(),
-                         ctx.get_region_epoch().get_version(),
-                         ctx.get_peer().get_id())
+                        (
+                            ctx.get_region_id(),
+                            ctx.get_region_epoch().get_version(),
+                            ctx.get_peer().get_id(),
+                        )
                     };
                     let mut group = grouped_reqs.entry(key).or_insert_with(Vec::new);
                     group.push(req);
@@ -274,24 +291,32 @@ impl BatchRunnable<Task> for Host {
                         let pri = req.priority();
                         let pri_str = get_req_pri_str(pri);
                         let type_str = get_req_type_str(req.req.get_tp());
-                        COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).add(1.0);
+                        COPR_PENDING_REQS
+                            .with_label_values(&[type_str, pri_str])
+                            .add(1.0);
                         let end_point = TiDbEndPoint::new(snap.clone());
                         let txn_id = req.start_ts.unwrap_or_default();
 
                         if pri == CommandPri::Low {
                             self.low_priority_pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
+                                COPR_PENDING_REQS
+                                    .with_label_values(&[type_str, pri_str])
+                                    .dec();
                             });
                         } else if pri == CommandPri::High {
                             self.high_priority_pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
+                                COPR_PENDING_REQS
+                                    .with_label_values(&[type_str, pri_str])
+                                    .dec();
                             });
                         } else {
                             self.pool.execute(txn_id, move || {
                                 end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str, pri_str]).dec();
+                                COPR_PENDING_REQS
+                                    .with_label_values(&[type_str, pri_str])
+                                    .dec();
                             });
                         }
                     }
@@ -302,11 +327,10 @@ impl BatchRunnable<Task> for Host {
             self.last_req_id += 1;
             let id = self.last_req_id;
             let sched = self.sched.clone();
-            if let Err(e) = self.engine.async_snapshot(reqs[0].req.get_context(),
-                                                       box move |(_, res)| {
-                                                           sched.schedule(Task::SnapRes(id, res))
-                                                               .unwrap()
-                                                       }) {
+            if let Err(e) = self.engine.async_snapshot(
+                reqs[0].req.get_context(),
+                box move |(_, res)| sched.schedule(Task::SnapRes(id, res)).unwrap(),
+            ) {
                 notify_batch_failed(e, reqs);
                 continue;
             }
@@ -335,10 +359,11 @@ fn err_resp(e: Error) -> Response {
         }
         Error::Outdated(deadline, now, tp) => {
             let t = get_req_type_str(tp);
-            let elapsed = now.duration_since(deadline) +
-                          Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+            let elapsed =
+                now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
             COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
-            OUTDATED_REQ_WAIT_TIME.with_label_values(&[t])
+            OUTDATED_REQ_WAIT_TIME
+                .with_label_values(&[t])
                 .observe(elapsed.as_secs() as f64);
 
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
@@ -415,9 +440,11 @@ impl TiDbEndPoint {
     }
 
     fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let snap = SnapshotStore::new(self.snap.as_ref(),
-                                      sel.get_start_ts(),
-                                      t.req.get_context().get_isolation_level());
+        let snap = SnapshotStore::new(
+            self.snap.as_ref(),
+            sel.get_start_ts(),
+            t.req.get_context().get_isolation_level(),
+        );
         let ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let range = t.req.get_ranges().to_vec();
         debug!("scanning range: {:?}", range);
@@ -426,14 +453,18 @@ impl TiDbEndPoint {
 
     pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
         let ranges = t.req.get_ranges().to_vec();
-        let eval_ctx = Rc::new(box_try!(EvalContext::new(dag.get_time_zone_offset(),
-                                                         dag.get_flags())));
-        let ctx = DAGContext::new(dag,
-                                  t.deadline,
-                                  ranges,
-                                  self.snap.as_ref(),
-                                  eval_ctx.clone(),
-                                  t.req.get_context().get_isolation_level());
+        let eval_ctx = Rc::new(box_try!(EvalContext::new(
+            dag.get_time_zone_offset(),
+            dag.get_flags()
+        )));
+        let ctx = DAGContext::new(
+            dag,
+            t.deadline,
+            ranges,
+            self.snap.as_ref(),
+            eval_ctx.clone(),
+            t.req.get_context().get_isolation_level(),
+        );
         ctx.handle_request(&mut t.statistics)
     }
 }
@@ -485,7 +516,10 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 
 #[inline]
 pub fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
-    if chunks.last().map_or(true, |chunk| chunk.get_rows_meta().len() >= BATCH_ROW_COUNT) {
+    if chunks
+        .last()
+        .map_or(true, |chunk| chunk.get_rows_meta().len() >= BATCH_ROW_COUNT)
+    {
         let chunk = Chunk::new();
         chunks.push(chunk);
     }
@@ -547,10 +581,7 @@ mod tests {
         let end_point = Host::new(engine, worker.scheduler(), 1);
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut task = RequestTask::new(Request::new(),
-                                        box move |msg| {
-                                            tx.send(msg).unwrap();
-                                        });
+        let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
         task.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -576,11 +607,10 @@ mod tests {
             } else {
                 req.mut_context().set_priority(CommandPri::High);
             }
-            let task = RequestTask::new(req,
-                                        box move |msg| {
-                                            thread::sleep(Duration::from_millis(100));
-                                            let _ = tx.send(msg);
-                                        });
+            let task = RequestTask::new(req, box move |msg| {
+                thread::sleep(Duration::from_millis(100));
+                let _ = tx.send(msg);
+            });
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {
