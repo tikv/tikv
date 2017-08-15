@@ -19,6 +19,8 @@ use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
+pub const DEFAULT_FLUSER_INTERVAL: u64 = 10000;
+
 pub struct MetricsFlusher {
     engine: Arc<DB>,
     handle: Option<JoinHandle<()>>,
@@ -44,17 +46,8 @@ impl MetricsFlusher {
         let h = try!(Builder::new().name(thd_name!("flush metrics")).spawn(
             move || {
                 let db = engine;
-                loop {
-                    match rx.recv_timeout(interval) {
-                        Ok(_) => {
-                            break;
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => flush_metrics(&db),
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            error!("The channel's sending half has become disconnected");
-                            break;
-                        }
-                    }
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
+                    flush_metrics(&db);
                 }
             }
         ));
@@ -68,7 +61,7 @@ impl MetricsFlusher {
         if h.is_none() {
             return;
         }
-        self.sender.as_ref().unwrap().send(true).unwrap();;
+        drop(self.sender.take().unwrap());
         if let Err(e) = h.unwrap().join() {
             error!("join metrics flusher failed {:?}", e);
             return;
@@ -100,9 +93,6 @@ mod tests {
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use std::thread::sleep;
 
-    const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
-    const DEFAULT_RUN_TIME: u64 = 20000;
-
     #[test]
     fn test_metrics_flusher() {
         let path = TempDir::new("_test_metrics_flusher").unwrap();
@@ -117,16 +107,13 @@ mod tests {
         let engine = Arc::new(
             rocksdb::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap(),
         );
-        let mut metrics_flusher = MetricsFlusher::new(
-            engine.clone(),
-            Duration::from_millis(DEFAULT_FLUSHER_INTERVAL),
-        );
+        let mut metrics_flusher = MetricsFlusher::new(engine.clone(), Duration::from_millis(100));
 
         if let Err(e) = metrics_flusher.start() {
             error!("failed to start metrics flusher, error = {:?}", e);
         }
 
-        let rtime = Duration::from_millis(DEFAULT_RUN_TIME);
+        let rtime = Duration::from_millis(300);
         sleep(rtime);
 
         metrics_flusher.stop();

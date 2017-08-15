@@ -13,7 +13,7 @@
 
 pub mod properties;
 pub mod engine_metrics;
-mod metrics_flusher;
+pub mod metrics_flusher;
 
 pub use self::metrics_flusher::MetricsFlusher;
 

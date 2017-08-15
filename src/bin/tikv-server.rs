@@ -57,6 +57,7 @@ use std::path::Path;
 use std::sync::{mpsc, Arc};
 use std::io::Read;
 use std::env;
+use std::time::Duration;
 
 use clap::{App, Arg, ArgMatches};
 use fs2::FileExt;
@@ -73,10 +74,7 @@ use tikv::server::resolve;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
-use util::rocksdb::MetricsFlusher;
-use std::time::Duration;
-
-const DEFAULT_FLUSER_INTERVAL: u64 = 10000;
+use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERVAL};
 
 fn exit_with_err<E: Error>(e: E) -> ! {
     exit_with_msg(format!("{:?}", e))
