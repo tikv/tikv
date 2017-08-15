@@ -117,6 +117,10 @@ impl MvccPropertiesCollector {
 
 impl TablePropertiesCollector for MvccPropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        if entry_type != DBEntryType::Put {
+            return;
+        }
+
         if !keys::validate_data_key(key) {
             self.num_errors += 1;
             return;
@@ -132,10 +136,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
-        match entry_type {
-            DBEntryType::Put => self.props.num_versions += 1,
-            _ => return,
-        }
+        self.props.num_versions += 1;
 
         if k != self.last_row.as_slice() {
             self.props.num_rows += 1;
@@ -329,7 +330,10 @@ impl SizePropertiesCollector {
 }
 
 impl TablePropertiesCollector for SizePropertiesCollector {
-    fn add(&mut self, key: &[u8], value: &[u8], _: DBEntryType, _: u64, _: u64) {
+    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        if entry_type != DBEntryType::Put {
+            return;
+        }
         let size = key.len() + value.len();
         self.index_handle.size += size as u64;
         self.index_handle.offset += size as u64;
@@ -535,6 +539,10 @@ mod tests {
         for &(k, vlen) in &cases {
             let v = vec![0; vlen as usize];
             collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+        }
+        for &(k, vlen) in &cases {
+            let v = vec![0; vlen as usize];
+            collector.add(k.as_bytes(), &v, DBEntryType::Other, 0, 0);
         }
         let result = UserProperties(collector.finish());
 
