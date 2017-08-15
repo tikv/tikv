@@ -43,7 +43,11 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
-            _ => Ok(None),
+            _ => Ok(if sig == ScalarFuncSig::NullEQInt {
+                Some(0)
+            } else {
+                None
+            })
         }
     }
 
@@ -69,7 +73,11 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
-            _ => Ok(None),
+            _ => Ok(if sig == ScalarFuncSig::NullEQReal {
+                Some(0)
+            } else {
+                None
+            })
         }
     }
 
@@ -95,7 +103,11 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
-            _ => Ok(None)
+            _ => Ok(if sig == ScalarFuncSig::NullEQDecimal {
+                Some(0)
+            } else {
+                None
+            })
         }
     }
 
@@ -121,7 +133,11 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
-            _ => Ok(None)
+            _ => Ok(if sig == ScalarFuncSig::NullEQString {
+                Some(0)
+            } else {
+                None
+            })
         }
     }
 
@@ -147,7 +163,11 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
-            _ => Ok(None)
+            _ => Ok(if sig == ScalarFuncSig::NullEQTime {
+                Some(0)
+            } else {
+                None
+            })
         }
     }
 
@@ -173,7 +193,11 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
-            _ => Ok(None)
+            _ => Ok(if sig == ScalarFuncSig::NullEQDuration {
+                Some(0)
+            } else {
+                None
+            })
         }
     }
 
@@ -199,7 +223,11 @@ impl FnCall {
                     _ => unreachable!(),
                 } as i64))
             }
-            _ => Ok(None)
+            _ => Ok(if sig == ScalarFuncSig::NullEQJson {
+                Some(0)
+            } else {
+                None
+            })
         }
     }
 }
