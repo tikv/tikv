@@ -445,7 +445,7 @@ mod test {
             tx: tx,
         };
 
-        let name = thd_name!("test_tasks_with_different_cost");
+        let name = thd_name!("test_tasks_with_contexts");
         let concurrency = 5;
         let mut task_pool = ThreadPool::new(name, concurrency, FifoQueue::new(), f);
 
