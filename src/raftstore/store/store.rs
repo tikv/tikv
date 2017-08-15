@@ -63,9 +63,9 @@ use super::msg::{BatchCallback, Callback};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
-use super::engine_metrics::*;
 use super::local_metrics::RaftMetrics;
 use prometheus::local::LocalHistogram;
+use util::rocksdb::get_used_size;
 
 type Key = Vec<u8>;
 
@@ -120,7 +120,6 @@ pub struct Store<T, C: 'static> {
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
-
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
@@ -1849,7 +1848,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         stats.set_capacity(capacity);
 
-        let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
+        let mut used_size = get_used_size(self.engine.clone());
         used_size += self.snap_mgr.get_total_snap_size();
 
         stats.set_used_size(used_size);
@@ -1928,21 +1927,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         self.store_heartbeat_pd();
-        self.flush_engine_statistics();
         self.register_pd_store_heartbeat_tick(event_loop);
-    }
-
-    fn flush_engine_statistics(&mut self) {
-        for t in ENGINE_TICKER_TYPES {
-            let v = self.engine.get_statistics_ticker_count(*t);
-            flush_engine_ticker_metrics(*t, v);
-        }
-
-        for t in ENGINE_HIST_TYPES {
-            if let Some(v) = self.engine.get_statistics_histogram(*t) {
-                flush_engine_histogram_metrics(*t, v);
-            }
-        }
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
