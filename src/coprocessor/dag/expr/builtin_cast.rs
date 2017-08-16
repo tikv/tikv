@@ -372,7 +372,12 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Vec<u8>>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_decimal(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = val.unwrap().to_string();
+        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
     pub fn cast_str_as_str(
