@@ -124,6 +124,10 @@ impl Time {
         })
     }
 
+    pub fn get_tp(&self) -> u8 {
+        self.tp
+    }
+
     pub fn is_zero(&self) -> bool {
         self.time.timestamp() == ZERO_TIMESTAMP
     }

@@ -20,10 +20,11 @@ use std::{error, io};
 use std::convert::TryFrom;
 use std::string::FromUtf8Error;
 
-use tipb::expression::{DataType, Expr, ExprType, FieldType, ScalarFuncSig};
+use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
+use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
 use util;
 use util::codec::number::NumberDecoder;
@@ -210,8 +211,8 @@ impl Expression {
     /// For example, when convert `0b101` to int, the result should be 5, but we will get
     /// 101 if we regard it as a string.
     fn is_hybrid_type(&self) -> bool {
-        match self.get_tp().get_tp() {
-            DataType::TypeEnum | DataType::TypeBit | DataType::TypeSet => {
+        match self.get_tp().get_tp() as u8 {
+            types::ENUM | types::BIT | types::SET => {
                 return true;
             }
             _ => {}

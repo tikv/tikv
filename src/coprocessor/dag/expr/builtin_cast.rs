@@ -17,14 +17,11 @@
 use std::{str, i64, u64};
 use std::ascii::AsciiExt;
 
-use tipb::expression::DataType;
-
 use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time};
+use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint,
                                   convert_int_to_uint};
-use coprocessor::codec::mysql::types;
 
 use super::{FnCall, Result, StatementContext};
 
@@ -668,7 +665,7 @@ impl FnCall {
             return Ok(convert::truncate_str(s, flen as isize).into_bytes());
         }
 
-        if self.tp.get_tp() == DataType::TypeString && s.len() < flen {
+        if self.tp.get_tp() == types::STRING as i32 && s.len() < flen {
             let to_pad = flen - s.len();
             let mut ret = s.into_bytes();
             ret.append(&mut vec![0; to_pad]);
