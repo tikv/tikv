@@ -11,8 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 // FIXME(shirly): remove following later
-#![allow(dead_code,unused_variables)]
+#![allow(dead_code, unused_variables)]
 
+mod column;
+mod constant;
 mod builtin_cast;
 mod compare;
 
@@ -115,6 +117,8 @@ impl Expression {
 
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
+            Expression::Constant(ref constant) => constant.eval_int(ctx),
+            Expression::ColumnRef(ref column) => column.eval_int(ctx, row),
             Expression::ScalarFn(ref f) => match f.sig {
                 ScalarFuncSig::LTInt |
                 ScalarFuncSig::LEInt |
@@ -173,32 +177,75 @@ impl Expression {
                 ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, f.sig),
                 _ => Err(Error::Other("Unknown signature")),
             },
-            _ => unimplemented!(),
         }
     }
 
     fn eval_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        unimplemented!()
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_real(ctx),
+            Expression::ColumnRef(ref column) => column.eval_real(ctx, row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_decimal<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Decimal>>> {
-        unimplemented!()
+    fn eval_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_decimal(ctx),
+            Expression::ColumnRef(ref column) => column.eval_decimal(ctx, row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_string<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        unimplemented!()
+    fn eval_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_string(ctx),
+            Expression::ColumnRef(ref column) => column.eval_string(ctx, row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_time<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Time>>> {
-        unimplemented!()
+    fn eval_time<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_time(ctx),
+            Expression::ColumnRef(ref column) => column.eval_time(ctx, row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_duration<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Duration>>> {
-        unimplemented!()
+    fn eval_duration<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Duration>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_duration(ctx),
+            Expression::ColumnRef(ref column) => column.eval_duration(ctx, row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_json<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Json>>> {
-        unimplemented!()
+    fn eval_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_json(ctx),
+            Expression::ColumnRef(ref column) => column.eval_json(ctx, row),
+            _ => unimplemented!(),
+        }
     }
 
     /// IsHybridType checks whether a ClassString expression is a hybrid type value which will
