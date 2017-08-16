@@ -675,7 +675,7 @@ pub mod test {
     use tipb::select::SelectRequest;
     use protobuf::RepeatedField;
 
-    fn datum_expr(datum: Datum) -> Expr {
+    pub fn datum_expr(datum: Datum) -> Expr {
         let mut expr = Expr::new();
         match datum {
             Datum::I64(i) => {
@@ -719,7 +719,7 @@ pub mod test {
         expr
     }
 
-    fn col_expr(col_id: i64) -> Expr {
+    pub fn col_expr(col_id: i64) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ColumnRef);
         let mut buf = Vec::with_capacity(8);

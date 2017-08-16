@@ -17,7 +17,7 @@ mod column;
 mod constant;
 mod builtin_cast;
 mod compare;
-use compare::CmpOp;
+use self::compare::CmpOp;
 
 use std::io;
 use std::borrow::Cow;
@@ -347,4 +347,9 @@ fn test_smoke() {
 
     let e: Result<Expression> = pb.try_into();
     let _ = e.unwrap();
+}
+
+#[cfg(test)]
+mod test {
+    pub use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
 }
