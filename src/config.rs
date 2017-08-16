@@ -616,9 +616,7 @@ impl TiKvConfig {
             );
         }
 
-        let store_path = Path::new(&self.storage.data_dir);
-        let kv_rocksdb_dir = store_path.join(Path::new("db"));
-        let kv_db_path = try!(config::path_str(kv_rocksdb_dir.as_path()));
+        let kv_db_path = try!(config::canonicalize_sub_path(&self.storage.data_dir, "db"));
         if kv_db_path == self.storage.raft_db_path {
             return Err(
                 "storage.raft_db_path can not same with storage.data_dir/db".into(),
