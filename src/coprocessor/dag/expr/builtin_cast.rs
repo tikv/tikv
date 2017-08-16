@@ -173,18 +173,7 @@ impl FnCall {
         }
         let val = val.unwrap();
         let res = try!(convert::bytes_to_f64(ctx, &val));
-        let flen = self.tp.get_flen();
-        let decimal = self.tp.get_decimal();
-        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
-            return Ok(Some(res));
-        }
-        let ret = try!(convert::float_to_float_with_specified_tp(
-            ctx,
-            res,
-            flen as u8,
-            decimal as u8
-        ));
-        Ok(Some(ret))
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_time_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -517,5 +506,19 @@ impl FnCall {
         row: &[Datum],
     ) -> Result<Option<Vec<Json>>> {
         unimplemented!()
+    }
+
+    /// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
+    /// a new float64 according to `flen` and `decimal` in `self.tp`.
+    /// TODO port tests from tidb(tidb haven't implemented now)
+    fn produce_float_with_specified_tp(&self, ctx: &StatementContext, f: f64) -> Result<f64> {
+        let flen = self.tp.get_flen();
+        let decimal = self.tp.get_decimal();
+        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+            return Ok(f);
+        }
+        let dec = try!(Decimal::from_f64(f));
+        let ret = try!(dec.convert_to(ctx, flen as u8, decimal as u8));
+        Ok(try!(ret.as_f64()))
     }
 }
