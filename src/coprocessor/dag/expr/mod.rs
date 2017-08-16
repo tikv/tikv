@@ -14,6 +14,7 @@
 mod compare;
 
 use std::io;
+use std::borrow::Cow;
 use std::convert::TryFrom;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
@@ -169,23 +170,23 @@ impl Expression {
         unimplemented!()
     }
 
-    fn eval_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Decimal>> {
+    fn eval_decimal<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Decimal>>> {
         unimplemented!()
     }
 
-    fn eval_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<String>> {
+    fn eval_string<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Vec<u8>>>> {
         unimplemented!()
     }
 
-    fn eval_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
+    fn eval_time<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Time>>> {
         unimplemented!()
     }
 
-    fn eval_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Duration>> {
+    fn eval_duration<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Duration>>> {
         unimplemented!()
     }
 
-    fn eval_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
+    fn eval_json<'a, 'b: 'a>(&'b self, ctx: &StatementContext, row: &'a [Datum]) -> Result<Option<Cow<'a, Json>>> {
         unimplemented!()
     }
 }
