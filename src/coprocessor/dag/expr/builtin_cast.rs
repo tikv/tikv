@@ -138,15 +138,25 @@ impl FnCall {
         }
         let val = val.unwrap();
         if !mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
-            Ok(Some(val as f64))
+            Ok(Some(
+                try!(self.produce_float_with_specified_tp(ctx, val as f64)),
+            ))
         } else {
             let uval = try!(convert_int_to_uint(val, u64::MAX, types::LONG_LONG));
-            Ok(Some(uval as f64))
+            Ok(Some(
+                try!(self.produce_float_with_specified_tp(ctx, uval as f64)),
+            ))
         }
     }
 
     pub fn cast_real_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        self.children[0].eval_real(ctx, row)
+        let val = try!(self.children[0].eval_real(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(try!(
+            self.produce_float_with_specified_tp(ctx, val.unwrap())
+        )))
     }
 
     pub fn cast_decimal_as_real(
@@ -160,7 +170,7 @@ impl FnCall {
         }
         let val = val.unwrap();
         let res = try!(val.as_f64());
-        Ok(Some(res))
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_str_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -181,9 +191,9 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = val.unwrap();
-        let res = try!(val.to_decimal());
-        Ok(Some(try!(res.as_f64())))
+        let val = try!(val.unwrap().to_decimal());
+        let res = try!(val.as_f64());
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_duration_as_real(
@@ -195,9 +205,9 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = val.unwrap();
-        let res = try!(val.to_decimal());
-        Ok(Some(try!(res.as_f64())))
+        let val = try!(val.unwrap().to_decimal());
+        let res = try!(val.as_f64());
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_json_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -206,7 +216,7 @@ impl FnCall {
             return Ok(None);
         }
         let val = try!(val.unwrap().cast_to_real());
-        Ok(Some(val))
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, val))))
     }
 
     pub fn cast_int_as_decimal(
