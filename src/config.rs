@@ -415,6 +415,10 @@ impl RaftDefaultCfConfig {
     }
 }
 
+// RocksDB Env associate thread pools of multiple instances from the same process.
+// When construct Options, options.env is set to same singleton Env::Default() object.
+// If we set same env parameter in different instance, we may overwrite other instance's config.
+// So we only set max_background_jobs in default rocksdb.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -425,7 +429,6 @@ pub struct RaftDbConfig {
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
-    pub max_background_jobs: i32,
     pub max_manifest_file_size: ReadableSize,
     pub create_if_missing: bool,
     pub max_open_files: i32,
@@ -435,7 +438,6 @@ pub struct RaftDbConfig {
     pub info_log_max_size: ReadableSize,
     pub info_log_roll_time: ReadableDuration,
     pub info_log_dir: String,
-    pub rate_bytes_per_sec: i64,
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
@@ -452,7 +454,6 @@ impl Default for RaftDbConfig {
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs: 6,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -462,7 +463,6 @@ impl Default for RaftDbConfig {
             info_log_max_size: ReadableSize::kb(0),
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_dir: "".to_owned(),
-            rate_bytes_per_sec: 0,
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
@@ -483,7 +483,6 @@ impl RaftDbConfig {
         opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
-        opts.set_max_background_jobs(self.max_background_jobs);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
@@ -504,9 +503,6 @@ impl RaftDbConfig {
                     );
                 },
             )
-        }
-        if self.rate_bytes_per_sec > 0 {
-            opts.set_ratelimiter(self.rate_bytes_per_sec);
         }
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);

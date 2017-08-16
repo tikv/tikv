@@ -359,7 +359,6 @@ stats-dump-period = "10m"
 # compaction-readahead-size = 0
 # writable-file-max-buffer-size = "1MB"
 # use-direct-io-for-flush-and-compaction = false
-# rate-bytes-per-sec = 0
 enable-pipelined-write = false
 allow-concurrent-memtable-write = false
 
