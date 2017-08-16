@@ -15,7 +15,7 @@ use std::borrow::Cow;
 
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use super::{Constant, Error, Result, StatementContext};
+use super::{Constant, Error, Result};
 
 #[inline]
 pub fn datum_as_int(d: &Datum) -> Result<Option<i64>> {
@@ -76,37 +76,37 @@ pub fn datum_as_json(d: &Datum) -> Result<Option<Cow<Json>>> {
 
 impl Constant {
     #[inline]
-    pub fn eval_int(&self, ctx: &StatementContext) -> Result<Option<i64>> {
+    pub fn eval_int(&self) -> Result<Option<i64>> {
         datum_as_int(&self.val)
     }
 
     #[inline]
-    pub fn eval_real(&self, ctx: &StatementContext) -> Result<Option<f64>> {
+    pub fn eval_real(&self) -> Result<Option<f64>> {
         datum_as_real(&self.val)
     }
 
     #[inline]
-    pub fn eval_decimal(&self, ctx: &StatementContext) -> Result<Option<Cow<Decimal>>> {
+    pub fn eval_decimal(&self) -> Result<Option<Cow<Decimal>>> {
         datum_as_decimal(&self.val)
     }
 
     #[inline]
-    pub fn eval_string(&self, ctx: &StatementContext) -> Result<Option<Cow<Vec<u8>>>> {
+    pub fn eval_string(&self) -> Result<Option<Cow<Vec<u8>>>> {
         datum_as_string(&self.val)
     }
 
     #[inline]
-    pub fn eval_time(&self, ctx: &StatementContext) -> Result<Option<Cow<Time>>> {
+    pub fn eval_time(&self) -> Result<Option<Cow<Time>>> {
         datum_as_time(&self.val)
     }
 
     #[inline]
-    pub fn eval_duration(&self, ctx: &StatementContext) -> Result<Option<Cow<Duration>>> {
+    pub fn eval_duration(&self) -> Result<Option<Cow<Duration>>> {
         datum_as_duration(&self.val)
     }
 
     #[inline]
-    pub fn eval_json(&self, ctx: &StatementContext) -> Result<Option<Cow<Json>>> {
+    pub fn eval_json(&self) -> Result<Option<Cow<Json>>> {
         datum_as_json(&self.val)
     }
 }

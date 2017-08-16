@@ -17,6 +17,7 @@ mod column;
 mod constant;
 mod builtin_cast;
 mod compare;
+use compare::CmpOp;
 
 use std::io;
 use std::borrow::Cow;
@@ -117,8 +118,8 @@ impl Expression {
 
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
-            Expression::Constant(ref constant) => constant.eval_int(ctx),
-            Expression::ColumnRef(ref column) => column.eval_int(ctx, row),
+            Expression::Constant(ref constant) => constant.eval_int(),
+            Expression::ColumnRef(ref column) => column.eval_int(row),
             Expression::ScalarFn(ref f) => match f.sig {
                 ScalarFuncSig::LTInt |
                 ScalarFuncSig::LEInt |
@@ -126,7 +127,7 @@ impl Expression {
                 ScalarFuncSig::GEInt |
                 ScalarFuncSig::EQInt |
                 ScalarFuncSig::NEInt |
-                ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, f.sig),
+                ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, CmpOp::from(f.sig)),
 
                 ScalarFuncSig::LTReal |
                 ScalarFuncSig::LEReal |
@@ -134,7 +135,7 @@ impl Expression {
                 ScalarFuncSig::GEReal |
                 ScalarFuncSig::EQReal |
                 ScalarFuncSig::NEReal |
-                ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, f.sig),
+                ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, CmpOp::from(f.sig)),
 
                 ScalarFuncSig::LTDecimal |
                 ScalarFuncSig::LEDecimal |
@@ -142,15 +143,14 @@ impl Expression {
                 ScalarFuncSig::GEDecimal |
                 ScalarFuncSig::EQDecimal |
                 ScalarFuncSig::NEDecimal |
-                ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, f.sig),
-
+                ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, CmpOp::from(f.sig)),
                 ScalarFuncSig::LTString |
                 ScalarFuncSig::LEString |
                 ScalarFuncSig::GTString |
                 ScalarFuncSig::GEString |
                 ScalarFuncSig::EQString |
                 ScalarFuncSig::NEString |
-                ScalarFuncSig::NullEQString => f.compare_string(ctx, row, f.sig),
+                ScalarFuncSig::NullEQString => f.compare_string(ctx, row, CmpOp::from(f.sig)),
 
                 ScalarFuncSig::LTTime |
                 ScalarFuncSig::LETime |
@@ -158,7 +158,7 @@ impl Expression {
                 ScalarFuncSig::GETime |
                 ScalarFuncSig::EQTime |
                 ScalarFuncSig::NETime |
-                ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, f.sig),
+                ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, CmpOp::from(f.sig)),
 
                 ScalarFuncSig::LTDuration |
                 ScalarFuncSig::LEDuration |
@@ -166,7 +166,7 @@ impl Expression {
                 ScalarFuncSig::GEDuration |
                 ScalarFuncSig::EQDuration |
                 ScalarFuncSig::NEDuration |
-                ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, f.sig),
+                ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, CmpOp::from(f.sig)),
 
                 ScalarFuncSig::LTJson |
                 ScalarFuncSig::LEJson |
@@ -174,7 +174,8 @@ impl Expression {
                 ScalarFuncSig::GEJson |
                 ScalarFuncSig::EQJson |
                 ScalarFuncSig::NEJson |
-                ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, f.sig),
+                ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::from(f.sig)),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -182,8 +183,8 @@ impl Expression {
 
     fn eval_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
         match *self {
-            Expression::Constant(ref constant) => constant.eval_real(ctx),
-            Expression::ColumnRef(ref column) => column.eval_real(ctx, row),
+            Expression::Constant(ref constant) => constant.eval_real(),
+            Expression::ColumnRef(ref column) => column.eval_real(row),
             _ => unimplemented!(),
         }
     }
@@ -194,8 +195,8 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         match *self {
-            Expression::Constant(ref constant) => constant.eval_decimal(ctx),
-            Expression::ColumnRef(ref column) => column.eval_decimal(ctx, row),
+            Expression::Constant(ref constant) => constant.eval_decimal(),
+            Expression::ColumnRef(ref column) => column.eval_decimal(row),
             _ => unimplemented!(),
         }
     }
@@ -206,8 +207,8 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         match *self {
-            Expression::Constant(ref constant) => constant.eval_string(ctx),
-            Expression::ColumnRef(ref column) => column.eval_string(ctx, row),
+            Expression::Constant(ref constant) => constant.eval_string(),
+            Expression::ColumnRef(ref column) => column.eval_string(row),
             _ => unimplemented!(),
         }
     }
@@ -218,8 +219,8 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         match *self {
-            Expression::Constant(ref constant) => constant.eval_time(ctx),
-            Expression::ColumnRef(ref column) => column.eval_time(ctx, row),
+            Expression::Constant(ref constant) => constant.eval_time(),
+            Expression::ColumnRef(ref column) => column.eval_time(row),
             _ => unimplemented!(),
         }
     }
@@ -230,8 +231,8 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         match *self {
-            Expression::Constant(ref constant) => constant.eval_duration(ctx),
-            Expression::ColumnRef(ref column) => column.eval_duration(ctx, row),
+            Expression::Constant(ref constant) => constant.eval_duration(),
+            Expression::ColumnRef(ref column) => column.eval_duration(row),
             _ => unimplemented!(),
         }
     }
@@ -242,8 +243,8 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         match *self {
-            Expression::Constant(ref constant) => constant.eval_json(ctx),
-            Expression::ColumnRef(ref column) => column.eval_json(ctx, row),
+            Expression::Constant(ref constant) => constant.eval_json(),
+            Expression::ColumnRef(ref column) => column.eval_json(row),
             _ => unimplemented!(),
         }
     }

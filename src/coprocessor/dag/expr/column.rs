@@ -15,7 +15,7 @@ use std::borrow::Cow;
 
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use super::{constant, Column, Error, Result, StatementContext};
+use super::{constant, Column, Error, Result};
 
 impl Column {
     fn check_offset(&self, row: &[Datum]) -> Result<()> {
@@ -26,13 +26,13 @@ impl Column {
     }
 
     #[inline]
-    pub fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn eval_int(&self, row: &[Datum]) -> Result<Option<i64>> {
         try!(self.check_offset(row));
         constant::datum_as_int(&row[self.offset])
     }
 
     #[inline]
-    pub fn eval_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn eval_real(&self, row: &[Datum]) -> Result<Option<f64>> {
         try!(self.check_offset(row));
         constant::datum_as_real(&row[self.offset])
     }
@@ -40,7 +40,6 @@ impl Column {
     #[inline]
     pub fn eval_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         try!(self.check_offset(row));
@@ -48,21 +47,13 @@ impl Column {
     }
 
     #[inline]
-    pub fn eval_string<'a, 'b: 'a>(
-        &'b self,
-        ctx: &StatementContext,
-        row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    pub fn eval_string<'a, 'b: 'a>(&'b self, row: &'a [Datum]) -> Result<Option<Cow<'a, Vec<u8>>>> {
         try!(self.check_offset(row));
         constant::datum_as_string(&row[self.offset])
     }
 
     #[inline]
-    pub fn eval_time<'a, 'b: 'a>(
-        &'b self,
-        ctx: &StatementContext,
-        row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Time>>> {
+    pub fn eval_time<'a, 'b: 'a>(&'b self, row: &'a [Datum]) -> Result<Option<Cow<'a, Time>>> {
         try!(self.check_offset(row));
         constant::datum_as_time(&row[self.offset])
     }
@@ -70,7 +61,6 @@ impl Column {
     #[inline]
     pub fn eval_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         try!(self.check_offset(row));
@@ -78,11 +68,7 @@ impl Column {
     }
 
     #[inline]
-    pub fn eval_json<'a, 'b: 'a>(
-        &'b self,
-        ctx: &StatementContext,
-        row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Json>>> {
+    pub fn eval_json<'a, 'b: 'a>(&'b self, row: &'a [Datum]) -> Result<Option<Cow<'a, Json>>> {
         try!(self.check_offset(row));
         constant::datum_as_json(&row[self.offset])
     }
