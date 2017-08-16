@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{Gauge, GaugeVec};
+use prometheus::{Gauge, GaugeVec, CounterVec};
 use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
               HistogramData, DB};
 use storage::ALL_CFS;
@@ -556,4 +556,10 @@ lazy_static!{
             "Number of times WAL sync is done."
         ).unwrap();
 
+    pub static ref STORE_ENGINE_EVENT_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_engine_event_total",
+            "Number of engine events",
+            &["cf", "type"]
+        ).unwrap();
 }
