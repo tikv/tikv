@@ -944,10 +944,12 @@ fn run_raft_server(pd_client: RpcClient,
 
 fn main() {
     let long_version: String = {
-        let (hash, time, rust_ver) = util::build_info();
-        format!("{}\nGit Commit Hash: {}\nUTC Build Time:  {}\nRust Version:    {}",
+        let (hash, branch, time, rust_ver) = util::build_info();
+        format!("{}\nGit Commit Hash:   {}\nGit Commit Branch: {}\nUTC Build Time:    {}\nRust \
+                 Version:      {}",
                 crate_version!(),
                 hash,
+                branch,
                 time,
                 rust_ver)
     };
