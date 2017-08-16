@@ -256,7 +256,7 @@ impl CacheQueryStats {
 }
 
 pub struct PeerStorage {
-    pub engine: Arc<DB>,
+    pub kv_engine: Arc<DB>,
     pub raft_engine: Arc<DB>,
 
     pub region: metapb::Region,
@@ -355,10 +355,10 @@ impl InvokeContext {
     }
 }
 
-pub fn recover_from_applying_state(engine: &DB, raft_engine: &DB, region_id: u64) -> Result<()> {
+pub fn recover_from_applying_state(kv_engine: &DB, raft_engine: &DB, region_id: u64) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
     let snapshot_raft_state: RaftLocalState =
-        match box_try!(engine.get_msg(&snapshot_raft_state_key)) {
+        match box_try!(kv_engine.get_msg(&snapshot_raft_state_key)) {
             Some(state) => state,
             None => {
                 return Err(box_err!(
@@ -405,9 +405,9 @@ fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> 
     })
 }
 
-fn init_apply_state(engine: &DB, region: &Region) -> Result<RaftApplyState> {
+fn init_apply_state(kv_engine: &DB, region: &Region) -> Result<RaftApplyState> {
     Ok(match try!(
-        engine.get_msg(&keys::apply_state_key(region.get_id()))
+        kv_engine.get_msg(&keys::apply_state_key(region.get_id()))
     ) {
         Some(s) => s,
         None => {
@@ -454,16 +454,16 @@ fn init_last_term(
 
 impl PeerStorage {
     pub fn new(
-        engine: Arc<DB>,
+        kv_engine: Arc<DB>,
         raft_engine: Arc<DB>,
         region: &metapb::Region,
         region_sched: Scheduler<RegionTask>,
         tag: String,
         stats: Rc<RefCell<CacheQueryStats>>,
     ) -> Result<PeerStorage> {
-        debug!("creating storage on {} for {:?}", engine.path(), region);
+        debug!("creating storage on {} for {:?}", kv_engine.path(), region);
         let raft_state = try!(init_raft_state(&raft_engine, region));
-        let apply_state = try!(init_apply_state(&engine, region));
+        let apply_state = try!(init_apply_state(&kv_engine, region));
         if raft_state.get_last_index() < apply_state.get_applied_index() {
             panic!(
                 "{} unexpected raft log index: last_index {} < applied_index {}",
@@ -480,7 +480,7 @@ impl PeerStorage {
         ));
 
         Ok(PeerStorage {
-            engine: engine,
+            kv_engine: kv_engine,
             raft_engine: raft_engine,
             region: region.clone(),
             raft_state: raft_state,
@@ -693,7 +693,7 @@ impl PeerStorage {
     }
 
     pub fn raw_snapshot(&self) -> DbSnapshot {
-        DbSnapshot::new(self.engine.clone())
+        DbSnapshot::new(self.kv_engine.clone())
     }
 
     fn validate_snap(&self, snap: &Snapshot) -> bool {
@@ -1417,15 +1417,15 @@ mod test {
     fn new_storage(sched: Scheduler<RegionTask>) -> PeerStorage {
         let kv_path = TempDir::new("tikv-store-test").unwrap();
         let raft_path = kv_path.path().join(Path::new("raft"));
-        let db = Arc::new(
+        let kv_db = Arc::new(
             new_engine(kv_path.path().to_str().unwrap(), ALL_CFS).unwrap(),
         );
         let raft_db = Arc::new(new_engine(raft_path.to_str().unwrap(), &[]).unwrap());
-        let engines = Engines::new(db.clone(), raft_db.clone());
+        let engines = Engines::new(kv_db.clone(), raft_db.clone());
         bootstrap::bootstrap_store(&engines, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
-        PeerStorage::new(db, raft_db, &region, sched, "".to_owned(), metrics).unwrap()
+        PeerStorage::new(kv_db, raft_db, &region, sched, "".to_owned(), metrics).unwrap()
     }
 
     fn new_storage_from_ents(sched: Scheduler<RegionTask>, ents: &[Entry]) -> PeerStorage {
@@ -1444,7 +1444,7 @@ mod test {
             .set_applied_index(ents.last().unwrap().get_index());
         ctx.save_apply_state_to(&mut kv_wb).unwrap();
         store.raft_engine.write(raft_wb).expect("");
-        store.engine.write(kv_wb).expect("");
+        store.kv_engine.write(kv_wb).expect("");
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1510,7 +1510,7 @@ mod test {
             keys::region_meta_prefix(region_id + 1),
         );
         store
-            .engine
+            .kv_engine
             .scan(&meta_start, &meta_end, false, &mut |_, _| {
                 count += 1;
                 Ok(true)
@@ -1522,7 +1522,7 @@ mod test {
             keys::region_raft_prefix(region_id + 1),
         );
         store
-            .engine
+            .kv_engine
             .scan(&raft_start, &raft_end, false, &mut |_, _| {
                 count += 1;
                 Ok(true)
@@ -1552,7 +1552,7 @@ mod test {
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
         store.clear_meta(&kv_wb, &raft_wb).unwrap();
-        store.engine.write(kv_wb).unwrap();
+        store.kv_engine.write(kv_wb).unwrap();
         store.raft_engine.write(raft_wb).unwrap();
 
         assert_eq!(0, get_meta_key_count(&store));
@@ -1656,7 +1656,7 @@ mod test {
             if res.is_ok() {
                 let mut kv_wb = WriteBatch::new();
                 ctx.save_apply_state_to(&mut kv_wb).unwrap();
-                store.engine.write(kv_wb).expect("");
+                store.kv_engine.write(kv_wb).expect("");
             }
         }
     }
@@ -1685,7 +1685,7 @@ mod test {
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &ents);
-        let runner = RegionRunner::new(s.engine.clone(), s.raft_engine.clone(), mgr, 0);
+        let runner = RegionRunner::new(s.kv_engine.clone(), s.raft_engine.clone(), mgr, 0);
         worker.start(runner).unwrap();
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -1728,7 +1728,7 @@ mod test {
         ctx.apply_state.set_applied_index(7);
         ctx.save_raft_state_to(&mut raft_wb).unwrap();
         ctx.save_apply_state_to(&mut kv_wb).unwrap();
-        s.engine.write(kv_wb).unwrap();
+        s.kv_engine.write(kv_wb).unwrap();
         s.raft_engine.write(raft_wb).unwrap();
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
@@ -1737,7 +1737,7 @@ mod test {
         compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
         kv_wb = WriteBatch::new();
         ctx.save_apply_state_to(&mut kv_wb).unwrap();
-        s.engine.write(kv_wb).unwrap();
+        s.kv_engine.write(kv_wb).unwrap();
         s.apply_state = ctx.apply_state;
         let (tx, rx) = channel();
         tx.send(snap.clone()).unwrap();
@@ -1973,7 +1973,8 @@ mod test {
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &ents);
-        let runner = RegionRunner::new(s1.engine.clone(), s1.raft_engine.clone(), mgr.clone(), 0);
+        let runner =
+            RegionRunner::new(s1.kv_engine.clone(), s1.raft_engine.clone(), mgr.clone(), 0);
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());
         let snap1 = match *s1.snap_state.borrow() {

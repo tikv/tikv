@@ -40,7 +40,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     let mut ident = StoreIdent::new();
 
     if !try!(is_range_empty(
-        &engines.engine,
+        &engines.kv_engine,
         CF_DEFAULT,
         keys::MIN_KEY,
         keys::MAX_KEY
@@ -53,7 +53,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     ident.set_cluster_id(cluster_id);
     ident.set_store_id(store_id);
 
-    engines.engine.put_msg(&ident_key, &ident)
+    engines.kv_engine.put_msg(&ident_key, &ident)
 }
 
 // Write first region meta and prepare state.
@@ -66,7 +66,7 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
     try!(wb.put_msg(&keys::region_state_key(region.get_id()), &state));
     try!(write_initial_state(&wb, &raft_wb, region.get_id()));
     try!(wb.put_msg(&keys::prepare_bootstrap_key(), region));
-    try!(engines.engine.write(wb));
+    try!(engines.kv_engine.write(wb));
     try!(engines.raft_engine.write(raft_wb));
     Ok(())
 }
@@ -81,13 +81,13 @@ pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> 
     try!(wb.delete(&keys::apply_state_key(region_id)));
 
     try!(engines.raft_engine.delete(&keys::raft_state_key(region_id)));
-    try!(engines.engine.write(wb));
+    try!(engines.kv_engine.write(wb));
     Ok(())
 }
 
 // Clear prepare state
 pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
-    try!(engines.engine.delete(&keys::prepare_bootstrap_key()));
+    try!(engines.kv_engine.delete(&keys::prepare_bootstrap_key()));
     Ok(())
 }
 
@@ -131,26 +131,26 @@ mod tests {
     fn test_bootstrap() {
         let path = TempDir::new("var").unwrap();
         let raft_path = path.path().join("raft");
-        let engine = Arc::new(
+        let kv_engine = Arc::new(
             rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
         );
         let raft_engine = Arc::new(
             rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
         );
-        let engines = Engines::new(engine.clone(), raft_engine.clone());
+        let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());
 
         assert!(prepare_bootstrap(&engines, 1, 1, 1).is_ok());
         assert!(
-            engine
+            kv_engine
                 .get_value(&keys::region_state_key(1))
                 .unwrap()
                 .is_some()
         );
         assert!(
-            engine
+            kv_engine
                 .get_value(&keys::prepare_bootstrap_key())
                 .unwrap()
                 .is_some()
@@ -162,7 +162,7 @@ mod tests {
                 .is_some()
         );
         assert!(
-            engine
+            kv_engine
                 .get_value(&keys::apply_state_key(1))
                 .unwrap()
                 .is_some()
@@ -172,7 +172,7 @@ mod tests {
         assert!(clear_prepare_bootstrap(&engines, 1).is_ok());
         assert!(
             is_range_empty(
-                &engine,
+                &kv_engine,
                 CF_DEFAULT,
                 &keys::region_meta_prefix(1),
                 &keys::region_meta_prefix(2)

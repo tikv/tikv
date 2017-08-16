@@ -220,7 +220,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     server
         .start(&cfg.server)
         .unwrap_or_else(|e| exit_with_err(e));
-    signal_handler::handle_signal(kv_engine, &cfg.rocksdb.backup_dir);
+    signal_handler::handle_signal(kv_engine, raft_engine, &cfg.rocksdb.backup_dir);
 
     // Stop.
     server.stop().unwrap_or_else(|e| exit_with_err(e));
@@ -252,6 +252,10 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
 
     if let Some(data_dir) = matches.value_of("data-dir") {
         config.storage.data_dir = data_dir.to_owned();
+    }
+
+    if let Some(raft_db_path) = matches.value_of("raft-db-path") {
+        config.storage.raft_db_path = raft_db_path.to_owned();
     }
 
     if let Some(endpoints) = matches.values_of("pd-endpoints") {
@@ -350,6 +354,15 @@ fn main() {
                 .takes_value(true)
                 .value_name("PATH")
                 .help("Sets the path to store directory"),
+        )
+        .arg(
+            Arg::with_name("raft-db-path")
+                .long("raft-db-path")
+                .short("r")
+                .alias("raftdb")
+                .takes_value(true)
+                .value_name("PATH")
+                .help("Sets the path to raftdb directory"),
         )
         .arg(
             Arg::with_name("capacity")

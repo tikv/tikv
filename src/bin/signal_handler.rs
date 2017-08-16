@@ -56,7 +56,7 @@ mod imp {
     }
 
     // TODO: remove backup_path from configuration
-    pub fn handle_signal(engine: Arc<DB>, _: &str) {
+    pub fn handle_signal(kv_engine: Arc<DB>, raft_engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
@@ -74,30 +74,33 @@ mod imp {
                     encoder.encode(&metric_familys, &mut buffer).unwrap();
                     info!("{}", String::from_utf8(buffer).unwrap());
 
-                    // Log common rocksdb stats.
-                    for name in engine.cf_names() {
-                        let handler = engine.cf_handle(name).unwrap();
-                        if let Some(v) =
-                            engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY)
-                        {
-                            info!("{}", v)
-                        }
-                    }
-
-                    if let Some(v) = engine.get_property_value(ROCKSDB_DB_STATS_KEY) {
-                        info!("{}", v)
-                    }
-
-                    // Log more stats if enable_statistics is true.
-                    if let Some(v) = engine.get_statistics() {
-                        info!("{}", v)
-                    }
+                    print_rocksdb_stats(&kv_engine);
+                    print_rocksdb_stats(&raft_engine);
                     print_malloc_stats();
                 }
                 SIGUSR2 => profiling::dump_prof(None),
                 // TODO: handle more signal
                 _ => unreachable!(),
             }
+        }
+    }
+
+    fn print_rocksdb_stats(engine: &Arc<DB>) {
+        // Log common rocksdb stats.
+        for name in engine.cf_names() {
+            let handler = engine.cf_handle(name).unwrap();
+            if let Some(v) = engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
+                info!("{}", v)
+            }
+        }
+
+        if let Some(v) = engine.get_property_value(ROCKSDB_DB_STATS_KEY) {
+            info!("{}", v)
+        }
+
+        // Log more stats if enable_statistics is true.
+        if let Some(v) = engine.get_statistics() {
+            info!("{}", v)
         }
     }
 

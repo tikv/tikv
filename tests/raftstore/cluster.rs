@@ -147,7 +147,7 @@ impl<T: Simulator> Cluster<T> {
                 let node_id = sim.run_node(
                     0,
                     self.cfg.clone(),
-                    engines.engine.clone(),
+                    engines.kv_engine.clone(),
                     engines.raft_engine.clone(),
                 );
                 self.engines.insert(node_id, engines.clone());
@@ -182,7 +182,7 @@ impl<T: Simulator> Cluster<T> {
         self.sim.wl().run_node(
             node_id,
             self.cfg.clone(),
-            engines.engine,
+            engines.kv_engine,
             engines.raft_engine,
         );
         debug!("node {} started", node_id);
@@ -195,7 +195,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        self.engines[&node_id].engine.clone()
+        self.engines[&node_id].kv_engine.clone()
     }
 
     pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
@@ -450,7 +450,7 @@ impl<T: Simulator> Cluster<T> {
         let half = self.engines.len() / 2;
         let mut qualified_cnt = 0;
         for (id, engines) in &self.engines {
-            if !condition(&engines.engine) {
+            if !condition(&engines.kv_engine) {
                 debug!("store {} is not qualified yet.", id);
                 continue;
             }
@@ -670,7 +670,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn must_flush(&mut self, sync: bool) {
         for engines in &self.dbs {
-            engines.engine.flush(sync).unwrap();
+            engines.kv_engine.flush(sync).unwrap();
             engines.raft_engine.flush(sync).unwrap();
         }
     }

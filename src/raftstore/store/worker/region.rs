@@ -90,7 +90,7 @@ impl Display for Task {
 
 #[derive(Clone)]
 struct SnapContext {
-    db: Arc<DB>,
+    kv_db: Arc<DB>,
     raft_db: Arc<DB>,
     batch_size: usize,
     mgr: SnapManager,
@@ -100,7 +100,7 @@ impl SnapContext {
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
         let raft_db = self.raft_db.clone();
-        let raw_snap = Snapshot::new(self.db.clone());
+        let raw_snap = Snapshot::new(self.kv_db.clone());
 
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
@@ -145,12 +145,12 @@ impl SnapContext {
     ) -> Result<()> {
         let mut wb = WriteBatch::new();
         let mut size_cnt = 0;
-        for cf in self.db.cf_names() {
+        for cf in self.kv_db.cf_names() {
             try!(check_abort(abort));
-            let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
+            let handle = box_try!(rocksdb::get_cf_handle(&self.kv_db, cf));
 
             let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
-            let mut it = box_try!(self.db.new_iterator_cf(cf, iter_opt));
+            let mut it = box_try!(self.kv_db.new_iterator_cf(cf, iter_opt));
 
             try!(check_abort(abort));
             it.seek(start_key.into());
@@ -166,7 +166,7 @@ impl SnapContext {
                     if size_cnt >= self.batch_size {
                         // Can't use write_without_wal here.
                         // Otherwise it may cause dirty data when applying snapshot.
-                        box_try!(self.db.write(wb));
+                        box_try!(self.kv_db.write(wb));
                         wb = WriteBatch::new();
                         size_cnt = 0;
                     }
@@ -179,7 +179,7 @@ impl SnapContext {
         }
 
         if wb.count() > 0 {
-            box_try!(self.db.write(wb));
+            box_try!(self.kv_db.write(wb));
         }
         Ok(())
     }
@@ -188,7 +188,7 @@ impl SnapContext {
         info!("[region {}] begin apply snap data", region_id);
         try!(check_abort(&abort));
         let region_key = keys::region_state_key(region_id);
-        let mut region_state: RegionLocalState = match box_try!(self.db.get_msg(&region_key)) {
+        let mut region_state: RegionLocalState = match box_try!(self.kv_db.get_msg(&region_key)) {
             Some(state) => state,
             None => {
                 return Err(box_err!(
@@ -205,7 +205,7 @@ impl SnapContext {
         box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState = match box_try!(self.db.get_msg(&state_key)) {
+        let apply_state: RaftApplyState = match box_try!(self.kv_db.get_msg(&state_key)) {
             Some(state) => state,
             None => {
                 return Err(box_err!(
@@ -228,7 +228,7 @@ impl SnapContext {
         try!(check_abort(&abort));
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.db.clone(),
+            db: self.kv_db.clone(),
             region: region.clone(),
             abort: abort.clone(),
             write_batch_size: self.batch_size,
@@ -239,7 +239,7 @@ impl SnapContext {
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg(&region_key, &region_state));
         box_try!(wb.delete(&keys::snapshot_raft_state_key(region_id)));
-        box_try!(self.db.write(wb));
+        box_try!(self.kv_db.write(wb));
         info!(
             "[region {}] apply new data takes {:?}",
             region_id,
@@ -304,11 +304,11 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(db: Arc<DB>, raft_db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
+    pub fn new(kv_db: Arc<DB>, raft_db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
         Runner {
             pool: ThreadPool::new_with_name(thd_name!("snap generator"), GENERATE_POOL_SIZE),
             ctx: SnapContext {
-                db: db,
+                kv_db: kv_db,
                 raft_db: raft_db,
                 mgr: mgr,
                 batch_size: batch_size,

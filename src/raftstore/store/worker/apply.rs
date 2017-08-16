@@ -296,7 +296,7 @@ impl ApplyDelegate {
 
     fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.engine(), reg)
+        ApplyDelegate::from_registration(peer.kv_engine(), reg)
     }
 
     fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
@@ -1423,7 +1423,7 @@ impl Runner {
             delegates.insert(region_id, ApplyDelegate::from_peer(p));
         }
         Runner {
-            db: store.engine(),
+            db: store.kv_engine(),
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,

@@ -178,7 +178,7 @@ where
     fn check_store(&self, engines: &Engines) -> Result<u64> {
         let res = try!(
             engines
-                .engine
+                .kv_engine
                 .get_msg::<StoreIdent>(&keys::store_ident_key())
         );
         if res.is_none() {
@@ -249,7 +249,7 @@ where
     fn check_prepare_bootstrap_cluster(&self, engines: &Engines) -> Result<()> {
         let res = try!(
             engines
-                .engine
+                .kv_engine
                 .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
         );
         if res.is_none() {
