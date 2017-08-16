@@ -47,6 +47,8 @@ pub const YEAR: u8 = 13;
 pub const NEWDATE: u8 = 14;
 pub const VARCHAR: u8 = 15;
 pub const BIT: u8 = 16;
+
+pub const JSON: u8 = 0xf5;
 pub const NEW_DECIMAL: u8 = 246;
 pub const ENUM: u8 = 247;
 pub const SET: u8 = 248;
