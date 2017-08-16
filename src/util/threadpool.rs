@@ -18,21 +18,16 @@ use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::hash::Hash;
-use std::marker::PhantomData;
 use std::fmt::{self, Debug, Formatter, Write};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 
-pub struct Task<T, C> {
+pub struct Task<C> {
     // The task's id in the pool. Each task has a unique id,
     // and it's always bigger than preceding ones.
     id: u64,
-
-    // which group the task belongs to.
-    gid: T,
 
     // use Box<FnBox<&mut C> + Send> instead
     // after https://github.com/rust-lang/rust/issues/25647 solved.
@@ -40,71 +35,70 @@ pub struct Task<T, C> {
     ctx: C,
 }
 
-impl<T: Debug, C> Debug for Task<T, C> {
+impl<C> Debug for Task<C> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "task_id:{},group_id:{:?}", self.id, self.gid)
+        write!(f, "task_id:{}", self.id)
     }
 }
 
-impl<T, C: Context> Task<T, C> {
-    fn new<F>(gid: T, job: F, ctx: C) -> Task<T, C>
+impl<C: Context> Task<C> {
+    fn new<F>(job: F, ctx: C) -> Task<C>
     where
         F: FnOnce(C) -> C + Send + 'static,
     {
         Task {
             id: 0,
-            gid: gid,
             task: Box::new(job),
             ctx: ctx,
         }
     }
 }
 
-impl<T, C> Ord for Task<T, C> {
-    fn cmp(&self, right: &Task<T, C>) -> Ordering {
+impl<C> Ord for Task<C> {
+    fn cmp(&self, right: &Task<C>) -> Ordering {
         self.id.cmp(&right.id).reverse()
     }
 }
 
-impl<T, C> PartialEq for Task<T, C> {
-    fn eq(&self, right: &Task<T, C>) -> bool {
+impl<C> PartialEq for Task<C> {
+    fn eq(&self, right: &Task<C>) -> bool {
         self.cmp(right) == Ordering::Equal
     }
 }
 
-impl<T, C> Eq for Task<T, C> {}
+impl<C> Eq for Task<C> {}
 
-impl<T, C> PartialOrd for Task<T, C> {
-    fn partial_cmp(&self, rhs: &Task<T, C>) -> Option<Ordering> {
+impl<C> PartialOrd for Task<C> {
+    fn partial_cmp(&self, rhs: &Task<C>) -> Option<Ordering> {
         Some(self.cmp(rhs))
     }
 }
 
-pub trait ScheduleQueue<T: Debug, C> {
-    fn pop(&mut self) -> Option<Task<T, C>>;
-    fn push(&mut self, task: Task<T, C>);
+pub trait ScheduleQueue<C> {
+    fn pop(&mut self) -> Option<Task<C>>;
+    fn push(&mut self, task: Task<C>);
 }
 
 // First in first out queue.
 #[derive(Default)]
-pub struct FifoQueue<T, C> {
-    queue: VecDeque<Task<T, C>>,
+pub struct FifoQueue<C> {
+    queue: VecDeque<Task<C>>,
 }
 
-impl<T: Hash + Ord + Send + Clone + Debug, C: Context> FifoQueue<T, C> {
-    pub fn new() -> FifoQueue<T, C> {
+impl<C: Context> FifoQueue<C> {
+    pub fn new() -> FifoQueue<C> {
         FifoQueue {
             queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY),
         }
     }
 }
 
-impl<T: Hash + Ord + Send + Clone + Debug, C> ScheduleQueue<T, C> for FifoQueue<T, C> {
-    fn push(&mut self, task: Task<T, C>) {
+impl<C> ScheduleQueue<C> for FifoQueue<C> {
+    fn push(&mut self, task: Task<C>) {
         self.queue.push_back(task);
     }
 
-    fn pop(&mut self) -> Option<Task<T, C>> {
+    fn pop(&mut self) -> Option<Task<C>> {
         let task = self.queue.pop_front();
 
         if self.queue.is_empty() && self.queue.capacity() > QUEUE_MAX_CAPACITY {
@@ -115,31 +109,28 @@ impl<T: Hash + Ord + Send + Clone + Debug, C> ScheduleQueue<T, C> for FifoQueue<
     }
 }
 
-struct TaskPool<Q, T, C> {
+struct TaskPool<Q, C> {
     next_task_id: u64,
     task_queue: Q,
-    marker: PhantomData<T>,
     stop: bool,
-    jobs: Receiver<Task<T, C>>,
+    jobs: Receiver<Task<C>>,
 }
 
-impl<Q, T, C> TaskPool<Q, T, C>
+impl<Q, C> TaskPool<Q, C>
 where
-    Q: ScheduleQueue<T, C>,
-    T: Debug,
+    Q: ScheduleQueue<C>,
     C: Context,
 {
-    fn new(queue: Q, jobs: Receiver<Task<T, C>>) -> TaskPool<Q, T, C> {
+    fn new(queue: Q, jobs: Receiver<Task<C>>) -> TaskPool<Q, C> {
         TaskPool {
             next_task_id: 0,
             task_queue: queue,
-            marker: PhantomData,
             stop: false,
             jobs: jobs,
         }
     }
 
-    fn pop_task(&mut self) -> Option<Task<T, C>> {
+    fn pop_task(&mut self) -> Option<Task<C>> {
         if let Some(task) = self.task_queue.pop() {
             return Some(task);
         }
@@ -177,31 +168,30 @@ pub trait ContextFactory<Ctx: Context> {
 }
 
 // Make clippy happy
-type TTaskPool<Q, T, C> = Arc<(Mutex<TaskPool<Q, T, C>>, Condvar)>;
+type TTaskPool<Q, C> = Arc<(Mutex<TaskPool<Q, C>>, Condvar)>;
 
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
-pub struct ThreadPool<Q, T, C, Ctx> {
-    task_pool: TTaskPool<Q, T, Ctx>,
+pub struct ThreadPool<Q, C, Ctx> {
+    task_pool: TTaskPool<Q, Ctx>,
     threads: Vec<JoinHandle<()>>,
     task_count: Arc<AtomicUsize>,
-    sender: Sender<Task<T, Ctx>>,
+    sender: Sender<Task<Ctx>>,
     // ctx_factory should only be used in one thread
     ctx_factory: C,
 }
 
-impl<Q, T, C, Ctx> ThreadPool<Q, T, C, Ctx>
+impl<Q, C, Ctx> ThreadPool<Q, C, Ctx>
 where
-    Q: ScheduleQueue<T, Ctx> + Send + 'static,
-    T: Hash + Send + Clone + 'static + Debug,
+    Q: ScheduleQueue<Ctx> + Send + 'static,
     Ctx: Context + 'static,
     C: ContextFactory<Ctx>,
 {
-    pub fn new(name: String, num_threads: usize, queue: Q, f: C) -> ThreadPool<Q, T, C, Ctx> {
+    pub fn new(name: String, num_threads: usize, queue: Q, f: C) -> ThreadPool<Q, C, Ctx> {
         assert!(num_threads >= 1);
-        let (sender, receiver) = channel::<Task<T, Ctx>>();
+        let (sender, receiver) = channel::<Task<Ctx>>();
         let task_pool = Arc::new((Mutex::new(TaskPool::new(queue, receiver)), Condvar::new()));
         let mut threads = Vec::with_capacity(num_threads);
         let task_count = Arc::new(AtomicUsize::new(0));
@@ -229,13 +219,13 @@ where
         }
     }
 
-    pub fn execute<F>(&mut self, gid: T, job: F)
+    pub fn execute<F>(&mut self, job: F)
     where
         F: FnOnce(Ctx) -> Ctx + Send + 'static,
         Ctx: Context,
     {
         let ctx = self.ctx_factory.create_context();
-        let task = Task::new(gid, job, ctx);
+        let task = Task::new(job, ctx);
         self.sender.send(task).unwrap();
         self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
         let &(_, ref cvar) = &*self.task_pool;
@@ -268,19 +258,18 @@ where
 }
 
 // Each thread has a worker.
-struct Worker<Q, T, C> {
-    task_pool: TTaskPool<Q, T, C>,
+struct Worker<Q, C> {
+    task_pool: TTaskPool<Q, C>,
     task_count: Arc<AtomicUsize>,
     ctx: C,
 }
 
-impl<Q, T, C> Worker<Q, T, C>
+impl<Q, C> Worker<Q, C>
 where
-    Q: ScheduleQueue<T, C>,
-    T: Debug,
+    Q: ScheduleQueue<C>,
     C: Context,
 {
-    fn new(task_pool: TTaskPool<Q, T, C>, task_count: Arc<AtomicUsize>, ctx: C) -> Worker<Q, T, C> {
+    fn new(task_pool: TTaskPool<Q, C>, task_count: Arc<AtomicUsize>, ctx: C) -> Worker<Q, C> {
         Worker {
             task_pool: task_pool,
             task_count: task_count,
@@ -302,7 +291,7 @@ where
 
     // `get_next_task` return `None` when `task_pool` is stopped.
     #[inline]
-    fn get_next_task(&mut self, prev_ctx: Option<C>) -> Option<Task<T, C>> {
+    fn get_next_task(&mut self, prev_ctx: Option<C>) -> Option<Task<C>> {
         // try to receive notification.
         let &(ref lock, ref cvar) = &*self.task_pool;
         let mut task_pool = lock.lock().unwrap();
@@ -364,7 +353,7 @@ mod test {
         for gid in 0..group_num {
             let rxer = receiver.clone();
             let ftx = ftx.clone();
-            task_pool.execute(gid, move |ctx: DummyContext| -> DummyContext {
+            task_pool.execute(move |ctx: DummyContext| -> DummyContext {
                 let rx = rxer.lock().unwrap();
                 let id = rx.recv_timeout(timeout).unwrap();
                 assert_eq!(id, gid);
@@ -395,7 +384,6 @@ mod test {
         let f = DummyContextFactory {};
         for id in 0..10 {
             let mut task = Task::new(
-                0,
                 move |d: DummyContext| -> DummyContext { d },
                 f.create_context(),
             );
@@ -452,8 +440,8 @@ mod test {
         let concurrency = 5;
         let mut task_pool = ThreadPool::new(name, concurrency, FifoQueue::new(), f);
 
-        for gid in 0..10 {
-            task_pool.execute(gid, move |ctx: TestContext| -> TestContext { ctx });
+        for _ in 0..10 {
+            task_pool.execute(move |ctx: TestContext| -> TestContext { ctx });
         }
         let mut fin: isize = -1;
         let mut count = 0;

@@ -65,11 +65,11 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<FifoQueue<u64, DummyContext>, u64, DummyContextFactory, DummyContext>,
+    pool: ThreadPool<FifoQueue<DummyContext>, DummyContextFactory, DummyContext>,
     low_priority_pool:
-        ThreadPool<FifoQueue<u64, DummyContext>, u64, DummyContextFactory, DummyContext>,
+        ThreadPool<FifoQueue<DummyContext>, DummyContextFactory, DummyContext>,
     high_priority_pool:
-        ThreadPool<FifoQueue<u64, DummyContext>, u64, DummyContextFactory, DummyContext>,
+        ThreadPool<FifoQueue<DummyContext>, DummyContextFactory, DummyContext>,
     max_running_task_count: usize,
 }
 
@@ -320,11 +320,9 @@ impl BatchRunnable<Task> for Host {
                             .with_label_values(&[type_str, pri_str])
                             .add(1.0);
                         let end_point = TiDbEndPoint::new(snap.clone());
-                        let txn_id = req.start_ts.unwrap_or_default();
 
                         if pri == CommandPri::Low {
                             self.low_priority_pool.execute(
-                                txn_id,
                                 move |ctx: DummyContext| -> DummyContext {
                                     end_point.handle_request(req);
                                     COPR_PENDING_REQS
@@ -335,7 +333,6 @@ impl BatchRunnable<Task> for Host {
                             );
                         } else if pri == CommandPri::High {
                             self.high_priority_pool.execute(
-                                txn_id,
                                 move |ctx: DummyContext| -> DummyContext {
                                     end_point.handle_request(req);
                                     COPR_PENDING_REQS
@@ -346,7 +343,6 @@ impl BatchRunnable<Task> for Host {
                             );
                         } else {
                             self.pool.execute(
-                                txn_id,
                                 move |ctx: DummyContext| -> DummyContext {
                                     end_point.handle_request(req);
                                     COPR_PENDING_REQS
