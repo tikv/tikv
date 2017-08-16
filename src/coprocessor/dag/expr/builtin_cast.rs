@@ -138,15 +138,25 @@ impl FnCall {
         }
         let val = val.unwrap();
         if !mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
-            Ok(Some(val as f64))
+            Ok(Some(
+                try!(self.produce_float_with_specified_tp(ctx, val as f64)),
+            ))
         } else {
             let uval = try!(convert_int_to_uint(val, u64::MAX, types::LONG_LONG));
-            Ok(Some(uval as f64))
+            Ok(Some(
+                try!(self.produce_float_with_specified_tp(ctx, uval as f64)),
+            ))
         }
     }
 
     pub fn cast_real_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        self.children[0].eval_real(ctx, row)
+        let val = try!(self.children[0].eval_real(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(try!(
+            self.produce_float_with_specified_tp(ctx, val.unwrap())
+        )))
     }
 
     pub fn cast_decimal_as_real(
@@ -160,7 +170,7 @@ impl FnCall {
         }
         let val = val.unwrap();
         let res = try!(val.as_f64());
-        Ok(Some(res))
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_str_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -173,18 +183,7 @@ impl FnCall {
         }
         let val = val.unwrap();
         let res = try!(convert::bytes_to_f64(ctx, &val));
-        let flen = self.tp.get_flen();
-        let decimal = self.tp.get_decimal();
-        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
-            return Ok(Some(res));
-        }
-        let ret = try!(convert::float_to_float_with_specified_tp(
-            ctx,
-            res,
-            flen as u8,
-            decimal as u8
-        ));
-        Ok(Some(ret))
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_time_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -192,9 +191,9 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = val.unwrap();
-        let res = try!(val.to_decimal());
-        Ok(Some(try!(res.as_f64())))
+        let val = try!(val.unwrap().to_decimal());
+        let res = try!(val.as_f64());
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_duration_as_real(
@@ -206,9 +205,9 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = val.unwrap();
-        let res = try!(val.to_decimal());
-        Ok(Some(try!(res.as_f64())))
+        let val = try!(val.unwrap().to_decimal());
+        let res = try!(val.as_f64());
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_json_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -217,7 +216,7 @@ impl FnCall {
             return Ok(None);
         }
         let val = try!(val.unwrap().cast_to_real());
-        Ok(Some(val))
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, val))))
     }
 
     pub fn cast_int_as_decimal(
@@ -568,5 +567,19 @@ impl FnCall {
         }
         let res = try!(val.convert_to(ctx, flen as u8, decimal as u8));
         Ok(res)
+    }
+
+    /// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
+    /// a new float64 according to `flen` and `decimal` in `self.tp`.
+    /// TODO port tests from tidb(tidb haven't implemented now)
+    fn produce_float_with_specified_tp(&self, ctx: &StatementContext, f: f64) -> Result<f64> {
+        let flen = self.tp.get_flen();
+        let decimal = self.tp.get_decimal();
+        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+            return Ok(f);
+        }
+        let dec = try!(Decimal::from_f64(f));
+        let ret = try!(dec.convert_to(ctx, flen as u8, decimal as u8));
+        Ok(try!(ret.as_f64()))
     }
 }
