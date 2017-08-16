@@ -16,13 +16,13 @@ use std::time::Duration;
 use rocksdb::Writable;
 use protobuf::Message;
 
-use kvproto::raft_serverpb::{self, RegionLocalState, PeerState, StoreIdent};
+use kvproto::raft_serverpb::{self, PeerState, RegionLocalState, StoreIdent};
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::transport_simulate::*;
 use super::server::new_server_cluster;
 use super::util::*;
-use tikv::raftstore::store::{keys, Peekable, Iterable, Mutable};
+use tikv::raftstore::store::{keys, Iterable, Mutable, Peekable};
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
@@ -61,14 +61,11 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"k3");
     let mut existing_kvs = vec![];
     for cf in engine_2.cf_names() {
-        engine_2.scan_cf(cf,
-                     b"",
-                     &[0xFF],
-                     false,
-                     &mut |k, v| {
-                         existing_kvs.push((k.to_vec(), v.to_vec()));
-                         Ok(true)
-                     })
+        engine_2
+            .scan_cf(cf, b"", &[0xFF], false, &mut |k, v| {
+                existing_kvs.push((k.to_vec(), v.to_vec()));
+                Ok(true)
+            })
             .unwrap();
     }
     // only tombstone key and store ident key exist.
@@ -106,10 +103,14 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // We must get RegionNotFound error.
     let region_status = new_status_request(r1, new_peer(2, 2), new_region_leader_cmd());
-    let resp = cluster.call_command(region_status, Duration::from_secs(5)).unwrap();
-    assert!(resp.get_header().get_error().has_region_not_found(),
-            "region must not found, but got {:?}",
-            resp);
+    let resp = cluster
+        .call_command(region_status, Duration::from_secs(5))
+        .unwrap();
+    assert!(
+        resp.get_header().get_error().has_region_not_found(),
+        "region must not found, but got {:?}",
+        resp
+    );
 }
 
 #[test]
@@ -249,10 +250,14 @@ fn test_server_stale_meta() {
     cluster.shutdown();
 
     let engine_3 = cluster.get_engine(3);
-    let mut state: RegionLocalState =
-        engine_3.get_msg(&keys::region_state_key(1)).unwrap().unwrap();
+    let mut state: RegionLocalState = engine_3
+        .get_msg(&keys::region_state_key(1))
+        .unwrap()
+        .unwrap();
     state.set_state(PeerState::Tombstone);
-    engine_3.put_msg(&keys::region_state_key(1), &state).unwrap();
+    engine_3
+        .put_msg(&keys::region_state_key(1), &state)
+        .unwrap();
     cluster.clear_send_filters();
 
     // avoid TIMEWAIT

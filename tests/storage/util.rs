@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
-use tikv::storage::{Engine, Snapshot, Modify, ALL_CFS};
-use tikv::storage::engine::{Callback, Result, BatchCallback};
+use tikv::storage::{Engine, Modify, Snapshot, ALL_CFS};
+use tikv::storage::engine::{BatchCallback, Callback, Result};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
@@ -88,9 +88,7 @@ impl Engine for BlockEngine {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()> {
         let block_write = self.block_write.clone();
         let sender = self.sender.clone();
-        self.engine.async_write(ctx,
-                                batch,
-                                box move |res| {
+        self.engine.async_write(ctx, batch, box move |res| {
             thread::spawn(move || {
                 try_notify(block_write.clone(), sender);
                 while block_write.load(Ordering::SeqCst) {
@@ -104,8 +102,7 @@ impl Engine for BlockEngine {
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()> {
         let block_snapshot = self.block_snapshot.clone();
         let sender = self.sender.clone();
-        self.engine.async_snapshot(ctx,
-                                   box move |res| {
+        self.engine.async_snapshot(ctx, box move |res| {
             thread::spawn(move || {
                 try_notify(block_snapshot.clone(), sender);
                 while block_snapshot.load(Ordering::SeqCst) {
@@ -116,14 +113,14 @@ impl Engine for BlockEngine {
         })
     }
 
-    fn async_batch_snapshot(&self,
-                            batch: Vec<Context>,
-                            on_finished: BatchCallback<Box<Snapshot>>)
-                            -> Result<()> {
+    fn async_batch_snapshot(
+        &self,
+        batch: Vec<Context>,
+        on_finished: BatchCallback<Box<Snapshot>>,
+    ) -> Result<()> {
         let block_snapshot = self.block_snapshot.clone();
         let sender = self.sender.clone();
-        self.engine.async_batch_snapshot(batch,
-                                         box move |res| {
+        self.engine.async_batch_snapshot(batch, box move |res| {
             thread::spawn(move || {
                 try_notify(block_snapshot.clone(), sender);
                 while block_snapshot.load(Ordering::SeqCst) {
@@ -159,9 +156,14 @@ pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<
     (cluster, engine, ctx)
 }
 
-pub fn new_raft_storage_with_store_count(count: usize,
-                                         key: &str)
-                                         -> (Cluster<ServerCluster>, SyncStorage, Context) {
+pub fn new_raft_storage_with_store_count(
+    count: usize,
+    key: &str,
+) -> (Cluster<ServerCluster>, SyncStorage, Context) {
     let (cluster, engine, ctx) = new_raft_engine(count, key);
-    (cluster, SyncStorage::from_engine(engine, &Config::default()), ctx)
+    (
+        cluster,
+        SyncStorage::from_engine(engine, &Config::default()),
+        ctx,
+    )
 }

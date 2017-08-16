@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::error;
-use std::io::{self, Write, ErrorKind, Read};
-use std::fmt::{self, Formatter, Display};
+use std::io::{self, ErrorKind, Read, Write};
+use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -122,7 +122,10 @@ impl SnapKey {
             return Err(io::Error::new(ErrorKind::Other, e));
         }
 
-        Ok(SnapKey::from_region_snap(snap_data.get_region().get_id(), snap))
+        Ok(SnapKey::from_region_snap(
+            snap_data.get_region().get_id(),
+            snap,
+        ))
     }
 }
 
@@ -140,7 +143,9 @@ pub struct SnapshotStatistics {
 
 impl SnapshotStatistics {
     pub fn new() -> SnapshotStatistics {
-        SnapshotStatistics { ..Default::default() }
+        SnapshotStatistics {
+            ..Default::default()
+        }
     }
 }
 
@@ -159,13 +164,14 @@ pub struct ApplyOptions {
 ///   4. apply snapshot
 ///   5. snapshot gc
 pub trait Snapshot: Read + Write + Send {
-    fn build(&mut self,
-             snap: &DbSnapshot,
-             region: &Region,
-             snap_data: &mut RaftSnapshotData,
-             stat: &mut SnapshotStatistics,
-             deleter: Box<SnapshotDeleter>)
-             -> RaftStoreResult<()>;
+    fn build(
+        &mut self,
+        snap: &DbSnapshot,
+        region: &Region,
+        snap_data: &mut RaftSnapshotData,
+        stat: &mut SnapshotStatistics,
+        deleter: Box<SnapshotDeleter>,
+    ) -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
     fn delete(&self);
@@ -194,10 +200,11 @@ pub trait SnapshotDeleter {
 }
 
 // Try to delete the specified snapshot using deleter, return true if the deletion is done.
-pub fn retry_delete_snapshot(deleter: Box<SnapshotDeleter>,
-                             key: &SnapKey,
-                             snap: &Snapshot)
-                             -> bool {
+pub fn retry_delete_snapshot(
+    deleter: Box<SnapshotDeleter>,
+    key: &SnapKey,
+    snap: &Snapshot,
+) -> bool {
     let d = time::Duration::from_millis(DELETE_RETRY_TIME_MILLIS);
     for _ in 0..DELETE_RETRY_MAX_TIMES {
         if deleter.delete_snapshot(key, snap, true) {
@@ -1030,8 +1037,10 @@ impl SnapManager {
             return Ok(());
         }
         if !path.is_dir() {
-            return Err(io::Error::new(ErrorKind::Other,
-                                      format!("{} should be a directory", path.display())));
+            return Err(io::Error::new(
+                ErrorKind::Other,
+                format!("{} should be a directory", path.display()),
+            ));
         }
         let mut size = core.snap_size.wl();
         for f in try!(fs::read_dir(path)) {
@@ -1056,7 +1065,8 @@ impl SnapManager {
         let path = Path::new(&core.base);
         let read_dir = try!(fs::read_dir(path));
         // Remove the duplicate snap keys.
-        let mut v: Vec<_> = read_dir.filter_map(|p| {
+        let mut v: Vec<_> = read_dir
+            .filter_map(|p| {
                 let p = match p {
                     Err(e) => {
                         error!("failed to list content of {}: {:?}", core.base, e);
@@ -1074,14 +1084,15 @@ impl SnapManager {
                     Some(n) => n,
                 };
                 let is_sending = name.starts_with(SNAP_GEN_PREFIX);
-                let numbers: Vec<u64> = name.split('.')
-                    .next()
-                    .map_or_else(|| vec![], |s| {
+                let numbers: Vec<u64> = name.split('.').next().map_or_else(
+                    || vec![],
+                    |s| {
                         s.split('_')
                             .skip(1)
                             .filter_map(|s| s.parse().ok())
                             .collect()
-                    });
+                    },
+                );
                 if numbers.len() != 3 {
                     error!("failed to parse snapkey from {}", name);
                     return None;
@@ -1125,10 +1136,11 @@ impl SnapManager {
         Ok(Box::new(s))
     }
 
-    pub fn get_snapshot_for_receiving(&self,
-                                      key: &SnapKey,
-                                      data: &[u8])
-                                      -> RaftStoreResult<Box<Snapshot>> {
+    pub fn get_snapshot_for_receiving(
+        &self,
+        key: &SnapKey,
+        data: &[u8],
+    ) -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
         let mut snapshot_data = RaftSnapshotData::new();
         try!(snapshot_data.merge_from_bytes(data));
@@ -1237,10 +1249,12 @@ impl SnapshotDeleter for SnapManager {
         if check_entry {
             if let Some(e) = core.registry.get(key) {
                 if e.len() > 1 {
-                    info!("skip to delete {} since it's registered more than 1, registered \
-                           entries {:?}",
-                          snap.path(),
-                          e);
+                    info!(
+                        "skip to delete {} since it's registered more than 1, registered \
+                         entries {:?}",
+                        snap.path(),
+                        e
+                    );
                     return false;
                 }
             }
@@ -1966,12 +1980,13 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(&snapshot,
-                   &region,
-                   &mut snap_data,
-                   &mut stat,
-                   Box::new(src_mgr.clone()))
-            .unwrap();
+        s1.build(
+            &snapshot,
+            &region,
+            &mut snap_data,
+            &mut stat,
+            Box::new(src_mgr.clone()),
+        ).unwrap();
         let mut v = vec![];
         snap_data.write_to_vec(&mut v).unwrap();
 
