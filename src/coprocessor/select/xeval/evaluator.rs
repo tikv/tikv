@@ -589,10 +589,7 @@ impl Evaluator {
         match expr.get_sig() {
             ScalarFuncSig::AbsInt => self.abs_int(ctx, expr),
             ScalarFuncSig::AbsReal => self.abs_real(ctx, expr),
-            ScalarFuncSig::CeilInt => self.ceil_int(ctx, expr),
             ScalarFuncSig::CeilReal => self.ceil_real(ctx, expr),
-            ScalarFuncSig::FloorInt => self.floor_int(ctx, expr),
-            ScalarFuncSig::FloorReal => self.floor_real(ctx, expr),
             _ => Err(Error::Expr(
                 format!("unsupported scalar function: {:?}", expr.get_sig()),
             )),
