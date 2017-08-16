@@ -328,9 +328,8 @@ impl FnCall {
             return Ok(None);
         }
         let val = try!(val.unwrap().cast_to_real());
-        let des = try!(Decimal::from_f64(val));
-        // TODO: why we don't need process flen & decimal here?
-        Ok(Some(des))
+        let dec = try!(Decimal::from_f64(val));
+        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
 
     pub fn cast_int_as_str(
@@ -360,7 +359,12 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Vec<u8>>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_real(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = format!("{}", val.unwrap());
+        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
     pub fn cast_decimal_as_str(
