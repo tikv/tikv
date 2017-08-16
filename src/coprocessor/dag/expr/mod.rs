@@ -15,6 +15,7 @@
 
 mod builtin_cast;
 mod compare;
+mod fncall;
 
 use std::io;
 use std::convert::TryFrom;
@@ -224,8 +225,7 @@ impl Expression {
 impl TryFrom<Expr> for Expression {
     type Error = Error;
 
-    fn try_from(expr: Expr) -> ::std::result::Result<Expression, Self::Error> {
-        let mut expr = expr;
+    fn try_from(mut expr: Expr) -> ::std::result::Result<Expression, Self::Error> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -260,15 +260,14 @@ impl TryFrom<Expr> for Expression {
                 .map_err(Error::from),
             // TODO(andelf): fn sig verification
             ExprType::ScalarFunc => {
-                let sig = expr.get_sig();
-                let mut expr = expr;
+                try!(FnCall::check_args(expr.get_sig(), expr.get_children().len()));
                 expr.take_children()
                     .into_iter()
                     .map(Expression::try_from)
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
-                            sig: sig,
+                            sig: expr.get_sig(),
                             children: children,
                             tp: tp,
                         })
