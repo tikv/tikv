@@ -177,8 +177,13 @@ pub fn dec_to_i64(dec: Decimal) -> Result<i64> {
 }
 
 #[inline]
+pub fn handle_truncate_as_error(ctx: &EvalContext) -> bool {
+    !(ctx.ignore_truncate || ctx.truncate_as_warning)
+}
+
+#[inline]
 pub fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
-    if is_truncated && !(ctx.ignore_truncate || ctx.truncate_as_warning) {
+    if is_truncated && handle_truncate_as_error(ctx) {
         Err(box_err!("[1265] Data Truncated"))
     } else {
         Ok(())

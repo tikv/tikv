@@ -16,7 +16,7 @@
 mod builtin_cast;
 mod compare;
 
-use std::io;
+use std::{error, io};
 use std::convert::TryFrom;
 use std::string::FromUtf8Error;
 
@@ -54,9 +54,11 @@ quick_error! {
             description("column offset not found")
             display("illegal column offset: {}", offset)
         }
-        Other(desc: &'static str) {
-            description(desc)
-            display("error {}", desc)
+        Other(err: Box<error::Error + Send + Sync>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
+            display("unknown error {:?}", err)
         }
     }
 }
@@ -170,7 +172,7 @@ impl Expression {
                 ScalarFuncSig::EQJson |
                 ScalarFuncSig::NEJson |
                 ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, f.sig),
-                _ => Err(Error::Other("Unknown signature")),
+                _ => Err(box_err!("Unknown signature")),
             },
             _ => unimplemented!(),
         }

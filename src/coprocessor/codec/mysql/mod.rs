@@ -60,6 +60,7 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
 
 mod duration;
 pub mod decimal;
+pub mod charset;
 pub mod types;
 mod time;
 pub mod json;

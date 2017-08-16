@@ -17,8 +17,10 @@
 use std::{str, i64, u64};
 use std::ascii::AsciiExt;
 
+use tipb::expression::DataType;
+
 use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time};
+use coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time};
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint,
                                   convert_int_to_uint};
@@ -336,7 +338,21 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Vec<u8>>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_int(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+            let uval = try!(convert_int_to_uint(
+                val.unwrap(),
+                u64::MAX,
+                types::LONG_LONG
+            ));
+            format!("{}", uval)
+        } else {
+            format!("{}", val.unwrap())
+        };
+        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
     pub fn cast_real_as_str(
@@ -581,5 +597,53 @@ impl FnCall {
         let dec = try!(Decimal::from_f64(f));
         let ret = try!(dec.convert_to(ctx, flen as u8, decimal as u8));
         Ok(try!(ret.as_f64()))
+    }
+
+    /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces
+    /// a new string according to `flen` and `chs`.
+    fn produce_str_with_specified_tp(&self, ctx: &StatementContext, s: String) -> Result<Vec<u8>> {
+        let flen = self.tp.get_flen();
+        let chs = self.tp.get_charset();
+        if flen < 0 {
+            return Ok(s.into_bytes());
+        }
+        let flen = flen as usize;
+        // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
+        // char count and truncate to flen chars if it is too long.
+        if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
+            let char_count = s.char_indices().count();
+            if char_count <= flen {
+                return Ok(s.into_bytes());
+            }
+
+            if convert::handle_truncate_as_error(ctx) {
+                return Err(box_err!(
+                    "Data Too Long, field len {}, data len {}",
+                    flen,
+                    char_count
+                ));
+            }
+            let (truncate_pos, _) = s.char_indices().nth(flen).unwrap();
+            return Ok(convert::truncate_str(s, truncate_pos as isize).into_bytes());
+        }
+
+        if s.len() > flen {
+            if convert::handle_truncate_as_error(ctx) {
+                return Err(box_err!(
+                    "Data Too Long, field len {}, data len {}",
+                    flen,
+                    s.len()
+                ));
+            }
+            return Ok(convert::truncate_str(s, flen as isize).into_bytes());
+        }
+
+        if self.tp.get_tp() == DataType::TypeString && s.len() < flen {
+            let to_pad = flen - s.len();
+            let mut ret = s.into_bytes();
+            ret.append(&mut vec![0; to_pad]);
+            return Ok(ret);
+        }
+        Ok(s.into_bytes())
     }
 }
