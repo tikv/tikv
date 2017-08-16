@@ -33,6 +33,9 @@ pub struct Task<T, C> {
 
     // which group the task belongs to.
     gid: T,
+
+    // use Box<FnBox<&mut C> + Send> instead
+    // after https://github.com/rust-lang/rust/issues/25647 solved.
     task: Box<FnBox(C) -> C + Send>,
     ctx: C,
 }
