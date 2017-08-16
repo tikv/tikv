@@ -81,7 +81,8 @@ impl Debug for Datum {
     }
 }
 
-fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
+#[inline]
+pub fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
     l.partial_cmp(&r)
         .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
 }

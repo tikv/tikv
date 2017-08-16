@@ -25,7 +25,6 @@ use rocksdb::{DBStatisticsTickerType as TickerType, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
-use fs2;
 use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage, RaftSnapshotData,
@@ -63,7 +62,6 @@ use super::msg::{BatchCallback, Callback};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
-use super::engine_metrics::*;
 use super::local_metrics::RaftMetrics;
 use prometheus::local::LocalHistogram;
 
@@ -98,6 +96,11 @@ impl Default for StoreStat {
     }
 }
 
+pub struct StoreInfo {
+    pub engine: Arc<DB>,
+    pub capacity: u64,
+}
+
 pub struct Store<T, C: 'static> {
     cfg: Rc<Config>,
     engine: Arc<DB>,
@@ -120,7 +123,6 @@ pub struct Store<T, C: 'static> {
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
-
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
@@ -1828,60 +1830,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
-        let disk_stats = match fs2::statvfs(self.engine.path()) {
-            Err(e) => {
-                error!(
-                    "{} get disk stat for rocksdb {} failed: {}",
-                    self.tag,
-                    self.engine.path(),
-                    e
-                );
-                return;
-            }
-            Ok(stats) => stats,
-        };
 
-        let disk_cap = disk_stats.total_space();
-        let capacity = if self.cfg.capacity.0 == 0 || disk_cap < self.cfg.capacity.0 {
-            disk_cap
-        } else {
-            self.cfg.capacity.0
-        };
-        stats.set_capacity(capacity);
-
-        let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
-        used_size += self.snap_mgr.get_total_snap_size();
-
+        let used_size = self.snap_mgr.get_total_snap_size();
         stats.set_used_size(used_size);
-
-        let mut available = if capacity > used_size {
-            capacity - used_size
-        } else {
-            warn!("{} no available space", self.tag);
-            0
-        };
-
-        // We only care rocksdb SST file size, so we should
-        // check disk available here.
-        if available > disk_stats.free_space() {
-            available = disk_stats.free_space();
-        }
-
         stats.set_store_id(self.store_id());
-        stats.set_available(available);
         stats.set_region_count(self.region_peers.len() as u32);
 
         let snap_stats = self.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
-
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["capacity"])
-            .set(capacity as f64);
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["available"])
-            .set(available as f64);
-
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["sending"])
             .set(snap_stats.sending_count as f64);
@@ -1919,30 +1876,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
 
-        if let Err(e) = self.pd_worker
-            .schedule(PdTask::StoreHeartbeat { stats: stats })
-        {
+        let store_info = StoreInfo {
+            engine: self.engine.clone(),
+            capacity: self.cfg.capacity.0,
+        };
+
+        let task = PdTask::StoreHeartbeat {
+            stats: stats,
+            store_info: store_info,
+        };
+        if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
     }
 
     fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         self.store_heartbeat_pd();
-        self.flush_engine_statistics();
         self.register_pd_store_heartbeat_tick(event_loop);
-    }
-
-    fn flush_engine_statistics(&mut self) {
-        for t in ENGINE_TICKER_TYPES {
-            let v = self.engine.get_statistics_ticker_count(*t);
-            flush_engine_ticker_metrics(*t, v);
-        }
-
-        for t in ENGINE_HIST_TYPES {
-            if let Some(v) = self.engine.get_statistics_histogram(*t) {
-                flush_engine_histogram_metrics(*t, v);
-            }
-        }
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
