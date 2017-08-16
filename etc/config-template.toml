@@ -225,7 +225,7 @@ stats-dump-period = "10m"
 # rate-bytes-per-sec = 0
 
 # Enable or disable the pipelined write
-# enable-pipelined-write = true
+# enable-pipelined-write = false
 
 # set backup path, if not set, use "backup" under store path.
 # backup-dir = "/tmp/tikv/store/backup"
@@ -359,8 +359,8 @@ stats-dump-period = "10m"
 # compaction-readahead-size = 0
 # writable-file-max-buffer-size = "1MB"
 # use-direct-io-for-flush-and-compaction = false
-enable-pipelined-write = false
-allow-concurrent-memtable-write = false
+# enable-pipelined-write = false
+# allow-concurrent-memtable-write = false
 
 [raftdb.defaultcf]
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
