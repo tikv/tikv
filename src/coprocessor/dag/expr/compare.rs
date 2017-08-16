@@ -13,9 +13,6 @@
 
 use std::i64;
 use std::cmp::Ordering;
-
-use tipb::expression::ScalarFuncSig;
-
 use coprocessor::codec::{datum, mysql, Datum};
 use super::{Error, FnCall, Result, StatementContext};
 
