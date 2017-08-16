@@ -385,7 +385,12 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Vec<u8>>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_string(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = try!(String::from_utf8(val.unwrap()));
+        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
     pub fn cast_time_as_str(
@@ -393,8 +398,14 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Vec<u8>>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_time(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = format!("{}", val.unwrap());
+        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
+
 
     pub fn cast_duration_as_str(
         &self,
