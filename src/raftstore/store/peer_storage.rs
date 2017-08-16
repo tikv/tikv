@@ -1815,7 +1815,12 @@ mod test {
 
     #[test]
     fn test_storage_apply_snapshot() {
-        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+        let ents = vec![
+            new_entry(3, 3),
+            new_entry(4, 4),
+            new_entry(5, 5),
+            new_entry(6, 6),
+        ];
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 

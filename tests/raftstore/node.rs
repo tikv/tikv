@@ -168,13 +168,16 @@ impl Simulator for NodeCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
-        let mut node = Node::new(&mut event_loop,
-                                 &cfg.server,
-                                 &cfg.raft_store,
-                                 self.pd_client.clone());
+        let mut node = Node::new(
+            &mut event_loop,
+            &cfg.server,
+            &cfg.raft_store,
+            self.pd_client.clone(),
+        );
 
         let (snap_mgr, tmp) = if node_id == 0 ||
-                                 !self.trans.rl().snap_paths.contains_key(&node_id) {
+            !self.trans.rl().snap_paths.contains_key(&node_id)
+        {
             let tmp = TempDir::new("test_cluster").unwrap();
             let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), Some(node.get_sendch()));
             (snap_mgr, Some(tmp))
@@ -184,15 +187,19 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        node.start(event_loop,
-                   engine.clone(),
-                   simulate_trans.clone(),
-                   snap_mgr.clone(),
-                   snap_status_receiver)
-            .unwrap();
-        assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
-            .unwrap()
-            .is_none());
+        node.start(
+            event_loop,
+            engine.clone(),
+            simulate_trans.clone(),
+            snap_mgr.clone(),
+            snap_status_receiver,
+        ).unwrap();
+        assert!(
+            engine
+                .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+                .unwrap()
+                .is_none()
+        );
         assert!(node_id == 0 || node_id == node.id());
         debug!(
             "node_id: {} tmp: {:?}",

@@ -111,14 +111,15 @@ impl Simulator for ServerCluster {
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch));
-        let mut server = Server::new(&cfg.server,
-                                     cfg.raft_store.region_split_size.0 as usize,
-                                     store.clone(),
-                                     sim_router.clone(),
-                                     snap_status_sender,
-                                     resolver,
-                                     snap_mgr.clone())
-            .unwrap();
+        let mut server = Server::new(
+            &cfg.server,
+            cfg.raft_store.region_split_size.0 as usize,
+            store.clone(),
+            sim_router.clone(),
+            snap_status_sender,
+            resolver,
+            snap_mgr.clone(),
+        ).unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();

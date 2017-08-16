@@ -159,18 +159,21 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     // Create pd client, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
-    let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
-        .unwrap_or_else(|e| exit_with_err(e));
-    let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
-                                    Some(store_sendch));
-    let mut server = Server::new(&cfg.server,
-                                 cfg.raft_store.region_split_size.0 as usize,
-                                 storage.clone(),
-                                 raft_router,
-                                 snap_status_sender,
-                                 resolver,
-                                 snap_mgr.clone())
-        .unwrap_or_else(|e| exit_with_err(e));
+    let (mut worker, resolver) =
+        resolve::new_resolver(pd_client.clone()).unwrap_or_else(|e| exit_with_err(e));
+    let snap_mgr = SnapManager::new(
+        snap_path.as_path().to_str().unwrap().to_owned(),
+        Some(store_sendch),
+    );
+    let mut server = Server::new(
+        &cfg.server,
+        cfg.raft_store.region_split_size.0 as usize,
+        storage.clone(),
+        raft_router,
+        snap_status_sender,
+        resolver,
+        snap_mgr.clone(),
+    ).unwrap_or_else(|e| exit_with_err(e));
     let trans = server.transport();
 
     // Create node.
