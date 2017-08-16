@@ -14,7 +14,6 @@
 #![feature(plugin)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-
 #![allow(needless_pass_by_value)]
 
 extern crate tikv;
@@ -26,139 +25,207 @@ extern crate tempdir;
 extern crate rustc_serialize;
 
 use std::{str, u64};
-use clap::{Arg, App, SubCommand};
+use clap::{App, Arg, SubCommand};
 use rustc_serialize::hex::{FromHex, ToHex};
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState, PeerState};
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState};
 use kvproto::eraftpb::Entry;
-use rocksdb::{DB, SeekKey, ReadOptions};
+use rocksdb::{ReadOptions, SeekKey, DB};
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
-use tikv::raftstore::store::engine::{Peekable, Iterable, IterOption};
-use tikv::storage::{ALL_CFS, CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT, CfName};
+use tikv::raftstore::store::engine::{IterOption, Iterable, Peekable};
+use tikv::storage::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::storage::mvcc::{Lock, Write};
 use tikv::storage::types::Key;
 
 fn main() {
     let mut app = App::new("TiKV Ctl")
         .author("PingCAP")
-        .about("Distributed transactional key value database powered by Rust and Raft")
-        .arg(Arg::with_name("db")
-            .short("d")
-            .takes_value(true)
-            .help("set rocksdb path"))
-        .arg(Arg::with_name("hex-to-escaped")
-            .short("h")
-            .takes_value(true)
-            .help("convert hex key to escaped key"))
-        .arg(Arg::with_name("escaped-to-hex")
-            .short("e")
-            .takes_value(true)
-            .help("convert escaped key to hex key"))
-        .subcommand(SubCommand::with_name("raft")
-            .about("print raft log entry")
-            .subcommand(SubCommand::with_name("log")
-                .about("print the raft log entry info")
-                .arg(Arg::with_name("region")
-                    .short("r")
-                    .takes_value(true)
-                    .help("set the region id"))
-                .arg(Arg::with_name("index")
-                    .short("i")
-                    .takes_value(true)
-                    .help("set the raft log index"))
-                .arg(Arg::with_name("key")
-                    .short("k")
-                    .takes_value(true)
-                    .help("set the raw key")))
-            .subcommand(SubCommand::with_name("region")
-                .about("print region info")
-                .arg(Arg::with_name("region")
-                    .short("r")
-                    .takes_value(true)
-                    .help("set the region id, if not specified, print all regions."))
-                .arg(Arg::with_name("skip-tombstone")
-                    .short("s")
-                    .takes_value(false)
-                    .help("skip tombstone region."))))
-        .subcommand(SubCommand::with_name("size")
-            .about("print region size")
-            .arg(Arg::with_name("region")
-                .short("r")
+        .about(
+            "Distributed transactional key value database powered by Rust and Raft",
+        )
+        .arg(
+            Arg::with_name("db")
+                .short("d")
                 .takes_value(true)
-                .help("set the region id, if not specified, print all regions."))
-            .arg(Arg::with_name("cf")
-                .short("c")
+                .help("set rocksdb path"),
+        )
+        .arg(
+            Arg::with_name("hex-to-escaped")
+                .short("h")
                 .takes_value(true)
-                .help("set the cf name, if not specified, print all cf.")))
-        .subcommand(SubCommand::with_name("scan")
-            .about("print the range db range")
-            .arg(Arg::with_name("from")
-                .short("f")
-                .takes_value(true)
-                .help("set the scan from raw key, in escaped format"))
-            .arg(Arg::with_name("to")
-                .short("t")
-                .takes_value(true)
-                .help("set the scan end raw key, in escaped format"))
-            .arg(Arg::with_name("limit")
-                .short("l")
-                .takes_value(true)
-                .help("set the scan limit"))
-            .arg(Arg::with_name("start_ts")
-                .short("s")
-                .takes_value(true)
-                .help("set the scan start_ts as filter"))
-            .arg(Arg::with_name("commit_ts")
-                .takes_value(true)
-                .help("set the scan commit_ts as filter"))
-            .arg(Arg::with_name("cf")
-                .short("c")
-                .takes_value(true)
-                .help("column family name")))
-        .subcommand(SubCommand::with_name("print")
-            .about("print the raw value")
-            .arg(Arg::with_name("cf")
-                .short("c")
-                .takes_value(true)
-                .help("column family name"))
-            .arg(Arg::with_name("key")
-                .short("k")
-                .takes_value(true)
-                .help("set the query raw key, in escaped form")))
-        .subcommand(SubCommand::with_name("mvcc")
-            .about("print the mvcc value")
-            .arg(Arg::with_name("cf")
-                .short("c")
-                .takes_value(true)
-                .help("column family name, only can be default/lock/write"))
-            .arg(Arg::with_name("key")
-                .short("key")
-                .takes_value(true)
-                .help("the query key"))
-            .arg(Arg::with_name("encoded")
+                .help("convert hex key to escaped key"),
+        )
+        .arg(
+            Arg::with_name("escaped-to-hex")
                 .short("e")
-                .takes_value(false)
-                .help("set it when the key is already encoded."))
-            .arg(Arg::with_name("start_ts")
-                .short("s")
                 .takes_value(true)
-                .help("set start_ts as filter"))
-            .arg(Arg::with_name("commit_ts")
-                .takes_value(true)
-                .help("set commit_ts as filter")))
-        .subcommand(SubCommand::with_name("diff")
-            .about("diff two region keys")
-            .arg(Arg::with_name("to")
-                .short("t")
-                .takes_value(true)
-                .help("to which db"))
-            .arg(Arg::with_name("region")
-                .short("r")
-                .takes_value(true)
-                .help("specify region id")));
+                .help("convert escaped key to hex key"),
+        )
+        .subcommand(
+            SubCommand::with_name("raft")
+                .about("print raft log entry")
+                .subcommand(
+                    SubCommand::with_name("log")
+                        .about("print the raft log entry info")
+                        .arg(
+                            Arg::with_name("region")
+                                .short("r")
+                                .takes_value(true)
+                                .help("set the region id"),
+                        )
+                        .arg(
+                            Arg::with_name("index")
+                                .short("i")
+                                .takes_value(true)
+                                .help("set the raft log index"),
+                        )
+                        .arg(
+                            Arg::with_name("key")
+                                .short("k")
+                                .takes_value(true)
+                                .help("set the raw key"),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("region")
+                        .about("print region info")
+                        .arg(
+                            Arg::with_name("region")
+                                .short("r")
+                                .takes_value(true)
+                                .help("set the region id, if not specified, print all regions."),
+                        )
+                        .arg(
+                            Arg::with_name("skip-tombstone")
+                                .short("s")
+                                .takes_value(false)
+                                .help("skip tombstone region."),
+                        ),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("size")
+                .about("print region size")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .takes_value(true)
+                        .help("set the region id, if not specified, print all regions."),
+                )
+                .arg(
+                    Arg::with_name("cf")
+                        .short("c")
+                        .takes_value(true)
+                        .help("set the cf name, if not specified, print all cf."),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("scan")
+                .about("print the range db range")
+                .arg(
+                    Arg::with_name("from")
+                        .short("f")
+                        .takes_value(true)
+                        .help("set the scan from raw key, in escaped format"),
+                )
+                .arg(
+                    Arg::with_name("to")
+                        .short("t")
+                        .takes_value(true)
+                        .help("set the scan end raw key, in escaped format"),
+                )
+                .arg(
+                    Arg::with_name("limit")
+                        .short("l")
+                        .takes_value(true)
+                        .help("set the scan limit"),
+                )
+                .arg(
+                    Arg::with_name("start_ts")
+                        .short("s")
+                        .takes_value(true)
+                        .help("set the scan start_ts as filter"),
+                )
+                .arg(
+                    Arg::with_name("commit_ts")
+                        .takes_value(true)
+                        .help("set the scan commit_ts as filter"),
+                )
+                .arg(
+                    Arg::with_name("cf")
+                        .short("c")
+                        .takes_value(true)
+                        .help("column family name"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("print")
+                .about("print the raw value")
+                .arg(
+                    Arg::with_name("cf")
+                        .short("c")
+                        .takes_value(true)
+                        .help("column family name"),
+                )
+                .arg(
+                    Arg::with_name("key")
+                        .short("k")
+                        .takes_value(true)
+                        .help("set the query raw key, in escaped form"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("mvcc")
+                .about("print the mvcc value")
+                .arg(
+                    Arg::with_name("cf")
+                        .short("c")
+                        .takes_value(true)
+                        .help("column family name, only can be default/lock/write"),
+                )
+                .arg(
+                    Arg::with_name("key")
+                        .short("key")
+                        .takes_value(true)
+                        .help("the query key"),
+                )
+                .arg(
+                    Arg::with_name("encoded")
+                        .short("e")
+                        .takes_value(false)
+                        .help("set it when the key is already encoded."),
+                )
+                .arg(
+                    Arg::with_name("start_ts")
+                        .short("s")
+                        .takes_value(true)
+                        .help("set start_ts as filter"),
+                )
+                .arg(
+                    Arg::with_name("commit_ts")
+                        .takes_value(true)
+                        .help("set commit_ts as filter"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("diff")
+                .about("diff two region keys")
+                .arg(
+                    Arg::with_name("to")
+                        .short("t")
+                        .takes_value(true)
+                        .help("to which db"),
+                )
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .takes_value(true)
+                        .help("specify region id"),
+                ),
+        );
     let matches = app.clone().get_matches();
 
     let hex_key = matches.value_of("hex-to-escaped");
@@ -303,11 +370,12 @@ fn from_hex(key: &str) -> Vec<u8> {
     s.as_str().from_hex().unwrap()
 }
 
-pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
-                                            key_prefix: &str,
-                                            prefix_is_encoded: bool,
-                                            mvcc_type: CfName)
-                                            -> Vec<MvccKv<T>> {
+pub fn gen_mvcc_iter<T: MvccDeserializable>(
+    db: &DB,
+    key_prefix: &str,
+    prefix_is_encoded: bool,
+    mvcc_type: CfName,
+) -> Vec<MvccKv<T>> {
     let encoded_prefix = if prefix_is_encoded {
         unescape(key_prefix)
     } else {
@@ -361,18 +429,21 @@ fn dump_mvcc_lock(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
     }
 }
 
-fn dump_mvcc_write(db: &DB,
-                   key: &str,
-                   encoded: bool,
-                   start_ts: Option<u64>,
-                   commit_ts: Option<u64>) {
+fn dump_mvcc_write(
+    db: &DB,
+    key: &str,
+    encoded: bool,
+    start_ts: Option<u64>,
+    commit_ts: Option<u64>,
+) {
     let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, encoded, CF_WRITE);
     for kv in kvs {
         let write = &kv.value;
         let cmt_ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
         if (start_ts.is_none() || start_ts.unwrap() == write.start_ts) &&
-           (commit_ts.is_none() || commit_ts.unwrap() == cmt_ts) {
+            (commit_ts.is_none() || commit_ts.unwrap() == cmt_ts)
+        {
             println!("Key: {:?}", escape(key.encoded()));
             println!("Type: {:?}", write.write_type);
             println!("Start_ts: {:?}", write.start_ts);
@@ -443,8 +514,10 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
                     has_diff = true;
                     println!("only db2 has : {}", escape(iter2.key()));
                     if cf == &CF_DEFAULT || cf == &CF_WRITE {
-                        println!("timestamp: {}",
-                                 Key::from_encoded(iter2.key().to_vec()).decode_ts().unwrap());
+                        println!(
+                            "timestamp: {}",
+                            Key::from_encoded(iter2.key().to_vec()).decode_ts().unwrap()
+                        );
                     }
                     iter2.next();
                     continue;
@@ -453,8 +526,10 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
                     has_diff = true;
                     println!("only db1 has : {}", escape(iter.key()));
                     if cf == &CF_DEFAULT || cf == &CF_WRITE {
-                        println!("timestamp: {}",
-                                 Key::from_encoded(iter.key().to_vec()).decode_ts().unwrap());
+                        println!(
+                            "timestamp: {}",
+                            Key::from_encoded(iter.key().to_vec()).decode_ts().unwrap()
+                        );
                     }
                     iter.next();
                     continue;
@@ -489,7 +564,10 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     let region_state_key = keys::region_state_key(region_id);
     let region_state: Option<RegionLocalState> = db.get_msg(&region_state_key).unwrap();
     if skip_tombstone &&
-       region_state.as_ref().map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+        region_state
+            .as_ref()
+            .map_or(false, |s| s.get_state() == PeerState::Tombstone)
+    {
         return;
     }
     println!("region state key: {}", escape(&region_state_key));
@@ -544,8 +622,10 @@ fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
 
 fn dump_all_region_size(db: &DB, cf: Option<&str>) {
     let mut region_ids = get_all_region_ids(db);
-    let mut region_sizes: Vec<u64> =
-        region_ids.iter().map(|&region_id| get_region_size(db, region_id, cf)).collect();
+    let mut region_sizes: Vec<u64> = region_ids
+        .iter()
+        .map(|&region_id| get_region_size(db, region_id, cf))
+        .collect();
     let region_number = region_ids.len();
     let total_size = region_sizes.iter().sum();
     let mut v: Vec<(u64, u64)> = region_sizes.drain(..).zip(region_ids.drain(..)).collect();
@@ -563,18 +643,14 @@ fn get_all_region_ids(db: &DB) -> Vec<u64> {
     let start_key = keys::REGION_META_MIN_KEY;
     let end_key = keys::REGION_META_MAX_KEY;
     let mut region_ids = vec![];
-    db.scan(start_key,
-              end_key,
-              false,
-              &mut |key, _| {
-            let (region_id, suffix) = keys::decode_region_meta_key(key)?;
-            if suffix != keys::REGION_STATE_SUFFIX {
-                return Ok(true);
-            }
-            region_ids.push(region_id);
-            Ok(true)
-        })
-        .unwrap();
+    db.scan(start_key, end_key, false, &mut |key, _| {
+        let (region_id, suffix) = keys::decode_region_meta_key(key)?;
+        if suffix != keys::REGION_STATE_SUFFIX {
+            return Ok(true);
+        }
+        region_ids.push(region_id);
+        Ok(true)
+    }).unwrap();
     region_ids
 }
 
@@ -590,15 +666,10 @@ fn get_region_size(db: &DB, region_id: u64, cf: Option<&str>) -> u64 {
         None => vec![CF_DEFAULT, CF_WRITE, CF_LOCK],
     };
     for cf in &cf_arr {
-        db.scan_cf(cf,
-                     start_key,
-                     end_key,
-                     true,
-                     &mut |_, v| {
-                         size += v.len() as u64;
-                         Ok(true)
-                     })
-            .unwrap();
+        db.scan_cf(cf, start_key, end_key, true, &mut |_, v| {
+            size += v.len() as u64;
+            Ok(true)
+        }).unwrap();
     }
     size
 }
@@ -611,13 +682,15 @@ fn parse_ts_key_from_key(encode_key: Vec<u8>) -> (u64, Vec<u8>) {
     (ts, key.clone())
 }
 
-fn dump_range(db: DB,
-              from: String,
-              to: Option<String>,
-              limit: Option<u64>,
-              cf: &str,
-              start_ts: Option<u64>,
-              commit_ts: Option<u64>) {
+fn dump_range(
+    db: DB,
+    from: String,
+    to: Option<String>,
+    limit: Option<u64>,
+    cf: &str,
+    start_ts: Option<u64>,
+    commit_ts: Option<u64>,
+) {
     let from = unescape(&from);
     let to = to.map_or_else(|| vec![0xff], |s| unescape(&s));
     let limit = limit.unwrap_or(u64::MAX);
@@ -626,38 +699,33 @@ fn dump_range(db: DB,
         return;
     }
     let mut cnt = 0;
-    db.scan_cf(cf,
-                 &from,
-                 &to,
-                 true,
-                 &mut |k, v| {
-            let mut right_key = true;
-            match cf {
-                CF_DEFAULT => {
-                    let (ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
-                    right_key = start_ts.is_none() || ts == start_ts.unwrap();
-                }
-                CF_WRITE => {
-                    let value = Write::deserialize(v.as_ref());
-                    let (cmt_ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
-                    right_key = (start_ts.is_none() || value.start_ts == start_ts.unwrap()) &&
-                                (commit_ts.is_none() || cmt_ts == commit_ts.unwrap());
-                }
-                CF_LOCK => {
-                    let value = Lock::deserialize(v.as_ref());
-                    right_key = start_ts.is_none() || value.ts == start_ts.unwrap();
-                }
-                _ => {}
+    db.scan_cf(cf, &from, &to, true, &mut |k, v| {
+        let mut right_key = true;
+        match cf {
+            CF_DEFAULT => {
+                let (ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
+                right_key = start_ts.is_none() || ts == start_ts.unwrap();
             }
+            CF_WRITE => {
+                let value = Write::deserialize(v.as_ref());
+                let (cmt_ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
+                right_key = (start_ts.is_none() || value.start_ts == start_ts.unwrap()) &&
+                    (commit_ts.is_none() || cmt_ts == commit_ts.unwrap());
+            }
+            CF_LOCK => {
+                let value = Lock::deserialize(v.as_ref());
+                right_key = start_ts.is_none() || value.ts == start_ts.unwrap();
+            }
+            _ => {}
+        }
 
-            if right_key {
-                println!("key: {}, value len: {}", escape(k), v.len());
-                println!("{}", escape(v));
-                cnt += 1;
-            }
-            Ok(cnt < limit)
-        })
-        .unwrap()
+        if right_key {
+            println!("key: {}, value len: {}", escape(k), v.len());
+            println!("{}", escape(v));
+            cnt += 1;
+        }
+        Ok(cnt < limit)
+    }).unwrap()
 }
 
 #[cfg(test)]
@@ -668,8 +736,8 @@ mod tests {
     use tikv::util::codec::bytes::encode_bytes;
     use tikv::util::codec::number::NumberEncoder;
     use tikv::raftstore::store::keys;
-    use tikv::storage::{ALL_CFS, CF_LOCK, CF_WRITE, CF_DEFAULT};
-    use tikv::storage::mvcc::{Lock, Write, LockType, WriteType};
+    use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use tikv::storage::mvcc::{Lock, LockType, Write, WriteType};
     use tempdir::TempDir;
     use tikv::util::rocksdb::new_engine;
     use tikv::storage::types::Key;
@@ -688,30 +756,40 @@ mod tests {
             db.put(key.as_slice(), v).unwrap();
         }
         let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", false, CF_DEFAULT);
-        assert_eq!(kvs_gen,
-                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_DEFAULT));
+        assert_eq!(
+            kvs_gen,
+            gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_DEFAULT)
+        );
         let mut test_iter = test_data.clone();
         assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {
             let ts = kv.key.decode_ts().unwrap();
             let key = kv.key.truncate_ts().unwrap().raw().unwrap();
             let value = kv.value.as_slice();
-            test_iter.retain(|&s| !(&s.0[..] == key.as_slice() && &s.1[..] == value && s.2 == ts));
+            test_iter.retain(|&s| {
+                !(&s.0[..] == key.as_slice() && &s.1[..] == value && s.2 == ts)
+            });
         }
         assert_eq!(test_iter.len(), 0);
 
         // Test MVCC Lock
-        let test_data_lock = vec![(b"kv", LockType::Put, b"v", 5),
-                                  (b"kx", LockType::Lock, b"x", 10),
-                                  (b"kz", LockType::Delete, b"y", 15)];
-        let keys: Vec<_> = test_data_lock.iter()
+        let test_data_lock = vec![
+            (b"kv", LockType::Put, b"v", 5),
+            (b"kx", LockType::Lock, b"x", 10),
+            (b"kz", LockType::Delete, b"y", 15),
+        ];
+        let keys: Vec<_> = test_data_lock
+            .iter()
             .map(|data| {
                 let encoded = encode_bytes(&data.0[..]);
                 keys::data_key(encoded.as_slice())
             })
             .collect();
-        let lock_value: Vec<_> = test_data_lock.iter()
-            .map(|data| Lock::new(data.1, data.2.to_vec(), data.3, 0, None).to_bytes())
+        let lock_value: Vec<_> = test_data_lock
+            .iter()
+            .map(|data| {
+                Lock::new(data.1, data.2.to_vec(), data.3, 0, None).to_bytes()
+            })
             .collect();
         let kvs = keys.iter().zip(lock_value.iter());
         let lock_cf = db.cf_handle(CF_LOCK).unwrap();
@@ -723,20 +801,25 @@ mod tests {
             let kv = &kvs_gen[0];
             let lock = &kv.value;
             let key = kv.key.raw().unwrap();
-            assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
+            assert!(
+                &key[..] == test_data.0 && test_data.1 == lock.lock_type &&
                     test_data.2 == lock.primary.as_slice() &&
-                    test_data.3 == lock.ts);
+                    test_data.3 == lock.ts
+            );
         }
         assert_iter(&gen_mvcc_iter(&db, "kv", false, CF_LOCK), test_data_lock[0]);
         assert_iter(&gen_mvcc_iter(&db, "kx", false, CF_LOCK), test_data_lock[1]);
         assert_iter(&gen_mvcc_iter(&db, "kz", false, CF_LOCK), test_data_lock[2]);
 
         // Test MVCC Write
-        let test_data_write = vec![(PREFIX, WriteType::Delete, 5, 10),
-                                   (PREFIX, WriteType::Lock, 15, 20),
-                                   (PREFIX, WriteType::Put, 25, 30),
-                                   (PREFIX, WriteType::Rollback, 35, 40)];
-        let keys: Vec<_> = test_data_write.iter()
+        let test_data_write = vec![
+            (PREFIX, WriteType::Delete, 5, 10),
+            (PREFIX, WriteType::Lock, 15, 20),
+            (PREFIX, WriteType::Put, 25, 30),
+            (PREFIX, WriteType::Rollback, 35, 40),
+        ];
+        let keys: Vec<_> = test_data_write
+            .iter()
             .map(|data| {
                 let encoded = encode_bytes(&data.0[..]);
                 let mut d = keys::data_key(encoded.as_slice());
@@ -744,7 +827,8 @@ mod tests {
                 d
             })
             .collect();
-        let write_value: Vec<_> = test_data_write.iter()
+        let write_value: Vec<_> = test_data_write
+            .iter()
             .map(|data| Write::new(data.1, data.2, None).to_bytes())
             .collect();
         let kvs = keys.iter().zip(write_value.iter());
@@ -753,8 +837,10 @@ mod tests {
             db.put_cf(write_cf, k.as_slice(), v.as_slice()).unwrap();
         }
         let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", false, CF_WRITE);
-        assert_eq!(kvs_gen,
-                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_WRITE));
+        assert_eq!(
+            kvs_gen,
+            gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_WRITE)
+        );
         let mut test_iter = test_data_write.clone();
         assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {
@@ -762,8 +848,8 @@ mod tests {
             let ts = kv.key.decode_ts().unwrap();
             let key = kv.key.truncate_ts().unwrap().raw().unwrap();
             test_iter.retain(|&s| {
-                !(&s.0[..] == key.as_slice() && s.1 == write.write_type && s.2 == write.start_ts &&
-                  s.3 == ts)
+                !(&s.0[..] == key.as_slice() && s.1 == write.write_type &&
+                    s.2 == write.start_ts && s.3 == ts)
             });
         }
         assert_eq!(test_iter.len(), 0);

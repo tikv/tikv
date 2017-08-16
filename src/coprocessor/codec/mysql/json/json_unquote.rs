@@ -14,7 +14,7 @@
 // FIXME: remove following later
 #![allow(dead_code)]
 
-use std::{u32, char, str};
+use std::{char, str, u32};
 
 use super::super::Result;
 use super::Json;
@@ -96,41 +96,45 @@ mod test {
     #[test]
     fn test_decode_escaped_unicode() {
         let mut test_cases = vec![
-                ("5e8a", '床'),
-                ("524d", '前'),
-                ("660e", '明'),
-                ("6708", '月'),
-                ("5149", '光'),
-            ];
+            ("5e8a", '床'),
+            ("524d", '前'),
+            ("660e", '明'),
+            ("6708", '月'),
+            ("5149", '光'),
+        ];
         for (i, (escaped, expected)) in test_cases.drain(..).enumerate() {
             let d = decode_escaped_unicode(escaped);
             assert!(d.is_ok(), "#{} expect ok but got err {:?}", i, d);
             let got = d.unwrap();
-            assert_eq!(got,
-                       expected,
-                       "#{} expect {:?} but got {:?}",
-                       i,
-                       expected,
-                       got);
+            assert_eq!(
+                got,
+                expected,
+                "#{} expect {:?} but got {:?}",
+                i,
+                expected,
+                got
+            );
         }
     }
 
     #[test]
     fn test_json_unquote() {
         // test unquote json string
-        let mut test_cases = vec![("\\b", true, Some("\x08")),
-                                  ("\\f", true, Some("\x0C")),
-                                  ("\\n", true, Some("\x0A")),
-                                  ("\\r", true, Some("\x0D")),
-                                  ("\\t", true, Some("\x09")),
-                                  ("\\\\", true, Some("\x5c")),
-                                  ("\\u597d", true, Some("好")),
-                                  ("0\\u597d0", true, Some("0好0")),
-                                  ("\\a", true, Some("a")),
-                                  ("[", true, Some("[")),
-                                  // invalid input
-                                  ("\\", false, None),
-                                  ("\\u59", false, None)];
+        let mut test_cases = vec![
+            ("\\b", true, Some("\x08")),
+            ("\\f", true, Some("\x0C")),
+            ("\\n", true, Some("\x0A")),
+            ("\\r", true, Some("\x0D")),
+            ("\\t", true, Some("\x09")),
+            ("\\\\", true, Some("\x5c")),
+            ("\\u597d", true, Some("好")),
+            ("0\\u597d0", true, Some("0好0")),
+            ("\\a", true, Some("a")),
+            ("[", true, Some("[")),
+            // invalid input
+            ("\\", false, None),
+            ("\\u59", false, None),
+        ];
         for (i, (input, no_error, expected)) in test_cases.drain(..).enumerate() {
             let j = Json::String(String::from(input));
             let r = j.unquote();
@@ -138,35 +142,41 @@ mod test {
                 assert!(r.is_ok(), "#{} expect unquote ok but got err {:?}", i, r);
                 let got = r.unwrap();
                 let expected = String::from(expected.unwrap());
-                assert_eq!(got,
-                           expected,
-                           "#{} expect {:?} but got {:?}",
-                           i,
-                           expected,
-                           got);
+                assert_eq!(
+                    got,
+                    expected,
+                    "#{} expect {:?} but got {:?}",
+                    i,
+                    expected,
+                    got
+                );
             } else {
                 assert!(r.is_err(), "#{} expected error but got {:?}", i, r);
             }
         }
 
         // test unquote other json types
-        let mut test_cases = vec![Json::Object(BTreeMap::new()),
-                                  Json::Array(vec![]),
-                                  Json::I64(2017),
-                                  Json::Double(19.28),
-                                  Json::Boolean(true),
-                                  Json::None];
+        let mut test_cases = vec![
+            Json::Object(BTreeMap::new()),
+            Json::Array(vec![]),
+            Json::I64(2017),
+            Json::Double(19.28),
+            Json::Boolean(true),
+            Json::None,
+        ];
         for (i, j) in test_cases.drain(..).enumerate() {
             let expected = j.to_string();
             let r = j.unquote();
             assert!(r.is_ok(), "#{} expect unquote ok but got err {:?}", i, r);
             let got = r.unwrap();
-            assert_eq!(got,
-                       expected,
-                       "#{} expect {:?} but got {:?}",
-                       i,
-                       expected,
-                       got);
+            assert_eq!(
+                got,
+                expected,
+                "#{} expect {:?} but got {:?}",
+                i,
+                expected,
+                got
+            );
         }
     }
 }

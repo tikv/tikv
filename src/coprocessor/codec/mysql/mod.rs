@@ -44,7 +44,9 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
     if s.iter().any(|&c| c < b'0' || c > b'9') {
         return Err(invalid_type!("{} contains invalid char", escape(s)));
     }
-    let res = s.iter().take(fsp as usize + 1).fold(0, |l, r| l * 10 + (r - b'0') as u32);
+    let res = s.iter()
+        .take(fsp as usize + 1)
+        .fold(0, |l, r| l * 10 + (r - b'0') as u32);
     if s.len() > fsp as usize {
         if res % 10 >= 5 {
             Ok(res / 10 + 1)
@@ -63,11 +65,11 @@ mod time;
 pub mod json;
 
 pub use self::duration::Duration;
-pub use self::decimal::{Decimal, Res, DecimalEncoder, DecimalDecoder, dec_encoded_len};
-pub use self::types::{has_unsigned_flag, has_not_null_flag};
+pub use self::decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res};
+pub use self::types::{has_not_null_flag, has_unsigned_flag};
 pub use self::time::Time;
-pub use self::json::{Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr,
-                     ModifyType};
+pub use self::json::{parse_json_path_expr, Json, JsonDecoder, JsonEncoder, ModifyType,
+                     PathExpression};
 
 #[cfg(test)]
 mod test {

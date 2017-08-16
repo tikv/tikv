@@ -15,9 +15,9 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 
 use util::collections::HashSet;
-use storage::{Statistics, SnapshotStore};
+use storage::{SnapshotStore, Statistics};
 use coprocessor::codec::table;
-use coprocessor::endpoint::{prefix_next, is_point};
+use coprocessor::endpoint::{is_point, prefix_next};
 use coprocessor::Result;
 use coprocessor::metrics::*;
 
@@ -34,11 +34,12 @@ pub struct TableScanExecutor<'a> {
 }
 
 impl<'a> TableScanExecutor<'a> {
-    pub fn new(meta: TableScan,
-               key_ranges: Vec<KeyRange>,
-               store: SnapshotStore<'a>,
-               statistics: &'a mut Statistics)
-               -> TableScanExecutor<'a> {
+    pub fn new(
+        meta: TableScan,
+        key_ranges: Vec<KeyRange>,
+        store: SnapshotStore<'a>,
+        statistics: &'a mut Statistics,
+    ) -> TableScanExecutor<'a> {
         let col_ids = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
@@ -120,11 +121,11 @@ mod test {
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
-    use storage::{Statistics, SnapshotStore};
+    use storage::{SnapshotStore, Statistics};
 
     use super::*;
-    use super::super::scanner::test::{Data, TestStore, prepare_table_data, get_range,
-                                      get_point_range};
+    use super::super::scanner::test::{get_point_range, get_range, prepare_table_data, Data,
+                                      TestStore};
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;

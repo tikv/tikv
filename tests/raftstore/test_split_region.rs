@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::time::Duration;
-use std::{thread, fs};
+use std::{fs, thread};
 use rand::{self, Rng};
 
 use kvproto::eraftpb::MessageType;
@@ -37,7 +37,11 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>, right_derive: 
 
     let pd_client = cluster.pd_client.clone();
 
-    let tbls = vec![(b"k22", b"k11", b"k33"), (b"k11", b"k00", b"k11"), (b"k33", b"k22", b"k33")];
+    let tbls = vec![
+        (b"k22", b"k11", b"k33"),
+        (b"k11", b"k00", b"k11"),
+        (b"k33", b"k22", b"k33"),
+    ];
 
     for (split_key, left_key, right_key) in tbls {
         cluster.must_put(left_key, b"v1");
@@ -54,12 +58,14 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>, right_derive: 
         let left = pd_client.get_region(left_key).unwrap();
         let right = pd_client.get_region(right_key).unwrap();
 
-        assert_eq!(region.get_id(),
-                   if right_derive {
-                       right.get_id()
-                   } else {
-                       left.get_id()
-                   });
+        assert_eq!(
+            region.get_id(),
+            if right_derive {
+                right.get_id()
+            } else {
+                left.get_id()
+            }
+        );
         assert_eq!(region.get_start_key(), left.get_start_key());
         assert_eq!(left.get_end_key(), right.get_start_key());
         assert_eq!(region.get_end_key(), right.get_end_key());
@@ -71,16 +77,22 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>, right_derive: 
         assert_eq!(cluster.get(right_key).unwrap(), b"vv3".to_vec());
 
         let epoch = left.get_region_epoch().clone();
-        let get = util::new_request(left.get_id(),
-                                    epoch,
-                                    vec![util::new_get_cmd(right_key)],
-                                    false);
+        let get = util::new_request(
+            left.get_id(),
+            epoch,
+            vec![util::new_get_cmd(right_key)],
+            false,
+        );
         debug!("requesting {:?}", get);
-        let resp = cluster.call_command_on_leader(get, Duration::from_secs(5)).unwrap();
+        let resp = cluster
+            .call_command_on_leader(get, Duration::from_secs(5))
+            .unwrap();
         assert!(resp.get_header().has_error(), "{:?}", resp);
-        assert!(resp.get_header().get_error().has_key_not_in_region(),
-                "{:?}",
-                resp);
+        assert!(
+            resp.get_header().get_error().has_key_not_in_region(),
+            "{:?}",
+            resp
+        );
 
     }
 }
@@ -114,18 +126,20 @@ fn test_server_base_split_region_right_derive() {
 }
 
 /// Keep puting random kvs until specified size limit is reached.
-fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>,
-                               limit: u64,
-                               range: &mut Iterator<Item = u64>)
-                               -> Vec<u8> {
+fn put_till_size<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    limit: u64,
+    range: &mut Iterator<Item = u64>,
+) -> Vec<u8> {
     put_cf_till_size(cluster, CF_DEFAULT, limit, range)
 }
 
-fn put_cf_till_size<T: Simulator>(cluster: &mut Cluster<T>,
-                                  cf: &'static str,
-                                  limit: u64,
-                                  range: &mut Iterator<Item = u64>)
-                                  -> Vec<u8> {
+fn put_cf_till_size<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    cf: &'static str,
+    limit: u64,
+    range: &mut Iterator<Item = u64>,
+) -> Vec<u8> {
     assert!(limit > 0);
     let mut len = 0;
     let mut rng = rand::thread_rng();
@@ -170,10 +184,12 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     assert_eq!(region, target);
 
-    let max_key = put_cf_till_size(cluster,
-                                   CF_WRITE,
-                                   REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
-                                   &mut range);
+    let max_key = put_cf_till_size(
+        cluster,
+        CF_WRITE,
+        REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
+        &mut range,
+    );
 
     thread::sleep(Duration::from_secs(1));
 
@@ -192,14 +208,11 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let store_id = leader.get_store_id();
     let mut size = 0;
     cluster.engines[&store_id]
-        .scan(&data_key(b""),
-              &data_key(middle_key),
-              false,
-              &mut |k, v| {
-                  size += k.len() as u64;
-                  size += v.len() as u64;
-                  Ok(true)
-              })
+        .scan(&data_key(b""), &data_key(middle_key), false, &mut |k, v| {
+            size += k.len() as u64;
+            size += v.len() as u64;
+            Ok(true)
+        })
         .expect("");
     assert!(size <= REGION_SPLIT_SIZE);
     // although size may be smaller than util::REGION_SPLIT_SIZE, but the diff should
@@ -207,11 +220,15 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(size > REGION_SPLIT_SIZE - 1000);
 
     let epoch = left.get_region_epoch().clone();
-    let get = util::new_request(left.get_id(),
-                                epoch,
-                                vec![util::new_get_cmd(&max_key)],
-                                false);
-    let resp = cluster.call_command_on_leader(get, Duration::from_secs(5)).unwrap();
+    let get = util::new_request(
+        left.get_id(),
+        epoch,
+        vec![util::new_get_cmd(&max_key)],
+        false,
+    );
+    let resp = cluster
+        .call_command_on_leader(get, Duration::from_secs(5))
+        .unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
 }
@@ -324,7 +341,10 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(Duration::from_secs(1));
     let snap_dir = cluster.get_snap_dir(3);
     // no snaps should be sent.
-    let snapfiles: Vec<_> = fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
+    let snapfiles: Vec<_> = fs::read_dir(snap_dir)
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .collect();
     assert!(snapfiles.is_empty());
 
     cluster.clear_send_filters();
@@ -437,8 +457,9 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // isolate node 3 for region 1.
     // only filter MsgAppend to avoid election when recover.
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
-        .msg_type(MessageType::MsgAppend)));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 3).msg_type(MessageType::MsgAppend),
+    ));
 
     let region = pd_client.get_region(b"").unwrap();
 
@@ -525,9 +546,11 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
         }
         try_cnt += 1;
         if try_cnt == 500 {
-            panic!("expect split cnt {}, but got {}",
-                   min_region_cnt,
-                   region_cnt);
+            panic!(
+                "expect split cnt {}, but got {}",
+                min_region_cnt,
+                region_cnt
+            );
         }
     }
 }
@@ -552,23 +575,37 @@ fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>, right_derive: 
     let pd_client = cluster.pd_client.clone();
     let old = pd_client.get_region(b"k1").unwrap();
     // Construct a get command using old region meta.
-    let get = util::new_request(old.get_id(),
-                                old.get_region_epoch().clone(),
-                                vec![util::new_get_cmd(b"k1")],
-                                false);
+    let get = util::new_request(
+        old.get_id(),
+        old.get_region_epoch().clone(),
+        vec![util::new_get_cmd(b"k1")],
+        false,
+    );
     cluster.must_split(&old, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k3").unwrap();
 
-    let resp = cluster.call_command_on_leader(get, Duration::from_secs(5)).unwrap();
+    let resp = cluster
+        .call_command_on_leader(get, Duration::from_secs(5))
+        .unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_stale_epoch());
     if right_derive {
-        assert_eq!(resp.get_header().get_error().get_stale_epoch().get_new_regions(),
-                   &[right, left]);
+        assert_eq!(
+            resp.get_header()
+                .get_error()
+                .get_stale_epoch()
+                .get_new_regions(),
+            &[right, left]
+        );
     } else {
-        assert_eq!(resp.get_header().get_error().get_stale_epoch().get_new_regions(),
-                   &[left, right]);
+        assert_eq!(
+            resp.get_header()
+                .get_error()
+                .get_stale_epoch()
+                .get_new_regions(),
+            &[left, right]
+        );
     }
 }
 
@@ -602,8 +639,9 @@ fn test_node_split_stale_epoch_right_derive() {
 // `test_quick_election_after_split` is a helper function for testing this feature.
 fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
     // Calculate the reserved time before a new campaign after split.
-    let reserved_time =
-        Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval.as_millis() * 2);
+    let reserved_time = Duration::from_millis(
+        cluster.cfg.raft_store.raft_base_tick_interval.as_millis() * 2,
+    );
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");

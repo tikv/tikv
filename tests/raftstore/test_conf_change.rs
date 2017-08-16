@@ -109,11 +109,18 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let conf_change = new_change_peer_request(ConfChangeType::AddNode, new_peer(2, 2));
     let epoch = cluster.pd_client.get_region_epoch(r1);
     let admin_req = new_admin_request(r1, &epoch, conf_change);
-    let resp = cluster.call_command_on_leader(admin_req, Duration::from_secs(3)).unwrap();
-    let exec_res = resp.get_header().get_error().get_message().contains("duplicated");
-    assert!(exec_res,
-            "add duplicated peer should failed, but got {:?}",
-            resp);
+    let resp = cluster
+        .call_command_on_leader(admin_req, Duration::from_secs(3))
+        .unwrap();
+    let exec_res = resp.get_header()
+        .get_error()
+        .get_message()
+        .contains("duplicated");
+    assert!(
+        exec_res,
+        "add duplicated peer should failed, but got {:?}",
+        resp
+    );
 
     // Remove peer (2, 2) from region 1.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
@@ -162,7 +169,10 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let peer = &region.get_peers()[0];
 
-    let i = stores.iter().position(|store| store.get_id() == peer.get_store_id()).unwrap();
+    let i = stores
+        .iter()
+        .position(|store| store.get_id() == peer.get_store_id())
+        .unwrap();
     stores.swap(0, i);
 
     // Now the first store has first region. others have none.
@@ -173,7 +183,12 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let peer2 = new_conf_change_peer(&stores[1], &pd_client);
     let engine_2 = cluster.get_engine(peer2.get_store_id());
-    assert!(engine_2.get_value(&keys::data_key(b"k1")).unwrap().is_none());
+    assert!(
+        engine_2
+            .get_value(&keys::data_key(b"k1"))
+            .unwrap()
+            .is_none()
+    );
     // add new peer to first region.
     pd_client.must_add_peer(region_id, peer2.clone());
 
@@ -268,9 +283,11 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
         }
         thread::sleep(Duration::from_millis(10));
     }
-    panic!("replica count {} still not meet {} after 10 secs",
-           replica_count,
-           c);
+    panic!(
+        "replica count {} still not meet {} after 10 secs",
+        replica_count,
+        c
+    );
 }
 
 fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -289,9 +306,19 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    region = pd_client.get_region_by_id(region_id).wait().unwrap().unwrap();
-    let i = stores.iter()
-        .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
+    region = pd_client
+        .get_region_by_id(region_id)
+        .wait()
+        .unwrap()
+        .unwrap();
+    let i = stores
+        .iter()
+        .position(|s| {
+            region
+                .get_peers()
+                .iter()
+                .all(|p| s.get_id() != p.get_store_id())
+        })
         .unwrap();
 
     let peer = new_conf_change_peer(&stores[i], &pd_client);
@@ -306,7 +333,11 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.reset_rule();
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 
-    region = pd_client.get_region_by_id(region_id).wait().unwrap().unwrap();
+    region = pd_client
+        .get_region_by_id(region_id)
+        .wait()
+        .unwrap()
+        .unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
     pd_client.must_remove_peer(region_id, peer);
     wait_till_reach_count(pd_client.clone(), region_id, 4);
@@ -361,9 +392,12 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.stop_node(3);
 
-    pd_client.set_rule(box move |region, _| new_pd_remove_change_peer(region, new_peer(1, 1)));
+    pd_client.set_rule(box move |region, _| {
+        new_pd_remove_change_peer(region, new_peer(1, 1))
+    });
 
-    let epoch = cluster.pd_client
+    let epoch = cluster
+        .pd_client
         .get_region_by_id(1)
         .wait()
         .unwrap()
@@ -383,14 +417,19 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(3);
 
     for _ in 0..250 {
-        let region: RegionLocalState =
-            engine1.get_msg(&keys::region_state_key(r1)).unwrap().unwrap();
+        let region: RegionLocalState = engine1
+            .get_msg(&keys::region_state_key(r1))
+            .unwrap()
+            .unwrap();
         if region.get_state() == PeerState::Tombstone {
             return;
         }
         sleep_ms(20);
     }
-    let region: RegionLocalState = engine1.get_msg(&keys::region_state_key(r1)).unwrap().unwrap();
+    let region: RegionLocalState = engine1
+        .get_msg(&keys::region_state_key(r1))
+        .unwrap()
+        .unwrap();
     assert_eq!(region.get_state(), PeerState::Tombstone);
 
     // TODO: add split after removing itself test later.
@@ -470,10 +509,11 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(header1.get_error().has_region_not_found());
 }
 
-fn find_leader_response_header<T: Simulator>(cluster: &mut Cluster<T>,
-                                             region_id: u64,
-                                             peer: metapb::Peer)
-                                             -> RaftResponseHeader {
+fn find_leader_response_header<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region_id: u64,
+    peer: metapb::Peer,
+) -> RaftResponseHeader {
     let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
     let resp = cluster.call_command(find_leader, Duration::from_secs(5));
     resp.unwrap().take_header()
@@ -583,11 +623,16 @@ fn test_conf_change_remove_leader() {
 
     // Try to remove leader, which should be ignored.
     let epoch = cluster.get_region_epoch(r1);
-    let req = new_admin_request(r1,
-                                &epoch,
-                                new_change_peer_request(ConfChangeType::RemoveNode,
-                                                        new_peer(1, 1)));
-    let res = cluster.call_command_on_leader(req, Duration::from_secs(5)).unwrap();
-    assert_eq!(res.get_header().get_error().get_message(),
-               "ignore remove leader");
+    let req = new_admin_request(
+        r1,
+        &epoch,
+        new_change_peer_request(ConfChangeType::RemoveNode, new_peer(1, 1)),
+    );
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        res.get_header().get_error().get_message(),
+        "ignore remove leader"
+    );
 }

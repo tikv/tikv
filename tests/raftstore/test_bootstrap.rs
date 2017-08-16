@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, mpsc};
-use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store};
+use std::sync::{mpsc, Arc};
+use tikv::raftstore::store::{bootstrap_store, create_event_loop, keys, Peekable, SnapManager};
 use tikv::server::Node;
 use tikv::storage::ALL_CFS;
 use tikv::util::rocksdb;
@@ -20,9 +20,9 @@ use tempdir::TempDir;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
-use super::pd::{TestPdClient, bootstrap_with_first_region};
+use super::pd::{bootstrap_with_first_region, TestPdClient};
 use super::cluster::{Cluster, Simulator};
-use super::node::{ChannelTransport, new_node_cluster};
+use super::node::{new_node_cluster, ChannelTransport};
 use super::transport_simulate::SimulateTransport;
 use super::util::*;
 
@@ -49,17 +49,22 @@ fn test_node_bootstrap_with_prepared_data() {
     let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_engine = TempDir::new("test_cluster").unwrap();
-    let engine = Arc::new(rocksdb::new_engine(tmp_engine.path().to_str().unwrap(), ALL_CFS)
-        .unwrap());
+    let engine = Arc::new(
+        rocksdb::new_engine(tmp_engine.path().to_str().unwrap(), ALL_CFS).unwrap(),
+    );
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
-    let mut node = Node::new(&mut event_loop,
-                             &cfg.server,
-                             &cfg.raft_store,
-                             pd_client.clone());
-    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(),
-                                    Some(node.get_sendch()),
-                                    cfg.raft_store.use_sst_file_snapshot);
+    let mut node = Node::new(
+        &mut event_loop,
+        &cfg.server,
+        &cfg.raft_store,
+        pd_client.clone(),
+    );
+    let snap_mgr = SnapManager::new(
+        tmp_mgr.path().to_str().unwrap(),
+        Some(node.get_sendch()),
+        cfg.raft_store.use_sst_file_snapshot,
+    );
     let (_, snapshot_status_receiver) = mpsc::channel();
 
 
@@ -70,24 +75,41 @@ fn test_node_bootstrap_with_prepared_data() {
     // now rocksDB must have some prepare data
     bootstrap_store(&engine, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engine, 1).unwrap();
-    assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
-        .unwrap()
-        .is_some());
+    assert!(
+        engine
+            .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+            .unwrap()
+            .is_some()
+    );
     let region_state_key = keys::region_state_key(region.get_id());
-    assert!(engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_some());
+    assert!(
+        engine
+            .get_msg::<RegionLocalState>(&region_state_key)
+            .unwrap()
+            .is_some()
+    );
 
     // try to restart this node, will clear the prepare data
-    node.start(event_loop,
-               engine.clone(),
-               simulate_trans,
-               snap_mgr,
-               snapshot_status_receiver)
-        .unwrap();
-    assert!(engine.clone()
-        .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
-        .unwrap()
-        .is_none());
-    assert!(engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_none());
+    node.start(
+        event_loop,
+        engine.clone(),
+        simulate_trans,
+        snap_mgr,
+        snapshot_status_receiver,
+    ).unwrap();
+    assert!(
+        engine
+            .clone()
+            .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        engine
+            .get_msg::<RegionLocalState>(&region_state_key)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(pd_client.get_regions_number() as u32, 1);
     node.stop().unwrap();
 }

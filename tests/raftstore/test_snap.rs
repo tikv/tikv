@@ -14,7 +14,7 @@
 
 use std::fs;
 use std::time::{Duration, Instant};
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::mpsc::{self, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -63,7 +63,10 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let value = format!("{:01024}", 0);
     must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
     let stale = Arc::new(AtomicBool::new(false));
-    cluster.sim.wl().add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(stale.clone()));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(stale.clone()));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
     loop {
@@ -116,7 +119,10 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let (tx, rx) = mpsc::channel();
     // drop all the snapshot so we can detect stale snapfile.
-    cluster.sim.wl().add_recv_filter(3, box DropSnapshotFilter::new(tx));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, box DropSnapshotFilter::new(tx));
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let first_snap_idx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -152,7 +158,10 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let snap_dir = cluster.get_snap_dir(3);
     // it must have more than 2 snaps.
-    let snapfiles: Vec<_> = fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
+    let snapfiles: Vec<_> = fs::read_dir(snap_dir)
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .collect();
     assert!(snapfiles.len() >= 2);
 
     cluster.sim.wl().clear_recv_filters(3);
@@ -209,14 +218,19 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
     // Force peer 2 to be followers all the way.
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(r1, 2)
-        .msg_type(MessageType::MsgRequestVote)
-        .direction(Direction::Send)));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 2)
+            .msg_type(MessageType::MsgRequestVote)
+            .direction(Direction::Send),
+    ));
     cluster.must_transfer_leader(r1, new_peer(1, 1));
     cluster.must_put(b"k3", b"v3");
     // Pile up snapshots of overlapped region ranges and deliver them all at once.
     let (tx, rx) = mpsc::channel();
-    cluster.sim.wl().add_recv_filter(3, box CollectSnapshotFilter::new(tx));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, box CollectSnapshotFilter::new(tx));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let region = cluster.get_region(b"k1");
     // Ensure the snapshot of range ("", "") is sent and piled in filter.
@@ -310,7 +324,8 @@ impl Filter<RaftMessage> for Arc<StaleSnap> {
         let mut res = Vec::with_capacity(msgs.len());
         for mut m in msgs.drain(..) {
             if m.get_message().get_msg_type() == MessageType::MsgSnapshot &&
-               m.get_to_peer().get_store_id() == 3 {
+                m.get_to_peer().get_store_id() == 3
+            {
                 if self.first_snap.rl().is_none() {
                     *self.first_snap.wl() = Some(m.take_message());
                     continue;
@@ -397,10 +412,10 @@ impl Filter<Msg> for SnapshotAppendFilter {
         for m in msgs.drain(..) {
             let mut should_collect = false;
             if let Msg::RaftMessage(ref msg) = m {
-                should_collect = !stale &&
-                                 msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
+                should_collect =
+                    !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
                 stale = !pending_msg.is_empty() &&
-                        msg.get_message().get_msg_type() == MessageType::MsgAppend;
+                    msg.get_message().get_msg_type() == MessageType::MsgAppend;
             }
             if should_collect {
                 pending_msg.push(m);
@@ -433,7 +448,10 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let (tx, rx) = mpsc::channel();
-    cluster.sim.wl().add_recv_filter(4, box SnapshotAppendFilter::new(tx));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(4, box SnapshotAppendFilter::new(tx));
     pd_client.add_peer(r1, new_peer(4, 4));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k1", b"v1");

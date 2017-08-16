@@ -14,7 +14,7 @@
 //! A module contains test cases of stale peers gc.
 
 use kvproto::eraftpb::MessageType;
-use kvproto::raft_serverpb::{RegionLocalState, PeerState};
+use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::raftstore::store::{keys, Peekable};
 
 use super::cluster::{Cluster, Simulator};
@@ -148,8 +148,9 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
     };
     let new_region_id = new_region.get_id();
     // Block peer (3, 4) at receiving snapshot, but not the heartbeat
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(new_region_id, 3)
-        .msg_type(MessageType::MsgSnapshot)));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(new_region_id, 3).msg_type(MessageType::MsgSnapshot),
+    ));
 
     pd_client.must_add_peer(new_region_id, new_peer(3, 4));
 
