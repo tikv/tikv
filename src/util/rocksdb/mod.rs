@@ -198,7 +198,7 @@ fn db_exist(path: &str) -> bool {
     fs::read_dir(&path).unwrap().next().is_some()
 }
 
-pub fn get_used_size(engine: Arc<DB>) -> u64 {
+pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
     for cf in ALL_CFS {
         let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
