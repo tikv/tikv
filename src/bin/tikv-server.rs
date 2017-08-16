@@ -147,7 +147,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
-    // Create engine, storage.
+    // Create kv engine, storage.
     let kv_db_opts = cfg.rocksdb.build_opt();
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
     let kv_engine = Arc::new(
