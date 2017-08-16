@@ -412,7 +412,12 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Vec<u8>>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_duration(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = format!("{}", val.unwrap());
+        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
     pub fn cast_json_as_str(
@@ -420,7 +425,12 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Vec<u8>>> {
-        unimplemented!()
+        let val = try!(self.children[0].eval_json(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = val.unwrap().to_string();
+        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
     pub fn cast_int_as_time(
