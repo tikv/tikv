@@ -32,11 +32,11 @@ fi
 export LOG_FILE=tests.log
 if [[ "$TRAVIS" = "true" ]]; then
     export RUST_TEST_THREADS=2
-fi
-export RUSTFLAGS=-Dwarnings
 
-if [[ `uname` == "Linux" ]]; then
-    export EXTRA_CARGO_ARGS="-j 2"
+    if [[ `uname` == "Linux" ]]; then
+        export EXTRA_CARGO_ARGS="-j 2"
+    fi
+    export RUSTFLAGS=-Dwarnings
 fi
 
 if [[ "$SKIP_TESTS" != "true" ]]; then

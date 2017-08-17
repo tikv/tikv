@@ -12,14 +12,14 @@ ${LOCAL_DIR}/lib/libgflags.a:
 	make install
 
 ${LOCAL_DIR}/lib/librocksdb.dylib: |prepare_brew
-${LOCAL_DIR}/lib/librocksdb.so.5.6.1: ${LOCAL_DIR}/lib/libgflags.a
-${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/lib/librocksdb.so.5.6.1:
+${LOCAL_DIR}/lib/librocksdb.so.5.6.2: ${LOCAL_DIR}/lib/libgflags.a
+${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/lib/librocksdb.so.5.6.2:
 	export CPLUS_INCLUDE_PATH="${CPLUS_INCLUDE_PATH}:${LOCAL_DIR}/include" && \
 	export CXX=${COMPILER} && \
 	cd /tmp && \
-	curl -L https://github.com/facebook/rocksdb/archive/v5.6.1.tar.gz -o rocksdb.tar.gz && \
+	curl -L https://github.com/facebook/rocksdb/archive/v5.6.2.tar.gz -o rocksdb.tar.gz && \
 	tar xf rocksdb.tar.gz && \
-	cd rocksdb-5.6.1 && \
+	cd rocksdb-5.6.2 && \
 	INSTALL_PATH=${LOCAL_DIR} make install-shared
 
 # TODO: use offical archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
@@ -41,7 +41,7 @@ ${LOCAL_DIR}/bin/kcov:
 prepare-rustfmt:
 	 @[[ "`cargo fmt -- --version`" = "0.2.1-nightly ( )" ]] || cargo install --vers 0.2.1 --force rustfmt-nightly || exit 0
 
-prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so.5.6.1 ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
+prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so.5.6.2 ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
 
 prepare_brew:
 	brew update && \
