@@ -148,7 +148,6 @@ impl Host {
                 .with_label_values(&[type_str, pri_str])
                 .add(1.0);
             let end_point = TiDbEndPoint::new(snap.clone());
-            let txn_id = req.start_ts.unwrap_or_default();
 
             let pool = match pri {
                 CommandPri::Low => &mut self.low_priority_pool,
