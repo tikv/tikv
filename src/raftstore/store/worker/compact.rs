@@ -69,7 +69,7 @@ impl Runner {
         let cf_handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[&cf_name])
-            .start_timer();
+            .start_coarse_timer();
         let mut compact_opts = CompactOptions::new();
         // manual compaction can concurrently run with background compaction threads.
         compact_opts.set_exclusive_manual_compaction(false);
