@@ -18,9 +18,8 @@ use std::time;
 use std::sync::Arc;
 use std::thread::{sleep, Builder, JoinHandle};
 use std::boxed::FnBox;
-use std::cmp::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
-use std::fmt::{self, Debug, Formatter, Write};
+use std::fmt::Write;
 
 const WORKER_WAIT_TIME: u64 = 20; // ms
 
@@ -34,20 +33,10 @@ pub trait ContextFactory<Ctx: Context> {
 }
 
 pub struct Task<C> {
-    // The task's id in the pool. Each task has a unique id,
-    // and it's always bigger than preceding ones.
-    id: u64,
-
     // use Box<FnBox<&mut C> + Send> instead
     // after https://github.com/rust-lang/rust/issues/25647 solved.
     task: Box<FnBox(C) -> C + Send>,
     ctx: C,
-}
-
-impl<C> Debug for Task<C> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "task_id:{}", self.id)
-    }
 }
 
 impl<C: Context> Task<C> {
@@ -56,36 +45,10 @@ impl<C: Context> Task<C> {
         F: FnOnce(C) -> C + Send + 'static,
     {
         Task {
-            id: 0,
             task: Box::new(job),
             ctx: ctx,
         }
     }
-}
-
-impl<C> Ord for Task<C> {
-    fn cmp(&self, right: &Task<C>) -> Ordering {
-        self.id.cmp(&right.id).reverse()
-    }
-}
-
-impl<C> PartialEq for Task<C> {
-    fn eq(&self, right: &Task<C>) -> bool {
-        self.cmp(right) == Ordering::Equal
-    }
-}
-
-impl<C> Eq for Task<C> {}
-
-impl<C> PartialOrd for Task<C> {
-    fn partial_cmp(&self, rhs: &Task<C>) -> Option<Ordering> {
-        Some(self.cmp(rhs))
-    }
-}
-
-pub trait ScheduleQueue<C> {
-    fn pop(&mut self) -> Option<Task<C>>;
-    fn push(&mut self, task: Task<C>);
 }
 
 /// `ThreadPool` is used to execute tasks in parallel.
