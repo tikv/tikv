@@ -21,10 +21,7 @@ panic() {
 
 if [[ "$SKIP_FORMAT_CHECK" != "true" ]]; then
     make format
-    if ! git diff-index --quiet HEAD --; then
-        git diff
-        panic "\e[35mplease make format before creating a pr!!!\e[0m"
-    fi
+    git diff-index --quiet HEAD -- || (git diff; panic "\e[35mplease make format before creating a pr!!!\e[0m")
 fi
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
@@ -35,11 +32,11 @@ fi
 export LOG_FILE=tests.log
 if [[ "$TRAVIS" = "true" ]]; then
     export RUST_TEST_THREADS=2
+fi
+export RUSTFLAGS=-Dwarnings
 
-    if [[ `uname` == "Linux" ]]; then
-        export EXTRA_CARGO_ARGS="-j 2"
-    fi
-    export RUSTFLAGS=-Dwarnings
+if [[ `uname` == "Linux" ]]; then
+    export EXTRA_CARGO_ARGS="-j 2"
 fi
 
 if [[ "$SKIP_TESTS" != "true" ]]; then
