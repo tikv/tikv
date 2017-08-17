@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, Gauge, GaugeVec, HistogramVec};
+use prometheus::{exponential_buckets, CounterVec, Gauge, GaugeVec, HistogramVec};
 use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
               HistogramData, DB};
 use storage::ALL_CFS;
@@ -527,7 +527,8 @@ lazy_static!{
         register_histogram_vec!(
             "tikv_engine_compaction_duration_seconds",
             "Histogram of compaction duration seconds",
-            &["cf"]
+            &["cf"],
+            exponential_buckets(0.005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref STORE_ENGINE_COMPACTION_NUM_CORRUPT_KEYS_VEC: CounterVec =
