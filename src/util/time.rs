@@ -268,7 +268,7 @@ impl Instant {
             (later - earlier).to_std().unwrap()
         } else {
             panic!(
-                "system time jumped back, {:.9} -> {:.9}",
+                "monotonic time jumped back, {:.9} -> {:.9}",
                 earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
                 later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
             );
@@ -278,7 +278,7 @@ impl Instant {
     // It is different from `elapsed_duration`, the resolution here is millisecond.
     // The processors in an SMP system do not start all at exactly the same time
     // and therefore the timer registers are typically running at an offset.
-    // Use millisecond resolution for ignoring the error.
+    // Use millisecond resolution for ignoring the error and warn instead of panic.
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
         let later_ms =
             later.sec * MILLISECOND_PER_SECOND + later.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
