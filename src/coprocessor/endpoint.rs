@@ -130,32 +130,17 @@ impl Host {
             let end_point = TiDbEndPoint::new(snap.clone());
             let txn_id = req.start_ts.unwrap_or_default();
 
-            match pri {
-                CommandPri::Low => {
-                    self.low_priority_pool.execute(txn_id, move || {
-                        end_point.handle_request(req);
-                        COPR_PENDING_REQS
-                            .with_label_values(&[type_str, pri_str])
-                            .dec();
-                    });
-                }
-                CommandPri::High => {
-                    self.high_priority_pool.execute(txn_id, move || {
-                        end_point.handle_request(req);
-                        COPR_PENDING_REQS
-                            .with_label_values(&[type_str, pri_str])
-                            .dec();
-                    });
-                }
-                CommandPri::Normal => {
-                    self.pool.execute(txn_id, move || {
-                        end_point.handle_request(req);
-                        COPR_PENDING_REQS
-                            .with_label_values(&[type_str, pri_str])
-                            .dec();
-                    });
-                }
-            }
+            let pool = match pri {
+                CommandPri::Low => &mut self.low_priority_pool,
+                CommandPri::High => &mut self.high_priority_pool,
+                CommandPri::Normal => &mut self.pool,
+            };
+            pool.execute(txn_id, move || {
+                end_point.handle_request(req);
+                COPR_PENDING_REQS
+                    .with_label_values(&[type_str, pri_str])
+                    .dec();
+            });
         }
     }
 }
