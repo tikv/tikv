@@ -12,7 +12,6 @@ machine:
     LOCAL_DIR: "$HOME/.local"
     # used by cargo
     LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"
-    RUST_TEST_THREADS: 1
     RUST_BACKTRACE: 1
     RUSTFLAGS: "-Dwarnings"
   pre:
@@ -42,13 +41,8 @@ dependencies:
       fi
     - make -f travis-build/Makefile prepare_linux
   post:
-    # check format first
-    - make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
-    # cargo test also use debug
-    - cargo test --features "dev" --no-run:
-        timeout: 1800
-
+    - cargo check --features dev
 
 test:
   override:
-    - make trace_test
+    - make -f travis-build/Makefile test_linux
