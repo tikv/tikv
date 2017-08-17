@@ -55,7 +55,10 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = val.unwrap().round(0, RoundMode::HalfEven).unwrap();
+        let val = val.unwrap()
+            .into_owned()
+            .round(0, RoundMode::HalfEven)
+            .unwrap();
         if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
             let uint = val.as_u64().unwrap();
             // TODO:handle overflow
