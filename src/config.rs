@@ -466,7 +466,7 @@ impl Default for RaftDbConfig {
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
-            enable_pipelined_write: false,
+            enable_pipelined_write: true,
             allow_concurrent_memtable_write: false,
             defaultcf: RaftDefaultCfConfig::default(),
         }

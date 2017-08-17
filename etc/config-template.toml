@@ -360,7 +360,7 @@ stats-dump-period = "10m"
 # compaction-readahead-size = 0
 # writable-file-max-buffer-size = "1MB"
 # use-direct-io-for-flush-and-compaction = false
-# enable-pipelined-write = false
+# enable-pipelined-write = true
 # allow-concurrent-memtable-write = false
 
 [raftdb.defaultcf]
