@@ -461,28 +461,41 @@ impl FnCall {
         Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
-    pub fn cast_str_as_time(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Time>>> {
-        unimplemented!()
+    pub fn cast_str_as_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
+        let val = try!(self.children[0].eval_string(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = try!(String::from_utf8(val.unwrap()));
+        Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
-    pub fn cast_time_as_time(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Time>>> {
-        unimplemented!()
+    pub fn cast_time_as_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
+        let val = try!(self.children[0].eval_time(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let mut val = val.unwrap();
+        try!(val.round_frac(self.tp.get_decimal() as i8));
+        // TODO: tidb only update tp when tp is Date
+        try!(val.set_tp(self.tp.get_tp() as u8));
+        Ok(Some(val))
     }
 
     pub fn cast_duration_as_time(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Time>>> {
-        unimplemented!()
+    ) -> Result<Option<Time>> {
+        let val = try!(self.children[0].eval_duration(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let mut val = try!(Time::from_duration(&ctx.tz, val.unwrap()));
+        try!(val.round_frac(self.tp.get_decimal() as i8));
+        // TODO: tidb only update tp when tp is Date
+        try!(val.set_tp(self.tp.get_tp() as u8));
+        Ok(Some(val))
     }
 
     pub fn cast_json_as_time(

@@ -49,10 +49,10 @@ fn tm_to_secs(t: Tm) -> u64 {
 #[derive(Debug, Clone)]
 pub struct Duration {
     pub dur: StdDuration,
-    neg: bool,
+    pub neg: bool,
     // Fsp is short for Fractional Seconds Precision.
     // See http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    fsp: u8,
+    pub fsp: u8,
 }
 
 impl Duration {
