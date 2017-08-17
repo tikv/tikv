@@ -239,7 +239,9 @@ impl SnapContext {
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg(&region_key, &region_state));
         box_try!(wb.delete(&keys::snapshot_raft_state_key(region_id)));
-        box_try!(self.kv_db.write(wb));
+        self.kv_db.write(wb).unwrap_or_else(|e| {
+            panic!("{} failed to save apply_snap result: {:?}", region_id, e);
+        });
         info!(
             "[region {}] apply new data takes {:?}",
             region_id,

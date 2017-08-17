@@ -300,7 +300,7 @@ impl Default for DbConfig {
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
-            enable_pipelined_write: false,
+            enable_pipelined_write: true,
             backup_dir: "".to_owned(),
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -622,6 +622,7 @@ impl TiKvConfig {
             (self.rocksdb.wal_dir == self.raftdb.wal_dir ||
                 self.rocksdb.wal_dir == self.storage.raft_db_path)
         {
+            // if raftdb.wal_dir is empty, we need check storage.raft_db_path
             return Err(
                 "please check rocksdb.wal_dir, can not equal to storage.raft_db_path or \
                  raftdb.wal_dir"
@@ -631,6 +632,7 @@ impl TiKvConfig {
         if !self.raftdb.wal_dir.is_empty() &&
             (self.rocksdb.wal_dir == self.raftdb.wal_dir || self.raftdb.wal_dir == kv_db_path)
         {
+            // if rocksdb.wal_dir is empty, we need check kv_db_path
             return Err(
                 "please check raftdb.wal_dir, can not equal to storage.data_dir/db or \
                  rocksdb.wal_dir"

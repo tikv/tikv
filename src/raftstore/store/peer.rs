@@ -141,7 +141,7 @@ impl ProposalQueue {
 }
 
 pub struct ReadyContext<'a, T: 'a> {
-    pub kv_wb: WriteBatch,
+    pub kv_wb: Option<WriteBatch>,
     pub raft_wb: WriteBatch,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
@@ -151,7 +151,7 @@ pub struct ReadyContext<'a, T: 'a> {
 impl<'a, T> ReadyContext<'a, T> {
     pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
-            kv_wb: WriteBatch::new(),
+            kv_wb: None,
             raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             metrics: metrics,
             trans: t,
@@ -394,6 +394,7 @@ impl Peer {
         let raft_wb = WriteBatch::new();
         try!(self.mut_store().clear_meta(&kv_wb, &raft_wb));
         try!(write_peer_state(&kv_wb, &region, PeerState::Tombstone));
+        // write kv rocksdb first in case of restart happen between two write
         try!(self.kv_engine.write(kv_wb));
         try!(self.raft_engine.write(raft_wb));
 

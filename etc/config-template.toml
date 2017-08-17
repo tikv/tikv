@@ -39,7 +39,7 @@ labels = {}
 # set the path to rocksdb directory.
 data-dir = "/tmp/tikv/store"
 # set the path to raft rocksdb directory, default value is data-dir/raft
-# raft-db-path = "/tmp/tikv/store/raft"
+# raft-db-path = ""
 
 # notify capacity of scheduler's channel
 # scheduler-notify-capacity = 10240
@@ -225,7 +225,7 @@ stats-dump-period = "10m"
 # rate-bytes-per-sec = 0
 
 # Enable or disable the pipelined write
-# enable-pipelined-write = false
+# enable-pipelined-write = true
 
 # set backup path, if not set, use "backup" under store path.
 # backup-dir = "/tmp/tikv/store/backup"
@@ -347,7 +347,8 @@ max-manifest-file-size = "20MB"
 create-if-missing = true
 
 wal-recovery-mode = 2
-# wal-dir = "/tmp/tikv/store/raft"
+# raftdb write-ahead logs dir path, default value is raft-db-path.
+# wal-dir = ""
 # wal-ttl-seconds = 0
 # wal-size-limit = 0
 # max-total-wal-size = "4GB"

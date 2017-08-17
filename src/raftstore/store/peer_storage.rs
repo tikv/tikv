@@ -920,8 +920,7 @@ impl PeerStorage {
             raft_wb,
             &self.raft_engine,
             region_id,
-            &self.raft_state,
-            false
+            &self.raft_state
         ));
         self.cache = EntryCache::default();
         Ok(())
@@ -1078,17 +1077,23 @@ impl PeerStorage {
         ready: &Ready,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let snapshot_index = if raft::is_empty_snap(&ready.snapshot) {
-            0
-        } else {
+        let mut snapshot_index = 0;
+        if !raft::is_empty_snap(&ready.snapshot) {
+            let kv_wb = if ready_ctx.kv_wb.is_none() {
+                WriteBatch::new()
+            } else {
+                ready_ctx.kv_wb.take().unwrap()
+            };
+
             try!(self.apply_snapshot(
                 &mut ctx,
                 &ready.snapshot,
-                &ready_ctx.kv_wb,
+                &kv_wb,
                 &ready_ctx.raft_wb
             ));
-            last_index(&ctx.raft_state)
-        };
+            snapshot_index = last_index(&ctx.raft_state);
+            ready_ctx.kv_wb = Some(kv_wb);
+        }
 
         if !ready.entries.is_empty() {
             try!(self.append(
@@ -1113,15 +1118,17 @@ impl PeerStorage {
                 // but not write raft_local_state to raft rocksdb in time.
                 // we write raft state to default rocksdb, with last index set to snap index,
                 // in case of recv raft log after snapshot.
-                try!(ctx.save_snapshot_raft_state_to(
-                    snapshot_index,
-                    &mut ready_ctx.kv_wb
-                ));
+                let mut kv_wb = ready_ctx.kv_wb.take().unwrap();
+                try!(ctx.save_snapshot_raft_state_to(snapshot_index, &mut kv_wb));
+                ready_ctx.kv_wb = Some(kv_wb);
             }
         }
 
+        // only when apply snapshot
         if ctx.apply_state != self.apply_state {
-            try!(ctx.save_apply_state_to(&mut ready_ctx.kv_wb));
+            let mut kv_wb = ready_ctx.kv_wb.take().unwrap();
+            try!(ctx.save_apply_state_to(&mut kv_wb));
+            ready_ctx.kv_wb = Some(kv_wb);
         }
 
         Ok(ctx)
@@ -1170,63 +1177,36 @@ pub fn clear_meta(
     raft_engine: &DB,
     region_id: u64,
     raft_state: &RaftLocalState,
-    is_stale_meta: bool,
 ) -> Result<()> {
     let t = Instant::now();
     try!(kv_wb.delete(&keys::region_state_key(region_id)));
     try!(kv_wb.delete(&keys::apply_state_key(region_id)));
 
-    let raft_count = if is_stale_meta {
-        try!(clear_raft_data(raft_wb, raft_engine, region_id))
-    } else {
-        let last_index = last_index(raft_state);
-        let mut first_index = last_index + 1;
-        let begin_log_key = keys::raft_log_key(region_id, 0);
-        let end_log_key = keys::raft_log_key(region_id, first_index);
-        try!(raft_engine.scan(
-            &begin_log_key,
-            &end_log_key,
-            false,
-            &mut |key, _| {
-                first_index = keys::raft_log_index(key).unwrap();
-                Ok(false)
-            }
-        ));
-        for id in first_index..last_index + 1 {
-            try!(raft_wb.delete(&keys::raft_log_key(region_id, id)));
+    let last_index = last_index(raft_state);
+    let mut first_index = last_index + 1;
+    let begin_log_key = keys::raft_log_key(region_id, 0);
+    let end_log_key = keys::raft_log_key(region_id, first_index);
+    try!(raft_engine.scan(
+        &begin_log_key,
+        &end_log_key,
+        false,
+        &mut |key, _| {
+            first_index = keys::raft_log_index(key).unwrap();
+            Ok(false)
         }
-        try!(raft_wb.delete(&keys::raft_state_key(region_id)));
-        last_index + 2 - first_index
-    };
+    ));
+    for id in first_index..last_index + 1 {
+        try!(raft_wb.delete(&keys::raft_log_key(region_id, id)));
+    }
+    try!(raft_wb.delete(&keys::raft_state_key(region_id)));
 
     info!(
-        "[region {}] clear peer 1 meta key, 1 apply key and {} raft keys, takes {:?}",
+        "[region {}] clear peer 1 meta key, 1 apply key, 1 raft key and {} raft logs, takes {:?}",
         region_id,
-        raft_count,
+        last_index + 1 - first_index,
         t.elapsed()
     );
     Ok(())
-}
-
-/// Delete all raft data belong to the region. Results are stored in `raft_wb`.
-pub fn clear_raft_data(raft_wb: &WriteBatch, raft_engine: &DB, region_id: u64) -> Result<(u64)> {
-    // TODO: use delete range directly
-    let mut raft_count = 0;
-    let (raft_start, raft_end) = (
-        keys::region_raft_prefix(region_id),
-        keys::region_raft_prefix(region_id + 1),
-    );
-    try!(raft_engine.scan(
-        &raft_start,
-        &raft_end,
-        false,
-        &mut |key, _| {
-            try!(raft_wb.delete(key));
-            raft_count += 1;
-            Ok(true)
-        }
-    ));
-    Ok(raft_count)
 }
 
 pub fn do_snapshot(
