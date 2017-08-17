@@ -101,7 +101,7 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = val.unwrap();
+        let mut val = val.unwrap().into_owned();
         try!(val.round_frac(mysql::DEFAULT_FSP));
         let dec = try!(val.to_decimal());
         let res = try!(convert::dec_to_i64(dec));
@@ -117,7 +117,7 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = val.unwrap();
+        let mut val = val.unwrap().into_owned();
         try!(val.round_frac(mysql::DEFAULT_FSP));
         let dec = try!(val.to_decimal());
         let res = try!(convert::dec_to_i64(dec));
@@ -129,7 +129,7 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = val.unwrap();
+        let val = val.unwrap().into_owned();
         let res = try!(val.cast_to_int());
         Ok(Some(res))
     }
@@ -218,7 +218,7 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = try!(val.unwrap().cast_to_real());
+        let val = try!(val.unwrap().into_owned().cast_to_real());
         Ok(Some(try!(self.produce_float_with_specified_tp(ctx, val))))
     }
 
