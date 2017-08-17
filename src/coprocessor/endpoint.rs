@@ -25,7 +25,7 @@ use kvproto::kvrpcpb::CommandPri;
 use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
-use util::threadpool::{Context, ContextFactory, FifoQueue, ThreadPool};
+use util::threadpool::{Context, ContextFactory, ThreadPool};
 use server::OnResponse;
 use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
 
@@ -65,11 +65,9 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<FifoQueue<DummyContext>, DummyContextFactory, DummyContext>,
-    low_priority_pool:
-        ThreadPool<FifoQueue<DummyContext>, DummyContextFactory, DummyContext>,
-    high_priority_pool:
-        ThreadPool<FifoQueue<DummyContext>, DummyContextFactory, DummyContext>,
+    pool: ThreadPool<DummyContextFactory, DummyContext>,
+    low_priority_pool: ThreadPool<DummyContextFactory, DummyContext>,
+    high_priority_pool: ThreadPool<DummyContextFactory, DummyContext>,
     max_running_task_count: usize,
 }
 
@@ -104,19 +102,16 @@ impl Host {
             pool: ThreadPool::new(
                 thd_name!("endpoint-normal-pool"),
                 concurrency,
-                FifoQueue::new(),
                 DummyContextFactory {},
             ),
             low_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-low-pool"),
                 concurrency,
-                FifoQueue::new(),
                 DummyContextFactory {},
             ),
             high_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-high-pool"),
                 concurrency,
-                FifoQueue::new(),
                 DummyContextFactory {},
             ),
         }
@@ -342,15 +337,13 @@ impl BatchRunnable<Task> for Host {
                                 },
                             );
                         } else {
-                            self.pool.execute(
-                                move |ctx: DummyContext| -> DummyContext {
-                                    end_point.handle_request(req);
-                                    COPR_PENDING_REQS
-                                        .with_label_values(&[type_str, pri_str])
-                                        .dec();
-                                    ctx
-                                },
-                            );
+                            self.pool.execute(move |ctx: DummyContext| -> DummyContext {
+                                end_point.handle_request(req);
+                                COPR_PENDING_REQS
+                                    .with_label_values(&[type_str, pri_str])
+                                    .dec();
+                                ctx
+                            });
                         }
                     }
                 }

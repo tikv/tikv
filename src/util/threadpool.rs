@@ -11,18 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{Builder, JoinHandle};
-use std::boxed::FnBox;
-use std::collections::VecDeque;
-use std::cmp::Ordering;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::fmt::{self, Debug, Formatter, Write};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use crossbeam::sync::MsQueue;
 
-const DEFAULT_QUEUE_CAPACITY: usize = 1000;
-const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
+use std::usize;
+use std::time;
+use std::sync::Arc;
+use std::thread::{sleep, Builder, JoinHandle};
+use std::boxed::FnBox;
+use std::cmp::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+use std::fmt::{self, Debug, Formatter, Write};
+
+const WORKER_WAIT_TIME: u64 = 20; // ms
+
+pub trait Context: Send {
+    fn on_task_started(&mut self, worker_ctx: &mut Self);
+    fn on_task_finished(&mut self, worker_ctx: &mut Self);
+}
+
+pub trait ContextFactory<Ctx: Context> {
+    fn create_context(&self) -> Ctx;
+}
 
 pub struct Task<C> {
     // The task's id in the pool. Each task has a unique id,
@@ -79,131 +88,40 @@ pub trait ScheduleQueue<C> {
     fn push(&mut self, task: Task<C>);
 }
 
-// First in first out queue.
-#[derive(Default)]
-pub struct FifoQueue<C> {
-    queue: VecDeque<Task<C>>,
-}
-
-impl<C: Context> FifoQueue<C> {
-    pub fn new() -> FifoQueue<C> {
-        FifoQueue {
-            queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY),
-        }
-    }
-}
-
-impl<C> ScheduleQueue<C> for FifoQueue<C> {
-    fn push(&mut self, task: Task<C>) {
-        self.queue.push_back(task);
-    }
-
-    fn pop(&mut self) -> Option<Task<C>> {
-        let task = self.queue.pop_front();
-
-        if self.queue.is_empty() && self.queue.capacity() > QUEUE_MAX_CAPACITY {
-            self.queue = VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY);
-        }
-
-        task
-    }
-}
-
-struct TaskPool<Q, C> {
-    next_task_id: u64,
-    task_queue: Q,
-    stop: bool,
-    jobs: Receiver<Task<C>>,
-}
-
-impl<Q, C> TaskPool<Q, C>
-where
-    Q: ScheduleQueue<C>,
-    C: Context,
-{
-    fn new(queue: Q, jobs: Receiver<Task<C>>) -> TaskPool<Q, C> {
-        TaskPool {
-            next_task_id: 0,
-            task_queue: queue,
-            stop: false,
-            jobs: jobs,
-        }
-    }
-
-    fn pop_task(&mut self) -> Option<Task<C>> {
-        if let Some(task) = self.task_queue.pop() {
-            return Some(task);
-        }
-        // try fill queue when queue is empty.
-        self.try_fill_queue();
-        self.task_queue.pop()
-    }
-
-    fn try_fill_queue(&mut self) {
-        while let Ok(mut task) = self.jobs.try_recv() {
-            task.id = self.next_task_id;
-            self.next_task_id += 1;
-            self.task_queue.push(task);
-        }
-    }
-
-    #[inline]
-    fn stop(&mut self) {
-        self.stop = true;
-    }
-
-    #[inline]
-    fn is_stopped(&self) -> bool {
-        self.stop
-    }
-}
-
-pub trait Context: Send {
-    fn on_task_started(&mut self, worker_ctx: &mut Self);
-    fn on_task_finished(&mut self, worker_ctx: &mut Self);
-}
-
-pub trait ContextFactory<Ctx: Context> {
-    fn create_context(&self) -> Ctx;
-}
-
-// Make clippy happy
-type TTaskPool<Q, C> = Arc<(Mutex<TaskPool<Q, C>>, Condvar)>;
-
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
-pub struct ThreadPool<Q, C, Ctx> {
-    task_pool: TTaskPool<Q, Ctx>,
+pub struct ThreadPool<C, Ctx> {
+    stop_flag: Arc<AtomicBool>,
+    task_queue: Arc<MsQueue<Task<Ctx>>>,
     threads: Vec<JoinHandle<()>>,
     task_count: Arc<AtomicUsize>,
-    sender: Sender<Task<Ctx>>,
     // ctx_factory should only be used in one thread
     ctx_factory: C,
 }
 
-impl<Q, C, Ctx> ThreadPool<Q, C, Ctx>
+impl<C, Ctx> ThreadPool<C, Ctx>
 where
-    Q: ScheduleQueue<Ctx> + Send + 'static,
     Ctx: Context + 'static,
     C: ContextFactory<Ctx>,
 {
-    pub fn new(name: String, num_threads: usize, queue: Q, f: C) -> ThreadPool<Q, C, Ctx> {
+    pub fn new(name: String, num_threads: usize, f: C) -> ThreadPool<C, Ctx> {
         assert!(num_threads >= 1);
-        let (sender, receiver) = channel::<Task<Ctx>>();
-        let task_pool = Arc::new((Mutex::new(TaskPool::new(queue, receiver)), Condvar::new()));
+        let task_queue = Arc::new(MsQueue::new());
         let mut threads = Vec::with_capacity(num_threads);
         let task_count = Arc::new(AtomicUsize::new(0));
+        let stop_flag = Arc::new(AtomicBool::new(false));
         // Threadpool threads
         for _ in 0..num_threads {
-            let tasks = task_pool.clone();
+            let tasks = task_queue.clone();
             let task_num = task_count.clone();
             let ctx = f.create_context();
+            let stop = stop_flag.clone();
             let thread = Builder::new()
                 .name(name.clone())
                 .spawn(move || {
-                    let mut worker = Worker::new(tasks, task_num, ctx);
+                    let mut worker = Worker::new(tasks, task_num, stop, ctx);
                     worker.run();
                 })
                 .unwrap();
@@ -211,10 +129,10 @@ where
         }
 
         ThreadPool {
-            task_pool: task_pool,
+            stop_flag: stop_flag,
+            task_queue: task_queue,
             threads: threads,
             task_count: task_count,
-            sender: sender,
             ctx_factory: f,
         }
     }
@@ -224,12 +142,11 @@ where
         F: FnOnce(Ctx) -> Ctx + Send + 'static,
         Ctx: Context,
     {
+        assert!(!self.stop_flag.load(AtomicOrdering::SeqCst));
         let ctx = self.ctx_factory.create_context();
         let task = Task::new(job, ctx);
-        self.sender.send(task).unwrap();
+        self.task_queue.push(task);
         self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
-        let &(_, ref cvar) = &*self.task_pool;
-        cvar.notify_one();
     }
 
     #[inline]
@@ -238,11 +155,9 @@ where
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        {
-            let &(ref lock, ref cvar) = &*self.task_pool;
-            let mut tasks = lock.lock().unwrap();
-            tasks.stop();
-            cvar.notify_all();
+        self.stop_flag.store(true, AtomicOrdering::SeqCst);
+        while !self.task_queue.is_empty() {
+            let _ = self.task_queue.try_pop();
         }
         let mut err_msg = String::new();
         for t in self.threads.drain(..) {
@@ -258,63 +173,51 @@ where
 }
 
 // Each thread has a worker.
-struct Worker<Q, C> {
-    task_pool: TTaskPool<Q, C>,
+struct Worker<C> {
+    stop_flag: Arc<AtomicBool>,
+    task_queue: Arc<MsQueue<Task<C>>>,
     task_count: Arc<AtomicUsize>,
     ctx: C,
 }
 
-impl<Q, C> Worker<Q, C>
+impl<C> Worker<C>
 where
-    Q: ScheduleQueue<C>,
     C: Context,
 {
-    fn new(task_pool: TTaskPool<Q, C>, task_count: Arc<AtomicUsize>, ctx: C) -> Worker<Q, C> {
+    fn new(
+        task_queue: Arc<MsQueue<Task<C>>>,
+        task_count: Arc<AtomicUsize>,
+        stop_flag: Arc<AtomicBool>,
+        ctx: C,
+    ) -> Worker<C> {
         Worker {
-            task_pool: task_pool,
+            stop_flag: stop_flag,
+            task_queue: task_queue,
             task_count: task_count,
             ctx: ctx,
         }
     }
 
     fn run(&mut self) {
-        let mut task = self.get_next_task(None);
-        // Start the worker. Loop breaks when receive stop message.
-        while let Some(mut t) = task {
-            // Since tikv would be down when any panic happens,
-            // we don't need to process panic case here.
-            t.ctx = (t.task)(t.ctx);
-            self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
-            task = self.get_next_task(Some(t.ctx));
-        }
-    }
-
-    // `get_next_task` return `None` when `task_pool` is stopped.
-    #[inline]
-    fn get_next_task(&mut self, prev_ctx: Option<C>) -> Option<Task<C>> {
-        // try to receive notification.
-        let &(ref lock, ref cvar) = &*self.task_pool;
-        let mut task_pool = lock.lock().unwrap();
-        if prev_ctx.is_some() {
-            let mut ctx = prev_ctx.unwrap();
-            ctx.on_task_finished(&mut self.ctx);
-        }
-        loop {
-            if task_pool.is_stopped() {
-                return None;
+        while !self.stop_flag.load(AtomicOrdering::SeqCst) {
+            match self.task_queue.try_pop() {
+                None => {
+                    sleep(time::Duration::from_millis(WORKER_WAIT_TIME));
+                }
+                Some(mut t) => {
+                    t.ctx.on_task_started(&mut self.ctx);
+                    t.ctx = (t.task)(t.ctx);
+                    t.ctx.on_task_finished(&mut self.ctx);
+                    self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
+                }
             }
-            if let Some(mut task) = task_pool.pop_task() {
-                task.ctx.on_task_started(&mut self.ctx);
-                return Some(task);
-            }
-            task_pool = cvar.wait(task_pool).unwrap();
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{Context, ContextFactory, FifoQueue, ScheduleQueue, Task, ThreadPool};
+    use super::{Context, ContextFactory, ThreadPool};
     use std::time::Duration;
     use std::sync::mpsc::{channel, Sender};
     use std::sync::{Arc, Mutex};
@@ -343,7 +246,7 @@ mod test {
         let name = thd_name!("test_get_task_count");
         let concurrency = 1;
         let f = DummyContextFactory {};
-        let mut task_pool = ThreadPool::new(name, concurrency, FifoQueue::new(), f);
+        let mut task_pool = ThreadPool::new(name, concurrency, f);
         let (tx, rx) = channel();
         let (ftx, frx) = channel();
         let receiver = Arc::new(Mutex::new(rx));
@@ -357,7 +260,9 @@ mod test {
                 let rx = rxer.lock().unwrap();
                 let id = rx.recv_timeout(timeout).unwrap();
                 assert_eq!(id, gid);
+                println!("id: {}", id);
                 ftx.send(true).unwrap();
+                println!("id {} done.", id);
                 ctx
             });
             task_num += 1;
@@ -367,6 +272,7 @@ mod test {
         for gid in 0..group_num {
             tx.send(gid).unwrap();
             frx.recv_timeout(timeout).unwrap();
+            println!("send {} done", gid);
             let left_num = task_pool.get_task_count();
             // current task may be still running.
             assert!(
@@ -376,24 +282,6 @@ mod test {
             task_num -= 1;
         }
         task_pool.stop().unwrap();
-    }
-
-    #[test]
-    fn test_fifo_queue() {
-        let mut queue = FifoQueue::new();
-        let f = DummyContextFactory {};
-        for id in 0..10 {
-            let mut task = Task::new(
-                move |d: DummyContext| -> DummyContext { d },
-                f.create_context(),
-            );
-            task.id = id;
-            queue.push(task);
-        }
-        for id in 0..10 {
-            let task = queue.pop().unwrap();
-            assert_eq!(id, task.id);
-        }
     }
 
     #[test]
@@ -438,7 +326,7 @@ mod test {
 
         let name = thd_name!("test_tasks_with_contexts");
         let concurrency = 5;
-        let mut task_pool = ThreadPool::new(name, concurrency, FifoQueue::new(), f);
+        let mut task_pool = ThreadPool::new(name, concurrency, f);
 
         for _ in 0..10 {
             task_pool.execute(move |ctx: TestContext| -> TestContext { ctx });
