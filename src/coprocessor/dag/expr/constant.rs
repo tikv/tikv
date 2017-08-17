@@ -24,7 +24,7 @@ impl Datum {
             Datum::Null => Ok(None),
             Datum::I64(i) => Ok(Some(i)),
             Datum::U64(u) => Ok(Some(u as i64)),
-            _ => Err(Error::Other("Can't eval_int from Constant")),
+            _ => Err(Error::Other("Can't eval_int from Datum")),
         }
     }
 
