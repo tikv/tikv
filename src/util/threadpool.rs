@@ -11,21 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crossbeam::sync::MsQueue;
-
 use std::usize;
 use std::time;
-use std::sync::Arc;
-use std::thread::{sleep, Builder, JoinHandle};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::fmt::Write;
 
 const WORKER_WAIT_TIME: u64 = 20; // ms
+const DEFAULT_QUEUE_CAPACITY: usize = 1000;
+const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 
 pub trait Context: Send {
-    fn on_task_started(&mut self, worker_ctx: &mut Self);
-    fn on_task_finished(&mut self, worker_ctx: &mut Self);
+    fn on_task_started(&mut self);
+    fn on_task_finished(&mut self);
 }
 
 pub trait ContextFactory<Ctx: Context> {
@@ -33,21 +34,44 @@ pub trait ContextFactory<Ctx: Context> {
 }
 
 pub struct Task<C> {
-    // use Box<FnBox<&mut C> + Send> instead
-    // after https://github.com/rust-lang/rust/issues/25647 solved.
-    task: Box<FnBox(C) -> C + Send>,
-    ctx: C,
+    task: Box<FnBox(&mut C) + Send>,
 }
 
 impl<C: Context> Task<C> {
-    fn new<F>(job: F, ctx: C) -> Task<C>
+    fn new<F>(job: F) -> Task<C>
     where
-        F: FnOnce(C) -> C + Send + 'static,
+        for<'r> F: FnOnce(&'r mut C) + Send + 'static,
     {
         Task {
             task: Box::new(job),
-            ctx: ctx,
         }
+    }
+}
+
+// First in first out queue.
+pub struct FifoQueue<C> {
+    queue: VecDeque<Task<C>>,
+}
+
+impl<C: Context> FifoQueue<C> {
+    fn new() -> FifoQueue<C> {
+        FifoQueue {
+            queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY),
+        }
+    }
+
+    fn push(&mut self, task: Task<C>) {
+        self.queue.push_back(task);
+    }
+
+    fn pop(&mut self) -> Option<Task<C>> {
+        let task = self.queue.pop_front();
+
+        if self.queue.is_empty() && self.queue.capacity() > QUEUE_MAX_CAPACITY {
+            self.queue = VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY);
+        }
+
+        task
     }
 }
 
@@ -55,29 +79,26 @@ impl<C: Context> Task<C> {
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
-pub struct ThreadPool<C, Ctx> {
+pub struct ThreadPool<Ctx> {
     stop_flag: Arc<AtomicBool>,
-    task_queue: Arc<MsQueue<Task<Ctx>>>,
+    task_pool: Arc<(Mutex<FifoQueue<Ctx>>, Condvar)>,
     threads: Vec<JoinHandle<()>>,
     task_count: Arc<AtomicUsize>,
-    // ctx_factory should only be used in one thread
-    ctx_factory: C,
 }
 
-impl<C, Ctx> ThreadPool<C, Ctx>
+impl<Ctx> ThreadPool<Ctx>
 where
     Ctx: Context + 'static,
-    C: ContextFactory<Ctx>,
 {
-    pub fn new(name: String, num_threads: usize, f: C) -> ThreadPool<C, Ctx> {
+    pub fn new<C: ContextFactory<Ctx>>(name: String, num_threads: usize, f: C) -> ThreadPool<Ctx> {
         assert!(num_threads >= 1);
-        let task_queue = Arc::new(MsQueue::new());
+        let task_pool = Arc::new((Mutex::new(FifoQueue::new()), Condvar::new()));
         let mut threads = Vec::with_capacity(num_threads);
         let task_count = Arc::new(AtomicUsize::new(0));
         let stop_flag = Arc::new(AtomicBool::new(false));
         // Threadpool threads
         for _ in 0..num_threads {
-            let tasks = task_queue.clone();
+            let tasks = task_pool.clone();
             let task_num = task_count.clone();
             let ctx = f.create_context();
             let stop = stop_flag.clone();
@@ -92,23 +113,28 @@ where
         }
 
         ThreadPool {
+            task_pool: task_pool,
             stop_flag: stop_flag,
-            task_queue: task_queue,
             threads: threads,
             task_count: task_count,
-            ctx_factory: f,
         }
     }
 
     pub fn execute<F>(&mut self, job: F)
     where
-        F: FnOnce(Ctx) -> Ctx + Send + 'static,
+        F: FnOnce(&mut Ctx) + Send + 'static,
         Ctx: Context,
     {
-        assert!(!self.stop_flag.load(AtomicOrdering::SeqCst));
-        let ctx = self.ctx_factory.create_context();
-        let task = Task::new(job, ctx);
-        self.task_queue.push(task);
+        if self.stop_flag.load(AtomicOrdering::SeqCst) {
+            return;
+        }
+        let task = Task::new(job);
+        let &(ref lock, ref cvar) = &*self.task_pool;
+        {
+            let mut queue = lock.lock().unwrap();
+            queue.push(task);
+        }
+        cvar.notify_one();
         self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
     }
 
@@ -119,9 +145,8 @@ where
 
     pub fn stop(&mut self) -> Result<(), String> {
         self.stop_flag.store(true, AtomicOrdering::SeqCst);
-        while !self.task_queue.is_empty() {
-            let _ = self.task_queue.try_pop();
-        }
+        let &(_, ref cvar) = &*self.task_pool;
+        cvar.notify_all();
         let mut err_msg = String::new();
         for t in self.threads.drain(..) {
             if let Err(e) = t.join() {
@@ -138,7 +163,7 @@ where
 // Each thread has a worker.
 struct Worker<C> {
     stop_flag: Arc<AtomicBool>,
-    task_queue: Arc<MsQueue<Task<C>>>,
+    task_pool: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
     task_count: Arc<AtomicUsize>,
     ctx: C,
 }
@@ -148,31 +173,40 @@ where
     C: Context,
 {
     fn new(
-        task_queue: Arc<MsQueue<Task<C>>>,
+        task_queue: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
         task_count: Arc<AtomicUsize>,
         stop_flag: Arc<AtomicBool>,
         ctx: C,
     ) -> Worker<C> {
         Worker {
             stop_flag: stop_flag,
-            task_queue: task_queue,
+            task_pool: task_queue,
             task_count: task_count,
             ctx: ctx,
         }
     }
 
+    fn get_task_timeout(&mut self, timeout: time::Duration) -> Option<Task<C>> {
+        let &(ref lock, ref cvar) = &*self.task_pool;
+        let mut task_pool = lock.lock().unwrap();
+
+        if let Some(task) = (*task_pool).pop() {
+            return Some(task);
+        }
+        let (mut task_pool, _) = cvar.wait_timeout(task_pool, timeout).unwrap();
+        if let Some(task) = (*task_pool).pop() {
+            return Some(task);
+        }
+        None
+    }
+
     fn run(&mut self) {
         while !self.stop_flag.load(AtomicOrdering::SeqCst) {
-            match self.task_queue.try_pop() {
-                None => {
-                    sleep(time::Duration::from_millis(WORKER_WAIT_TIME));
-                }
-                Some(mut t) => {
-                    t.ctx.on_task_started(&mut self.ctx);
-                    t.ctx = (t.task)(t.ctx);
-                    t.ctx.on_task_finished(&mut self.ctx);
-                    self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
-                }
+            if let Some(t) = self.get_task_timeout(time::Duration::from_millis(WORKER_WAIT_TIME)) {
+                self.ctx.on_task_started();
+                (t.task).call_once((&mut self.ctx,));
+                self.ctx.on_task_finished();
+                self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
             }
         }
     }
@@ -192,8 +226,8 @@ mod test {
     unsafe impl Send for DummyContext {}
 
     impl Context for DummyContext {
-        fn on_task_started(&mut self, _: &mut DummyContext) {}
-        fn on_task_finished(&mut self, _: &mut DummyContext) {}
+        fn on_task_started(&mut self) {}
+        fn on_task_finished(&mut self) {}
     }
 
     struct DummyContextFactory {}
@@ -219,12 +253,11 @@ mod test {
         for gid in 0..group_num {
             let rxer = receiver.clone();
             let ftx = ftx.clone();
-            task_pool.execute(move |ctx: DummyContext| -> DummyContext {
+            task_pool.execute(move |_: &mut DummyContext| {
                 let rx = rxer.lock().unwrap();
                 let id = rx.recv_timeout(timeout).unwrap();
                 assert_eq!(id, gid);
                 ftx.send(true).unwrap();
-                ctx
             });
             task_num += 1;
             assert_eq!(task_pool.get_task_count(), task_num);
@@ -254,10 +287,10 @@ mod test {
         unsafe impl Send for TestContext {}
 
         impl Context for TestContext {
-            fn on_task_started(&mut self, _: &mut Self) {
+            fn on_task_started(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
             }
-            fn on_task_finished(&mut self, _: &mut Self) {
+            fn on_task_finished(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
                 self.tx.send(self.counter.load(Ordering::SeqCst)).unwrap();
             }
@@ -289,7 +322,7 @@ mod test {
         let mut task_pool = ThreadPool::new(name, concurrency, f);
 
         for _ in 0..10 {
-            task_pool.execute(move |ctx: TestContext| -> TestContext { ctx });
+            task_pool.execute(move |_: &mut TestContext| {});
         }
         let mut fin: isize = -1;
         let mut count = 0;

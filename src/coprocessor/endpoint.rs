@@ -65,9 +65,9 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<DummyContextFactory, DummyContext>,
-    low_priority_pool: ThreadPool<DummyContextFactory, DummyContext>,
-    high_priority_pool: ThreadPool<DummyContextFactory, DummyContext>,
+    pool: ThreadPool<DummyContext>,
+    low_priority_pool: ThreadPool<DummyContext>,
+    high_priority_pool: ThreadPool<DummyContext>,
     max_running_task_count: usize,
 }
 
@@ -78,8 +78,8 @@ struct DummyContext {}
 unsafe impl Send for DummyContext {}
 
 impl Context for DummyContext {
-    fn on_task_started(&mut self, _: &mut Self) {}
-    fn on_task_finished(&mut self, _: &mut Self) {}
+    fn on_task_started(&mut self) {}
+    fn on_task_finished(&mut self) {}
 }
 
 struct DummyContextFactory {}
@@ -317,32 +317,27 @@ impl BatchRunnable<Task> for Host {
                         let end_point = TiDbEndPoint::new(snap.clone());
 
                         if pri == CommandPri::Low {
-                            self.low_priority_pool.execute(
-                                move |ctx: DummyContext| -> DummyContext {
-                                    end_point.handle_request(req);
-                                    COPR_PENDING_REQS
-                                        .with_label_values(&[type_str, pri_str])
-                                        .dec();
-                                    ctx
-                                },
-                            );
-                        } else if pri == CommandPri::High {
-                            self.high_priority_pool.execute(
-                                move |ctx: DummyContext| -> DummyContext {
-                                    end_point.handle_request(req);
-                                    COPR_PENDING_REQS
-                                        .with_label_values(&[type_str, pri_str])
-                                        .dec();
-                                    ctx
-                                },
-                            );
-                        } else {
-                            self.pool.execute(move |ctx: DummyContext| -> DummyContext {
+                            self.low_priority_pool.execute(move |_: &mut DummyContext| {
                                 end_point.handle_request(req);
                                 COPR_PENDING_REQS
                                     .with_label_values(&[type_str, pri_str])
                                     .dec();
-                                ctx
+                            });
+                        } else if pri == CommandPri::High {
+                            self.high_priority_pool.execute(
+                                move |_: &mut DummyContext| {
+                                    end_point.handle_request(req);
+                                    COPR_PENDING_REQS
+                                        .with_label_values(&[type_str, pri_str])
+                                        .dec();
+                                },
+                            );
+                        } else {
+                            self.pool.execute(move |_: &mut DummyContext| {
+                                end_point.handle_request(req);
+                                COPR_PENDING_REQS
+                                    .with_label_values(&[type_str, pri_str])
+                                    .dec();
                             });
                         }
                     }
