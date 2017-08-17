@@ -430,12 +430,13 @@ impl FnCall {
         Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
-    pub fn cast_int_as_time(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Time>>> {
-        unimplemented!()
+    pub fn cast_int_as_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
+        let val = try!(self.children[0].eval_int(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = format!("{}", val.unwrap());
+        Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
     pub fn cast_real_as_time(
@@ -672,5 +673,15 @@ impl FnCall {
             return Ok(ret);
         }
         Ok(s.into_bytes())
+    }
+
+    fn produce_time_with_str(&self, ctx: &StatementContext, s: String) -> Result<Time> {
+        let mut t = try!(Time::parse_datetime(
+            s.as_ref(),
+            self.tp.get_decimal() as i8,
+            &ctx.tz
+        ));
+        try!(t.set_tp(self.tp.get_tp() as u8));
+        Ok(t)
     }
 }

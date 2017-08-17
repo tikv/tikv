@@ -128,6 +128,25 @@ impl Time {
         self.tp
     }
 
+    pub fn set_tp(&mut self, tp: u8) -> Result<()> {
+        if self.tp != tp && tp == types::DATE {
+            // Truncate hh:mm::ss part if the type is Date
+            self.time = try!(ymd_hms_nanos(
+                &self.time.timezone(),
+                self.time.year(),
+                self.time.month(),
+                self.time.day(),
+                0,
+                0,
+                0,
+                0
+            ));
+            self.fsp = 0;
+        }
+        self.tp = tp;
+        Ok(())
+    }
+
     pub fn is_zero(&self) -> bool {
         self.time.timestamp() == ZERO_TIMESTAMP
     }
@@ -330,7 +349,7 @@ impl Time {
     }
 
     pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
-        if self.tp == types::DATETIME || self.is_zero() {
+        if self.tp == types::DATE || self.is_zero() {
             // date type has no fsp
             return Ok(());
         }
@@ -752,6 +771,22 @@ mod test {
                     expect
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_set_tp() {
+        let cases = vec![
+            ("2011-11-11 10:10:10.123456", "2011-11-11"),
+            ("  2011-11-11 23:59:59", "2011-11-11"),
+        ];
+
+        for (s, exp) in cases {
+            let mut res = Time::parse_utc_datetime(s, UN_SPECIFIED_FSP).unwrap();
+            res.set_tp(types::DATE).unwrap();
+            res.set_tp(types::DATETIME).unwrap();
+            let ep = Time::parse_utc_datetime(exp, 0).unwrap();
+            assert_eq!(res, ep);
         }
     }
 }
