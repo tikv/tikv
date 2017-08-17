@@ -279,6 +279,7 @@ impl Instant {
     // The processors in an SMP system do not start all at exactly the same time
     // and therefore the timer registers are typically running at an offset.
     // Use millisecond resolution for ignoring the error and warn instead of panic.
+    // See more: https://linux.die.net/man/2/clock_gettime
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
         let later_ms =
             later.sec * MILLISECOND_PER_SECOND + later.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
