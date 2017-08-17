@@ -10,10 +10,9 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-// FIXME(shirly): remove following later
 
 use tipb::expression::ScalarFuncSig;
-use super::{FnCall, Result, Error};
+use super::{Error, FnCall, Result};
 
 impl FnCall {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {

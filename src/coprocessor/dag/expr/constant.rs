@@ -123,7 +123,6 @@ impl Constant {
 #[cfg(test)]
 mod test {
     use std::u64;
-    use std::convert::TryFrom;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::dag::expr::{Expression, StatementContext};
@@ -168,7 +167,7 @@ mod test {
 
         let ctx = StatementContext::default();
         for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
-            let e = Expression::try_from(case).unwrap();
+            let e = Expression::build(case, 0).unwrap();
 
             let i = e.eval_int(&ctx, &[]).unwrap_or(None);
             let r = e.eval_real(&ctx, &[]).unwrap_or(None);

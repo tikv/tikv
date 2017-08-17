@@ -21,7 +21,6 @@ mod fncall;
 
 use std::io;
 use std::borrow::Cow;
-use std::convert::TryFrom;
 use std::string::FromUtf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
@@ -271,7 +270,7 @@ impl Expression {
 }
 
 impl Expression {
-    fn build(mut expr: Expr, row_size: usize) -> Result<Self> {
+    fn build(mut expr: Expr, row_len: usize) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -306,10 +305,13 @@ impl Expression {
                 .map_err(Error::from),
             // TODO(andelf): fn sig verification
             ExprType::ScalarFunc => {
-                try!(FnCall::check_args(expr.get_sig(), expr.get_children().len()));
+                try!(FnCall::check_args(
+                    expr.get_sig(),
+                    expr.get_children().len()
+                ));
                 expr.take_children()
                     .into_iter()
-                    .map(Expression::try_from)
+                    .map(|child| Expression::build(child, row_len))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
@@ -320,31 +322,15 @@ impl Expression {
                     })
             }
             ExprType::ColumnRef => {
-                let offset = expr.get_val().decode_i64() as usize;
-                expr.get_val()
-                .decode_i64()
-                .map(|i| {
-                    Expression::ColumnRef(Column {
-                        offset: i as usize,
-                        tp: tp,
-                    })
-                })
-                .map_err(Error::from),
+                let offset = try!(expr.get_val().decode_i64().map_err(Error::from)) as usize;
+                try!(Column::check_offset(offset, row_len));
+                let column = Column {
+                    offset: offset,
+                    tp: tp,
+                };
+                Ok(Expression::ColumnRef(column))
             }
             unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
         }
     }
-}
-
-#[test]
-fn test_smoke() {
-    use std::convert::TryInto;
-    use util::codec::number::NumberEncoder;
-
-    let mut pb = Expr::new();
-    pb.set_tp(ExprType::ColumnRef);
-    pb.mut_val().encode_i64(1).unwrap();
-
-    let e: Result<Expression> = pb.try_into();
-    let _ = e.unwrap();
 }
