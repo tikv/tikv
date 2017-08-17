@@ -15,19 +15,20 @@
 
 mod column;
 mod constant;
+mod fncall;
 mod builtin_cast;
 mod compare;
 use self::compare::CmpOp;
 
 use std::io;
 use std::borrow::Cow;
-use std::convert::TryFrom;
 use std::string::FromUtf8Error;
 
-use tipb::expression::{DataType, Expr, ExprType, FieldType, ScalarFuncSig};
+use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
+use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
 use util;
 use util::codec::number::NumberDecoder;
@@ -258,8 +259,8 @@ impl Expression {
     /// For example, when convert `0b101` to int, the result should be 5, but we will get
     /// 101 if we regard it as a string.
     fn is_hybrid_type(&self) -> bool {
-        match self.get_tp().get_tp() {
-            DataType::TypeEnum | DataType::TypeBit | DataType::TypeSet => {
+        match self.get_tp().get_tp() as u8 {
+            types::ENUM | types::BIT | types::SET => {
                 return true;
             }
             _ => {}
@@ -270,11 +271,8 @@ impl Expression {
     }
 }
 
-impl TryFrom<Expr> for Expression {
-    type Error = Error;
-
-    fn try_from(expr: Expr) -> ::std::result::Result<Expression, Self::Error> {
-        let mut expr = expr;
+impl Expression {
+    fn build(mut expr: Expr, row_len: usize) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -307,50 +305,83 @@ impl TryFrom<Expr> for Expression {
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            // TODO(andelf): fn sig verification
             ExprType::ScalarFunc => {
-                let sig = expr.get_sig();
-                let mut expr = expr;
+                try!(FnCall::check_args(
+                    expr.get_sig(),
+                    expr.get_children().len()
+                ));
                 expr.take_children()
                     .into_iter()
-                    .map(Expression::try_from)
+                    .map(|child| Expression::build(child, row_len))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
-                            sig: sig,
+                            sig: expr.get_sig(),
                             children: children,
                             tp: tp,
                         })
                     })
             }
-            ExprType::ColumnRef => expr.get_val()
-                .decode_i64()
-                .map(|i| {
-                    Expression::ColumnRef(Column {
-                        offset: i as usize,
-                        tp: tp,
-                    })
-                })
-                .map_err(Error::from),
+            ExprType::ColumnRef => {
+                let offset = try!(expr.get_val().decode_i64().map_err(Error::from)) as usize;
+                try!(Column::check_offset(offset, row_len));
+                let column = Column {
+                    offset: offset,
+                    tp: tp,
+                };
+                Ok(Expression::ColumnRef(column))
+            }
             unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
         }
     }
 }
 
-#[test]
-fn test_smoke() {
-    use std::convert::TryInto;
-    use util::codec::number::NumberEncoder;
-
-    let mut pb = Expr::new();
-    pb.set_tp(ExprType::ColumnRef);
-    pb.mut_val().encode_i64(1).unwrap();
-
-    let e: Result<Expression> = pb.try_into();
-    let _ = e.unwrap();
-}
-
 #[cfg(test)]
 mod test {
-    pub use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
+    use coprocessor::codec::Datum;
+    use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
+    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+    use super::Expression;
+
+    pub fn fncall_expr(sig: ScalarFuncSig, ft: FieldType, children: &[Expr]) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(sig);
+        expr.set_field_type(ft);
+        for child in children {
+            expr.mut_children().push(child.clone());
+        }
+        expr
+    }
+
+    #[test]
+    fn test_expression_build() {
+        let colref = col_expr(1);
+        let constant = datum_expr(Datum::Null);
+
+        let tests = vec![
+            (colref.clone(), 1, false),
+            (colref.clone(), 2, true),
+            (constant.clone(), 0, true),
+            (
+                fncall_expr(
+                    ScalarFuncSig::LTInt,
+                    FieldType::new(),
+                    &[colref.clone(), constant.clone()],
+                ),
+                2,
+                true,
+            ),
+            (
+                fncall_expr(ScalarFuncSig::LTInt, FieldType::new(), &[colref.clone()]),
+                0,
+                false,
+            ),
+        ];
+
+        for tt in tests.into_iter() {
+            let expr = Expression::build(tt.0, tt.1);
+            assert_eq!(expr.is_ok(), tt.2);
+        }
+    }
 }

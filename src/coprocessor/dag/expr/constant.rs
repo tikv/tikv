@@ -24,7 +24,7 @@ impl Datum {
             Datum::Null => Ok(None),
             Datum::I64(i) => Ok(Some(i)),
             Datum::U64(u) => Ok(Some(u as i64)),
-            _ => Err(Error::Other("Can't eval_int from Constant")),
+            _ => Err(Error::Other("Can't eval_int from Datum")),
         }
     }
 
@@ -123,11 +123,10 @@ impl Constant {
 #[cfg(test)]
 mod test {
     use std::u64;
-    use std::convert::TryFrom;
-    use super::super::{Expression, StatementContext};
-    use super::super::test::datum_expr;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use coprocessor::dag::expr::{Expression, StatementContext};
+    use coprocessor::select::xeval::evaluator::test::datum_expr;
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
@@ -168,7 +167,7 @@ mod test {
 
         let ctx = StatementContext::default();
         for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
-            let e = Expression::try_from(case).unwrap();
+            let e = Expression::build(case, 0).unwrap();
 
             let i = e.eval_int(&ctx, &[]).unwrap_or(None);
             let r = e.eval_real(&ctx, &[]).unwrap_or(None);

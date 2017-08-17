@@ -29,11 +29,13 @@ fn main() {
 }
 
 // build_info returns a string of commit hash and utc time.
+// TODO: use serde.
 fn build_info() -> String {
     // explicit separates outputs by '\n'.
     format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         commit_hash().trim_right(),
+        branch_info().trim_right(),
         utc_time(),
         rustc_version()
     )
@@ -47,6 +49,15 @@ fn utc_time() -> String {
 fn commit_hash() -> String {
     let mut cmd = Command::new("git");
     cmd.args(&["rev-parse", "HEAD"]);
+    cmd.output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or("None".to_owned())
+}
+
+fn branch_info() -> String {
+    let mut cmd = Command::new("git");
+    cmd.args(&["rev-parse", "--abbrev-ref", "HEAD"]);
     cmd.output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())

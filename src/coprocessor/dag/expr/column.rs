@@ -19,52 +19,45 @@ use super::{Column, Error, Result};
 
 impl Column {
     #[inline]
-    fn check_offset(&self, row: &[Datum]) -> Result<()> {
-        if self.offset >= row.len() {
-            return Err(Error::ColumnOffset(self.offset));
+    pub fn check_offset(offset: usize, row_len: usize) -> Result<()> {
+        if offset >= row_len {
+            return Err(Error::ColumnOffset(offset));
         }
         Ok(())
     }
 
     #[inline]
     pub fn eval_int(&self, row: &[Datum]) -> Result<Option<i64>> {
-        try!(self.check_offset(row));
         row[self.offset].as_int()
     }
 
     #[inline]
     pub fn eval_real(&self, row: &[Datum]) -> Result<Option<f64>> {
-        try!(self.check_offset(row));
         row[self.offset].as_real()
     }
 
     #[inline]
     pub fn eval_decimal<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Decimal>>> {
-        try!(self.check_offset(row));
         row[self.offset].as_decimal()
     }
 
     #[inline]
     pub fn eval_string<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        try!(self.check_offset(row));
         row[self.offset].as_string()
     }
 
     #[inline]
     pub fn eval_time<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Time>>> {
-        try!(self.check_offset(row));
         row[self.offset].as_time()
     }
 
     #[inline]
     pub fn eval_duration<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Duration>>> {
-        try!(self.check_offset(row));
         row[self.offset].as_duration()
     }
 
     #[inline]
     pub fn eval_json<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Json>>> {
-        try!(self.check_offset(row));
         row[self.offset].as_json()
     }
 }
@@ -72,11 +65,10 @@ impl Column {
 #[cfg(test)]
 mod test {
     use std::u64;
-    use std::convert::TryFrom;
-    use super::super::{Expression, StatementContext};
-    use super::super::test::col_expr;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use coprocessor::dag::expr::{Expression, StatementContext};
+    use coprocessor::select::xeval::evaluator::test::col_expr;
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
@@ -118,7 +110,7 @@ mod test {
         let ctx = StatementContext::default();
         for ii in 0..row.len() {
             let c = col_expr(ii as i64);
-            let e = Expression::try_from(c).unwrap();
+            let e = Expression::build(c, row.len()).unwrap();
 
             let i = e.eval_int(&ctx, &row).unwrap_or(None);
             let r = e.eval_real(&ctx, &row).unwrap_or(None);

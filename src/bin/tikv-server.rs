@@ -164,7 +164,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
-        cfg.raft_store.use_sst_file_snapshot,
     );
     let mut server = Server::new(
         &cfg.server,
@@ -273,11 +272,13 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
 
 fn main() {
     let long_version: String = {
-        let (hash, time, rust_ver) = util::build_info();
+        let (hash, branch, time, rust_ver) = util::build_info();
         format!(
-            "{}\nGit Commit Hash: {}\nUTC Build Time:  {}\nRust Version:    {}",
+            "{}\nGit Commit Hash:   {}\nGit Commit Branch: {}\nUTC Build Time:    {}\nRust \
+             Version:      {}",
             crate_version!(),
             hash,
+            branch,
             time,
             rust_ver
         )
