@@ -243,7 +243,7 @@ mod tests {
             router,
             snapshot_status_sender,
             MockResolver { addr: addr.clone() },
-            SnapManager::new("", None, true),
+            SnapManager::new("", None),
         ).unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 
