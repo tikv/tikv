@@ -24,7 +24,7 @@ use util::collections::{HashMap, HashMapEntry};
 
 use coprocessor::codec;
 use coprocessor::codec::datum::{Datum, DatumDecoder};
-use coprocessor::codec::mysql::{DecimalDecoder, Duration, Json, ModifyType, PathExpression,
+use coprocessor::codec::mysql::{DecimalDecoder, Duration, Json, ModifyType, PathExpression, Time,
                                 MAX_FSP};
 use coprocessor::codec::mysql::json::{json_array, json_object};
 use super::{Error, Result};
@@ -124,6 +124,7 @@ impl Evaluator {
             ExprType::Float32 | ExprType::Float64 => self.eval_float(expr),
             ExprType::MysqlDuration => self.eval_duration(expr),
             ExprType::MysqlDecimal => self.eval_decimal(expr),
+            ExprType::MysqlTime => self.eval_time(ctx, expr),
             ExprType::In => self.eval_in(ctx, expr),
             ExprType::Plus => self.eval_arith(ctx, expr, Datum::checked_add),
             ExprType::Div => self.eval_arith(ctx, expr, Datum::checked_div),
@@ -176,6 +177,17 @@ impl Evaluator {
     fn eval_decimal(&self, expr: &Expr) -> Result<Datum> {
         let d = try!(expr.get_val().decode_decimal());
         Ok(Datum::Dec(d))
+    }
+
+    fn eval_time(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let d = try!(expr.get_val().decode_u64());
+        let t = try!(Time::from_packed_u64(
+            d,
+            expr.get_field_type().get_tp() as u8,
+            expr.get_field_type().get_decimal() as i8,
+            &ctx.tz
+        ));
+        Ok(Datum::Time(t))
     }
 
     fn eval_column_ref(&self, expr: &Expr) -> Result<Datum> {
@@ -668,6 +680,7 @@ pub mod test {
     use util::codec::number::{self, NumberEncoder};
     use coprocessor::codec::{datum, Datum};
     use coprocessor::codec::mysql::{self, Decimal, DecimalEncoder, Duration, MAX_FSP};
+    use tipb::expression::FieldType;
 
     use std::i32;
 
@@ -711,6 +724,17 @@ pub mod test {
                 let (prec, frac) = d.prec_and_frac();
                 let mut buf = Vec::with_capacity(mysql::dec_encoded_len(&[prec, frac]).unwrap());
                 buf.encode_decimal(&d, prec, frac).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Time(t) => {
+                expr.set_tp(ExprType::MysqlTime);
+                let mut ft = FieldType::new();
+                ft.set_tp(t.get_tp() as i32);
+                ft.set_decimal(t.get_fsp() as i32);
+                expr.set_field_type(ft);
+                let u = t.to_packed_u64();
+                let mut buf = Vec::with_capacity(number::U64_SIZE);
+                buf.encode_u64(u).unwrap();
                 expr.set_val(buf);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
@@ -820,6 +844,16 @@ pub mod test {
             (datum_expr(Datum::F64(1.1)), Datum::F64(1.1)),
             (datum_expr(Datum::I64(1)), Datum::I64(1)),
             (datum_expr(Datum::U64(1)), Datum::U64(1)),
+            (
+                datum_expr(
+                    Time::parse_utc_datetime("19910905111111", 0)
+                        .unwrap()
+                        .into(),
+                ),
+                Time::parse_utc_datetime("1991-09-05 11:11:11.001", 0)
+                    .unwrap()
+                    .into(),
+            ),
             (datum_expr(b"abc".as_ref().into()), b"abc".as_ref().into()),
             (datum_expr(Datum::Null), Datum::Null),
             (

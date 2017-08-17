@@ -17,16 +17,18 @@ mod column;
 mod constant;
 mod builtin_cast;
 mod compare;
+mod fncall;
 
 use std::io;
 use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::string::FromUtf8Error;
 
-use tipb::expression::{DataType, Expr, ExprType, FieldType, ScalarFuncSig};
+use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
+use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
 use util;
 use util::codec::number::NumberDecoder;
@@ -256,8 +258,8 @@ impl Expression {
     /// For example, when convert `0b101` to int, the result should be 5, but we will get
     /// 101 if we regard it as a string.
     fn is_hybrid_type(&self) -> bool {
-        match self.get_tp().get_tp() {
-            DataType::TypeEnum | DataType::TypeBit | DataType::TypeSet => {
+        match self.get_tp().get_tp() as u8 {
+            types::ENUM | types::BIT | types::SET => {
                 return true;
             }
             _ => {}
@@ -268,11 +270,8 @@ impl Expression {
     }
 }
 
-impl TryFrom<Expr> for Expression {
-    type Error = Error;
-
-    fn try_from(expr: Expr) -> ::std::result::Result<Expression, Self::Error> {
-        let mut expr = expr;
+impl Expression {
+    fn build(mut expr: Expr, row_size: usize) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -307,21 +306,22 @@ impl TryFrom<Expr> for Expression {
                 .map_err(Error::from),
             // TODO(andelf): fn sig verification
             ExprType::ScalarFunc => {
-                let sig = expr.get_sig();
-                let mut expr = expr;
+                try!(FnCall::check_args(expr.get_sig(), expr.get_children().len()));
                 expr.take_children()
                     .into_iter()
                     .map(Expression::try_from)
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
-                            sig: sig,
+                            sig: expr.get_sig(),
                             children: children,
                             tp: tp,
                         })
                     })
             }
-            ExprType::ColumnRef => expr.get_val()
+            ExprType::ColumnRef => {
+                let offset = expr.get_val().decode_i64() as usize;
+                expr.get_val()
                 .decode_i64()
                 .map(|i| {
                     Expression::ColumnRef(Column {
@@ -330,6 +330,7 @@ impl TryFrom<Expr> for Expression {
                     })
                 })
                 .map_err(Error::from),
+            }
             unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
         }
     }
