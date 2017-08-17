@@ -130,27 +130,31 @@ impl Host {
             let end_point = TiDbEndPoint::new(snap.clone());
             let txn_id = req.start_ts.unwrap_or_default();
 
-            if pri == CommandPri::Low {
-                self.low_priority_pool.execute(txn_id, move || {
-                    end_point.handle_request(req);
-                    COPR_PENDING_REQS
-                        .with_label_values(&[type_str, pri_str])
-                        .dec();
-                });
-            } else if pri == CommandPri::High {
-                self.high_priority_pool.execute(txn_id, move || {
-                    end_point.handle_request(req);
-                    COPR_PENDING_REQS
-                        .with_label_values(&[type_str, pri_str])
-                        .dec();
-                });
-            } else {
-                self.pool.execute(txn_id, move || {
-                    end_point.handle_request(req);
-                    COPR_PENDING_REQS
-                        .with_label_values(&[type_str, pri_str])
-                        .dec();
-                });
+            match pri {
+                CommandPri::Low => {
+                    self.low_priority_pool.execute(txn_id, move || {
+                        end_point.handle_request(req);
+                        COPR_PENDING_REQS
+                            .with_label_values(&[type_str, pri_str])
+                            .dec();
+                    });
+                }
+                CommandPri::High => {
+                    self.high_priority_pool.execute(txn_id, move || {
+                        end_point.handle_request(req);
+                        COPR_PENDING_REQS
+                            .with_label_values(&[type_str, pri_str])
+                            .dec();
+                    });
+                }
+                CommandPri::Normal => {
+                    self.pool.execute(txn_id, move || {
+                        end_point.handle_request(req);
+                        COPR_PENDING_REQS
+                            .with_label_values(&[type_str, pri_str])
+                            .dec();
+                    });
+                }
             }
         }
     }
@@ -168,10 +172,7 @@ impl Display for Task {
         match *self {
             Task::Request(ref req) => write!(f, "{}", req),
             Task::SnapRes(req_id, _) => write!(f, "snapres [{}]", req_id),
-            Task::BatchSnapRes(ref batch) => {
-                let ids: Vec<u64> = batch.iter().map(|&(id, _)| id).collect();
-                write!(f, "batch snapres {:?}", ids)
-            }
+            Task::BatchSnapRes(_) => write!(f, "batch snapres"),
             Task::RetryRequests(ref retry) => write!(f, "retry on task ids: {:?}", retry),
         }
     }
