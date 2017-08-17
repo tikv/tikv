@@ -24,6 +24,12 @@ impl rocksdb::EventListener for EventListener {
 
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC.with_label_values(&[info.cf_name(), "compaction"]).inc();
+        STORE_ENGINE_COMPACTION_DURATIONS_VEC
+            .with_label_values(&[info.cf_name()])
+            .observe(info.elapsed_micros() as f64 / 1_000_000.0);
+        STORE_ENGINE_COMPACTION_NUM_CORRUPT_KEYS_VEC
+            .with_label_values(&[info.cf_name()])
+            .inc_by(info.num_corrupt_keys() as f64).unwrap();
     }
 
     fn on_external_file_ingested(&self, info: &IngestionInfo) {
