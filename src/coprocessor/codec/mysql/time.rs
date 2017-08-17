@@ -141,7 +141,6 @@ impl Time {
                 0,
                 0
             ));
-            self.fsp = 0;
         }
         self.tp = tp;
         Ok(())
@@ -785,7 +784,7 @@ mod test {
             let mut res = Time::parse_utc_datetime(s, UN_SPECIFIED_FSP).unwrap();
             res.set_tp(types::DATE).unwrap();
             res.set_tp(types::DATETIME).unwrap();
-            let ep = Time::parse_utc_datetime(exp, 0).unwrap();
+            let ep = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
             assert_eq!(res, ep);
         }
     }

@@ -439,20 +439,26 @@ impl FnCall {
         Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
-    pub fn cast_real_as_time(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Time>>> {
-        unimplemented!()
+    pub fn cast_real_as_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
+        let val = try!(self.children[0].eval_real(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = format!("{}", val.unwrap());
+        Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
     pub fn cast_decimal_as_time(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Time>>> {
-        unimplemented!()
+    ) -> Result<Option<Time>> {
+        let val = try!(self.children[0].eval_decimal(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = val.unwrap().to_string();
+        Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
     pub fn cast_str_as_time(
@@ -676,6 +682,7 @@ impl FnCall {
     }
 
     fn produce_time_with_str(&self, ctx: &StatementContext, s: String) -> Result<Time> {
+        // TODO: it's a bug in tidb do not care tz here
         let mut t = try!(Time::parse_datetime(
             s.as_ref(),
             self.tp.get_decimal() as i8,
