@@ -303,7 +303,6 @@ impl Expression {
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            // TODO(andelf): fn sig verification
             ExprType::ScalarFunc => {
                 try!(FnCall::check_args(
                     expr.get_sig(),
@@ -339,11 +338,12 @@ impl Expression {
 mod test {
     use coprocessor::codec::Datum;
     use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
-    use tipb::expression::{Expr, FieldType, ScalarFuncSig};
+    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use super::Expression;
 
     pub fn fncall_expr(sig: ScalarFuncSig, ft: FieldType, children: &[Expr]) -> Expr {
         let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(sig);
         expr.set_field_type(ft);
         for child in children {
@@ -367,7 +367,7 @@ mod test {
                     FieldType::new(),
                     &[colref.clone(), constant.clone()],
                 ),
-                0,
+                2,
                 true,
             ),
             (
