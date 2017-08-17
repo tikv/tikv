@@ -330,7 +330,7 @@ impl Time {
     }
 
     pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
-        if self.tp == types::DATETIME || self.is_zero() {
+        if self.tp == types::DATE || self.is_zero() {
             // date type has no fsp
             return Ok(());
         }
