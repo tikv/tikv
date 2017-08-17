@@ -15,6 +15,7 @@ use std::usize;
 use std::time::{Duration, Instant};
 use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
+
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
 use tipb::schema::ColumnInfo;
 use protobuf::Message as PbMsg;
@@ -28,6 +29,7 @@ use util::collections::HashMap;
 use util::threadpool::{FifoQueue, ThreadPool};
 use server::OnResponse;
 use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
+use storage::engine::Error as EngineError;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
@@ -101,11 +103,53 @@ impl Host {
         self.pool.get_task_count() + self.low_priority_pool.get_task_count() +
             self.high_priority_pool.get_task_count()
     }
+
+    fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
+        let reqs = self.reqs.remove(&id).unwrap();
+        let snap = match snapshot {
+            Ok(s) => s,
+            Err(e) => {
+                notify_batch_failed(e, reqs);
+                return;
+            }
+        };
+
+        if self.running_task_count() >= self.max_running_task_count {
+            notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
+            return;
+        }
+
+
+        for req in reqs {
+            let pri = req.priority();
+            let pri_str = get_req_pri_str(pri);
+            let type_str = get_req_type_str(req.req.get_tp());
+            COPR_PENDING_REQS
+                .with_label_values(&[type_str, pri_str])
+                .add(1.0);
+            let end_point = TiDbEndPoint::new(snap.clone());
+            let txn_id = req.start_ts.unwrap_or_default();
+
+            let pool = match pri {
+                CommandPri::Low => &mut self.low_priority_pool,
+                CommandPri::High => &mut self.high_priority_pool,
+                CommandPri::Normal => &mut self.pool,
+            };
+            pool.execute(txn_id, move || {
+                end_point.handle_request(req);
+                COPR_PENDING_REQS
+                    .with_label_values(&[type_str, pri_str])
+                    .dec();
+            });
+        }
+    }
 }
 
 pub enum Task {
     Request(RequestTask),
     SnapRes(u64, engine::Result<Box<Snapshot>>),
+    BatchSnapRes(Vec<(u64, engine::Result<Box<Snapshot>>)>),
+    RetryRequests(Vec<u64>),
 }
 
 impl Display for Task {
@@ -113,6 +157,8 @@ impl Display for Task {
         match *self {
             Task::Request(ref req) => write!(f, "{}", req),
             Task::SnapRes(req_id, _) => write!(f, "snapres [{}]", req_id),
+            Task::BatchSnapRes(_) => write!(f, "batch snapres"),
+            Task::RetryRequests(ref retry) => write!(f, "retry on task ids: {:?}", retry),
         }
     }
 }
@@ -273,68 +319,79 @@ impl BatchRunnable<Task> for Host {
                     group.push(req);
                 }
                 Task::SnapRes(q_id, snap_res) => {
-                    let reqs = self.reqs.remove(&q_id).unwrap();
-                    let snap = match snap_res {
-                        Ok(s) => s,
-                        Err(e) => {
-                            notify_batch_failed(e, reqs);
-                            continue;
-                        }
-                    };
-
-                    if self.running_task_count() >= self.max_running_task_count {
-                        notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
-                        continue;
-                    }
-
-                    for req in reqs {
-                        let pri = req.priority();
-                        let pri_str = get_req_pri_str(pri);
-                        let type_str = get_req_type_str(req.req.get_tp());
-                        COPR_PENDING_REQS
-                            .with_label_values(&[type_str, pri_str])
-                            .add(1.0);
-                        let end_point = TiDbEndPoint::new(snap.clone());
-                        let txn_id = req.start_ts.unwrap_or_default();
-
-                        if pri == CommandPri::Low {
-                            self.low_priority_pool.execute(txn_id, move || {
-                                end_point.handle_request(req);
-                                COPR_PENDING_REQS
-                                    .with_label_values(&[type_str, pri_str])
-                                    .dec();
-                            });
-                        } else if pri == CommandPri::High {
-                            self.high_priority_pool.execute(txn_id, move || {
-                                end_point.handle_request(req);
-                                COPR_PENDING_REQS
-                                    .with_label_values(&[type_str, pri_str])
-                                    .dec();
-                            });
-                        } else {
-                            self.pool.execute(txn_id, move || {
-                                end_point.handle_request(req);
-                                COPR_PENDING_REQS
-                                    .with_label_values(&[type_str, pri_str])
-                                    .dec();
-                            });
-                        }
-                    }
+                    self.handle_snapshot_result(q_id, snap_res);
                 }
+                Task::BatchSnapRes(batch) => for (q_id, snap_res) in batch {
+                    self.handle_snapshot_result(q_id, snap_res);
+                },
+                Task::RetryRequests(retry) => for id in retry {
+                    let reqs = self.reqs.remove(&id).unwrap();
+                    let sched = self.sched.clone();
+                    if let Err(e) = self.engine.async_snapshot(
+                        reqs[0].req.get_context(),
+                        box move |(_, res)| sched.schedule(Task::SnapRes(id, res)).unwrap(),
+                    ) {
+                        notify_batch_failed(e, reqs);
+                    } else {
+                        self.reqs.insert(id, reqs);
+                    }
+                },
             }
         }
+
+        if grouped_reqs.is_empty() {
+            return;
+        }
+
+        let mut batch = Vec::with_capacity(grouped_reqs.len());
+        let start_id = self.last_req_id + 1;
         for (_, reqs) in grouped_reqs {
             self.last_req_id += 1;
             let id = self.last_req_id;
-            let sched = self.sched.clone();
-            if let Err(e) = self.engine.async_snapshot(
-                reqs[0].req.get_context(),
-                box move |(_, res)| sched.schedule(Task::SnapRes(id, res)).unwrap(),
-            ) {
-                notify_batch_failed(e, reqs);
-                continue;
-            }
+            let ctx = reqs[0].req.get_context().clone();
+            batch.push(ctx);
             self.reqs.insert(id, reqs);
+        }
+        let end_id = self.last_req_id;
+
+        let sched = self.sched.clone();
+        let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
+            let mut ready = Vec::with_capacity(results.len());
+            let mut retry = Vec::new();
+            for (id, res) in (start_id..end_id + 1).zip(results) {
+                match res {
+                    Some((_, res)) => {
+                        ready.push((id, res));
+                    }
+                    None => {
+                        retry.push(id);
+                    }
+                }
+            }
+
+            if !ready.is_empty() {
+                sched.schedule(Task::BatchSnapRes(ready)).unwrap();
+            }
+            if !retry.is_empty() {
+                BATCH_REQUEST_TASKS
+                    .with_label_values(&["retry"])
+                    .observe(retry.len() as f64);
+                sched.schedule(Task::RetryRequests(retry)).unwrap();
+            }
+        };
+
+        BATCH_REQUEST_TASKS
+            .with_label_values(&["all"])
+            .observe(batch.len() as f64);
+        if let Err(e) = self.engine.async_batch_snapshot(batch, on_finished) {
+            for id in start_id..end_id + 1 {
+                let reqs = self.reqs.remove(&id).unwrap();
+                let err = e.maybe_clone().unwrap_or_else(|| {
+                    error!("async snapshot batch failed error {:?}", e);
+                    EngineError::Other(box_err!("{:?}", e))
+                });
+                notify_batch_failed(err, reqs);
+            }
         }
     }
 
