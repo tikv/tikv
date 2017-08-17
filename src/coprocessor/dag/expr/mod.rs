@@ -334,3 +334,52 @@ impl Expression {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use coprocessor::codec::Datum;
+    use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
+    use tipb::expression::{Expr, FieldType, ScalarFuncSig};
+    use super::Expression;
+
+    pub fn fncall_expr(sig: ScalarFuncSig, ft: FieldType, children: &[Expr]) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_sig(sig);
+        expr.set_field_type(ft);
+        for child in children {
+            expr.mut_children().push(child.clone());
+        }
+        expr
+    }
+
+    #[test]
+    fn test_expression_build() {
+        let colref = col_expr(1);
+        let constant = datum_expr(Datum::Null);
+
+        let tests = vec![
+            (colref.clone(), 1, false),
+            (colref.clone(), 2, true),
+            (constant.clone(), 0, true),
+            (
+                fncall_expr(
+                    ScalarFuncSig::LTInt,
+                    FieldType::new(),
+                    &[colref.clone(), constant.clone()],
+                ),
+                0,
+                true,
+            ),
+            (
+                fncall_expr(ScalarFuncSig::LTInt, FieldType::new(), &[colref.clone()]),
+                0,
+                false,
+            ),
+        ];
+
+        for tt in tests.into_iter() {
+            let expr = Expression::build(tt.0, tt.1);
+            assert_eq!(expr.is_ok(), tt.2);
+        }
+    }
+}
