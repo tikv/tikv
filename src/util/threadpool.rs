@@ -223,9 +223,7 @@ mod test {
                 let rx = rxer.lock().unwrap();
                 let id = rx.recv_timeout(timeout).unwrap();
                 assert_eq!(id, gid);
-                println!("id: {}", id);
                 ftx.send(true).unwrap();
-                println!("id {} done.", id);
                 ctx
             });
             task_num += 1;
@@ -235,7 +233,6 @@ mod test {
         for gid in 0..group_num {
             tx.send(gid).unwrap();
             frx.recv_timeout(timeout).unwrap();
-            println!("send {} done", gid);
             let left_num = task_pool.get_task_count();
             // current task may be still running.
             assert!(
