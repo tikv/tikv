@@ -1293,7 +1293,7 @@ mod test {
     use raft::{Error as RaftError, StorageError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, copy_snapshot, SnapKey};
+    use raftstore::store::bootstrap;
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
     use util::worker::{Scheduler, Worker};
@@ -1543,27 +1543,14 @@ mod test {
     }
 
     #[test]
-    fn test_storage_create_snapshot_with_plain_format() {
-        test_storage_create_snapshot(false);
-    }
-
-    #[test]
-    fn test_storage_create_snapshot_with_sst_format() {
-        test_storage_create_snapshot(true);
-    }
-
-    fn test_storage_create_snapshot(use_sst_file_snapshot: bool) {
+    fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let mgr = SnapManager::new(
-            snap_dir.path().to_str().unwrap(),
-            None,
-            use_sst_file_snapshot,
-        );
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
@@ -1826,18 +1813,8 @@ mod test {
         assert!(store.cache.cache.capacity() < cap as usize);
     }
 
-
     #[test]
-    fn test_storage_apply_snapshot_with_old_format() {
-        test_storage_apply_snapshot(false);
-    }
-
-    #[test]
-    fn test_storage_apply_snapshot_with_sst_file_format() {
-        test_storage_apply_snapshot(true);
-    }
-
-    fn test_storage_apply_snapshot(use_sst_file_snapshot: bool) {
+    fn test_storage_apply_snapshot() {
         let ents = vec![
             new_entry(3, 3),
             new_entry(4, 4),
@@ -1849,11 +1826,7 @@ mod test {
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let mgr = SnapManager::new(
-            snap_dir.path().to_str().unwrap(),
-            None,
-            use_sst_file_snapshot,
-        );
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
@@ -1866,11 +1839,6 @@ mod test {
         };
         assert_eq!(s1.truncated_index(), 3);
         assert_eq!(s1.truncated_term(), 3);
-
-        let key = SnapKey::from_snap(&snap1).unwrap();
-        let from = mgr.get_snapshot_for_sending(&key).unwrap();
-        let to = mgr.get_snapshot_for_receiving(&key, b"").unwrap();
-        copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let mut s2 = new_storage(sched.clone(), &td2);
