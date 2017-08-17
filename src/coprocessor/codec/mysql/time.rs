@@ -343,11 +343,8 @@ impl Time {
         let base = 10u32.pow(NANO_WIDTH - fsp as u32);
         let expect_nanos = ((nanos as f64 / base as f64).round() as u32) * base;
         let diff = nanos as i64 - expect_nanos as i64;
-        let new_time = if diff < 0 {
-            self.time.checked_sub_signed(Duration::nanoseconds(-diff))
-        } else {
-            self.time.checked_add_signed(Duration::nanoseconds(diff))
-        };
+        let new_time = self.time.checked_add_signed(Duration::nanoseconds(diff));
+
         if new_time.is_none() {
             Err(box_err!("round_frac {} overflows", self.time))
         } else {
@@ -715,6 +712,8 @@ mod test {
             ("2012-12-31 11:30:45.123456", 1, "2012-12-31 11:30:45.1"),
             ("2012-12-31 11:30:45.999999", 4, "2012-12-31 11:30:46.0000"),
             ("2012-12-31 11:30:45.999999", 0, "2012-12-31 11:30:46"),
+            ("2012-12-31 23:59:59.999999", 0, "2013-01-01 00:00:00"),
+            ("2012-12-31 23:59:59.999999", 3, "2013-01-01 00:00:00.000"),
             // TODO: TIDB can handle this case, but we can't.
             //("2012-00-00 11:30:45.999999", 3, "2012-00-00 11:30:46.000"),
             // TODO: MySQL can handle this case, but we can't.
