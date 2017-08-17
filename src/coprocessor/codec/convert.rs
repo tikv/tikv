@@ -171,8 +171,8 @@ pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
 pub fn dec_to_i64(dec: Decimal) -> Result<i64> {
     match dec.as_i64() {
         Res::Ok(t) => Ok(t),
-        Res::Truncated(_) => Err(box_err!("[1265] Data Truncated")),
-        Res::Overflow(_) => Err(box_err!("[1264] Data Out of Range")),
+        Res::Truncated(_) => Err(box_err!("[1265] Data Truncated for decimal: {:?}", dec)),
+        Res::Overflow(_) => Err(box_err!("[1264] Data Out of Range decimal: {:?}", dec)),
     }
 }
 
