@@ -589,10 +589,7 @@ impl Evaluator {
         match expr.get_sig() {
             ScalarFuncSig::AbsInt => self.abs_int(ctx, expr),
             ScalarFuncSig::AbsReal => self.abs_real(ctx, expr),
-            ScalarFuncSig::CeilInt => self.ceil_int(ctx, expr),
             ScalarFuncSig::CeilReal => self.ceil_real(ctx, expr),
-            ScalarFuncSig::FloorInt => self.floor_int(ctx, expr),
-            ScalarFuncSig::FloorReal => self.floor_real(ctx, expr),
             _ => Err(Error::Expr(
                 format!("unsupported scalar function: {:?}", expr.get_sig()),
             )),
@@ -688,7 +685,7 @@ pub mod test {
     use tipb::select::SelectRequest;
     use protobuf::RepeatedField;
 
-    fn datum_expr(datum: Datum) -> Expr {
+    pub fn datum_expr(datum: Datum) -> Expr {
         let mut expr = Expr::new();
         match datum {
             Datum::I64(i) => {
@@ -743,7 +740,7 @@ pub mod test {
         expr
     }
 
-    fn col_expr(col_id: i64) -> Expr {
+    pub fn col_expr(col_id: i64) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ColumnRef);
         let mut buf = Vec::with_capacity(8);
