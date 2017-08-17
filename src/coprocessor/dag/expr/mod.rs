@@ -10,19 +10,25 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
+// FIXME(shirly): remove following later
+#![allow(dead_code,unused_variables)]
 
+mod builtin_cast;
 mod compare;
 
 use std::io;
 use std::convert::TryFrom;
+use std::string::FromUtf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
+use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
 use util;
 use util::codec::number::NumberDecoder;
+use util::codec::Error as CError;
 
 pub use coprocessor::select::xeval::EvalContext as StatementContext;
 
@@ -53,6 +59,12 @@ quick_error! {
             description(desc)
             display("error {}", desc)
         }
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(err: FromUtf8Error) -> Error {
+        Error::Codec(CError::Encoding(err.utf8_error().into()))
     }
 }
 
@@ -173,7 +185,7 @@ impl Expression {
         unimplemented!()
     }
 
-    fn eval_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<String>> {
+    fn eval_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<u8>>> {
         unimplemented!()
     }
 
@@ -187,6 +199,25 @@ impl Expression {
 
     fn eval_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
         unimplemented!()
+    }
+
+    /// IsHybridType checks whether a ClassString expression is a hybrid type value which will
+    /// return different types of value in different context.
+    /// For ENUM/SET which is consist of a string attribute `Name` and an int attribute `Value`,
+    /// it will cause an error if we convert ENUM/SET to int as a string value.
+    /// For Bit/Hex, we will get a wrong result if we convert it to int as a string value.
+    /// For example, when convert `0b101` to int, the result should be 5, but we will get
+    /// 101 if we regard it as a string.
+    fn is_hybrid_type(&self) -> bool {
+        match self.get_tp().get_tp() as u8 {
+            types::ENUM | types::BIT | types::SET => {
+                return true;
+            }
+            _ => {}
+        }
+        // TODO:For a constant, the field type will be inferred as `VARCHAR`
+        // when the kind of it is `HEX` or `BIT`.
+        false
     }
 }
 
