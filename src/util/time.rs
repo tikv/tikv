@@ -278,7 +278,7 @@ impl Instant {
     // It is different from `elapsed_duration`, the resolution here is millisecond.
     // The processors in an SMP system do not start all at exactly the same time
     // and therefore the timer registers are typically running at an offset.
-    // Use millisecond resolution for ignoring the error and warn instead of panic.
+    // Use millisecond resolution for ignoring the error, does not panic.
     // See more: https://linux.die.net/man/2/clock_gettime
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
         let later_ms =
@@ -289,7 +289,7 @@ impl Instant {
         if dur >= 0 {
             Duration::from_millis(dur as u64)
         } else {
-            warn!(
+            debug!(
                 "coarse time jumped back, {:.3} -> {:.3}",
                 earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
                 later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
