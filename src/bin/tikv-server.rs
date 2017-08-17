@@ -164,7 +164,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
-        cfg.raft_store.use_sst_file_snapshot,
     );
     let mut server = Server::new(
         &cfg.server,
