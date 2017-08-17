@@ -154,7 +154,6 @@ impl Drop for Monitor {
 pub use self::inner::monotonic_raw_now;
 use self::inner::monotonic_now;
 use self::inner::monotonic_coarse_now;
-use self::inner::CORASE_ERROR;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
@@ -164,8 +163,6 @@ const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 mod inner {
     use time::{self, Timespec};
     use super::NANOSECONDS_PER_SECOND;
-
-    pub const CORASE_ERROR: &i64 = &1;
 
     pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
@@ -192,7 +189,6 @@ mod inner {
     use std::io;
     use time::Timespec;
     use libc;
-    use super::NANOSECONDS_PER_MILLISECOND;
 
     pub fn monotonic_raw_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_RAW)
@@ -219,17 +215,6 @@ mod inner {
             );
         }
         Timespec::new(t.tv_sec, t.tv_nsec as _)
-    }
-
-    lazy_static! {
-        pub static ref CORASE_ERROR: i64 = {
-            let mut t = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            assert_eq!(unsafe { libc::clock_getres(libc::CLOCK_MONOTONIC_COARSE, &mut t) }, 0);
-            t.tv_nsec / NANOSECONDS_PER_MILLISECOND
-        };
     }
 }
 
@@ -300,14 +285,15 @@ impl Instant {
         let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND +
             earlier.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
         let dur = later_ms - earlier_ms;
-        if dur > -*CORASE_ERROR {
-            Duration::from_millis(if dur > 0 { dur as u64 } else { 0 })
+        if dur >= 0 {
+            Duration::from_millis(dur as u64)
         } else {
-            panic!(
-                "system time jumped back, {:.3} -> {:.3}",
+            warn!(
+                "coarse time jumped back, {:.3} -> {:.3}",
                 earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
                 later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
             );
+            Duration::from_millis(0)
         }
     }
 }
@@ -479,12 +465,15 @@ mod tests {
 
     #[test]
     fn test_coarse_instant_on_smp() {
-        for i in 0..100000 {
-            let now = Instant::now_coarse();
+        let zero = Duration::from_millis(0);
+        for i in 0..1000_000 {
+            let now = Instant::now();
+            let now_coarse = Instant::now_coarse();
             if i % 100 == 0 {
                 thread::yield_now();
             }
-            now.elapsed();
+            assert!(now.elapsed() >= zero);
+            assert!(now_coarse.elapsed() >= zero);
         }
     }
 }
