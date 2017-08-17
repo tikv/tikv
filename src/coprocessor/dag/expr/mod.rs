@@ -222,10 +222,8 @@ impl Expression {
     }
 }
 
-impl TryFrom<Expr> for Expression {
-    type Error = Error;
-
-    fn try_from(mut expr: Expr) -> ::std::result::Result<Expression, Self::Error> {
+impl Expression {
+    fn build(mut expr: Expr, row_size: usize) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -273,7 +271,9 @@ impl TryFrom<Expr> for Expression {
                         })
                     })
             }
-            ExprType::ColumnRef => expr.get_val()
+            ExprType::ColumnRef => {
+                let offset = expr.get_val().decode_i64() as usize;
+                expr.get_val()
                 .decode_i64()
                 .map(|i| {
                     Expression::ColumnRef(Column {
@@ -282,6 +282,7 @@ impl TryFrom<Expr> for Expression {
                     })
                 })
                 .map_err(Error::from),
+            }
             unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
         }
     }

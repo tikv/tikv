@@ -17,15 +17,14 @@ use super::{FnCall, Result, Error};
 
 impl FnCall {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
-        let xpt_args = match sig {
-            ScalarFuncSig::LTInt => 2,
-            ScalarFuncSig::CastIntAsInt => 1,
+        let (min_args, max_args) = match sig {
+            ScalarFuncSig::LTInt => (2, 2),
+            ScalarFuncSig::CastIntAsInt => (1, 1),
             _ => unimplemented!(),
         };
-        if args != xpt_args {
+        if args < min_args || args > max_args {
             return Err(Error::Other("unexpected arguments"));
         }
         Ok(())
     }
 }
-
