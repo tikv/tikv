@@ -15,9 +15,10 @@
 
 mod column;
 mod constant;
+mod fncall;
 mod builtin_cast;
 mod compare;
-mod fncall;
+use self::compare::CmpOp;
 
 use std::io;
 use std::borrow::Cow;
@@ -121,61 +122,62 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_int(),
             Expression::ColumnRef(ref column) => column.eval_int(row),
             Expression::ScalarFn(ref f) => match f.sig {
-                ScalarFuncSig::LTInt |
-                ScalarFuncSig::LEInt |
-                ScalarFuncSig::GTInt |
-                ScalarFuncSig::GEInt |
-                ScalarFuncSig::EQInt |
-                ScalarFuncSig::NEInt |
-                ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, f.sig),
+                ScalarFuncSig::LTInt => f.compare_int(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEInt => f.compare_int(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTInt => f.compare_int(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEInt => f.compare_int(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQInt => f.compare_int(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEInt => f.compare_int(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTReal |
-                ScalarFuncSig::LEReal |
-                ScalarFuncSig::GTReal |
-                ScalarFuncSig::GEReal |
-                ScalarFuncSig::EQReal |
-                ScalarFuncSig::NEReal |
-                ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, f.sig),
+                ScalarFuncSig::LTReal => f.compare_real(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEReal => f.compare_real(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTReal => f.compare_real(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEReal => f.compare_real(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQReal => f.compare_real(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEReal => f.compare_real(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTDecimal |
-                ScalarFuncSig::LEDecimal |
-                ScalarFuncSig::GTDecimal |
-                ScalarFuncSig::GEDecimal |
-                ScalarFuncSig::EQDecimal |
-                ScalarFuncSig::NEDecimal |
-                ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, f.sig),
+                ScalarFuncSig::LTDecimal => f.compare_decimal(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEDecimal => f.compare_decimal(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTDecimal => f.compare_decimal(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEDecimal => f.compare_decimal(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQDecimal => f.compare_decimal(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEDecimal => f.compare_decimal(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTString |
-                ScalarFuncSig::LEString |
-                ScalarFuncSig::GTString |
-                ScalarFuncSig::GEString |
-                ScalarFuncSig::EQString |
-                ScalarFuncSig::NEString |
-                ScalarFuncSig::NullEQString => f.compare_string(ctx, row, f.sig),
+                ScalarFuncSig::LTString => f.compare_string(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEString => f.compare_string(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTString => f.compare_string(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEString => f.compare_string(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQString => f.compare_string(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEString => f.compare_string(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQString => f.compare_string(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTTime |
-                ScalarFuncSig::LETime |
-                ScalarFuncSig::GTTime |
-                ScalarFuncSig::GETime |
-                ScalarFuncSig::EQTime |
-                ScalarFuncSig::NETime |
-                ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, f.sig),
+                ScalarFuncSig::LTTime => f.compare_time(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LETime => f.compare_time(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTTime => f.compare_time(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GETime => f.compare_time(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQTime => f.compare_time(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NETime => f.compare_time(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTDuration |
-                ScalarFuncSig::LEDuration |
-                ScalarFuncSig::GTDuration |
-                ScalarFuncSig::GEDuration |
-                ScalarFuncSig::EQDuration |
-                ScalarFuncSig::NEDuration |
-                ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, f.sig),
+                ScalarFuncSig::LTDuration => f.compare_duration(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEDuration => f.compare_duration(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTDuration => f.compare_duration(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEDuration => f.compare_duration(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQDuration => f.compare_duration(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEDuration => f.compare_duration(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTJson |
-                ScalarFuncSig::LEJson |
-                ScalarFuncSig::GTJson |
-                ScalarFuncSig::GEJson |
-                ScalarFuncSig::EQJson |
-                ScalarFuncSig::NEJson |
-                ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, f.sig),
+                ScalarFuncSig::LTJson => f.compare_json(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEJson => f.compare_json(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTJson => f.compare_json(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEJson => f.compare_json(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQJson => f.compare_json(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEJson => f.compare_json(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
