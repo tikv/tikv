@@ -73,10 +73,10 @@ impl Column {
 mod test {
     use std::u64;
     use std::convert::TryFrom;
-    use super::super::{Expression, StatementContext};
-    use super::super::test::col_expr;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use coprocessor::dag::expr::{Expression, StatementContext};
+    use coprocessor::select::xeval::evaluator::test::col_expr;
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(

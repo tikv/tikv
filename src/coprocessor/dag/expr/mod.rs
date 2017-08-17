@@ -347,8 +347,3 @@ fn test_smoke() {
     let e: Result<Expression> = pb.try_into();
     let _ = e.unwrap();
 }
-
-#[cfg(test)]
-mod test {
-    pub use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
-}

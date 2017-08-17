@@ -124,10 +124,10 @@ impl Constant {
 mod test {
     use std::u64;
     use std::convert::TryFrom;
-    use super::super::{Expression, StatementContext};
-    use super::super::test::datum_expr;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use coprocessor::dag::expr::{Expression, StatementContext};
+    use coprocessor::select::xeval::evaluator::test::datum_expr;
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
