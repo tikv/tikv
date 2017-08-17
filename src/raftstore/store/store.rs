@@ -534,7 +534,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let timer = self.raft_metrics.process_tick.start_timer();
+        let timer = self.raft_metrics.process_tick.start_coarse_timer();
         for peer in &mut self.region_peers.values_mut() {
             if peer.pending_remove {
                 continue;
