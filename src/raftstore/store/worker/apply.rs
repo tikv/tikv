@@ -1434,7 +1434,7 @@ impl Runner {
     }
 
     fn handle_applies(&mut self, applys: Vec<Apply>) {
-        let _timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
+        let _timer = STORE_APPLY_LOG_HISTOGRAM.start_coarse_timer();
 
         let mut applys_res = Vec::with_capacity(applys.len());
         let mut apply_ctx = ApplyContext::new(self.host.as_ref());
