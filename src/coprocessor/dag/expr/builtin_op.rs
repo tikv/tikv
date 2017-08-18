@@ -53,30 +53,6 @@ impl FnCall {
         }
     }
 
-    pub fn bit_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
-    }
-
-    pub fn bit_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
-    }
-
-    pub fn bit_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
-    }
-
-    pub fn left_shift(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
-    }
-
-    pub fn right_shift(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
-    }
-
-    pub fn is_true_or_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
-    }
-
     pub fn real_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_int(ctx, row));
         match input {
@@ -142,6 +118,14 @@ impl FnCall {
         unimplemented!()
     }
 
+    pub fn unary_minus_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        unimplemented!()
+    }
+
+    pub fn unary_minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        unimplemented!()
+    }
+
     pub fn decimal_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try!(self.children[0].eval_decimal(ctx, row));
         eval_is_null(arg)
@@ -170,10 +154,6 @@ impl FnCall {
     pub fn duration_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try!(self.children[0].eval_duration(ctx, row));
         eval_is_null(arg)
-    }
-
-    pub fn bit_neg(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
     }
 }
 

@@ -17,6 +17,8 @@ mod column;
 mod constant;
 mod fncall;
 mod builtin_cast;
+mod builtin_control;
+mod builtin_op;
 mod compare;
 use self::compare::CmpOp;
 
