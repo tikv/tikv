@@ -167,6 +167,11 @@ impl FnCall {
         eval_is_null(arg)
     }
 
+    pub fn duration_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let arg = try!(self.children[0].eval_duration(ctx, row));
+        eval_is_null(arg)
+    }
+
     pub fn bit_neg(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         unimplemented!()
     }
