@@ -315,8 +315,7 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_temp_engine() -> (Arc<DB>, Arc<DB>) {
-        let path = TempDir::new("test-raftstore").unwrap();
+    fn new_temp_engine(path: &TempDir) -> (Arc<DB>, Arc<DB>) {
         let raft_path = path.path().join(Path::new("raft"));
         (
             Arc::new(
@@ -363,7 +362,8 @@ mod tests {
 
     #[test]
     fn test_peekable() {
-        let (engine, raft_engine) = new_temp_engine();
+        let path = TempDir::new("test-raftstore").unwrap();
+        let (engine, raft_engine) = new_temp_engine(&path);
         let mut r = Region::new();
         r.set_id(10);
         r.set_start_key(b"key0".to_vec());
@@ -395,7 +395,8 @@ mod tests {
     #[allow(type_complexity)]
     #[test]
     fn test_iterate() {
-        let (engine, raft_engine) = new_temp_engine();
+        let path = TempDir::new("test-raftstore").unwrap();
+        let (engine, raft_engine) = new_temp_engine(&path);
         let (store, base_data) = load_default_dataset(engine.clone(), raft_engine.clone());
 
         let snap = RegionSnapshot::new(&store);
@@ -508,7 +509,8 @@ mod tests {
 
     #[test]
     fn test_reverse_iterate() {
-        let (engine, raft_engine) = new_temp_engine();
+        let path = TempDir::new("test-raftstore").unwrap();
+        let (engine, raft_engine) = new_temp_engine(&path);
         let (store, test_data) = load_default_dataset(engine.clone(), raft_engine.clone());
 
         let snap = RegionSnapshot::new(&store);

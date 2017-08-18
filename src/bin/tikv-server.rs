@@ -197,8 +197,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
     let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
-    node.start(event_loop, engines, trans, snap_mgr, snap_status_receiver)
-        .unwrap_or_else(|e| exit_with_err(e));
+    node.start(
+        event_loop,
+        engines.clone(),
+        trans,
+        snap_mgr,
+        snap_status_receiver,
+    ).unwrap_or_else(|e| exit_with_err(e));
     initial_metric(&cfg.metric, Some(node.id()));
 
     // Start storage.
@@ -208,8 +213,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     }
 
     let mut metrics_flusher = MetricsFlusher::new(
-        kv_engine.clone(),
-        raft_engine.clone(),
+        engines.clone(),
         Duration::from_millis(DEFAULT_FLUSER_INTERVAL),
     );
 
@@ -222,7 +226,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     server
         .start(&cfg.server)
         .unwrap_or_else(|e| exit_with_err(e));
-    signal_handler::handle_signal(kv_engine, raft_engine, &cfg.rocksdb.backup_dir);
+    signal_handler::handle_signal(engines, &cfg.rocksdb.backup_dir);
 
     // Stop.
     server.stop().unwrap_or_else(|e| exit_with_err(e));

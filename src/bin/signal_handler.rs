@@ -22,6 +22,8 @@ mod imp {
     use prometheus::{self, Encoder, TextEncoder};
     use profiling;
 
+    use tikv::raftstore::store::Engines;
+
     const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
     const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
 
@@ -56,7 +58,7 @@ mod imp {
     }
 
     // TODO: remove backup_path from configuration
-    pub fn handle_signal(kv_engine: Arc<DB>, raft_engine: Arc<DB>, _: &str) {
+    pub fn handle_signal(engines: Engines, _: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
@@ -74,8 +76,8 @@ mod imp {
                     encoder.encode(&metric_familys, &mut buffer).unwrap();
                     info!("{}", String::from_utf8(buffer).unwrap());
 
-                    print_rocksdb_stats(&kv_engine);
-                    print_rocksdb_stats(&raft_engine);
+                    print_rocksdb_stats(&engines.kv_engine);
+                    print_rocksdb_stats(&engines.raft_engine);
                     print_malloc_stats();
                 }
                 SIGUSR2 => profiling::dump_prof(None),
