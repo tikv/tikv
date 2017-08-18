@@ -18,7 +18,7 @@ use std::{str, i64, u64};
 use std::ascii::AsciiExt;
 
 use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time};
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint,
                                   convert_int_to_uint};
@@ -530,8 +530,13 @@ impl FnCall {
         if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
             return Ok(f);
         }
-        let dec = try!(Decimal::from_f64(f));
-        let ret = try!(dec.convert_to(ctx, flen as u8, decimal as u8));
-        Ok(try!(ret.as_f64()))
+        match convert::truncate_f64(f, flen as u8, decimal as u8) {
+            Res::Ok(d) | Res::Truncated(d) => Ok(d),
+            Res::Overflow(d) => {
+                //TODO process warning with ctx
+                try!(convert::handle_truncate(ctx, true));
+                Ok(d)
+            }
+        }
     }
 }
