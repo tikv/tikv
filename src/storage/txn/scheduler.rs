@@ -1098,7 +1098,7 @@ impl Scheduler {
     ///
     /// Returns true if successful; returns false otherwise.
     fn acquire_lock(&mut self, cid: u64) -> bool {
-        let mut ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
+        let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
         let ok = self.latches.acquire(&mut ctx.lock, cid);
         if ok {
@@ -1341,7 +1341,7 @@ impl Scheduler {
     fn lock_and_register_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
             let ctx = self.extract_context(cid).clone();
-            let mut group = self.grouped_cmds
+            let group = self.grouped_cmds
                 .as_mut()
                 .unwrap()
                 .entry(HashableContext(ctx))
