@@ -82,6 +82,7 @@ unsafe impl Send for DummyContext {}
 impl Context for DummyContext {
     fn on_task_started(&mut self) {}
     fn on_task_finished(&mut self) {}
+    fn on_tick(&mut self) {}
 }
 
 struct DummyContextFactory {}

@@ -27,6 +27,7 @@ const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 pub trait Context: Send {
     fn on_task_started(&mut self);
     fn on_task_finished(&mut self);
+    fn on_tick(&mut self);
 }
 
 pub trait ContextFactory<Ctx: Context> {
@@ -205,6 +206,7 @@ where
                 self.ctx.on_task_finished();
                 self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
             }
+            self.ctx.on_tick();
         }
     }
 }
@@ -225,6 +227,7 @@ mod test {
     impl Context for DummyContext {
         fn on_task_started(&mut self) {}
         fn on_task_finished(&mut self) {}
+        fn on_tick(&mut self) {}
     }
 
     struct DummyContextFactory {}
@@ -291,6 +294,7 @@ mod test {
                 self.counter.fetch_add(1, Ordering::SeqCst);
                 self.tx.send(self.counter.load(Ordering::SeqCst)).unwrap();
             }
+            fn on_tick(&mut self) {}
         }
 
         struct TestContextFactory {
