@@ -101,10 +101,10 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = val.unwrap().into_owned();
-        try!(val.round_frac(mysql::DEFAULT_FSP));
-        let dec = try!(val.to_decimal());
-        let res = try!(convert::dec_to_i64(dec));
+        let dec = try!(val.unwrap().to_decimal());
+        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+            .unwrap();
+        let res = dec.as_i64().unwrap();
         Ok(Some(res))
     }
 
@@ -117,10 +117,10 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = val.unwrap().into_owned();
-        try!(val.round_frac(mysql::DEFAULT_FSP));
-        let dec = try!(val.to_decimal());
-        let res = try!(convert::dec_to_i64(dec));
+        let dec = try!(val.unwrap().to_decimal());
+        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+            .unwrap();
+        let res = dec.as_i64().unwrap();
         Ok(Some(res))
     }
 
