@@ -1077,23 +1077,17 @@ impl PeerStorage {
         ready: &Ready,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let mut snapshot_index = 0;
-        if !raft::is_empty_snap(&ready.snapshot) {
-            let kv_wb = if ready_ctx.kv_wb.is_none() {
-                WriteBatch::new()
-            } else {
-                ready_ctx.kv_wb.take().unwrap()
-            };
-
+        let snapshot_index = if raft::is_empty_snap(&ready.snapshot) {
+            0
+        } else {
             try!(self.apply_snapshot(
                 &mut ctx,
                 &ready.snapshot,
-                &kv_wb,
+                &ready_ctx.kv_wb,
                 &ready_ctx.raft_wb
             ));
-            snapshot_index = last_index(&ctx.raft_state);
-            ready_ctx.kv_wb = Some(kv_wb);
-        }
+            last_index(&ctx.raft_state)
+        };
 
         if !ready.entries.is_empty() {
             try!(self.append(
@@ -1118,17 +1112,16 @@ impl PeerStorage {
                 // but not write raft_local_state to raft rocksdb in time.
                 // we write raft state to default rocksdb, with last index set to snap index,
                 // in case of recv raft log after snapshot.
-                let mut kv_wb = ready_ctx.kv_wb.take().unwrap();
-                try!(ctx.save_snapshot_raft_state_to(snapshot_index, &mut kv_wb));
-                ready_ctx.kv_wb = Some(kv_wb);
+                try!(ctx.save_snapshot_raft_state_to(
+                    snapshot_index,
+                    &mut ready_ctx.kv_wb
+                ));
             }
         }
 
         // only when apply snapshot
         if ctx.apply_state != self.apply_state {
-            let mut kv_wb = ready_ctx.kv_wb.take().unwrap();
-            try!(ctx.save_apply_state_to(&mut kv_wb));
-            ready_ctx.kv_wb = Some(kv_wb);
+            try!(ctx.save_apply_state_to(&mut ready_ctx.kv_wb));
         }
 
         Ok(ctx)

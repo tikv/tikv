@@ -23,7 +23,8 @@ use sys_info;
 use server::Config as ServerConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
-use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, DEFAULT_DATA_DIR};
+use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, DEFAULT_DATA_DIR,
+              DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
 use util::rocksdb::{CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
@@ -611,34 +612,26 @@ impl TiKvConfig {
                 Path::new(&self.storage.data_dir).join("backup").display()
             );
         }
+        let kv_db_path = try!(config::canonicalize_sub_path(
+            &self.storage.data_dir,
+            DEFAULT_ROCKSDB_SUB_DIR
+        ));
+        if !self.raft_store.raftdb_path.is_empty() {
+            self.raft_store.raftdb_path =
+                try!(config::canonicalize_path(&self.raft_store.raftdb_path));
+        }
 
-        let kv_db_path = try!(config::canonicalize_sub_path(&self.storage.data_dir, "db"));
-        if kv_db_path == self.storage.raft_db_path {
+        if kv_db_path == self.raft_store.raftdb_path {
             return Err(
-                "storage.raft_db_path can not same with storage.data_dir/db".into(),
+                "raft_store.raftdb_path can not same with storage.data_dir/db".into(),
             );
         }
-        if !self.rocksdb.wal_dir.is_empty() &&
-            (self.rocksdb.wal_dir == self.raftdb.wal_dir ||
-                self.rocksdb.wal_dir == self.storage.raft_db_path)
-        {
-            // if raftdb.wal_dir is empty, we need check storage.raft_db_path
+        if !self.rocksdb.wal_dir.is_empty() && self.rocksdb.wal_dir == self.raft_store.raftdb_path {
             return Err(
-                "please check rocksdb.wal_dir, can not equal to storage.raft_db_path or \
-                 raftdb.wal_dir"
-                    .into(),
+                "raft_store.raftdb_path can not same with rocksdb.wal_dir".into(),
             );
         }
-        if !self.raftdb.wal_dir.is_empty() &&
-            (self.rocksdb.wal_dir == self.raftdb.wal_dir || self.raftdb.wal_dir == kv_db_path)
-        {
-            // if rocksdb.wal_dir is empty, we need check kv_db_path
-            return Err(
-                "please check raftdb.wal_dir, can not equal to storage.data_dir/db or \
-                 rocksdb.wal_dir"
-                    .into(),
-            );
-        }
+
         try!(self.rocksdb.validate());
         try!(self.server.validate());
         try!(self.raft_store.validate());

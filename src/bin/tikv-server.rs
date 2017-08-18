@@ -68,6 +68,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
+use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
@@ -112,7 +113,9 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 }
 
 fn check_system_config(config: &TiKvConfig) {
-    if let Err(e) = util::config::check_max_open_fds(config.rocksdb.max_open_files as u64) {
+    if let Err(e) = util::config::check_max_open_fds(
+        (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
+    ) {
         exit_with_msg(format!("{:?}", e));
     }
 
@@ -129,7 +132,7 @@ fn check_system_config(config: &TiKvConfig) {
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
-    let db_path = store_path.join(Path::new("db"));
+    let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
 
     let f = File::create(lock_path).unwrap_or_else(|e| exit_with_err(e));
@@ -177,10 +180,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let trans = server.transport();
 
     // Create raft engine.
-    let raft_db_path = if cfg.storage.raft_db_path.is_empty() {
+    let raft_db_path = if cfg.raft_store.raftdb_path.is_empty() {
         store_path.join(Path::new("raft"))
     } else {
-        Path::new(&cfg.storage.raft_db_path).to_path_buf()
+        Path::new(&cfg.raft_store.raftdb_path).to_path_buf()
     };
     let raft_db_opts = cfg.raftdb.build_opt();
     let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
@@ -251,10 +254,6 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
 
     if let Some(data_dir) = matches.value_of("data-dir") {
         config.storage.data_dir = data_dir.to_owned();
-    }
-
-    if let Some(raft_db_path) = matches.value_of("raft-db-path") {
-        config.storage.raft_db_path = raft_db_path.to_owned();
     }
 
     if let Some(endpoints) = matches.values_of("pd-endpoints") {
@@ -355,15 +354,6 @@ fn main() {
                 .takes_value(true)
                 .value_name("PATH")
                 .help("Sets the path to store directory"),
-        )
-        .arg(
-            Arg::with_name("raft-db-path")
-                .long("raft-db-path")
-                .short("r")
-                .alias("raftdb")
-                .takes_value(true)
-                .value_name("PATH")
-                .help("Sets the path to raftdb directory"),
         )
         .arg(
             Arg::with_name("capacity")

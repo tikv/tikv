@@ -141,7 +141,7 @@ impl ProposalQueue {
 }
 
 pub struct ReadyContext<'a, T: 'a> {
-    pub kv_wb: Option<WriteBatch>,
+    pub kv_wb: WriteBatch,
     pub raft_wb: WriteBatch,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
@@ -151,7 +151,7 @@ pub struct ReadyContext<'a, T: 'a> {
 impl<'a, T> ReadyContext<'a, T> {
     pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
-            kv_wb: None,
+            kv_wb: WriteBatch::new(),
             raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             metrics: metrics,
             trans: t,

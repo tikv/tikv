@@ -38,8 +38,6 @@ labels = {}
 [storage]
 # set the path to rocksdb directory.
 data-dir = "/tmp/tikv/store"
-# set the path to raft rocksdb directory, default value is data-dir/raft
-# raft-db-path = ""
 
 # notify capacity of scheduler's channel
 # scheduler-notify-capacity = 10240
@@ -69,6 +67,9 @@ job = "tikv"
 [raftstore]
 # true (default value) for high reliability, this can prevent data loss when power failure.
 sync-log = true
+
+# set the path to raftdb directory, default value is data-dir/raft
+# raftdb-path = ""
 
 # set store capacity, if no set, use disk capacity.
 # capacity = 0
@@ -128,13 +129,6 @@ max-peer-down-duration = "5m"
 # consistency-check-interval = 0
 
 [rocksdb]
-# RocksDB info log directory, if set, RocksDB will save the log in `info-log-dir/LOG`.
-# info-log-dir = ""
-# Maximal size of the info log, if new info log will be created if size is large than it.
-# info-log-max-size = 0
-# Time for the info log file to roll (in seconds).
-# info-log-roll-time = "0s"
-
 # Maximum number of concurrent background jobs (compactions and flushes)
 # max-background-jobs = 8
 
@@ -337,21 +331,10 @@ stats-dump-period = "10m"
 # compaction-pri = 0
 
 [raftdb]
-# info-log-dir = ""
-# info-log-max-size = 0
-# info-log-roll-time = "0s"
-
 # max-sub-compactions = 1
 # max-open-files = 40960
 max-manifest-file-size = "20MB"
 create-if-missing = true
-
-wal-recovery-mode = 2
-# raftdb write-ahead logs dir path, default value is raft-db-path.
-# wal-dir = ""
-# wal-ttl-seconds = 0
-# wal-size-limit = 0
-# max-total-wal-size = "4GB"
 # writable-file-max-buffer-size = "1MB"
 
 # enable-statistics = true

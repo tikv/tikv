@@ -52,6 +52,7 @@ pub const REGION_META_MAX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFI
 pub const RAFT_LOG_SUFFIX: u8 = 0x01;
 pub const RAFT_STATE_SUFFIX: u8 = 0x02;
 pub const APPLY_STATE_SUFFIX: u8 = 0x03;
+pub const SNAPSHOT_RAFT_STATE_SUFFIX: u8 = 0x04;
 
 // For region meta
 pub const REGION_STATE_SUFFIX: u8 = 0x01;
@@ -100,7 +101,7 @@ pub fn raft_state_key(region_id: u64) -> Vec<u8> {
 }
 
 pub fn snapshot_raft_state_key(region_id: u64) -> Vec<u8> {
-    make_region_id_key(region_id, RAFT_STATE_SUFFIX, 0)
+    make_region_id_key(region_id, SNAPSHOT_RAFT_STATE_SUFFIX, 0)
 }
 
 pub fn apply_state_key(region_id: u64) -> Vec<u8> {

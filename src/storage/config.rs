@@ -18,6 +18,7 @@ use sys_info;
 use util::config;
 
 pub const DEFAULT_DATA_DIR: &'static str = "";
+pub const DEFAULT_ROCKSDB_SUB_DIR: &'static str = "db";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
@@ -29,7 +30,6 @@ const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 1000;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
-    pub raft_db_path: String,
     pub gc_ratio_threshold: f64,
     pub scheduler_notify_capacity: usize,
     pub scheduler_messages_per_tick: usize,
@@ -43,7 +43,6 @@ impl Default for Config {
         let total_cpu = sys_info::cpu_num().unwrap();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
-            raft_db_path: String::new(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             scheduler_notify_capacity: DEFAULT_SCHED_CAPACITY,
             scheduler_messages_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
@@ -58,9 +57,6 @@ impl Config {
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
         if self.data_dir != DEFAULT_DATA_DIR {
             self.data_dir = try!(config::canonicalize_path(&self.data_dir))
-        }
-        if !self.raft_db_path.is_empty() {
-            self.raft_db_path = try!(config::canonicalize_path(&self.raft_db_path));
         }
         Ok(())
     }

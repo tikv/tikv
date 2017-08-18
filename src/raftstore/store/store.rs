@@ -1072,15 +1072,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
         // otherwise, if program restart happen between two write, raft log will be removed,
         // but region state may not changed in disk.
-        if let Some(wb) = kv_wb {
+        if !kv_wb.is_empty() {
             // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log);
-            self.kv_engine.write_opt(wb, &write_opts).unwrap_or_else(
-                |e| {
+            self.kv_engine
+                .write_opt(kv_wb, &write_opts)
+                .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
-                },
-            );
+                });
         }
 
         if !raft_wb.is_empty() {
