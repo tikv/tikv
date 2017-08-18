@@ -555,16 +555,30 @@ impl FnCall {
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Duration>>> {
-        unimplemented!()
+    ) -> Result<Option<Duration>> {
+        let val = try!(self.children[0].eval_string(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let val = val.unwrap();
+        // TODO: tidb would handle truncate here
+        Ok(Some(
+            try!(Duration::parse(&val, self.tp.get_decimal() as i8)),
+        ))
     }
 
     pub fn cast_time_as_duration(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Duration>>> {
-        unimplemented!()
+    ) -> Result<Option<Duration>> {
+        let val = try!(self.children[0].eval_time(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let mut res = try!(val.unwrap().to_duration());
+        try!(res.round_frac(self.tp.get_decimal() as i8));
+        Ok(Some(res))
     }
 
     pub fn cast_duration_as_duration(

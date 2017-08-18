@@ -350,6 +350,20 @@ impl Time {
         }
     }
 
+    pub fn to_duration(&self) -> Result<MyDuration> {
+        if self.is_zero() {
+            return Ok(MyDuration::zero());
+        }
+        let (hour, minute, second, nanosecs) = (
+            self.time.hour() as i64,
+            self.time.minute() as i64,
+            self.time.second() as i64,
+            self.time.nanosecond() as i64,
+        );
+        let nanos = ((hour * 60 + minute) * 60 + second) * 10i64.pow(NANO_WIDTH) + nanosecs;
+        MyDuration::from_nanos(nanos, self.fsp as i8)
+    }
+
     /// Serialize time to a u64.
     ///
     /// If `tp` is TIMESTAMP, it will be converted to a UTC time first.
@@ -823,13 +837,31 @@ mod test {
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
                 .unwrap();
             let now = Local::now();
-            println!("get {:?}, get_today:{:?}, now:{:?}", get, get_today, now);
             assert_eq!(get_today.year(), now.year());
             assert_eq!(get_today.month(), now.month());
             assert_eq!(get_today.day(), now.day());
             assert_eq!(get_today.hour(), 0);
             assert_eq!(get_today.minute(), 0);
             assert_eq!(get_today.second(), 0);
+        }
+    }
+
+    #[test]
+    fn test_convert_to_duration() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "11:30:45.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "11:30:45.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "11:30:45"),
+            ("2012-12-31 11:30:45.999999", 0, "11:30:46"),
+            ("2017-01-05 08:40:59.575601", 0, "08:41:00"),
+            ("2017-01-05 23:59:59.575601", 0, "00:00:00"),
+            ("0000-00-00 00:00:00", 6, "00:00:00"),
+        ];
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let du = t.to_duration().unwrap();
+            let get = du.to_string();
+            assert_eq!(get, expect);
         }
     }
 }
