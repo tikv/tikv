@@ -205,9 +205,11 @@ impl RunningCtx {
             latch_timer: Some(
                 SCHED_LATCH_HISTOGRAM_VEC
                     .with_label_values(&[tag])
-                    .start_timer(),
+                    .start_coarse_timer(),
             ),
-            _timer: SCHED_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer(),
+            _timer: SCHED_HISTOGRAM_VEC
+                .with_label_values(&[tag])
+                .start_coarse_timer(),
             slow_timer: SlowTimer::new(),
         }
     }

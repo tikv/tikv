@@ -93,7 +93,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_get";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage.async_get(
@@ -136,7 +136,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_scan";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let storage = self.storage.clone();
         let mut options = Options::default();
@@ -186,7 +186,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_prewrite";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let mutations = req.take_mutations()
             .into_iter()
@@ -240,7 +240,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_commit";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
@@ -291,7 +291,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_cleanup";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage.async_cleanup(
@@ -339,7 +339,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_batchget";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let keys = req.get_keys()
             .into_iter()
@@ -384,7 +384,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_batch_rollback";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let keys = req.get_keys()
             .into_iter()
@@ -429,7 +429,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_scan_lock";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage
@@ -472,7 +472,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_resolve_lock";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let commit_ts = match req.get_commit_version() {
             0 => None,
@@ -512,7 +512,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_gc";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage
@@ -552,7 +552,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "kv_delete_range";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage.async_delete_range(
@@ -591,7 +591,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "raw_get";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage
@@ -630,7 +630,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "raw_scan";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage.async_raw_scan(
@@ -669,7 +669,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "raw_put";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage
@@ -709,7 +709,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "raw_delete";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage
@@ -744,7 +744,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "coprocessor";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let (cb, future) = make_callback();
         let res = self.end_point_scheduler
@@ -844,7 +844,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "mvcc_get_by_key";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let storage = self.storage.clone();
 
@@ -891,7 +891,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let label = "mvcc_get_by_start_ts";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
-            .start_timer();
+            .start_coarse_timer();
 
         let storage = self.storage.clone();
 

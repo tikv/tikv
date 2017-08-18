@@ -448,4 +448,14 @@ fn test_skip_bcast_commit() {
     assert_eq!(nt.peers[&1].raft_log.committed, 4);
     assert_eq!(nt.peers[&2].raft_log.committed, 3);
     assert_eq!(nt.peers[&3].raft_log.committed, 3);
+
+    // When committing conf change, leader should always bcast commit.
+    let mut cc_entry = Entry::new();
+    cc_entry.set_entry_type(EntryType::EntryConfChange);
+    nt.send(vec![
+        new_message_with_entries(1, 1, MessageType::MsgPropose, vec![cc_entry]),
+    ]);
+    assert_eq!(nt.peers[&1].raft_log.committed, 5);
+    assert_eq!(nt.peers[&2].raft_log.committed, 5);
+    assert_eq!(nt.peers[&3].raft_log.committed, 5);
 }
