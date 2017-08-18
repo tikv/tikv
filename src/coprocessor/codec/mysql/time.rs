@@ -154,6 +154,10 @@ impl Time {
         self.fsp
     }
 
+    pub fn set_fsp(&mut self, fsp: u8) {
+        self.fsp = fsp;
+    }
+
     fn to_numeric_str(&self) -> String {
         if self.tp == types::DATE {
             // TODO: pure calculation should be enough.

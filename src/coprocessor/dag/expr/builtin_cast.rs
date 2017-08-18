@@ -658,28 +658,36 @@ impl FnCall {
         }
     }
 
-    pub fn cast_time_as_json(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Json>>> {
-        unimplemented!()
+    pub fn cast_time_as_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
+        let val = try!(self.children[0].eval_time(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let mut val = val.unwrap();
+        if val.get_tp() == types::DATETIME || val.get_tp() == types::TIMESTAMP {
+            val.set_fsp(mysql::MAX_FSP as u8);
+        }
+        let s = format!("{}", val);
+        Ok(Some(Json::String(s)))
     }
 
     pub fn cast_duration_as_json(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Json>>> {
-        unimplemented!()
+    ) -> Result<Option<Json>> {
+        let val = try!(self.children[0].eval_duration(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let mut val = val.unwrap();
+        val.fsp = mysql::MAX_FSP as u8;
+        let s = format!("{}", val);
+        Ok(Some(Json::String(s)))
     }
 
-    pub fn cast_json_as_json(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Json>>> {
-        unimplemented!()
+    pub fn cast_json_as_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
+        self.children[0].eval_json(ctx, row)
     }
 
     fn produce_dec_with_specified_tp(
