@@ -62,8 +62,8 @@ impl FnCall {
 
     pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_decimal(ctx, row));
-        if input.is_none() || input.unwrap.is_zero() {
-            Ok(Some(0))
+        if input.is_none() || input.unwrap().into_owned().is_zero() {
+            return Ok(Some(0));
         }
         Ok(Some(1))
     }
@@ -79,17 +79,17 @@ impl FnCall {
 
     pub fn real_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_real(ctx, row));
-        match input {
-            None => Ok(Some(0)),
-            Some(0) => Ok(Some(1)),
-            _ => Ok(Some(0)),
+        // Shouldn't do this, for compatible tidb bug.
+        if input.is_none() || input.unwrap() == 0.0 {
+            return Ok(Some(0));
         }
+        Ok(Some(1))
     }
 
     pub fn decimal_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_decimal(ctx, row));
-        if input.is_none() || !input.unwrap.is_zero() {
-            Ok(Some(0))
+        if input.is_none() || !input.unwrap().into_owned().is_zero() {
+            return Ok(Some(0));
         }
         Ok(Some(1))
     }
@@ -155,7 +155,7 @@ impl FnCall {
     }
 }
 
-fn eval_is_null<T>(arg: Option<T>) -> Result<Option<T>> {
+fn eval_is_null<T>(arg: Option<T>) -> Result<Option<i64>> {
     match arg {
         None => Ok(Some(1)),
         _ => Ok(Some(0)),
