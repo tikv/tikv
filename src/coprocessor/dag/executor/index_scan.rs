@@ -45,7 +45,7 @@ impl<'a> IndexScanExecutor<'a> {
     ) -> IndexScanExecutor<'a> {
         let mut pk_col = None;
         let desc = meta.get_desc();
-        let mut cols = meta.mut_columns();
+        let cols = meta.mut_columns();
         if cols.last().map_or(false, |c| c.get_pk_handle()) {
             pk_col = Some(cols.pop().unwrap());
         }

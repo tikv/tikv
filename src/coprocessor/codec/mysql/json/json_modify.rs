@@ -93,7 +93,7 @@ impl Json {
             if let Json::Object(ref mut map) = *self {
                 if map.contains_key(key) {
                     // e.g. json_replace('{"a": 1}', '$.a', 2) => '{"a": 2}'
-                    let mut v = map.get_mut(key).unwrap();
+                    let v = map.get_mut(key).unwrap();
                     v.set_json(sub_path_legs, value, mt);
                 } else if sub_path_legs.is_empty() && mt != ModifyType::Replace {
                     // e.g. json_insert('{"a": 1}', '$.b', 2) => '{"a": 1, "b": 2}'
