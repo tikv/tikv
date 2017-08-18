@@ -74,7 +74,6 @@ extern crate serde;
 extern crate serde_derive;
 extern crate toml;
 extern crate sys_info;
-extern crate crossbeam;
 
 #[macro_use]
 pub mod util;

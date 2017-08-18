@@ -163,7 +163,7 @@ where
 // Each thread has a worker.
 struct Worker<C> {
     stop_flag: Arc<AtomicBool>,
-    task_pool: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
+    task_queue: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
     task_count: Arc<AtomicUsize>,
     ctx: C,
 }
@@ -180,24 +180,21 @@ where
     ) -> Worker<C> {
         Worker {
             stop_flag: stop_flag,
-            task_pool: task_queue,
+            task_queue: task_queue,
             task_count: task_count,
             ctx: ctx,
         }
     }
 
     fn get_task_timeout(&mut self, timeout: time::Duration) -> Option<Task<C>> {
-        let &(ref lock, ref cvar) = &*self.task_pool;
-        let mut task_pool = lock.lock().unwrap();
+        let &(ref lock, ref cvar) = &*self.task_queue;
+        let mut task_queue = lock.lock().unwrap();
 
-        if let Some(task) = (*task_pool).pop() {
+        if let Some(task) = (*task_queue).pop() {
             return Some(task);
         }
-        let (mut task_pool, _) = cvar.wait_timeout(task_pool, timeout).unwrap();
-        if let Some(task) = (*task_pool).pop() {
-            return Some(task);
-        }
-        None
+        let (mut q, _) = cvar.wait_timeout(task_queue, timeout).unwrap();
+        (*q).pop()
     }
 
     fn run(&mut self) {
