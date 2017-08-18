@@ -26,8 +26,8 @@ use raftstore::store::keys::region_raft_prefix_len;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_DATA_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
-use util::rocksdb::{CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-                    NoopSliceTransform};
+use util::rocksdb::{CFOptions, EventListener, FixedPrefixSliceTransform,
+                    FixedSuffixSliceTransform, NoopSliceTransform};
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -398,6 +398,7 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.add_event_listener(EventListener::default());
         opts
     }
 

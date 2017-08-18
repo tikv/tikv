@@ -63,14 +63,11 @@ dependencies:
   post:
     # check format first
     - make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
-    # cargo test also use debug
-    - cargo build:
-        timeout: 1800
-    - cargo test --features "default" --no-run:
+    - cargo test --features "dev" --no-run:
         timeout: 1800
 
 
 test:
   override:
-    - cargo test --features "default" -- --nocapture
-    - cargo test --features "default" --bench benches -- --nocapture
+    - cargo test --features "dev" -- --nocapture
+    - cargo test --features "dev" --bench benches -- --nocapture

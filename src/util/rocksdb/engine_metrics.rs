@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{Gauge, GaugeVec};
+use prometheus::{exponential_buckets, CounterVec, Gauge, GaugeVec, HistogramVec};
 use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
               HistogramData, DB};
 use storage::ALL_CFS;
@@ -523,6 +523,21 @@ lazy_static!{
             &["type"]
         ).unwrap();
 
+    pub static ref STORE_ENGINE_COMPACTION_DURATIONS_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_engine_compaction_duration_seconds",
+            "Histogram of compaction duration seconds",
+            &["cf"],
+            exponential_buckets(0.005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_COMPACTION_NUM_CORRUPT_KEYS_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_engine_compaction_num_corrupt_keys",
+            "Number of corrupt keys during compaction",
+            &["cf"]
+        ).unwrap();
+
     pub static ref STORE_ENGINE_LOCATE_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_engine_locate",
@@ -556,4 +571,10 @@ lazy_static!{
             "Number of times WAL sync is done."
         ).unwrap();
 
+    pub static ref STORE_ENGINE_EVENT_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_engine_event_total",
+            "Number of engine events",
+            &["cf", "type"]
+        ).unwrap();
 }
