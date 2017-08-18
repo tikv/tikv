@@ -22,55 +22,63 @@ impl FnCall {
     pub fn if_null_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         if !arg0.is_some() {
-            return Ok(arg0)
+            return Ok(arg0);
         }
         let arg1 = try!(self.children[0].eval_int(ctx, row));
-        return Ok(arg1)
+        Ok(arg1)
     }
 
     pub fn if_null_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
         let arg0 = try!(self.children[0].eval_real(ctx, row));
         if !arg0.is_some() {
-            return Ok(arg0)
+            return Ok(arg0);
         }
         let arg1 = try!(self.children[0].eval_real(ctx, row));
-        return Ok(arg1)
+        Ok(arg1)
     }
 
-    pub fn if_null_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Decimal>> {
+    pub fn if_null_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Decimal>> {
         let arg0 = try!(self.children[0].eval_decimal(ctx, row));
         if !arg0.is_some() {
-            return Ok(arg0.map(|x| x.into_owned()))
+            return Ok(arg0.map(|x| x.into_owned()));
         }
         let arg1 = try!(self.children[0].eval_decimal(ctx, row));
-        return Ok(arg1.map(|x| x.into_owned()))
+        Ok(arg1.map(|x| x.into_owned()))
     }
 
     pub fn if_null_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<u8>>> {
         let arg0 = try!(self.children[0].eval_string(ctx, row));
         if !arg0.is_some() {
-            return Ok(arg0.map(|x| x.into_owned()))
+            return Ok(arg0.map(|x| x.into_owned()));
         }
         let arg1 = try!(self.children[0].eval_string(ctx, row));
-        return Ok(arg1.map(|x| x.into_owned()))
+        Ok(arg1.map(|x| x.into_owned()))
     }
 
     pub fn if_null_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
         let arg0 = try!(self.children[0].eval_time(ctx, row));
         if !arg0.is_some() {
-            return Ok(arg0.map(|x| x.into_owned()))
+            return Ok(arg0.map(|x| x.into_owned()));
         }
         let arg1 = try!(self.children[0].eval_time(ctx, row));
-        return Ok(arg1.map(|x| x.into_owned()))
+        Ok(arg1.map(|x| x.into_owned()))
     }
 
-    pub fn if_null_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Duration>> {
+    pub fn if_null_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Duration>> {
         let arg0 = try!(self.children[0].eval_duration(ctx, row));
         if !arg0.is_some() {
-            return Ok(arg0.map(|x| x.into_owned()))
+            return Ok(arg0.map(|x| x.into_owned()));
         }
         let arg1 = try!(self.children[0].eval_duration(ctx, row));
-        return Ok(arg1.map(|x| x.into_owned()))
+        Ok(arg1.map(|x| x.into_owned()))
     }
 
     pub fn if_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {

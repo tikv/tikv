@@ -24,7 +24,7 @@ impl FnCall {
         match (arg0, arg1) {
             (None, None) => Ok(None),
             (Some(0), _) | (_, Some(0)) => Ok(Some(0)),
-            _ => Ok(Some(1))
+            _ => Ok(Some(1)),
         }
     }
 
@@ -33,8 +33,7 @@ impl FnCall {
         let arg1 = try!(self.children[1].eval_int(ctx, row));
         match (arg0, arg1) {
             (None, None) => Ok(None),
-            (None, Some(0)) | (Some(0), None) => Ok(Some(0)),
-            (Some(0), Some(0)) => Ok(Some(0)),
+            (None, Some(0)) | (Some(0), None) | (Some(0), Some(0)) => Ok(Some(0)),
             _ => Ok(Some(1)),
         }
     }
@@ -43,9 +42,7 @@ impl FnCall {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         let arg1 = try!(self.children[1].eval_int(ctx, row));
         match (arg0, arg1) {
-            (None, _) => Ok(None),
-            (_, None) => Ok(None),
-            (Some(0), Some(0)) => Ok(Some(0)),
+            (None, _) | (_, None) => Ok(None),
             (Some(0), _) | (_, Some(0)) => Ok(Some(1)),
             _ => Ok(Some(0)),
         }
@@ -54,8 +51,7 @@ impl FnCall {
     pub fn real_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_int(ctx, row));
         match input {
-            None => Ok(Some(0)),
-            Some(0) => Ok(Some(0)),
+            None | Some(0) => Ok(Some(0)),
             _ => Ok(Some(1)),
         }
     }
@@ -71,15 +67,14 @@ impl FnCall {
     pub fn int_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_int(ctx, row));
         match input {
-            None => Ok(Some(0)),
-            Some(0) => Ok(Some(0)),
+            None | Some(0) => Ok(Some(0)),
             _ => Ok(Some(1)),
         }
     }
 
     pub fn real_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_real(ctx, row));
-        // Shouldn't do this, for compatible tidb bug.
+        // Shouldn't compare float to 0 directly, but for compatibility to TiDB
         if input.is_none() || input.unwrap() == 0.0 {
             return Ok(Some(0));
         }
@@ -97,7 +92,6 @@ impl FnCall {
     pub fn int_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_int(ctx, row));
         match input {
-            None => Ok(Some(0)),
             Some(0) => Ok(Some(1)),
             _ => Ok(Some(0)),
         }
@@ -116,7 +110,11 @@ impl FnCall {
         unimplemented!()
     }
 
-    pub fn unary_minus_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn unary_minus_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<i64>> {
         unimplemented!()
     }
 
