@@ -493,17 +493,17 @@ impl FnCall {
         }
         let mut val = try!(Time::from_duration(&ctx.tz, val.unwrap()));
         try!(val.round_frac(self.tp.get_decimal() as i8));
-        // TODO: tidb only update tp when tp is Date
         try!(val.set_tp(self.tp.get_tp() as u8));
         Ok(Some(val))
     }
 
-    pub fn cast_json_as_time(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Time>>> {
-        unimplemented!()
+    pub fn cast_json_as_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
+        let val = try!(self.children[0].eval_json(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = try!(val.unwrap().unquote());
+        Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
     pub fn cast_int_as_duration(
