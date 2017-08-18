@@ -11,13 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 // FIXME(shirly): remove following later
-#![allow(dead_code,unused_variables)]
+#![allow(dead_code, unused_variables)]
 
+mod column;
+mod constant;
+mod fncall;
 mod builtin_cast;
 mod compare;
+use self::compare::CmpOp;
 
 use std::io;
-use std::convert::TryFrom;
+use std::borrow::Cow;
 use std::string::FromUtf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
@@ -115,90 +119,136 @@ impl Expression {
 
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
+            Expression::Constant(ref constant) => constant.eval_int(),
+            Expression::ColumnRef(ref column) => column.eval_int(row),
             Expression::ScalarFn(ref f) => match f.sig {
-                ScalarFuncSig::LTInt |
-                ScalarFuncSig::LEInt |
-                ScalarFuncSig::GTInt |
-                ScalarFuncSig::GEInt |
-                ScalarFuncSig::EQInt |
-                ScalarFuncSig::NEInt |
-                ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, f.sig),
+                ScalarFuncSig::LTInt => f.compare_int(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEInt => f.compare_int(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTInt => f.compare_int(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEInt => f.compare_int(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQInt => f.compare_int(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEInt => f.compare_int(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTReal |
-                ScalarFuncSig::LEReal |
-                ScalarFuncSig::GTReal |
-                ScalarFuncSig::GEReal |
-                ScalarFuncSig::EQReal |
-                ScalarFuncSig::NEReal |
-                ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, f.sig),
+                ScalarFuncSig::LTReal => f.compare_real(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEReal => f.compare_real(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTReal => f.compare_real(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEReal => f.compare_real(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQReal => f.compare_real(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEReal => f.compare_real(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTDecimal |
-                ScalarFuncSig::LEDecimal |
-                ScalarFuncSig::GTDecimal |
-                ScalarFuncSig::GEDecimal |
-                ScalarFuncSig::EQDecimal |
-                ScalarFuncSig::NEDecimal |
-                ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, f.sig),
+                ScalarFuncSig::LTDecimal => f.compare_decimal(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEDecimal => f.compare_decimal(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTDecimal => f.compare_decimal(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEDecimal => f.compare_decimal(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQDecimal => f.compare_decimal(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEDecimal => f.compare_decimal(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTString |
-                ScalarFuncSig::LEString |
-                ScalarFuncSig::GTString |
-                ScalarFuncSig::GEString |
-                ScalarFuncSig::EQString |
-                ScalarFuncSig::NEString |
-                ScalarFuncSig::NullEQString => f.compare_string(ctx, row, f.sig),
+                ScalarFuncSig::LTString => f.compare_string(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEString => f.compare_string(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTString => f.compare_string(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEString => f.compare_string(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQString => f.compare_string(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEString => f.compare_string(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQString => f.compare_string(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTTime |
-                ScalarFuncSig::LETime |
-                ScalarFuncSig::GTTime |
-                ScalarFuncSig::GETime |
-                ScalarFuncSig::EQTime |
-                ScalarFuncSig::NETime |
-                ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, f.sig),
+                ScalarFuncSig::LTTime => f.compare_time(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LETime => f.compare_time(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTTime => f.compare_time(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GETime => f.compare_time(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQTime => f.compare_time(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NETime => f.compare_time(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTDuration |
-                ScalarFuncSig::LEDuration |
-                ScalarFuncSig::GTDuration |
-                ScalarFuncSig::GEDuration |
-                ScalarFuncSig::EQDuration |
-                ScalarFuncSig::NEDuration |
-                ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, f.sig),
+                ScalarFuncSig::LTDuration => f.compare_duration(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEDuration => f.compare_duration(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTDuration => f.compare_duration(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEDuration => f.compare_duration(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQDuration => f.compare_duration(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEDuration => f.compare_duration(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LTJson |
-                ScalarFuncSig::LEJson |
-                ScalarFuncSig::GTJson |
-                ScalarFuncSig::GEJson |
-                ScalarFuncSig::EQJson |
-                ScalarFuncSig::NEJson |
-                ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, f.sig),
+                ScalarFuncSig::LTJson => f.compare_json(ctx, row, CmpOp::LT),
+                ScalarFuncSig::LEJson => f.compare_json(ctx, row, CmpOp::LE),
+                ScalarFuncSig::GTJson => f.compare_json(ctx, row, CmpOp::GT),
+                ScalarFuncSig::GEJson => f.compare_json(ctx, row, CmpOp::GE),
+                ScalarFuncSig::EQJson => f.compare_json(ctx, row, CmpOp::EQ),
+                ScalarFuncSig::NEJson => f.compare_json(ctx, row, CmpOp::NE),
+                ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
-            _ => unimplemented!(),
         }
     }
 
     fn eval_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        unimplemented!()
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_real(),
+            Expression::ColumnRef(ref column) => column.eval_real(row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Decimal>> {
-        unimplemented!()
+    fn eval_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_decimal(),
+            Expression::ColumnRef(ref column) => column.eval_decimal(row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<u8>>> {
-        unimplemented!()
+    fn eval_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_string(),
+            Expression::ColumnRef(ref column) => column.eval_string(row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
-        unimplemented!()
+    fn eval_time<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_time(),
+            Expression::ColumnRef(ref column) => column.eval_time(row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Duration>> {
-        unimplemented!()
+    fn eval_duration<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Duration>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_duration(),
+            Expression::ColumnRef(ref column) => column.eval_duration(row),
+            _ => unimplemented!(),
+        }
     }
 
-    fn eval_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
-        unimplemented!()
+    fn eval_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        match *self {
+            Expression::Constant(ref constant) => constant.eval_json(),
+            Expression::ColumnRef(ref column) => column.eval_json(row),
+            _ => unimplemented!(),
+        }
     }
 
     /// IsHybridType checks whether a ClassString expression is a hybrid type value which will
@@ -221,11 +271,8 @@ impl Expression {
     }
 }
 
-impl TryFrom<Expr> for Expression {
-    type Error = Error;
-
-    fn try_from(expr: Expr) -> ::std::result::Result<Expression, Self::Error> {
-        let mut expr = expr;
+impl Expression {
+    fn build(mut expr: Expr, row_len: usize) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -258,45 +305,83 @@ impl TryFrom<Expr> for Expression {
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            // TODO(andelf): fn sig verification
             ExprType::ScalarFunc => {
-                let sig = expr.get_sig();
-                let mut expr = expr;
+                try!(FnCall::check_args(
+                    expr.get_sig(),
+                    expr.get_children().len()
+                ));
                 expr.take_children()
                     .into_iter()
-                    .map(Expression::try_from)
+                    .map(|child| Expression::build(child, row_len))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
-                            sig: sig,
+                            sig: expr.get_sig(),
                             children: children,
                             tp: tp,
                         })
                     })
             }
-            ExprType::ColumnRef => expr.get_val()
-                .decode_i64()
-                .map(|i| {
-                    Expression::ColumnRef(Column {
-                        offset: i as usize,
-                        tp: tp,
-                    })
-                })
-                .map_err(Error::from),
+            ExprType::ColumnRef => {
+                let offset = try!(expr.get_val().decode_i64().map_err(Error::from)) as usize;
+                try!(Column::check_offset(offset, row_len));
+                let column = Column {
+                    offset: offset,
+                    tp: tp,
+                };
+                Ok(Expression::ColumnRef(column))
+            }
             unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
         }
     }
 }
 
-#[test]
-fn test_smoke() {
-    use std::convert::TryInto;
-    use util::codec::number::NumberEncoder;
+#[cfg(test)]
+mod test {
+    use coprocessor::codec::Datum;
+    use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
+    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+    use super::Expression;
 
-    let mut pb = Expr::new();
-    pb.set_tp(ExprType::ColumnRef);
-    pb.mut_val().encode_i64(1).unwrap();
+    pub fn fncall_expr(sig: ScalarFuncSig, ft: FieldType, children: &[Expr]) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(sig);
+        expr.set_field_type(ft);
+        for child in children {
+            expr.mut_children().push(child.clone());
+        }
+        expr
+    }
 
-    let e: Result<Expression> = pb.try_into();
-    let _ = e.unwrap();
+    #[test]
+    fn test_expression_build() {
+        let colref = col_expr(1);
+        let constant = datum_expr(Datum::Null);
+
+        let tests = vec![
+            (colref.clone(), 1, false),
+            (colref.clone(), 2, true),
+            (constant.clone(), 0, true),
+            (
+                fncall_expr(
+                    ScalarFuncSig::LTInt,
+                    FieldType::new(),
+                    &[colref.clone(), constant.clone()],
+                ),
+                2,
+                true,
+            ),
+            (
+                fncall_expr(ScalarFuncSig::LTInt, FieldType::new(), &[colref.clone()]),
+                0,
+                false,
+            ),
+        ];
+
+        for tt in tests.into_iter() {
+            let expr = Expression::build(tt.0, tt.1);
+            assert_eq!(expr.is_ok(), tt.2);
+        }
+    }
 }

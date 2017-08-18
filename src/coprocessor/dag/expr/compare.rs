@@ -13,235 +13,130 @@
 
 use std::i64;
 use std::cmp::Ordering;
-
-use tipb::expression::ScalarFuncSig;
-
 use coprocessor::codec::{datum, mysql, Datum};
-use super::{FnCall, Result, StatementContext};
+use super::{Error, FnCall, Result, StatementContext};
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum CmpOp {
+    LT,
+    LE,
+    GT,
+    GE,
+    NE,
+    EQ,
+    NullEQ,
+}
 
 impl FnCall {
     pub fn compare_int(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-        sig: ScalarFuncSig,
+        op: CmpOp,
     ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_int(ctx, row));
         let rhs = try!(self.children[1].eval_int(ctx, row));
-        match (lhs, rhs) {
-            (None, None) if sig == ScalarFuncSig::NullEQInt => Ok(Some(1)),
-            (Some(lhs), Some(rhs)) => {
-                let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
-                let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
-                let ordering = cmp_i64_with_unsigned_flag(lhs, lhs_unsigned, rhs, rhs_unsigned);
-                Ok(Some(match sig {
-                    ScalarFuncSig::LTInt => ordering == Ordering::Less,
-                    ScalarFuncSig::LEInt => ordering != Ordering::Greater,
-                    ScalarFuncSig::GTInt => ordering == Ordering::Greater,
-                    ScalarFuncSig::GEInt => ordering != Ordering::Less,
-                    ScalarFuncSig::NEInt => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQInt | ScalarFuncSig::NullEQInt => ordering == Ordering::Equal,
-                    _ => unreachable!(),
-                } as i64))
-            }
-            _ => Ok(if sig == ScalarFuncSig::NullEQInt {
-                Some(0)
-            } else {
-                None
-            }),
-        }
+        do_compare(lhs, rhs, op, |l, r| {
+            let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+            let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+            Ok(cmp_i64_with_unsigned_flag(l, lhs_unsigned, r, rhs_unsigned))
+        })
     }
 
     pub fn compare_real(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-        sig: ScalarFuncSig,
+        op: CmpOp,
     ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_real(ctx, row));
         let rhs = try!(self.children[1].eval_real(ctx, row));
-        match (lhs, rhs) {
-            (None, None) if sig == ScalarFuncSig::NullEQReal => Ok(Some(1)),
-            (Some(lhs), Some(rhs)) => {
-                let ordering = try!(datum::cmp_f64(lhs, rhs));
-                Ok(Some(match sig {
-                    ScalarFuncSig::LTReal => ordering == Ordering::Less,
-                    ScalarFuncSig::LEReal => ordering != Ordering::Greater,
-                    ScalarFuncSig::GTReal => ordering == Ordering::Greater,
-                    ScalarFuncSig::GEReal => ordering != Ordering::Less,
-                    ScalarFuncSig::NEReal => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQReal | ScalarFuncSig::NullEQReal => {
-                        ordering == Ordering::Equal
-                    }
-                    _ => unreachable!(),
-                } as i64))
-            }
-            _ => Ok(if sig == ScalarFuncSig::NullEQReal {
-                Some(0)
-            } else {
-                None
-            }),
-        }
+        do_compare(
+            lhs,
+            rhs,
+            op,
+            |l, r| datum::cmp_f64(l, r).map_err(Error::from),
+        )
     }
 
     pub fn compare_decimal(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-        sig: ScalarFuncSig,
+        op: CmpOp,
     ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_decimal(ctx, row));
         let rhs = try!(self.children[1].eval_decimal(ctx, row));
-        match (lhs, rhs) {
-            (None, None) if sig == ScalarFuncSig::NullEQDecimal => Ok(Some(1)),
-            (Some(lhs), Some(rhs)) => {
-                let ordering = lhs.cmp(&rhs);
-                Ok(Some(match sig {
-                    ScalarFuncSig::LTDecimal => ordering == Ordering::Less,
-                    ScalarFuncSig::LEDecimal => ordering != Ordering::Greater,
-                    ScalarFuncSig::GTDecimal => ordering == Ordering::Greater,
-                    ScalarFuncSig::GEDecimal => ordering != Ordering::Less,
-                    ScalarFuncSig::NEDecimal => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQDecimal | ScalarFuncSig::NullEQDecimal => {
-                        ordering == Ordering::Equal
-                    }
-                    _ => unreachable!(),
-                } as i64))
-            }
-            _ => Ok(if sig == ScalarFuncSig::NullEQDecimal {
-                Some(0)
-            } else {
-                None
-            }),
-        }
+        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
     }
 
     pub fn compare_string(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-        sig: ScalarFuncSig,
+        op: CmpOp,
     ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_string(ctx, row));
         let rhs = try!(self.children[1].eval_string(ctx, row));
-        match (lhs, rhs) {
-            (None, None) if sig == ScalarFuncSig::NullEQString => Ok(Some(1)),
-            (Some(lhs), Some(rhs)) => {
-                let ordering = lhs.cmp(&rhs);
-                Ok(Some(match sig {
-                    ScalarFuncSig::LTString => ordering == Ordering::Less,
-                    ScalarFuncSig::LEString => ordering != Ordering::Greater,
-                    ScalarFuncSig::GTString => ordering == Ordering::Greater,
-                    ScalarFuncSig::GEString => ordering != Ordering::Less,
-                    ScalarFuncSig::NEString => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQString | ScalarFuncSig::NullEQString => {
-                        ordering == Ordering::Equal
-                    }
-                    _ => unreachable!(),
-                } as i64))
-            }
-            _ => Ok(if sig == ScalarFuncSig::NullEQString {
-                Some(0)
-            } else {
-                None
-            }),
-        }
+        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
     }
 
     pub fn compare_time(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-        sig: ScalarFuncSig,
+        op: CmpOp,
     ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_time(ctx, row));
         let rhs = try!(self.children[1].eval_time(ctx, row));
-        match (lhs, rhs) {
-            (None, None) if sig == ScalarFuncSig::NullEQTime => Ok(Some(1)),
-            (Some(lhs), Some(rhs)) => {
-                let ordering = lhs.cmp(&rhs);
-                Ok(Some(match sig {
-                    ScalarFuncSig::LTTime => ordering == Ordering::Less,
-                    ScalarFuncSig::LETime => ordering != Ordering::Greater,
-                    ScalarFuncSig::GTTime => ordering == Ordering::Greater,
-                    ScalarFuncSig::GETime => ordering != Ordering::Less,
-                    ScalarFuncSig::NETime => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQTime | ScalarFuncSig::NullEQTime => {
-                        ordering == Ordering::Equal
-                    }
-                    _ => unreachable!(),
-                } as i64))
-            }
-            _ => Ok(if sig == ScalarFuncSig::NullEQTime {
-                Some(0)
-            } else {
-                None
-            }),
-        }
+        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
     }
 
     pub fn compare_duration(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-        sig: ScalarFuncSig,
+        op: CmpOp,
     ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_duration(ctx, row));
         let rhs = try!(self.children[1].eval_duration(ctx, row));
-        match (lhs, rhs) {
-            (None, None) if sig == ScalarFuncSig::NullEQDuration => Ok(Some(1)),
-            (Some(lhs), Some(rhs)) => {
-                let ordering = lhs.cmp(&rhs);
-                Ok(Some(match sig {
-                    ScalarFuncSig::LTDuration => ordering == Ordering::Less,
-                    ScalarFuncSig::LEDuration => ordering != Ordering::Greater,
-                    ScalarFuncSig::GTDuration => ordering == Ordering::Greater,
-                    ScalarFuncSig::GEDuration => ordering != Ordering::Less,
-                    ScalarFuncSig::NEDuration => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQDuration | ScalarFuncSig::NullEQDuration => {
-                        ordering == Ordering::Equal
-                    }
-                    _ => unreachable!(),
-                } as i64))
-            }
-            _ => Ok(if sig == ScalarFuncSig::NullEQDuration {
-                Some(0)
-            } else {
-                None
-            }),
-        }
+        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
     }
 
     pub fn compare_json(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-        sig: ScalarFuncSig,
+        op: CmpOp,
     ) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_json(ctx, row));
         let rhs = try!(self.children[1].eval_json(ctx, row));
-        match (lhs, rhs) {
-            (None, None) if sig == ScalarFuncSig::NullEQJson => Ok(Some(1)),
-            (Some(lhs), Some(rhs)) => {
-                let ordering = lhs.cmp(&rhs);
-                Ok(Some(match sig {
-                    ScalarFuncSig::LTJson => ordering == Ordering::Less,
-                    ScalarFuncSig::LEJson => ordering != Ordering::Greater,
-                    ScalarFuncSig::GTJson => ordering == Ordering::Greater,
-                    ScalarFuncSig::GEJson => ordering != Ordering::Less,
-                    ScalarFuncSig::NEJson => ordering != Ordering::Equal,
-                    ScalarFuncSig::EQJson | ScalarFuncSig::NullEQJson => {
-                        ordering == Ordering::Equal
-                    }
-                    _ => unreachable!(),
-                } as i64))
-            }
-            _ => Ok(if sig == ScalarFuncSig::NullEQJson {
-                Some(0)
-            } else {
-                None
-            }),
+        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
+    }
+}
+
+fn do_compare<T, F>(lhs: Option<T>, rhs: Option<T>, op: CmpOp, get_order: F) -> Result<Option<i64>>
+where
+    F: Fn(T, T) -> Result<Ordering>,
+{
+    match (lhs, rhs) {
+        (None, None) if op == CmpOp::NullEQ => Ok(Some(1)),
+        (Some(lhs), Some(rhs)) => {
+            let ordering = try!(get_order(lhs, rhs));
+            let r = match op {
+                CmpOp::LT => ordering == Ordering::Less,
+                CmpOp::LE => ordering != Ordering::Greater,
+                CmpOp::GT => ordering == Ordering::Greater,
+                CmpOp::GE => ordering != Ordering::Less,
+                CmpOp::NE => ordering != Ordering::Equal,
+                CmpOp::EQ | CmpOp::NullEQ => ordering == Ordering::Equal,
+            };
+            Ok(Some(r as i64))
         }
+        _ => match op {
+            CmpOp::NullEQ => Ok(Some(0)),
+            _ => Ok(None),
+        },
     }
 }
 
