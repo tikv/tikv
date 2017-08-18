@@ -277,9 +277,9 @@ impl Ord for Duration {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::mysql::MAX_FSP;
     use util::escape;
     use super::*;
-    use super::super::MAX_FSP;
 
     #[test]
     fn test_parse() {
