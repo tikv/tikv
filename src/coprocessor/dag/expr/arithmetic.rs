@@ -205,6 +205,54 @@ mod test {
                 str2dec("2.2"),
                 str2dec("3.3"),
             ),
+            (
+                ScalarFuncSig::MinusInt,
+                Datum::I64(12),
+                Datum::I64(1),
+                Datum::I64(11),
+            ),
+            (
+                ScalarFuncSig::MinusIntUnsigned,
+                Datum::U64(12),
+                Datum::U64(1),
+                Datum::U64(11),
+            ),
+            (
+                ScalarFuncSig::MinusReal,
+                Datum::F64(1.01001),
+                Datum::F64(-0.01),
+                Datum::F64(1.02001),
+            ),
+            (
+                ScalarFuncSig::MinusDecimal,
+                str2dec("1.1"),
+                str2dec("2.2"),
+                str2dec("-1.1"),
+            ),
+            (
+                ScalarFuncSig::MultiplyInt,
+                Datum::I64(12),
+                Datum::I64(1),
+                Datum::I64(12),
+            ),
+            (
+                ScalarFuncSig::MultiplyIntUnsigned,
+                Datum::U64(12),
+                Datum::U64(1),
+                Datum::U64(12),
+            ),
+            (
+                ScalarFuncSig::MultiplyReal,
+                Datum::F64(1.01001),
+                Datum::F64(-0.01),
+                Datum::F64(-0.0101001),
+            ),
+            (
+                ScalarFuncSig::MultiplyDecimal,
+                str2dec("1.1"),
+                str2dec("2.2"),
+                str2dec("2.42"),
+            ),
         ];
 
         let ctx = StatementContext::default();
