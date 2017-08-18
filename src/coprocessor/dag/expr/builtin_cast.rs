@@ -510,24 +510,45 @@ impl FnCall {
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Duration>>> {
-        unimplemented!()
+    ) -> Result<Option<Duration>> {
+        let val = try!(self.children[0].eval_int(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = format!("{}", val.unwrap());
+        Ok(Some(try!(
+            Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)
+        )))
     }
 
     pub fn cast_real_as_duration(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Duration>>> {
-        unimplemented!()
+    ) -> Result<Option<Duration>> {
+        let val = try!(self.children[0].eval_real(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = format!("{}", val.unwrap());
+        Ok(Some(try!(
+            Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)
+        )))
     }
 
     pub fn cast_decimal_as_duration(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Duration>>> {
-        unimplemented!()
+    ) -> Result<Option<Duration>> {
+        let val = try!(self.children[0].eval_decimal(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = val.unwrap().to_string();
+        Ok(Some(try!(
+            Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)
+        )))
     }
 
     pub fn cast_str_as_duration(
