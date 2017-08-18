@@ -145,8 +145,8 @@ where
     F: Fn(T, T) -> Result<T>,
 {
     match (lhs, rhs) {
-        (None, _) | (_, None) => Ok(None),
         (Some(lhs), Some(rhs)) => op(lhs, rhs).map(|t| Some(t)),
+        (None, _) | (_, None) => Ok(None),
     }
 }
 
