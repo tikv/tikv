@@ -13,8 +13,8 @@
 
 use std::{f64, i64, u64};
 use std::borrow::Cow;
-use coprocessor::codec::{datum, mysql, Datum};
-use coprocessor::codec::mysql::{Decimal, MAX_FSP};
+use coprocessor::codec::Datum;
+use coprocessor::codec::mysql::Decimal;
 use super::{Error, FnCall, Result, StatementContext};
 
 impl FnCall {
@@ -26,7 +26,7 @@ impl FnCall {
             if !res.is_finite() {
                 return Err(Error::Overflow);
             }
-            Ok(r)
+            Ok(res)
         })
     }
 
@@ -74,7 +74,7 @@ impl FnCall {
             if !res.is_finite() {
                 return Err(Error::Overflow);
             }
-            Ok(r)
+            Ok(res)
         })
     }
 
@@ -122,7 +122,7 @@ impl FnCall {
             if !res.is_finite() {
                 return Err(Error::Overflow);
             }
-            Ok(r)
+            Ok(res)
         })
     }
 
@@ -173,5 +173,196 @@ where
     match (lhs, rhs) {
         (None, _) | (_, None) => Ok(None),
         (Some(lhs), Some(rhs)) => op(lhs, rhs).map(|t| Some(t)),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{f64, i64, u64};
+    use tipb::expression::ScalarFuncSig;
+    use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::{Error, Expression, StatementContext};
+    use coprocessor::dag::expr::test::{fncall_expr, str2dec};
+    use coprocessor::select::xeval::evaluator::test::datum_expr;
+
+    fn check_overflow(e: Error) -> Result<(), ()> {
+        match e {
+            Error::Overflow => Ok(()),
+            _ => Err(()),
+        }
+    }
+
+    #[test]
+    fn test_arithmetic() {
+        let tests = vec![
+            (
+                ScalarFuncSig::PlusInt,
+                Datum::Null,
+                Datum::I64(1),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::PlusInt,
+                Datum::I64(1),
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::PlusInt,
+                Datum::I64(12),
+                Datum::I64(1),
+                Datum::I64(13),
+            ),
+            (
+                ScalarFuncSig::PlusIntUnsigned,
+                Datum::U64(12),
+                Datum::U64(1),
+                Datum::U64(13),
+            ),
+            (
+                ScalarFuncSig::PlusReal,
+                Datum::F64(1.01001),
+                Datum::F64(-0.01),
+                Datum::F64(1.00001),
+            ),
+            (
+                ScalarFuncSig::PlusDecimal,
+                str2dec("1.1"),
+                str2dec("2.2"),
+                str2dec("3.3"),
+            ),
+        ];
+
+        let ctx = StatementContext::default();
+        for tt in tests {
+            let lhs = datum_expr(tt.1);
+            let rhs = datum_expr(tt.2);
+            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
+            match tt.0 {
+                ScalarFuncSig::PlusInt |
+                ScalarFuncSig::MinusInt |
+                ScalarFuncSig::MultiplyInt |
+                ScalarFuncSig::PlusIntUnsigned |
+                ScalarFuncSig::MinusIntUnsigned |
+                ScalarFuncSig::MultiplyIntUnsigned => {
+                    let lhs = op.eval_int(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::PlusReal | ScalarFuncSig::MinusReal => {
+                    let lhs = op.eval_real(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::MultiplyReal => {
+                    let lhs = op.eval_real(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::PlusDecimal |
+                ScalarFuncSig::MinusDecimal |
+                ScalarFuncSig::MultiplyDecimal => {
+                    let lhs = op.eval_decimal(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_arithmetic_overflow() {
+        let tests = vec![
+            (
+                ScalarFuncSig::PlusInt,
+                Datum::I64(i64::MAX),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::PlusInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MIN),
+            ),
+            (
+                ScalarFuncSig::PlusIntUnsigned,
+                Datum::U64(u64::MAX),
+                Datum::U64(u64::MAX),
+            ),
+            (
+                ScalarFuncSig::PlusReal,
+                Datum::F64(f64::MAX),
+                Datum::F64(f64::MAX),
+            ),
+            (
+                ScalarFuncSig::MinusInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::MinusInt,
+                Datum::I64(i64::MAX),
+                Datum::I64(i64::MIN),
+            ),
+            (
+                ScalarFuncSig::MinusIntUnsigned,
+                Datum::U64(1u64),
+                Datum::U64(2u64),
+            ),
+            (
+                ScalarFuncSig::MinusReal,
+                Datum::F64(f64::MIN),
+                Datum::F64(f64::MAX),
+            ),
+            (
+                ScalarFuncSig::MultiplyInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::MultiplyIntUnsigned,
+                Datum::U64(u64::MAX),
+                Datum::U64(u64::MAX),
+            ),
+            (
+                ScalarFuncSig::MultiplyReal,
+                Datum::F64(f64::MIN),
+                Datum::F64(f64::MAX),
+            ),
+        ];
+
+        let ctx = StatementContext::default();
+        for tt in tests {
+            let lhs = datum_expr(tt.1);
+            let rhs = datum_expr(tt.2);
+            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
+            match tt.0 {
+                ScalarFuncSig::PlusInt |
+                ScalarFuncSig::MinusInt |
+                ScalarFuncSig::MultiplyInt |
+                ScalarFuncSig::PlusIntUnsigned |
+                ScalarFuncSig::MinusIntUnsigned |
+                ScalarFuncSig::MultiplyIntUnsigned => {
+                    let lhs = op.eval_int(&ctx, &[]).unwrap_err();
+                    assert!(check_overflow(lhs).is_ok());
+                }
+                ScalarFuncSig::PlusReal | ScalarFuncSig::MinusReal => {
+                    let lhs = op.eval_real(&ctx, &[]).unwrap_err();
+                    assert!(check_overflow(lhs).is_ok());
+                }
+                ScalarFuncSig::MultiplyReal => {
+                    let lhs = op.eval_real(&ctx, &[]).unwrap_err();
+                    assert!(check_overflow(lhs).is_ok());
+                }
+                ScalarFuncSig::PlusDecimal |
+                ScalarFuncSig::MinusDecimal |
+                ScalarFuncSig::MultiplyDecimal => {
+                    let lhs = op.eval_decimal(&ctx, &[]).unwrap_err();
+                    assert!(check_overflow(lhs).is_ok());
+                }
+                _ => unreachable!(),
+            }
+        }
     }
 }
