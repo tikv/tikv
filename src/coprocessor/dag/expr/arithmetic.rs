@@ -146,7 +146,7 @@ where
 {
     match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => op(lhs, rhs).map(|t| Some(t)),
-        (None, _) | (_, None) => Ok(None),
+        _ => Ok(None),
     }
 }
 
