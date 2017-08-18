@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{f64, i64, u64};
+use std::{f64, i64};
 use std::borrow::Cow;
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::Decimal;
@@ -46,23 +46,15 @@ impl FnCall {
     pub fn plus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_int(ctx, row));
         let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            if (l > 0 && r > i64::MAX - l) || (l < 0 && r < i64::MIN - l) {
-                return Err(Error::Overflow);
-            }
-            Ok(l + r)
-        })
+        do_arithmetic(lhs, rhs, |l, r| l.checked_add(r).ok_or(Error::Overflow))
     }
 
     pub fn plus_uint(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_int(ctx, row));
         let rhs = try!(self.children[1].eval_int(ctx, row));
         do_arithmetic(lhs, rhs, |l, r| {
-            let (l, r) = (l as u64, r as u64);
-            if l > u64::MAX - r {
-                return Err(Error::Overflow);
-            }
-            Ok((l + r) as i64)
+            let res = (l as u64).checked_add(r as u64).ok_or(Error::Overflow);
+            res.map(|u| u as i64)
         })
     }
 
@@ -94,23 +86,15 @@ impl FnCall {
     pub fn minus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_int(ctx, row));
         let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            if (l > 0 && -r > i64::MAX - l) || (l < 0 && -r < i64::MIN - l) {
-                return Err(Error::Overflow);
-            }
-            Ok(l + r)
-        })
+        do_arithmetic(lhs, rhs, |l, r| l.checked_sub(r).ok_or(Error::Overflow))
     }
 
     pub fn minus_uint(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_int(ctx, row));
         let rhs = try!(self.children[1].eval_int(ctx, row));
         do_arithmetic(lhs, rhs, |l, r| {
-            let (l, r) = (l as u64, r as u64);
-            if l < r {
-                return Err(Error::Overflow);
-            }
-            Ok((l - r) as i64)
+            let res = (l as u64).checked_sub(r as u64).ok_or(Error::Overflow);
+            res.map(|u| u as i64)
         })
     }
 
@@ -142,25 +126,15 @@ impl FnCall {
     pub fn multiply_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_int(ctx, row));
         let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let res = l * r;
-            if l != 0 && res / l != r {
-                return Err(Error::Overflow);
-            }
-            Ok(res)
-        })
+        do_arithmetic(lhs, rhs, |l, r| l.checked_mul(r).ok_or(Error::Overflow))
     }
 
     pub fn multiply_uint(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try!(self.children[0].eval_int(ctx, row));
         let rhs = try!(self.children[1].eval_int(ctx, row));
         do_arithmetic(lhs, rhs, |l, r| {
-            let (l, r) = (l as u64, r as u64);
-            let res = l * r;
-            if l != 0 && res / l != r {
-                return Err(Error::Overflow);
-            }
-            Ok(res as i64)
+            let res = (l as u64).checked_mul(r as u64).ok_or(Error::Overflow);
+            res.map(|u| u as i64)
         })
     }
 }
