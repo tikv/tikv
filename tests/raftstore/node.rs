@@ -19,7 +19,6 @@ use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
 
-use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
@@ -160,13 +159,7 @@ impl NodeCluster {
 }
 
 impl Simulator for NodeCluster {
-    fn run_node(
-        &mut self,
-        node_id: u64,
-        cfg: TiKvConfig,
-        engine: Arc<DB>,
-        raft_engine: Arc<DB>,
-    ) -> u64 {
+    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engines: Engines) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
@@ -192,16 +185,17 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        let engines = Engines::new(engine.clone(), raft_engine.clone());
         node.start(
             event_loop,
-            engines,
+            engines.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
         ).unwrap();
         assert!(
-            engine
+            engines
+                .kv_engine
+                .clone()
                 .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
                 .unwrap()
                 .is_none()

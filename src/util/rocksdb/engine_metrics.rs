@@ -14,7 +14,6 @@
 use prometheus::{exponential_buckets, CounterVec, GaugeVec, HistogramVec};
 use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
               HistogramData, DB};
-use storage::CfName;
 use util::rocksdb;
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-size";
@@ -362,8 +361,8 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
     }
 }
 
-pub fn flush_engine_properties(engine: &DB, cfs: &[CfName], name: &str) {
-    for cf in cfs {
+pub fn flush_engine_properties(engine: &DB, name: &str) {
+    for cf in engine.cf_names() {
         let handle = rocksdb::get_cf_handle(engine, cf).unwrap();
         // It is important to monitor each cf's size, especially the "raft" and "lock" column
         // families.

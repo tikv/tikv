@@ -17,7 +17,7 @@ use kvproto::metapb;
 use raftstore::Result;
 use super::keys;
 use super::engine::{Iterable, Mutable};
-use super::peer_storage::write_initial_state;
+use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
 use super::store::Engines;
 use storage::CF_DEFAULT;
 
@@ -45,7 +45,18 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
         keys::MIN_KEY,
         keys::MAX_KEY
     )) {
-        return Err(box_err!("store is not empty and has already had data."));
+        return Err(box_err!("kv store is not empty and has already had data."));
+    }
+
+    if !try!(is_range_empty(
+        &engines.raft_engine,
+        CF_DEFAULT,
+        keys::MIN_KEY,
+        keys::MAX_KEY
+    )) {
+        return Err(box_err!(
+            "raft store is not empty and has already had data."
+        ));
     }
 
     let ident_key = keys::store_ident_key();
@@ -64,8 +75,9 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
     let wb = WriteBatch::new();
     let raft_wb = WriteBatch::new();
     try!(wb.put_msg(&keys::region_state_key(region.get_id()), &state));
-    try!(write_initial_state(&wb, &raft_wb, region.get_id()));
     try!(wb.put_msg(&keys::prepare_bootstrap_key(), region));
+    try!(write_initial_apply_state(&wb, region.get_id()));
+    try!(write_initial_raft_state(&raft_wb, region.get_id()));
     try!(engines.kv_engine.write(wb));
     try!(engines.raft_engine.write(raft_wb));
     Ok(())

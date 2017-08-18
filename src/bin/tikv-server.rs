@@ -114,7 +114,7 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
 fn check_system_config(config: &TiKvConfig) {
     if let Err(e) = util::config::check_max_open_fds(
-        (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
+        (config.rocksdb.max_open_files + config.raftdb.max_open_files + 1000) as u64,
     ) {
         exit_with_msg(format!("{:?}", e));
     }

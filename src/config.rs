@@ -614,6 +614,7 @@ impl TiKvConfig {
                 Path::new(&self.storage.data_dir).join("backup").display()
             );
         }
+
         let kv_db_path = try!(config::canonicalize_sub_path(
             &self.storage.data_dir,
             DEFAULT_ROCKSDB_SUB_DIR
@@ -622,15 +623,9 @@ impl TiKvConfig {
             self.raft_store.raftdb_path =
                 try!(config::canonicalize_path(&self.raft_store.raftdb_path));
         }
-
         if kv_db_path == self.raft_store.raftdb_path {
             return Err(
                 "raft_store.raftdb_path can not same with storage.data_dir/db".into(),
-            );
-        }
-        if !self.rocksdb.wal_dir.is_empty() && self.rocksdb.wal_dir == self.raft_store.raftdb_path {
-            return Err(
-                "raft_store.raftdb_path can not same with rocksdb.wal_dir".into(),
             );
         }
 

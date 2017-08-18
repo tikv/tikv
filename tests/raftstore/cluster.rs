@@ -50,13 +50,7 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(
-        &mut self,
-        node_id: u64,
-        cfg: TiKvConfig,
-        engine: Arc<DB>,
-        raft_engine: Arc<DB>,
-    ) -> u64;
+    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engines: Engines) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command_on_node(
@@ -144,12 +138,7 @@ impl<T: Simulator> Cluster<T> {
         if self.engines.is_empty() {
             let mut sim = self.sim.wl();
             for engines in &self.dbs {
-                let node_id = sim.run_node(
-                    0,
-                    self.cfg.clone(),
-                    engines.kv_engine.clone(),
-                    engines.raft_engine.clone(),
-                );
+                let node_id = sim.run_node(0, self.cfg.clone(), engines.clone());
                 self.engines.insert(node_id, engines.clone());
             }
         } else {
@@ -178,13 +167,9 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn run_node(&mut self, node_id: u64) {
         debug!("starting node {}", node_id);
-        let engines = self.engines[&node_id].clone();
-        self.sim.wl().run_node(
-            node_id,
-            self.cfg.clone(),
-            engines.kv_engine,
-            engines.raft_engine,
-        );
+        self.sim
+            .wl()
+            .run_node(node_id, self.cfg.clone(), self.engines[&node_id].clone());
         debug!("node {} started", node_id);
     }
 

@@ -18,7 +18,6 @@ use std::thread::{Builder, JoinHandle};
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
-use storage::{CfName, ALL_CFS, CF_DEFAULT};
 
 pub const DEFAULT_FLUSER_INTERVAL: u64 = 10000;
 
@@ -52,8 +51,8 @@ impl MetricsFlusher {
                 .name(thd_name!("rocksb-metrics-flusher"))
                 .spawn(move || {
                     while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                        flush_metrics(&db, ALL_CFS, "kv");
-                        flush_metrics(&raft_db, &[CF_DEFAULT], "raft");
+                        flush_metrics(&db, "kv");
+                        flush_metrics(&raft_db, "raft");
                     }
                 })
         );
@@ -75,7 +74,7 @@ impl MetricsFlusher {
     }
 }
 
-fn flush_metrics(db: &DB, cfs: &[CfName], name: &str) {
+fn flush_metrics(db: &DB, name: &str) {
     for t in ENGINE_TICKER_TYPES {
         let v = db.get_statistics_ticker_count(*t);
         flush_engine_ticker_metrics(*t, v, name);
@@ -85,7 +84,7 @@ fn flush_metrics(db: &DB, cfs: &[CfName], name: &str) {
             flush_engine_histogram_metrics(*t, v, name);
         }
     }
-    flush_engine_properties(db, cfs, name);
+    flush_engine_properties(db, name);
 }
 
 #[cfg(test)]

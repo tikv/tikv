@@ -1284,31 +1284,19 @@ pub fn do_snapshot(
     Ok(snapshot)
 }
 
-// When we bootstrap the region or handling split new region, we must
-// call this to initialize region local state first.
-pub fn write_initial_state<T: Mutable>(kv_wb: &T, raft_wb: &T, region_id: u64) -> Result<()> {
+// When we bootstrap the region we must call this to initialize region local state first.
+pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::new();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
     raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
 
-    let mut apply_state = RaftApplyState::new();
-    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
-    apply_state
-        .mut_truncated_state()
-        .set_index(RAFT_INIT_LOG_INDEX);
-    apply_state
-        .mut_truncated_state()
-        .set_term(RAFT_INIT_LOG_TERM);
-
     try!(raft_wb.put_msg(&keys::raft_state_key(region_id), &raft_state));
-    try!(kv_wb.put_msg(&keys::apply_state_key(region_id), &apply_state));
-
     Ok(())
 }
 
 // When we bootstrap the region or handling split new region, we must
-// call this to initialize region local state first.
+// call this to initialize region apply state first.
 pub fn write_initial_apply_state<T: Mutable>(kv_wb: &T, region_id: u64) -> Result<()> {
     let mut apply_state = RaftApplyState::new();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);

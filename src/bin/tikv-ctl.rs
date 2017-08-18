@@ -219,16 +219,15 @@ fn main() {
             SubCommand::with_name("diff")
                 .about("diff two region keys")
                 .arg(
-                    Arg::with_name("to")
+                    Arg::with_name("to_db")
                         .short("t")
                         .takes_value(true)
                         .help("to which db"),
                 )
                 .arg(
-                    Arg::with_name("raftdb")
-                        .short("raftdb")
+                    Arg::with_name("to_raftdb")
                         .takes_value(true)
-                        .help("to which raft_db"),
+                        .help("to which raftdb"),
                 )
                 .arg(
                     Arg::with_name("region")
@@ -336,9 +335,9 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("diff") {
         let region_id: u64 = matches.value_of("region").unwrap().parse().unwrap();
-        let db_path2 = matches.value_of("to").unwrap();
+        let db_path2 = matches.value_of("to_db").unwrap();
         let db2 = util::rocksdb::open(db_path2, ALL_CFS).unwrap();
-        let raft_db_path2 = matches.value_of("raftdb").unwrap();
+        let raft_db_path2 = matches.value_of("to_raftdb").unwrap();
         let raft_db2 = util::rocksdb::open(raft_db_path2, &[CF_DEFAULT]).unwrap();
         dump_diff(&db, &raft_db, &db2, &raft_db2, region_id);
     } else {

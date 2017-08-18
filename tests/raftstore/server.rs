@@ -18,7 +18,6 @@ use std::time::Duration;
 use std::boxed::FnBox;
 
 use grpc::Environment;
-use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
@@ -78,13 +77,7 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(
-        &mut self,
-        node_id: u64,
-        mut cfg: TiKvConfig,
-        engine: Arc<DB>,
-        raft_engine: Arc<DB>,
-    ) -> u64 {
+    fn run_node(&mut self, node_id: u64, mut cfg: TiKvConfig, engines: Engines) -> u64 {
         assert!(node_id == 0 || !self.metas.contains_key(&node_id));
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -110,7 +103,8 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let mut store =
-            create_raft_storage(sim_router.clone(), engine.clone(), &cfg.storage).unwrap();
+            create_raft_storage(sim_router.clone(), engines.kv_engine.clone(), &cfg.storage)
+                .unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
@@ -132,7 +126,6 @@ impl Simulator for ServerCluster {
         let simulate_trans = SimulateTransport::new(trans.clone());
 
         // Create node.
-        let engines = Engines::new(engine.clone(), raft_engine.clone());
         let mut node = Node::new(
             &mut event_loop,
             &cfg.server,
