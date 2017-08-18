@@ -1412,7 +1412,7 @@ impl<T: Storage> Raft<T> {
         );
         if maybe_commit {
             if self.maybe_commit() {
-                if !self.skip_bcast_commit {
+                if self.should_bcast_commit() {
                     self.bcast_append();
                 }
             } else if old_paused {
@@ -1729,6 +1729,10 @@ impl<T: Storage> Raft<T> {
         true
     }
 
+    pub fn should_bcast_commit(&self) -> bool {
+        !self.skip_bcast_commit || self.pending_conf
+    }
+
     // promotable indicates whether state machine can be promoted to leader,
     // which is true when its own id is in progress list.
     pub fn promotable(&self) -> bool {
@@ -1757,7 +1761,7 @@ impl<T: Storage> Raft<T> {
 
         // The quorum size is now smaller, so see if any pending entries can
         // be committed.
-        if self.maybe_commit() && !self.skip_bcast_commit {
+        if self.maybe_commit() {
             self.bcast_append();
         }
         // If the removed node is the lead_transferee, then abort the leadership transferring.

@@ -15,7 +15,6 @@ use tipb::expression::Expr;
 use coprocessor::codec::datum::Datum;
 use super::{Error, EvalContext, Evaluator, Result};
 
-const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
 pub const TYPE_INT: &'static str = "int";
 pub const TYPE_FLOAT: &'static str = "float";
 
@@ -73,16 +72,6 @@ impl Evaluator {
             Datum::Null => Ok(Datum::Null),
             _ => invalid_type_error(&d, TYPE_FLOAT),
         }
-    }
-
-    pub fn floor_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
-    }
-
-    pub fn floor_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 }
 
@@ -190,44 +179,6 @@ mod test {
                     ScalarFuncSig::AbsReal,
                 ),
                 Datum::F64(0.0_f64),
-            ),
-        ]
-    );
-
-    test_eval!(
-        test_ceil_int,
-        vec![
-            (
-                build_expr_with_sig(
-                    vec![Datum::F64(-1.23)],
-                    ExprType::ScalarFunc,
-                    ScalarFuncSig::CeilInt,
-                ),
-                Datum::I64(-1),
-            ),
-            (
-                build_expr_with_sig(
-                    vec![Datum::F64(1.23)],
-                    ExprType::ScalarFunc,
-                    ScalarFuncSig::CeilInt,
-                ),
-                Datum::I64(2),
-            ),
-            (
-                build_expr_with_sig(
-                    vec![Datum::F64(2.0)],
-                    ExprType::ScalarFunc,
-                    ScalarFuncSig::CeilInt,
-                ),
-                Datum::I64(2),
-            ),
-            (
-                build_expr_with_sig(
-                    vec![Datum::Null],
-                    ExprType::ScalarFunc,
-                    ScalarFuncSig::CeilInt,
-                ),
-                Datum::Null,
             ),
         ]
     );

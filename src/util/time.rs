@@ -157,7 +157,7 @@ use self::inner::monotonic_coarse_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
-const NANOSECONDS_PER_MILLISECOND: i32 = 1_000_000;
+const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
@@ -210,7 +210,7 @@ mod inner {
         let errno = unsafe { libc::clock_gettime(clock, &mut t) };
         if errno != 0 {
             panic!(
-                "failed to get monotonic raw locktime, err {}",
+                "failed to get clocktime, err {}",
                 io::Error::last_os_error()
             );
         }
@@ -268,7 +268,7 @@ impl Instant {
             (later - earlier).to_std().unwrap()
         } else {
             panic!(
-                "system time jumped back, {:.9} -> {:.9}",
+                "monotonic time jumped back, {:.9} -> {:.9}",
                 earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
                 later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
             );
@@ -278,20 +278,23 @@ impl Instant {
     // It is different from `elapsed_duration`, the resolution here is millisecond.
     // The processors in an SMP system do not start all at exactly the same time
     // and therefore the timer registers are typically running at an offset.
-    // Use millisecond resolution for ignoring the error.
+    // Use millisecond resolution for ignoring the error, does not panic.
+    // See more: https://linux.die.net/man/2/clock_gettime
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
         let later_ms =
-            later.sec * MILLISECOND_PER_SECOND + (later.nsec / NANOSECONDS_PER_MILLISECOND) as i64;
+            later.sec * MILLISECOND_PER_SECOND + later.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
         let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND +
-            (earlier.nsec / NANOSECONDS_PER_MILLISECOND) as i64;
-        if later_ms >= earlier_ms {
-            Duration::from_millis((later_ms - earlier_ms) as u64)
+            earlier.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
+        let dur = later_ms - earlier_ms;
+        if dur >= 0 {
+            Duration::from_millis(dur as u64)
         } else {
-            panic!(
-                "system time jumped back, {:.3} -> {:.3}",
+            debug!(
+                "coarse time jumped back, {:.3} -> {:.3}",
                 earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
                 later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
             );
+            Duration::from_millis(0)
         }
     }
 }
@@ -463,12 +466,15 @@ mod tests {
 
     #[test]
     fn test_coarse_instant_on_smp() {
-        for i in 0..100000 {
-            let now = Instant::now_coarse();
+        let zero = Duration::from_millis(0);
+        for i in 0..1_000_000 {
+            let now = Instant::now();
+            let now_coarse = Instant::now_coarse();
             if i % 100 == 0 {
                 thread::yield_now();
             }
-            now.elapsed();
+            assert!(now.elapsed() >= zero);
+            assert!(now_coarse.elapsed() >= zero);
         }
     }
 }
