@@ -18,6 +18,7 @@ mod constant;
 mod fncall;
 mod builtin_cast;
 mod compare;
+mod arithmetic;
 use self::compare::CmpOp;
 
 use std::io;
@@ -26,7 +27,7 @@ use std::string::FromUtf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
@@ -59,6 +60,14 @@ quick_error! {
             description("column offset not found")
             display("illegal column offset: {}", offset)
         }
+        Truncated {
+            description("Truncated")
+            display("error Truncated")
+        }
+        Overflow {
+            description("Overflow")
+            display("error Overflow")
+        }
         Other(desc: &'static str) {
             description(desc)
             display("error {}", desc)
@@ -73,6 +82,16 @@ impl From<FromUtf8Error> for Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+impl<T> Into<Result<T>> for Res<T> {
+    fn into(self) -> Result<T> {
+        match self {
+            Res::Ok(t) => Ok(t),
+            Res::Truncated(_) => Err(Error::Truncated),
+            Res::Overflow(_) => Err(Error::Overflow),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -178,6 +197,11 @@ impl Expression {
                 ScalarFuncSig::NEJson => f.compare_json(ctx, row, CmpOp::NE),
                 ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
 
+                ScalarFuncSig::PlusInt => f.plus_int(ctx, row),
+                ScalarFuncSig::PlusIntUnsigned => f.plus_uint(ctx, row),
+                ScalarFuncSig::MinusInt => f.minus_int(ctx, row),
+                ScalarFuncSig::MinusIntUnsigned => f.minus_uint(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -187,7 +211,11 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
+                ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
+                _ => unimplemented!(),
+            },
         }
     }
 
@@ -199,7 +227,11 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_decimal(),
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
+                ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
+                _ => unimplemented!(),
+            },
         }
     }
 
