@@ -122,7 +122,7 @@ impl RaftClient {
     }
 
     pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
-        let mut conn = self.get_conn(addr, msg.region_id, store_id);
+        let conn = self.get_conn(addr, msg.region_id, store_id);
         conn.buffer
             .as_mut()
             .unwrap()

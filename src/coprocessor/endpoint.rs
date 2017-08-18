@@ -315,7 +315,7 @@ impl BatchRunnable<Task> for Host {
                             ctx.get_peer().get_id(),
                         )
                     };
-                    let mut group = grouped_reqs.entry(key).or_insert_with(Vec::new);
+                    let group = grouped_reqs.entry(key).or_insert_with(Vec::new);
                     group.push(req);
                 }
                 Task::SnapRes(q_id, snap_res) => {
