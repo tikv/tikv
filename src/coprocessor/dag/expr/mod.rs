@@ -379,7 +379,7 @@ mod test {
             ),
         ];
 
-        for tt in tests.into_iter() {
+        for tt in tests {
             let expr = Expression::build(tt.0, tt.1);
             assert_eq!(expr.is_ok(), tt.2);
         }

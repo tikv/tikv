@@ -85,7 +85,7 @@ mod test {
     fn test_column_eval() {
         let dec = "1.1".parse::<Decimal>().unwrap();
         let s = "你好".as_bytes().to_owned();
-        let dur = Duration::parse("01:00:00".as_bytes(), 0).unwrap();
+        let dur = Duration::parse(b"01:00:00", 0).unwrap();
 
         let row = vec![
             Datum::Null,
@@ -108,7 +108,7 @@ mod test {
         ];
 
         let ctx = StatementContext::default();
-        for ii in 0..row.len() {
+        for (ii, exp) in expecteds.iter().enumerate().take(row.len()) {
             let c = col_expr(ii as i64);
             let e = Expression::build(c, row.len()).unwrap();
 
@@ -131,7 +131,7 @@ mod test {
                 .map(|t| t.into_owned());
 
             let result = EvalResults(i, r, dec, s, t, dur, j);
-            assert_eq!(expecteds[ii], result);
+            assert_eq!(*exp, result);
         }
     }
 }
