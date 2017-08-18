@@ -585,24 +585,42 @@ impl FnCall {
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Duration>>> {
-        unimplemented!()
+    ) -> Result<Option<Duration>> {
+        let val = try!(self.children[0].eval_duration(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let mut res = val.unwrap();
+        try!(res.round_frac(self.tp.get_decimal() as i8));
+        Ok(Some(res))
     }
 
     pub fn cast_json_as_duration(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Duration>>> {
-        unimplemented!()
+    ) -> Result<Option<Duration>> {
+        let val = try!(self.children[0].eval_json(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = try!(val.unwrap().unquote());
+        // TODO: tidb would handle truncate here
+        Ok(Some(try!(
+            Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)
+        )))
     }
 
-    pub fn cast_int_as_json(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Json>>> {
-        unimplemented!()
+    pub fn cast_int_as_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
+        let val = try!(self.children[0].eval_int(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+            Ok(Some(Json::U64(val.unwrap() as u64)))
+        } else {
+            Ok(Some(Json::I64(val.unwrap())))
+        }
     }
 
     pub fn cast_real_as_json(
