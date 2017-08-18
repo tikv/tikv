@@ -168,7 +168,7 @@ impl<'a> MvccReader<'a> {
             self.write_cursor = Some(iter);
         }
 
-        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
             try!(cursor.near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write))
         } else {
@@ -297,7 +297,7 @@ impl<'a> MvccReader<'a> {
         assert!(self.scan_mode.is_some());
         try!(self.create_write_cursor());
 
-        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let cursor = self.write_cursor.as_mut().unwrap();
         let mut ok = cursor.seek_to_first(&mut self.statistics.write);
 
         while ok {
@@ -320,8 +320,8 @@ impl<'a> MvccReader<'a> {
 
         loop {
             key = {
-                let mut w_cur = self.write_cursor.as_mut().unwrap();
-                let mut l_cur = self.lock_cursor.as_mut().unwrap();
+                let w_cur = self.write_cursor.as_mut().unwrap();
+                let l_cur = self.lock_cursor.as_mut().unwrap();
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
                     if try!(w_cur.near_seek(&key, &mut self.statistics.write)) {
@@ -366,8 +366,8 @@ impl<'a> MvccReader<'a> {
 
         loop {
             key = {
-                let mut w_cur = self.write_cursor.as_mut().unwrap();
-                let mut l_cur = self.lock_cursor.as_mut().unwrap();
+                let w_cur = self.write_cursor.as_mut().unwrap();
+                let l_cur = self.lock_cursor.as_mut().unwrap();
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
                     if try!(w_cur.near_reverse_seek(&key, &mut self.statistics.write)) {
@@ -413,7 +413,7 @@ impl<'a> MvccReader<'a> {
         F: Fn(&Lock) -> bool,
     {
         try!(self.create_lock_cursor());
-        let mut cursor = self.lock_cursor.as_mut().unwrap();
+        let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
             Some(ref x) => try!(cursor.seek(x, &mut self.statistics.lock)),
             None => cursor.seek_to_first(&mut self.statistics.lock),
@@ -469,7 +469,7 @@ impl<'a> MvccReader<'a> {
     // Get all Value of the given key in CF_DEFAULT
     pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(u64, Value)>> {
         try!(self.create_data_cursor());
-        let mut cursor = self.data_cursor.as_mut().unwrap();
+        let cursor = self.data_cursor.as_mut().unwrap();
         let mut ok = try!(cursor.seek(key, &mut self.statistics.data));
         if !ok {
             return Ok(vec![]);

@@ -467,7 +467,7 @@ mod tests {
     #[test]
     fn test_coarse_instant_on_smp() {
         let zero = Duration::from_millis(0);
-        for i in 0..1000_000 {
+        for i in 0..1_000_000 {
             let now = Instant::now();
             let now_coarse = Instant::now_coarse();
             if i % 100 == 0 {

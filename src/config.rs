@@ -27,8 +27,8 @@ use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, DEFAULT_DA
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
-use util::rocksdb::{CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-                    NoopSliceTransform};
+use util::rocksdb::{CFOptions, EventListener, FixedPrefixSliceTransform,
+                    FixedSuffixSliceTransform, NoopSliceTransform};
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -351,6 +351,7 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.add_event_listener(EventListener::new("kv"));
         opts
     }
 
@@ -512,6 +513,7 @@ impl RaftDbConfig {
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
+        opts.add_event_listener(EventListener::new("raft"));
         opts
     }
 

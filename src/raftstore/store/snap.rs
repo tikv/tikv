@@ -626,8 +626,8 @@ impl Snap {
     }
 
     fn add_kv(&mut self, k: &[u8], v: &[u8]) -> io::Result<()> {
-        let mut cf_file = &mut self.cf_files[self.cf_index];
-        let mut writer = cf_file.sst_writer.as_mut().unwrap();
+        let cf_file = &mut self.cf_files[self.cf_index];
+        let writer = cf_file.sst_writer.as_mut().unwrap();
         if let Err(e) = writer.add(k, v) {
             return Err(io::Error::new(ErrorKind::Other, e));
         }
@@ -1011,8 +1011,8 @@ impl Write for Snap {
                 continue;
             }
 
-            let mut file = cf_file.file.as_mut().unwrap();
-            let mut digest = cf_file.write_digest.as_mut().unwrap();
+            let file = cf_file.file.as_mut().unwrap();
+            let digest = cf_file.write_digest.as_mut().unwrap();
             if next_buf.len() > left {
                 try!(file.write_all(&next_buf[0..left]));
                 digest.write(&next_buf[0..left]);
