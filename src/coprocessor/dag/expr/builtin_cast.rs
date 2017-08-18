@@ -623,28 +623,39 @@ impl FnCall {
         }
     }
 
-    pub fn cast_real_as_json(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Json>>> {
-        unimplemented!()
+    pub fn cast_real_as_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
+        let val = try!(self.children[0].eval_real(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(Json::Double(val.unwrap())))
     }
 
     pub fn cast_decimal_as_json(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
-    ) -> Result<Option<Vec<Json>>> {
-        unimplemented!()
+    ) -> Result<Option<Json>> {
+        let val = try!(self.children[0].eval_decimal(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let val = try!(val.unwrap().as_f64());
+        Ok(Some(Json::Double(val)))
     }
 
-    pub fn cast_str_as_json(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Vec<Json>>> {
-        unimplemented!()
+    pub fn cast_str_as_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
+        let val = try!(self.children[0].eval_string(ctx, row));
+        if val.is_none() {
+            return Ok(None);
+        }
+        let s = try!(String::from_utf8(val.unwrap()));
+        if self.tp.get_decimal() == 0 {
+            let j: Json = try!(s.parse());
+            Ok(Some(j))
+        } else {
+            Ok(Some(Json::String(s)))
+        }
     }
 
     pub fn cast_time_as_json(
