@@ -15,53 +15,121 @@
 #![allow(dead_code)]
 
 use super::{FnCall, Result, StatementContext};
+use coprocessor::codec::Datum;
+use coprocessor::codec::mysql::{Decimal, Duration, Time};
 
 impl FnCall {
     pub fn if_null_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+        let arg0 = try!(self.children[0].eval_int(ctx, row));
+        if !arg0.is_some() {
+            return Ok(arg0)
+        }
+        let arg1 = try!(self.children[0].eval_int(ctx, row));
+        return Ok(arg1)
     }
 
-    pub fn if_null_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_null_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+        let arg0 = try!(self.children[0].eval_real(ctx, row));
+        if !arg0.is_some() {
+            return Ok(arg0)
+        }
+        let arg1 = try!(self.children[0].eval_real(ctx, row));
+        return Ok(arg1)
     }
 
-    pub fn if_null_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_null_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Decimal>> {
+        let arg0 = try!(self.children[0].eval_decimal(ctx, row));
+        if !arg0.is_some() {
+            return Ok(arg0)
+        }
+        let arg1 = try!(self.children[0].eval_decimal(ctx, row));
+        return Ok(arg1)
     }
 
-    pub fn if_null_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_null_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<u8>>> {
+        let arg0 = try!(self.children[0].eval_string(ctx, row));
+        if !arg0.is_some() {
+            return Ok(arg0)
+        }
+        let arg1 = try!(self.children[0].eval_string(ctx, row));
+        return Ok(arg1)
     }
 
-    pub fn if_null_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_null_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<Time>>> {
+        let arg0 = try!(self.children[0].eval_time(ctx, row));
+        if !arg0.is_some() {
+            return Ok(arg0)
+        }
+        let arg1 = try!(self.children[0].eval_time(ctx, row));
+        return Ok(arg1)
     }
 
-    pub fn if_null_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_null_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<Duration>>> {
+        let arg0 = try!(self.children[0].eval_duration(ctx, row));
+        if !arg0.is_some() {
+            return Ok(arg0)
+        }
+        let arg1 = try!(self.children[0].eval_duration(ctx, row));
+        return Ok(arg1)
     }
 
     pub fn if_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+        let arg0 = try!(self.children[0].eval_int(ctx, row));
+        let arg1 = try!(self.children[0].eval_int(ctx, row));
+        let arg2 = try!(self.children[0].eval_int(ctx, row));
+        match arg0 {
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
+        }
     }
 
-    pub fn if_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+        let arg0 = try!(self.children[0].eval_int(ctx, row));
+        let arg1 = try!(self.children[0].eval_real(ctx, row));
+        let arg2 = try!(self.children[0].eval_real(ctx, row));
+        match arg0 {
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
+        }
     }
 
-    pub fn if_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Decimal>> {
+        let arg0 = try!(self.children[0].eval_int(ctx, row));
+        let arg1 = try!(self.children[0].eval_decimal(ctx, row));
+        let arg2 = try!(self.children[0].eval_decimal(ctx, row));
+        match arg0 {
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
+        }
     }
 
-    pub fn if_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<u8>>> {
+        let arg0 = try!(self.children[0].eval_int(ctx, row));
+        let arg1 = try!(self.children[0].eval_string(ctx, row));
+        let arg2 = try!(self.children[0].eval_string(ctx, row));
+        match arg0 {
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
+        }
     }
 
-    pub fn if_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<Time>>> {
+        let arg0 = try!(self.children[0].eval_int(ctx, row));
+        let arg1 = try!(self.children[0].eval_time(ctx, row));
+        let arg2 = try!(self.children[0].eval_time(ctx, row));
+        match arg0 {
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
+        }
     }
 
-    pub fn if_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn if_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<Duration>>> {
+        let arg0 = try!(self.children[0].eval_int(ctx, row));
+        let arg1 = try!(self.children[0].eval_duration(ctx, row));
+        let arg2 = try!(self.children[0].eval_duration(ctx, row));
+        match arg0 {
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
+        }
     }
 }

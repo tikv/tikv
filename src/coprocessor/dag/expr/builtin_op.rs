@@ -15,6 +15,7 @@
 #![allow(dead_code)]
 
 use super::{FnCall, Result, StatementContext};
+use coprocessor::codec::Datum;
 
 impl FnCall {
     pub fn logic_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -22,8 +23,7 @@ impl FnCall {
         let arg1 = try!(self.children[1].eval_int(ctx, row));
         match (arg0, arg1) {
             (None, None) => Ok(None),
-            (Some(0), _) => Ok(Some(0)),
-            (_, Some(0)) => Ok(Some(0)),
+            (Some(0), _) | (_, Some(0)) => Ok(Some(0)),
             _ => Ok(Some(1))
         }
     }
@@ -33,8 +33,7 @@ impl FnCall {
         let arg1 = try!(self.children[1].eval_int(ctx, row));
         match (arg0, arg1) {
             (None, None) => Ok(None),
-            (None, Some(0)) => Ok(Some(0)),
-            (Some(0), None) => Ok(Some(0)),
+            (None, Some(0)) | (Some(0), None) => Ok(Some(0)),
             (Some(0), Some(0)) => Ok(Some(0)),
             _ => Ok(Some(1)),
         }
@@ -47,8 +46,7 @@ impl FnCall {
             (None, _) => Ok(None),
             (_, None) => Ok(None),
             (Some(0), Some(0)) => Ok(Some(0)),
-            (Some(0), _) => Ok(Some(1)),
-            (_, Some(0)) => Ok(Some(1)),
+            (Some(0), _) | (_, Some(0)) => Ok(Some(1)),
             _ => Ok(Some(0)),
         }
     }
