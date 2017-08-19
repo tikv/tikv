@@ -23,7 +23,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use storage::{ALL_CFS, CF_DEFAULT};
+use storage::{CfName, ALL_CFS, CF_DEFAULT};
 use rocksdb::{ColumnFamilyOptions, DBCompressionType, DBOptions, SliceTransform, DB};
 use rocksdb::rocksdb::supported_compression;
 use util::rocksdb::engine_metrics::{ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
@@ -32,6 +32,8 @@ use util::rocksdb;
 pub use rocksdb::CFHandle;
 
 use super::cfs_diff;
+
+const CF_RAFT: CfName = "raft";
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
@@ -139,6 +141,12 @@ fn check_and_open(
         }
 
         return DB::open_cf(db_opt, path, cfs_v, cfs_opts_v);
+    }
+
+    if existed.iter().any(|x| x == &CF_RAFT) {
+        return Err(
+            "failed to start tikv, new version can't compatible with old data".to_string(),
+        );
     }
 
     // Open db.
@@ -295,7 +303,7 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
     use tempdir::TempDir;
     use storage::CF_DEFAULT;
-    use super::{check_and_open, CFOptions};
+    use super::{check_and_open, CFOptions, CF_RAFT};
 
     #[test]
     fn test_check_and_open() {
@@ -335,5 +343,23 @@ mod tests {
         cfs_existed.sort();
         cfs_excepted.sort();
         assert_eq!(cfs_existed, cfs_excepted);
+    }
+
+    #[test]
+    fn test_check_old_version_data() {
+        let path = TempDir::new("_util_rocksdb_test_check_old_version").expect("");
+        let path_str = path.path().to_str().unwrap();
+
+        // create db with raft cf.
+        let cfs_opts = vec![
+            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+        ];
+        check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT, CF_RAFT]);
+
+        // next open db will check raft cf.
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
+        assert!(check_and_open(path_str, DBOptions::new(), cfs_opts).is_err());
     }
 }

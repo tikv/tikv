@@ -214,8 +214,8 @@ impl<T, C> Store<T, C> {
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
-            kv_engine: engines.kv_engine.clone(),
-            raft_engine: engines.raft_engine.clone(),
+            kv_engine: engines.kv_engine,
+            raft_engine: engines.raft_engine,
             sendch: sendch,
             sent_snapshot_count: 0,
             snapshot_status_receiver: ch.snapshot_status_receiver,

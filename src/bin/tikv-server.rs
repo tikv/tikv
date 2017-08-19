@@ -77,6 +77,8 @@ use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERVAL};
 
+const RESERVED_OPEN_FDS: u64 = 1000;
+
 fn exit_with_err<E: Error>(e: E) -> ! {
     exit_with_msg(format!("{:?}", e))
 }
@@ -114,7 +116,7 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
 fn check_system_config(config: &TiKvConfig) {
     if let Err(e) = util::config::check_max_open_fds(
-        (config.rocksdb.max_open_files + config.raftdb.max_open_files + 1000) as u64,
+        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
     ) {
         exit_with_msg(format!("{:?}", e));
     }
