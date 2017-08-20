@@ -143,7 +143,7 @@ fn check_and_open(
         return DB::open_cf(db_opt, path, cfs_v, cfs_opts_v);
     }
 
-    if existed.iter().any(|x| x == &CF_RAFT) {
+    if existed.iter().any(|x| *x == CF_RAFT) {
         return Err(
             "failed to start tikv, new version can't compatible with old data".to_string(),
         );
