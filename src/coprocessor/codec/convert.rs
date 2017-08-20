@@ -15,7 +15,7 @@ use std::{self, str, i64};
 use std::borrow::Cow;
 
 use coprocessor::select::xeval::EvalContext;
-use super::mysql::{Decimal, Res};
+use super::mysql::Res;
 use super::Result;
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
 pub const UNSPECIFIED_LENGTH: i32 = -1;
@@ -192,14 +192,6 @@ pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
     let vs = try!(get_valid_float_prefix(ctx, s));
 
     bytes_to_f64_without_context(vs.as_bytes())
-}
-
-pub fn dec_to_i64(dec: Decimal) -> Result<i64> {
-    match dec.as_i64() {
-        Res::Ok(t) => Ok(t),
-        Res::Truncated(_) => Err(box_err!("[1265] Data Truncated for decimal: {:?}", dec)),
-        Res::Overflow(_) => Err(box_err!("[1264] Data Out of Range decimal: {:?}", dec)),
-    }
 }
 
 #[inline]
@@ -557,34 +549,6 @@ mod test {
         let s3 = truncate_str(s, 0);
         assert!(s3.is_empty());
         // TODO port tests from tidb(tidb haven't implemented now)
-    }
-
-    #[test]
-    fn test_decimal_to_i64() {
-        let cases = vec![
-            ("-1", -1),
-            ("1", 1),
-            ("-9223372036854775807", -9223372036854775807),
-            ("-9223372036854775808", -9223372036854775808),
-        ];
-
-        for (dec_str, exp) in cases {
-            let dec: Decimal = dec_str.parse().unwrap();
-            let i = dec_to_i64(dec).unwrap();
-            assert_eq!(i, exp);
-        }
-
-        let illegal_cases = vec![
-            "9223372036854775808",
-            "-9223372036854775809",
-            "18446744073709551615",
-            "-1.23",
-        ];
-        for case in illegal_cases {
-            let dec: Decimal = case.parse().unwrap();
-            let ret = dec_to_i64(dec);
-            assert!(ret.is_err());
-        }
     }
 
     #[test]
