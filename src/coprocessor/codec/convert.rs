@@ -36,9 +36,9 @@ pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
     if f.is_nan() {
         return Res::Overflow(0f64);
     }
-    let maxf = 10u64.pow((flen - decimal) as u32) as f64 - 1.0 / (10u64.pow(decimal as u32) as f64);
+    let shift = 10u64.pow(decimal as u32) as f64;
+    let maxf = 10u64.pow((flen - decimal) as u32) as f64 - 1.0 / shift;
     if f.is_finite() {
-        let shift = 10u64.pow(decimal as u32) as f64;
         let tmp = f * shift;
         if tmp.is_finite() {
             f = tmp.round() / shift
@@ -559,6 +559,7 @@ mod test {
             (100.1156, 10, 3, Res::Ok(100.116)),
             (100.1156, 3, 1, Res::Overflow(99.9)),
             (1.36, 10, 2, Res::Ok(1.36)),
+            (f64::NAN, 10, 1, Res::Overflow(0f64)),
         ];
         for (f, flen, decimal, exp) in cases {
             let res = truncate_f64(f, flen, decimal);
