@@ -24,6 +24,7 @@ use self::compare::CmpOp;
 use std::io;
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
+use chrono::FixedOffset;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
@@ -329,6 +330,13 @@ impl Expression {
                 .decode_f64()
                 .map(Datum::F64)
                 .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
+            ExprType::MysqlTime => expr.get_val()
+                .decode_u64()
+                .and_then(|n| {
+                    Time::from_packed_u64(n, types::DATETIME, MAX_FSP, &FixedOffset::east(0))
+                })
+                .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
             ExprType::MysqlDuration => expr.get_val()
                 .decode_i64()
