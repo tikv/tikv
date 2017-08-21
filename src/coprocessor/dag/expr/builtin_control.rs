@@ -141,3 +141,305 @@ impl FnCall {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use tipb::expression::ScalarFuncSig;
+    use coprocessor::codec::Datum;
+    use coprocessor::codec::mysql::{Time, Duration};
+    use chrono::DateTime;
+    use coprocessor::dag::expr::{Expression, StatementContext};
+    use coprocessor::dag::expr::test::{fncall_expr, str2dec};
+    use coprocessor::select::xeval::evaluator::test::datum_expr;
+
+    #[test]
+    fn test_if_null() {
+        let tests = vec![
+            (
+                ScalarFuncSig::IfNullInt,
+                Datum::I64(1),
+                Datum::I64(2),
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IfNullInt,
+                Datum::Null,
+                Datum::I64(2),
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IfNullReal,
+                Datum::F64(1.1),
+                Datum::F64(2.2),
+                Datum::F64(1.1),
+            ),
+            (
+                ScalarFuncSig::IfNullReal,
+                Datum::Null,
+                Datum::F64(2.2),
+                Datum::F64(2.2),
+            ),
+            (
+                ScalarFuncSig::IfNullString,
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::Bytes(b"abd".to_vec()),
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                ScalarFuncSig::IfNullString,
+                Datum::Null,
+                Datum::Bytes(b"abd".to_vec()),
+                Datum::Bytes(b"abd".to_vec()),
+            ),
+            (
+                ScalarFuncSig::IfNullDecimal,
+                str2dec("1.123"),
+                str2dec("2.345"),
+                str2dec("1.123"),
+            ),
+            (
+                ScalarFuncSig::IfNullDecimal,
+                Datum::Null,
+                str2dec("2.345"),
+                str2dec("2.345"),
+            ),
+            (
+                ScalarFuncSig::IfNullDuration,
+                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
+                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfNullDuration,
+                Datum::Null,
+                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfNullTime,
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfNullTime,
+                Datum::Null,
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
+            ),
+        ];
+        let ctx = StatementContext::default();
+        for tt in tests {
+            let arg1 = datum_expr(tt.1);
+            let arg2 = datum_expr(tt.2);
+            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[arg1]), 0).unwrap();
+            match tt.0 {
+                ScalarFuncSig::IfNullInt => {
+                    let lhs = op.eval_int(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfNullReal => {
+                    let lhs = op.eval_real(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfNullString => {
+                    let lhs = op.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
+                    let rhs = expected.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfNullDecimal => {
+                    let lhs = op.eval_decimal(&ctx, &[]).unwrap().unwrap().into_owned().as_f64().unwrap();
+                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap().unwrap().into_owned().as_f64().unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfNullTime => {
+                    let lhs = op.eval_time(&ctx, &[]).unwrap().unwrap().into_owned().to_numeric_str();
+                    let rhs = expected.eval_time(&ctx, &[]).unwrap().unwrap().into_owned().to_numeric_str();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfNullDuration => {
+                    let lhs = op.eval_duration(&ctx, &[]).unwrap().unwrap().into_owned().to_nanos();
+                    let rhs = expected.eval_duration(&ctx, &[]).unwrap().unwrap().into_owned().to_nanos();
+                    assert_eq!(lhs, rhs);
+                }
+                _ => unreachable!()
+            }
+        }
+    }
+
+    #[test]
+    fn test_if() {
+        let tests = vec![
+            (
+                ScalarFuncSig::IfInt,
+                Datum::I64(1),
+                Datum::I64(1),
+                Datum::I64(2),
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IfInt,
+                Datum::Null,
+                Datum::I64(1),
+                Datum::I64(2),
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IfInt,
+                Datum::I64(0),
+                Datum::I64(1),
+                Datum::I64(2),
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IfReal,
+                Datum::I64(1),
+                Datum::F64(1.1),
+                Datum::F64(2.2),
+                Datum::F64(1.1),
+            ),
+            (
+                ScalarFuncSig::IfReal,
+                Datum::Null,
+                Datum::F64(1.1),
+                Datum::F64(2.2),
+                Datum::F64(2.2),
+            ),
+            (
+                ScalarFuncSig::IfReal,
+                Datum::I64(0),
+                Datum::F64(1.1),
+                Datum::F64(2.2),
+                Datum::F64(2.2),
+            ),
+            (
+                ScalarFuncSig::IfString,
+                Datum::I64(1),
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::Bytes(b"abd".to_vec()),
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                ScalarFuncSig::IfString,
+                Datum::Null,
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::Bytes(b"abd".to_vec()),
+                Datum::Bytes(b"abd".to_vec()),
+            ),
+            (
+                ScalarFuncSig::IfString,
+                Datum::I64(0),
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::Bytes(b"abd".to_vec()),
+                Datum::Bytes(b"abd".to_vec()),
+            ),
+            (
+                ScalarFuncSig::IfDecimal,
+                Datum::I64(1),
+                str2dec("1.123"),
+                str2dec("2.345"),
+                str2dec("1.123"),
+            ),
+            (
+                ScalarFuncSig::IfDecimal,
+                Datum::Null,
+                str2dec("1.123"),
+                str2dec("2.345"),
+                str2dec("2.345"),
+            ),
+            (
+                ScalarFuncSig::IfDecimal,
+                Datum::I64(0),
+                str2dec("1.123"),
+                str2dec("2.345"),
+                str2dec("2.345"),
+            ),
+            (
+                ScalarFuncSig::IfDuration,
+                Datum::I64(1),
+                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
+                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfDuration,
+                Datum::Null,
+                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
+                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfDuration,
+                Datum::I64(0),
+                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
+                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfTime,
+                Datum::I64(1),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfTime,
+                Datum::Null,
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfTime,
+                Datum::I64(0),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
+                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
+            ),
+        ];
+        let ctx = StatementContext::default();
+        for tt in tests {
+            let arg1 = datum_expr(tt.1);
+            let arg2 = datum_expr(tt.2);
+            let arg2 = datum_expr(tt.3);
+            let expected = Expression::build(datum_expr(tt.4), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[arg1]), 0).unwrap();
+            match tt.0 {
+                ScalarFuncSig::IfInt => {
+                    let lhs = op.eval_int(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfReal => {
+                    let lhs = op.eval_real(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfString => {
+                    let lhs = op.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
+                    let rhs = expected.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfDecimal => {
+                    let lhs = op.eval_decimal(&ctx, &[]).unwrap().unwrap().into_owned().as_f64().unwrap();
+                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap().unwrap().into_owned().as_f64().unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfTime => {
+                    let lhs = op.eval_time(&ctx, &[]).unwrap().unwrap().into_owned().to_numeric_str();
+                    let rhs = expected.eval_time(&ctx, &[]).unwrap().unwrap().into_owned().to_numeric_str();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::IfDuration => {
+                    let lhs = op.eval_duration(&ctx, &[]).unwrap().unwrap().into_owned().to_nanos();
+                    let rhs = expected.eval_duration(&ctx, &[]).unwrap().unwrap().into_owned().to_nanos();
+                    assert_eq!(lhs, rhs);
+                }
+                _ => unreachable!()
+            }
+        }
+    }
+}

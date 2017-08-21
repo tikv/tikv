@@ -135,7 +135,7 @@ impl Time {
         self.fsp
     }
 
-    fn to_numeric_str(&self) -> String {
+    pub fn to_numeric_str(&self) -> String {
         if self.tp == types::DATE {
             // TODO: pure calculation should be enough.
             format!("{}", self.time.format("%Y%m%d"))
