@@ -233,7 +233,7 @@ mod test {
             let arg1 = datum_expr(tt.1);
             let arg2 = datum_expr(tt.2);
             let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
-            let op = Expression::build(fncall_expr(tt.0, &[arg1]), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[arg1, arg2]), 0).unwrap();
             match tt.0 {
                 ScalarFuncSig::IfNullInt => {
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
@@ -404,9 +404,9 @@ mod test {
         for tt in tests {
             let arg1 = datum_expr(tt.1);
             let arg2 = datum_expr(tt.2);
-            let arg2 = datum_expr(tt.3);
+            let arg3 = datum_expr(tt.3);
             let expected = Expression::build(datum_expr(tt.4), 0).unwrap();
-            let op = Expression::build(fncall_expr(tt.0, &[arg1]), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[arg1, arg2, arg3]), 0).unwrap();
             match tt.0 {
                 ScalarFuncSig::IfInt => {
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
