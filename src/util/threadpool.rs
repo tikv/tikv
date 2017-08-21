@@ -171,7 +171,7 @@ struct Worker<C> {
     task_queue: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
     task_count: Arc<AtomicUsize>,
     batch_size: usize,
-    current_batch_number: usize,
+    task_counter: usize,
     ctx: C,
 }
 
@@ -191,7 +191,7 @@ where
             task_queue: task_queue,
             task_count: task_count,
             batch_size: batch_size,
-            current_batch_number: 0,
+            task_counter: 0,
             ctx: ctx,
         }
     }
@@ -204,7 +204,7 @@ where
             return Some(task);
         }
         let (mut q, _) = cvar.wait_timeout(task_queue, timeout).unwrap();
-        (*q).pop()
+        q.pop()
     }
 
     fn run(&mut self) {
@@ -214,13 +214,13 @@ where
                 (t.task).call_once((&mut self.ctx,));
                 self.ctx.on_task_finished();
                 self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
-                self.current_batch_number += 1;
-                if self.current_batch_number == self.batch_size {
-                    self.current_batch_number = 0;
+                self.task_counter += 1;
+                if self.task_counter == self.batch_size {
+                    self.task_counter = 0;
                     self.ctx.on_tick();
                 }
             } else {
-                self.current_batch_number = 0;
+                self.task_counter = 0;
                 self.ctx.on_tick();
             }
         }
@@ -349,5 +349,59 @@ mod test {
         }
         task_pool.stop().unwrap();
         assert_eq!(fin, 20);
+    }
+
+    #[test]
+    fn test_task_tick() {
+        struct TestContext {
+            counter: Arc<AtomicIsize>,
+            tx: Sender<isize>,
+        }
+
+        unsafe impl Send for TestContext {}
+
+        impl Context for TestContext {
+            fn on_task_started(&mut self) {}
+            fn on_task_finished(&mut self) {}
+            fn on_tick(&mut self) {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+                self.tx.send(self.counter.load(Ordering::SeqCst)).unwrap();
+            }
+        }
+
+        struct TestContextFactory {
+            counter: Arc<AtomicIsize>,
+            tx: Sender<isize>,
+        }
+
+        impl ContextFactory<TestContext> for TestContextFactory {
+            fn create(&self) -> TestContext {
+                TestContext {
+                    counter: self.counter.clone(),
+                    tx: self.tx.clone(),
+                }
+            }
+        }
+
+        let (tx, rx) = channel();
+
+        let f = TestContextFactory {
+            counter: Arc::new(AtomicIsize::new(0)),
+            tx: tx,
+        };
+
+        let name = thd_name!("test_tasks_tick");
+        let concurrency = 1;
+        let mut task_pool = ThreadPool::new(name, concurrency, 1, f);
+
+        for _ in 0..10 {
+            task_pool.execute(move |_: &mut TestContext| {});
+        }
+        let mut fin: isize = -1;
+        for _ in 0..10 {
+            fin = rx.recv_timeout(Duration::from_millis(20)).unwrap();
+        }
+        task_pool.stop().unwrap();
+        assert_eq!(fin, 10);
     }
 }
