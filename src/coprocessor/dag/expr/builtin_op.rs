@@ -303,14 +303,9 @@ mod test {
             let arg2 = datum_expr(tt.2);
             let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
             let op = Expression::build(fncall_expr(tt.0, &[arg1, arg2]), 0).unwrap();
-            match tt.0 {
-                ScalarFuncSig::LogicalAnd | ScalarFuncSig::LogicalOr | ScalarFuncSig::LogicalXor => {
-                    let lhs = op.eval_int(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                _ => unreachable!(),
-            }
+            let lhs = op.eval_int(&ctx, &[]).unwrap();
+            let rhs = expected.eval_int(&ctx, &[]).unwrap();
+            assert_eq!(lhs, rhs);
         }
     }
 
