@@ -18,7 +18,7 @@ use std::{str, i64, u64};
 use std::ascii::AsciiExt;
 
 use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::{Decimal, Duration, Time};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time};
 use coprocessor::codec::mysql::decimal::RoundMode;
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint,
                                   convert_int_to_uint};
@@ -32,11 +32,7 @@ impl FnCall {
     }
 
     pub fn cast_real_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val = try!(self.children[0].eval_real(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
         if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
             let uval = try!(convert_float_to_uint(val, u64::MAX, types::DOUBLE));
             Ok(Some(uval as i64))
@@ -51,14 +47,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<i64>> {
-        let val = try!(self.children[0].eval_decimal(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap()
-            .into_owned()
-            .round(0, RoundMode::HalfEven)
-            .unwrap();
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
         if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
             let uint = val.as_u64().unwrap();
             // TODO:handle overflow
@@ -74,11 +64,7 @@ impl FnCall {
         if self.children[0].is_hybrid_type() {
             return self.children[0].eval_int(ctx, row);
         }
-        let val = try!(self.children[0].eval_string(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
         let negative_flag = b'-';
         let is_negative = match val.iter().skip_while(|x| x.is_ascii_whitespace()).next() {
             Some(&negative_flag) => true,
@@ -97,7 +83,12 @@ impl FnCall {
     }
 
     pub fn cast_time_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let dec = try!(val.to_decimal());
+        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+            .unwrap();
+        let res = dec.as_i64().unwrap();
+        Ok(Some(res))
     }
 
     pub fn cast_duration_as_int(
@@ -105,25 +96,37 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<i64>> {
-        unimplemented!()
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dec = try!(val.to_decimal());
+        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+            .unwrap();
+        let res = dec.as_i64().unwrap();
+        Ok(Some(res))
+    }
+
+    pub fn cast_json_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let res = val.cast_to_int();
+        Ok(Some(res))
     }
 
     pub fn cast_int_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try!(self.children[0].eval_int(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
         if !mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
-            Ok(Some(val as f64))
+            Ok(Some(
+                try!(self.produce_float_with_specified_tp(ctx, val as f64)),
+            ))
         } else {
             let uval = try!(convert_int_to_uint(val, u64::MAX, types::LONG_LONG));
-            Ok(Some(uval as f64))
+            Ok(Some(
+                try!(self.produce_float_with_specified_tp(ctx, uval as f64)),
+            ))
         }
     }
 
     pub fn cast_real_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        unimplemented!()
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, val))))
     }
 
     pub fn cast_decimal_as_real(
@@ -131,15 +134,25 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<f64>> {
-        unimplemented!()
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let res = try!(val.as_f64());
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_str_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        unimplemented!()
+        if self.children[0].is_hybrid_type() {
+            return self.children[0].eval_real(ctx, row);
+        }
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let res = try!(convert::bytes_to_f64(ctx, &val));
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_time_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        unimplemented!()
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let val = try!(val.to_decimal());
+        let res = try!(val.as_f64());
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_duration_as_real(
@@ -147,7 +160,16 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<f64>> {
-        unimplemented!()
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let val = try!(val.to_decimal());
+        let res = try!(val.as_f64());
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
+    }
+
+    pub fn cast_json_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let val = val.cast_to_real();
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, val))))
     }
 
     pub fn cast_int_as_decimal(
@@ -155,11 +177,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<Decimal>> {
-        let val = try!(self.children[0].eval_int(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
         let field_type = &self.children[0].get_tp();
         let res = if !mysql::has_unsigned_flag(field_type.get_flag() as u64) {
             Decimal::from(val)
@@ -216,6 +234,15 @@ impl FnCall {
         unimplemented!()
     }
 
+
+    pub fn cast_json_as_decimal(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Decimal>> {
+        unimplemented!()
+    }
+
     pub fn cast_int_as_str(
         &self,
         ctx: &StatementContext,
@@ -248,7 +275,7 @@ impl FnCall {
         unimplemented!()
     }
 
-    pub fn cast_time_as_strl(
+    pub fn cast_time_as_str(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
@@ -257,6 +284,14 @@ impl FnCall {
     }
 
     pub fn cast_duration_as_str(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<u8>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_json_as_str(
         &self,
         ctx: &StatementContext,
         row: &[Datum],
@@ -312,6 +347,14 @@ impl FnCall {
         unimplemented!()
     }
 
+    pub fn cast_json_as_time(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Time>>> {
+        unimplemented!()
+    }
+
     pub fn cast_int_as_duration(
         &self,
         ctx: &StatementContext,
@@ -358,5 +401,88 @@ impl FnCall {
         row: &[Datum],
     ) -> Result<Option<Vec<Duration>>> {
         unimplemented!()
+    }
+
+    pub fn cast_json_as_duration(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Duration>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_int_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_real_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_decimal_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_str_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_time_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_duration_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    pub fn cast_json_as_json(
+        &self,
+        ctx: &StatementContext,
+        row: &[Datum],
+    ) -> Result<Option<Vec<Json>>> {
+        unimplemented!()
+    }
+
+    /// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
+    /// a new float64 according to `flen` and `decimal` in `self.tp`.
+    /// TODO port tests from tidb(tidb haven't implemented now)
+    fn produce_float_with_specified_tp(&self, ctx: &StatementContext, f: f64) -> Result<f64> {
+        let flen = self.tp.get_flen();
+        let decimal = self.tp.get_decimal();
+        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+            return Ok(f);
+        }
+        match convert::truncate_f64(f, flen as u8, decimal as u8) {
+            Res::Ok(d) => Ok(d),
+            Res::Overflow(d) | Res::Truncated(d) => {
+                //TODO process warning with ctx
+                try!(convert::handle_truncate(ctx, true));
+                Ok(d)
+            }
+        }
     }
 }

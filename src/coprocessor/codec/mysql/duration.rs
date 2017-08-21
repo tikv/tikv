@@ -22,7 +22,7 @@ use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
 
 const NANOS_PER_SEC: i64 = 1_000_000_000;
-const NANO_WIDTH: u32 = 9;
+pub const NANO_WIDTH: u32 = 9;
 const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
 
@@ -213,6 +213,20 @@ impl Duration {
         let d = unsafe { try!(str::from_utf8_unchecked(&buf).parse()) };
         Ok(d)
     }
+
+    pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
+        let fsp = try!(check_fsp(fsp));
+        if fsp >= self.fsp {
+            self.fsp = fsp;
+            return Ok(());
+        }
+        self.fsp = fsp;
+        let nanos =
+            self.dur.subsec_nanos() as f64 / (10u32.pow(NANO_WIDTH - self.fsp as u32) as f64);
+        let nanos = (nanos.round() as u32) * (10u32.pow(NANO_WIDTH - self.fsp as u32));
+        self.dur = StdDuration::new(self.dur.as_secs(), nanos);
+        Ok(())
+    }
 }
 
 impl Display for Duration {
@@ -263,6 +277,7 @@ impl Ord for Duration {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::mysql::MAX_FSP;
     use util::escape;
     use super::*;
 
@@ -344,6 +359,26 @@ mod test {
         for (input, fsp, exp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let res = format!("{}", t.to_decimal().unwrap());
+            assert_eq!(exp, res);
+        }
+    }
+
+    #[test]
+    fn test_round_frac() {
+        let cases = vec![
+            ("11:30:45.123456", 4, "11:30:45.1235"),
+            ("11:30:45.123456", 6, "11:30:45.123456"),
+            ("11:30:45.123456", 0, "11:30:45"),
+            ("11:59:59.999999", 3, "12:00:00.000"),
+            ("1 11:30:45.123456", 1, "35:30:45.1"),
+            ("1 11:30:45.999999", 4, "35:30:46.0000"),
+            ("-1 11:30:45.999999", 0, "-35:30:46"),
+            ("-1 11:59:59.9999", 2, "-36:00:00.00"),
+        ];
+        for (input, fsp, exp) in cases {
+            let mut t = Duration::parse(input.as_bytes(), MAX_FSP).unwrap();
+            t.round_frac(fsp).unwrap();
+            let res = format!("{}", t);
             assert_eq!(exp, res);
         }
     }
