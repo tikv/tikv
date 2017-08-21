@@ -30,6 +30,9 @@ impl FnCall {
 
     pub fn logic_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
+        if arg0.is_some() && arg0.unwrap() != 0 {
+            return Ok(Some(1))
+        }
         let arg1 = try!(self.children[1].eval_int(ctx, row));
         match (arg0, arg1) {
             (None, None) => Ok(None),
@@ -40,25 +43,21 @@ impl FnCall {
 
     pub fn logic_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
+        if arg0.is_none() {
+            return Ok(None)
+        }
         let arg1 = try!(self.children[1].eval_int(ctx, row));
-        if arg0.is_none() || arg1.is_none() {
-            return Ok(None);
+        if arg1.is_none() {
+            return Ok(None)
         }
-        if arg0.unwrap() == 0 && arg1.unwrap() == 0 {
-            return Ok(Some(0));
-        }
-        if arg0.unwrap() == 0 || arg1.unwrap() == 0 {
-            return Ok(Some(1));
-        }
-        Ok(Some(0))
+        let arg0 = arg0.unwrap();
+        let arg1 = arg1.unwrap();
+        Ok(Some(((arg0 == 0) ^ (arg1 == 0)) as i64))
     }
 
     pub fn real_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_real(ctx, row));
-        if input.is_none() || input.unwrap() == 0.0 {
-            return Ok(Some(0));
-        }
-        Ok(Some(1))
+        Ok(Some(input.map_or(true, |i| i == 0f64) as i64))
     }
 
     pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
