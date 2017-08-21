@@ -26,6 +26,20 @@ use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_u
 
 use super::{FnCall, Result, StatementContext};
 
+#[macro_export]
+macro_rules! ok_with_cow {
+    ($expr:expr) => ({
+       Ok(Cow::Owned($expr))
+    });
+}
+
+#[macro_export]
+macro_rules! ok_with_some_cow {
+    ($expr:expr) => ({
+       Ok(Some(Cow::Owned($expr)))
+    });
+}
+
 impl FnCall {
     pub fn cast_int_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
@@ -386,7 +400,7 @@ impl FnCall {
         try!(val.round_frac(self.tp.get_decimal() as i8));
         // TODO: tidb only update tp when tp is Date
         try!(val.set_tp(self.tp.get_tp() as u8));
-        Ok(Some(Cow::Owned(val)))
+        ok_with_some_cow!(val)
     }
 
     pub fn cast_duration_as_time<'a, 'b: 'a>(
@@ -398,7 +412,7 @@ impl FnCall {
         let mut val = try!(Time::from_duration(&ctx.tz, val.as_ref()));
         try!(val.round_frac(self.tp.get_decimal() as i8));
         try!(val.set_tp(self.tp.get_tp() as u8));
-        Ok(Some(Cow::Owned(val)))
+        ok_with_some_cow!(val)
     }
 
     pub fn cast_json_as_time<'a, 'b: 'a>(
@@ -419,7 +433,7 @@ impl FnCall {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = format!("{}", val);
         let dur = try!(Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8));
-        Ok(Some(Cow::Owned(dur)))
+        ok_with_some_cow!(dur)
     }
 
     pub fn cast_real_as_duration<'a, 'b: 'a>(
@@ -430,7 +444,7 @@ impl FnCall {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
         let dur = try!(Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8));
-        Ok(Some(Cow::Owned(dur)))
+        ok_with_some_cow!(dur)
     }
 
     pub fn cast_decimal_as_duration<'a, 'b: 'a>(
@@ -441,7 +455,7 @@ impl FnCall {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
         let dur = try!(Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8));
-        Ok(Some(Cow::Owned(dur)))
+        ok_with_some_cow!(dur)
     }
 
     pub fn cast_str_as_duration<'a, 'b: 'a>(
@@ -452,7 +466,7 @@ impl FnCall {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         // TODO: tidb would handle truncate here
         let dur = try!(Duration::parse(val.as_ref(), self.tp.get_decimal() as i8));
-        Ok(Some(Cow::Owned(dur)))
+        ok_with_some_cow!(dur)
     }
 
     pub fn cast_time_as_duration<'a, 'b: 'a>(
@@ -463,7 +477,7 @@ impl FnCall {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let mut res = try!(val.to_duration());
         try!(res.round_frac(self.tp.get_decimal() as i8));
-        Ok(Some(Cow::Owned(res)))
+        ok_with_some_cow!(res)
     }
 
     pub fn cast_duration_as_duration<'a, 'b: 'a>(
@@ -474,7 +488,7 @@ impl FnCall {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let mut res = val.into_owned();
         try!(res.round_frac(self.tp.get_decimal() as i8));
-        Ok(Some(Cow::Owned(res)))
+        ok_with_some_cow!(res)
     }
 
     pub fn cast_json_as_duration<'a, 'b: 'a>(
@@ -486,7 +500,7 @@ impl FnCall {
         let s = try!(val.unquote());
         // TODO: tidb would handle truncate here
         let d = try!(Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8));
-        Ok(Some(Cow::Owned(d)))
+        ok_with_some_cow!(d)
     }
 
     pub fn cast_int_as_jsonn<'a, 'b: 'a>(
@@ -500,7 +514,7 @@ impl FnCall {
         } else {
             Json::I64(val)
         };
-        Ok(Some(Cow::Owned(j)))
+        ok_with_some_cow!(j)
     }
 
     pub fn cast_real_as_json<'a, 'b: 'a>(
@@ -509,7 +523,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
-        Ok(Some(Cow::Owned(Json::Double(val))))
+        ok_with_some_cow!(Json::Double(val))
     }
 
     pub fn cast_decimal_as_json<'a, 'b: 'a>(
@@ -519,7 +533,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val = try!(val.as_f64());
-        Ok(Some(Cow::Owned(Json::Double(val))))
+        ok_with_some_cow!(Json::Double(val))
     }
 
     pub fn cast_str_as_json<'a, 'b: 'a>(
@@ -531,9 +545,9 @@ impl FnCall {
         let s = try!(String::from_utf8(val.into_owned()));
         if self.tp.get_decimal() == 0 {
             let j: Json = try!(s.parse());
-            Ok(Some(Cow::Owned(j)))
+            ok_with_some_cow!(j)
         } else {
-            Ok(Some(Cow::Owned(Json::String(s))))
+            ok_with_some_cow!(Json::String(s))
         }
     }
 
@@ -548,7 +562,7 @@ impl FnCall {
             val.set_fsp(mysql::MAX_FSP as u8);
         }
         let s = format!("{}", val);
-        Ok(Some(Cow::Owned(Json::String(s))))
+        ok_with_some_cow!(Json::String(s))
     }
 
     pub fn cast_duration_as_json<'a, 'b: 'a>(
@@ -560,7 +574,7 @@ impl FnCall {
         let mut val = val.into_owned();
         val.fsp = mysql::MAX_FSP as u8;
         let s = format!("{}", val);
-        Ok(Some(Cow::Owned(Json::String(s))))
+        ok_with_some_cow!(Json::String(s))
     }
 
     pub fn cast_json_as_json<'a, 'b: 'a>(
@@ -579,10 +593,10 @@ impl FnCall {
         let flen = self.tp.get_flen();
         let decimal = self.tp.get_decimal();
         if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
-            return Ok(Cow::Owned(val));
+            return ok_with_cow!(val);
         }
         let res = try!(val.convert_to(ctx, flen as u8, decimal as u8));
-        Ok(Cow::Owned(res))
+        ok_with_cow!(res)
     }
 
     /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces
@@ -595,7 +609,7 @@ impl FnCall {
         let flen = self.tp.get_flen();
         let chs = self.tp.get_charset();
         if flen < 0 {
-            return Ok(Cow::Owned(s.into_bytes()));
+            return ok_with_cow!(s.into_bytes());
         }
         let flen = flen as usize;
         // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
@@ -603,7 +617,7 @@ impl FnCall {
         if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
             let char_count = s.char_indices().count();
             if char_count <= flen {
-                return Ok(Cow::Owned(s.into_bytes()));
+                return ok_with_cow!(s.into_bytes());
             }
 
             if convert::handle_truncate_as_error(ctx) {
@@ -615,7 +629,7 @@ impl FnCall {
             }
             let (truncate_pos, _) = s.char_indices().nth(flen).unwrap();
             let res = convert::truncate_str(s, truncate_pos as isize).into_bytes();
-            return Ok(Cow::Owned(res));
+            return ok_with_cow!(res);
         }
 
         if s.len() > flen {
@@ -627,16 +641,16 @@ impl FnCall {
                 ));
             }
             let res = convert::truncate_str(s, flen as isize).into_bytes();
-            return Ok(Cow::Owned(res));
+            return ok_with_cow!(res);
         }
 
         if self.tp.get_tp() == types::STRING as i32 && s.len() < flen {
             let to_pad = flen - s.len();
             let mut ret = s.into_bytes();
             ret.append(&mut vec![0; to_pad]);
-            return Ok(Cow::Owned(ret));
+            return ok_with_cow!(ret);
         }
-        Ok(Cow::Owned(s.into_bytes()))
+        ok_with_cow!(s.into_bytes())
     }
 
     fn produce_time_with_str(&self, ctx: &StatementContext, s: String) -> Result<Cow<Time>> {
@@ -647,7 +661,7 @@ impl FnCall {
             &ctx.tz
         ));
         try!(t.set_tp(self.tp.get_tp() as u8));
-        Ok(Cow::Owned(t))
+        ok_with_cow!(t)
     }
 
     /// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
