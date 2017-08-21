@@ -60,7 +60,6 @@ use std::env;
 use std::time::Duration;
 
 use clap::{App, Arg, ArgMatches};
-use fs2::FileExt;
 
 use tikv::config::{MetricConfig, TiKvConfig};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
@@ -128,17 +127,9 @@ fn check_system_config(config: &TiKvConfig) {
 
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let store_path = Path::new(&cfg.storage.data_dir);
-    let lock_path = store_path.join(Path::new("LOCK"));
-    let db_path = store_path.join(Path::new("db"));
-    let snap_path = store_path.join(Path::new("snap"));
-
-    let f = File::create(lock_path).unwrap_or_else(|e| exit_with_err(e));
-    if f.try_lock_exclusive().is_err() {
-        exit_with_msg(format!(
-            "lock {:?} failed, maybe another instance is using this directory.",
-            store_path
-        ));
-    }
+    let (lock_path, db_path, snap_path) =
+        util::init_store_dir(store_path).unwrap_or_else(|e| exit_with_err(e));
+    let _lock = util::check_version(&lock_path, &db_path).unwrap_or_else(|e| exit_with_msg(e));
 
     // Initialize raftstore channels.
     let mut event_loop =
