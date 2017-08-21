@@ -19,6 +19,7 @@ mod comparison;
 mod serde;
 mod path_expr;
 // json functions
+mod json_cast;
 mod json_extract;
 mod json_merge;
 mod json_modify;
