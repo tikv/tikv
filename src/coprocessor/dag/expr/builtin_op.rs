@@ -57,7 +57,7 @@ impl FnCall {
 
     pub fn real_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_real(ctx, row));
-        Ok(Some(input.map_or(true, |i| i == 0f64) as i64))
+        Ok(Some(input.map_or(false, |i| i != 0f64) as i64))
     }
 
     pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
