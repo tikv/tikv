@@ -20,6 +20,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::fmt::Write;
 
+pub const DEFAULT_BATCH_SIZE: usize = 50;
 const WORKER_WAIT_TIME: u64 = 20; // ms
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
@@ -31,7 +32,7 @@ pub trait Context: Send {
 }
 
 pub trait ContextFactory<Ctx: Context> {
-    fn create_context(&self) -> Ctx;
+    fn create(&self) -> Ctx;
 }
 
 pub struct Task<C> {
@@ -91,7 +92,12 @@ impl<Ctx> ThreadPool<Ctx>
 where
     Ctx: Context + 'static,
 {
-    pub fn new<C: ContextFactory<Ctx>>(name: String, num_threads: usize, f: C) -> ThreadPool<Ctx> {
+    pub fn new<C: ContextFactory<Ctx>>(
+        name: String,
+        num_threads: usize,
+        batch_size: usize,
+        f: C,
+    ) -> ThreadPool<Ctx> {
         assert!(num_threads >= 1);
         let task_pool = Arc::new((Mutex::new(FifoQueue::new()), Condvar::new()));
         let mut threads = Vec::with_capacity(num_threads);
@@ -101,12 +107,12 @@ where
         for _ in 0..num_threads {
             let tasks = task_pool.clone();
             let task_num = task_count.clone();
-            let ctx = f.create_context();
+            let ctx = f.create();
             let stop = stop_flag.clone();
             let thread = Builder::new()
                 .name(name.clone())
                 .spawn(move || {
-                    let mut worker = Worker::new(tasks, task_num, stop, ctx);
+                    let mut worker = Worker::new(tasks, task_num, batch_size, stop, ctx);
                     worker.run();
                 })
                 .unwrap();
@@ -131,10 +137,8 @@ where
         }
         let task = Task::new(job);
         let &(ref lock, ref cvar) = &*self.task_pool;
-        {
-            let mut queue = lock.lock().unwrap();
-            queue.push(task);
-        }
+        let mut queue = lock.lock().unwrap();
+        queue.push(task);
         cvar.notify_one();
         self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
     }
@@ -166,6 +170,8 @@ struct Worker<C> {
     stop_flag: Arc<AtomicBool>,
     task_queue: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
     task_count: Arc<AtomicUsize>,
+    batch_size: usize,
+    current_batch_number: usize,
     ctx: C,
 }
 
@@ -176,6 +182,7 @@ where
     fn new(
         task_queue: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
         task_count: Arc<AtomicUsize>,
+        batch_size: usize,
         stop_flag: Arc<AtomicBool>,
         ctx: C,
     ) -> Worker<C> {
@@ -183,6 +190,8 @@ where
             stop_flag: stop_flag,
             task_queue: task_queue,
             task_count: task_count,
+            batch_size: batch_size,
+            current_batch_number: 0,
             ctx: ctx,
         }
     }
@@ -191,7 +200,7 @@ where
         let &(ref lock, ref cvar) = &*self.task_queue;
         let mut task_queue = lock.lock().unwrap();
 
-        if let Some(task) = (*task_queue).pop() {
+        if let Some(task) = task_queue.pop() {
             return Some(task);
         }
         let (mut q, _) = cvar.wait_timeout(task_queue, timeout).unwrap();
@@ -205,15 +214,22 @@ where
                 (t.task).call_once((&mut self.ctx,));
                 self.ctx.on_task_finished();
                 self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
+                self.current_batch_number += 1;
+                if self.current_batch_number == self.batch_size {
+                    self.current_batch_number = 0;
+                    self.ctx.on_tick();
+                }
+            } else {
+                self.current_batch_number = 0;
+                self.ctx.on_tick();
             }
-            self.ctx.on_tick();
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{Context, ContextFactory, ThreadPool};
+    use super::{Context, ContextFactory, ThreadPool, DEFAULT_BATCH_SIZE};
     use std::time::Duration;
     use std::sync::mpsc::{channel, Sender};
     use std::sync::{Arc, Mutex};
@@ -233,7 +249,7 @@ mod test {
     struct DummyContextFactory {}
 
     impl ContextFactory<DummyContext> for DummyContextFactory {
-        fn create_context(&self) -> DummyContext {
+        fn create(&self) -> DummyContext {
             DummyContext {}
         }
     }
@@ -243,7 +259,7 @@ mod test {
         let name = thd_name!("test_get_task_count");
         let concurrency = 1;
         let f = DummyContextFactory {};
-        let mut task_pool = ThreadPool::new(name, concurrency, f);
+        let mut task_pool = ThreadPool::new(name, concurrency, DEFAULT_BATCH_SIZE, f);
         let (tx, rx) = channel();
         let (ftx, frx) = channel();
         let receiver = Arc::new(Mutex::new(rx));
@@ -303,7 +319,7 @@ mod test {
         }
 
         impl ContextFactory<TestContext> for TestContextFactory {
-            fn create_context(&self) -> TestContext {
+            fn create(&self) -> TestContext {
                 TestContext {
                     counter: self.counter.clone(),
                     tx: self.tx.clone(),
@@ -320,7 +336,7 @@ mod test {
 
         let name = thd_name!("test_tasks_with_contexts");
         let concurrency = 5;
-        let mut task_pool = ThreadPool::new(name, concurrency, f);
+        let mut task_pool = ThreadPool::new(name, concurrency, DEFAULT_BATCH_SIZE, f);
 
         for _ in 0..10 {
             task_pool.execute(move |_: &mut TestContext| {});

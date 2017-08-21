@@ -26,7 +26,7 @@ use kvproto::kvrpcpb::CommandPri;
 use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
-use util::threadpool::{Context, ContextFactory, ThreadPool};
+use util::threadpool::{Context, ContextFactory, ThreadPool, DEFAULT_BATCH_SIZE};
 use server::OnResponse;
 use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
 use storage::engine::Error as EngineError;
@@ -88,7 +88,7 @@ impl Context for DummyContext {
 struct DummyContextFactory {}
 
 impl ContextFactory<DummyContext> for DummyContextFactory {
-    fn create_context(&self) -> DummyContext {
+    fn create(&self) -> DummyContext {
         DummyContext {}
     }
 }
@@ -105,16 +105,19 @@ impl Host {
             pool: ThreadPool::new(
                 thd_name!("endpoint-normal-pool"),
                 concurrency,
+                DEFAULT_BATCH_SIZE,
                 DummyContextFactory {},
             ),
             low_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-low-pool"),
                 concurrency,
+                DEFAULT_BATCH_SIZE,
                 DummyContextFactory {},
             ),
             high_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-high-pool"),
                 concurrency,
+                DEFAULT_BATCH_SIZE,
                 DummyContextFactory {},
             ),
         }
