@@ -17,12 +17,17 @@ use coprocessor::codec::Datum;
 impl FnCall {
     pub fn logic_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
-        let arg1 = try!(self.children[1].eval_int(ctx, row));
-        match (arg0, arg1) {
-            (Some(0), _) | (_, Some(0)) => Ok(Some(0)),
-            (None, _) | (_, None) => Ok(None),
-            _ => Ok(Some(1)),
+        if arg0.is_some() && arg0.unwrap() == 0 {
+            return Ok(Some(0));
         }
+        let arg1 = try!(self.children[1].eval_int(ctx, row));
+        if arg1.is_some() && arg1.unwrap() == 0 {
+            return Ok(Some(0));
+        }
+        if arg0.is_none() || arg1.is_none() {
+            return Ok(None)
+        }
+        Ok(Some(1))
     }
 
     pub fn logic_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
