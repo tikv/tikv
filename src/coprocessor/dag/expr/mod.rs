@@ -180,6 +180,14 @@ impl Expression {
                 ScalarFuncSig::NEJson => f.compare_json(ctx, row, CmpOp::NE),
                 ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
 
+                ScalarFuncSig::CastIntAsInt => f.cast_int_as_int(ctx, row),
+                ScalarFuncSig::CastRealAsInt => f.cast_real_as_int(ctx, row),
+                ScalarFuncSig::CastDecimalAsInt => f.cast_decimal_as_int(ctx, row),
+                ScalarFuncSig::CastStringAsInt => f.cast_str_as_int(ctx, row),
+                ScalarFuncSig::CastTimeAsInt => f.cast_time_as_int(ctx, row),
+                ScalarFuncSig::CastDurationAsInt => f.cast_duration_as_int(ctx, row),
+                ScalarFuncSig::CastJsonAsInt => f.cast_json_as_int(ctx, row),
+
                 _ => Err(box_err!("Unknown signature")),
             },
         }
@@ -189,7 +197,16 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::CastIntAsReal => f.cast_int_as_real(ctx, row),
+                ScalarFuncSig::CastRealAsReal => f.cast_real_as_real(ctx, row),
+                ScalarFuncSig::CastDecimalAsReal => f.cast_decimal_as_real(ctx, row),
+                ScalarFuncSig::CastStringAsReal => f.cast_str_as_real(ctx, row),
+                ScalarFuncSig::CastTimeAsReal => f.cast_time_as_real(ctx, row),
+                ScalarFuncSig::CastDurationAsReal => f.cast_duration_as_real(ctx, row),
+                ScalarFuncSig::CastJsonAsReal => f.cast_json_as_real(ctx, row),
+                _ => Err(box_err!("Unknown signature")),
+            },
         }
     }
 
@@ -201,7 +218,16 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_decimal(),
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::CastIntAsDecimal => f.cast_int_as_decimal(ctx, row),
+                ScalarFuncSig::CastRealAsDecimal => f.cast_real_as_decimal(ctx, row),
+                ScalarFuncSig::CastDecimalAsDecimal => f.cast_decimal_as_decimal(ctx, row),
+                ScalarFuncSig::CastStringAsDecimal => f.cast_str_as_decimal(ctx, row),
+                ScalarFuncSig::CastTimeAsDecimal => f.cast_time_as_decimal(ctx, row),
+                ScalarFuncSig::CastDurationAsDecimal => f.cast_duration_as_decimal(ctx, row),
+                ScalarFuncSig::CastJsonAsDecimal => f.cast_json_as_decimal(ctx, row),
+                _ => Err(box_err!("Unknown signature")),
+            },
         }
     }
 
@@ -213,7 +239,16 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::CastIntAsString => f.cast_int_as_str(ctx, row),
+                ScalarFuncSig::CastRealAsString => f.cast_real_as_str(ctx, row),
+                ScalarFuncSig::CastDecimalAsString => f.cast_decimal_as_str(ctx, row),
+                ScalarFuncSig::CastStringAsString => f.cast_str_as_str(ctx, row),
+                ScalarFuncSig::CastTimeAsString => f.cast_time_as_str(ctx, row),
+                ScalarFuncSig::CastDurationAsString => f.cast_duration_as_str(ctx, row),
+                ScalarFuncSig::CastJsonAsString => f.cast_json_as_str(ctx, row),
+                _ => Err(box_err!("Unknown signature")),
+            },
         }
     }
 
@@ -225,7 +260,16 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_time(),
             Expression::ColumnRef(ref column) => column.eval_time(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::CastIntAsTime => f.cast_int_as_time(ctx, row),
+                ScalarFuncSig::CastRealAsTime => f.cast_real_as_time(ctx, row),
+                ScalarFuncSig::CastDecimalAsTime => f.cast_decimal_as_time(ctx, row),
+                ScalarFuncSig::CastStringAsTime => f.cast_str_as_time(ctx, row),
+                ScalarFuncSig::CastTimeAsTime => f.cast_time_as_time(ctx, row),
+                ScalarFuncSig::CastDurationAsTime => f.cast_duration_as_time(ctx, row),
+                ScalarFuncSig::CastJsonAsTime => f.cast_json_as_time(ctx, row),
+                _ => Err(box_err!("Unknown signature")),
+            },
         }
     }
 
@@ -237,7 +281,16 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::CastIntAsDuration => f.cast_int_as_duration(ctx, row),
+                ScalarFuncSig::CastRealAsDuration => f.cast_real_as_duration(ctx, row),
+                ScalarFuncSig::CastDecimalAsDuration => f.cast_decimal_as_duration(ctx, row),
+                ScalarFuncSig::CastStringAsDuration => f.cast_str_as_duration(ctx, row),
+                ScalarFuncSig::CastTimeAsDuration => f.cast_time_as_duration(ctx, row),
+                ScalarFuncSig::CastDurationAsDuration => f.cast_duration_as_duration(ctx, row),
+                ScalarFuncSig::CastJsonAsDuration => f.cast_json_as_duration(ctx, row),
+                _ => Err(box_err!("Unknown signature")),
+            },
         }
     }
 
@@ -249,7 +302,16 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_json(),
             Expression::ColumnRef(ref column) => column.eval_json(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::CastIntAsJson => f.cast_int_as_json(ctx, row),
+                ScalarFuncSig::CastRealAsJson => f.cast_real_as_json(ctx, row),
+                ScalarFuncSig::CastDecimalAsJson => f.cast_decimal_as_json(ctx, row),
+                ScalarFuncSig::CastStringAsJson => f.cast_str_as_json(ctx, row),
+                ScalarFuncSig::CastTimeAsJson => f.cast_time_as_json(ctx, row),
+                ScalarFuncSig::CastDurationAsJson => f.cast_duration_as_json(ctx, row),
+                ScalarFuncSig::CastJsonAsJson => f.cast_json_as_json(ctx, row),
+                _ => Err(box_err!("Unknown signature")),
+            },
         }
     }
 

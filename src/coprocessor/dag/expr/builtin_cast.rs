@@ -503,7 +503,7 @@ impl FnCall {
         ok_with_some_cow!(d)
     }
 
-    pub fn cast_int_as_jsonn<'a, 'b: 'a>(
+    pub fn cast_int_as_json<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
