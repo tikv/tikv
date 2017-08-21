@@ -14,6 +14,7 @@
 // TODO: remove following later
 #![allow(dead_code)]
 
+use std::borrow::Cow;
 use super::{FnCall, Result, StatementContext};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Time};
@@ -37,48 +38,56 @@ impl FnCall {
         Ok(arg1)
     }
 
-    pub fn if_null_decimal(
-        &self,
+    pub fn if_null_decimal<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Decimal>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
         let arg0 = try!(self.children[0].eval_decimal(ctx, row));
         if !arg0.is_none() {
-            return Ok(arg0.map(|x| x.into_owned()));
+            return Ok(arg0);
         }
         let arg1 = try!(self.children[1].eval_decimal(ctx, row));
-        Ok(arg1.map(|x| x.into_owned()))
+        Ok(arg1)
     }
 
-    pub fn if_null_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<u8>>> {
+    pub fn if_null_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let arg0 = try!(self.children[0].eval_string(ctx, row));
         if !arg0.is_none() {
-            return Ok(arg0.map(|x| x.into_owned()));
+            return Ok(arg0);
         }
         let arg1 = try!(self.children[1].eval_string(ctx, row));
-        Ok(arg1.map(|x| x.into_owned()))
+        Ok(arg1)
     }
 
-    pub fn if_null_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
+    pub fn if_null_time<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
         let arg0 = try!(self.children[0].eval_time(ctx, row));
         if !arg0.is_none() {
-            return Ok(arg0.map(|x| x.into_owned()));
+            return Ok(arg0);
         }
         let arg1 = try!(self.children[1].eval_time(ctx, row));
-        Ok(arg1.map(|x| x.into_owned()))
+        Ok(arg1)
     }
 
-    pub fn if_null_duration(
-        &self,
+    pub fn if_null_duration<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Duration>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Duration>>> {
         let arg0 = try!(self.children[0].eval_duration(ctx, row));
         if !arg0.is_none() {
-            return Ok(arg0.map(|x| x.into_owned()));
+            return Ok(arg0);
         }
         let arg1 = try!(self.children[1].eval_duration(ctx, row));
-        Ok(arg1.map(|x| x.into_owned()))
+        Ok(arg1)
     }
 
     pub fn if_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -101,43 +110,59 @@ impl FnCall {
         }
     }
 
-    pub fn if_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Decimal>> {
+    pub fn if_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         let arg1 = try!(self.children[1].eval_decimal(ctx, row));
         let arg2 = try!(self.children[2].eval_decimal(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2.map(|x| x.into_owned())),
-            _ => Ok(arg1.map(|x| x.into_owned())),
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
         }
     }
 
-    pub fn if_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Vec<u8>>> {
+    pub fn if_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         let arg1 = try!(self.children[1].eval_string(ctx, row));
         let arg2 = try!(self.children[2].eval_string(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2.map(|x| x.into_owned())),
-            _ => Ok(arg1.map(|x| x.into_owned())),
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
         }
     }
 
-    pub fn if_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
+    pub fn if_time<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         let arg1 = try!(self.children[1].eval_time(ctx, row));
         let arg2 = try!(self.children[2].eval_time(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2.map(|x| x.into_owned())),
-            _ => Ok(arg1.map(|x| x.into_owned())),
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
         }
     }
 
-    pub fn if_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Duration>> {
+    pub fn if_duration<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Duration>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         let arg1 = try!(self.children[1].eval_duration(ctx, row));
         let arg2 = try!(self.children[2].eval_duration(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2.map(|x| x.into_owned())),
-            _ => Ok(arg1.map(|x| x.into_owned())),
+            None | Some(0) => Ok(arg2),
+            _ => Ok(arg1),
         }
     }
 }
@@ -146,8 +171,7 @@ impl FnCall {
 mod test {
     use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::{Time, Duration};
-    use chrono::DateTime;
+    use coprocessor::codec::mysql::Duration;
     use coprocessor::dag::expr::{Expression, StatementContext};
     use coprocessor::dag::expr::test::{fncall_expr, str2dec};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
@@ -215,18 +239,7 @@ mod test {
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
             ),
-            (
-                ScalarFuncSig::IfNullTime,
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
-            ),
-            (
-                ScalarFuncSig::IfNullTime,
-                Datum::Null,
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
-            ),
+            // TODO: add Time related tests after Time is implementted in Expression::build
         ];
         let ctx = StatementContext::default();
         for tt in tests {
@@ -247,25 +260,58 @@ mod test {
                 }
                 ScalarFuncSig::IfNullString => {
                     let lhs = op.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
-                    let rhs = expected.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
+                    let rhs = expected
+                        .eval_string(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfNullDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[]).unwrap().unwrap().into_owned().as_f64().unwrap();
-                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap().unwrap().into_owned().as_f64().unwrap();
+                    let lhs = op.eval_decimal(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .as_f64()
+                        .unwrap();
+                    let rhs = expected
+                        .eval_decimal(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .as_f64()
+                        .unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfNullTime => {
-                    let lhs = op.eval_time(&ctx, &[]).unwrap().unwrap().into_owned().to_numeric_str();
-                    let rhs = expected.eval_time(&ctx, &[]).unwrap().unwrap().into_owned().to_numeric_str();
+                    let lhs = op.eval_time(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .to_numeric_str();
+                    let rhs = expected
+                        .eval_time(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .to_numeric_str();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfNullDuration => {
-                    let lhs = op.eval_duration(&ctx, &[]).unwrap().unwrap().into_owned().to_nanos();
-                    let rhs = expected.eval_duration(&ctx, &[]).unwrap().unwrap().into_owned().to_nanos();
+                    let lhs = op.eval_duration(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .to_nanos();
+                    let rhs = expected
+                        .eval_duration(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .to_nanos();
                     assert_eq!(lhs, rhs);
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
     }
@@ -378,27 +424,7 @@ mod test {
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
             ),
-            (
-                ScalarFuncSig::IfTime,
-                Datum::I64(1),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
-            ),
-            (
-                ScalarFuncSig::IfTime,
-                Datum::Null,
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
-            ),
-            (
-                ScalarFuncSig::IfTime,
-                Datum::I64(0),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 22:00:09 +0900").unwrap(), 1, 1).unwrap()),
-            ),
+            // TODO: add Time related tests after Time is implementted in Expression::build
         ];
         let ctx = StatementContext::default();
         for tt in tests {
@@ -420,25 +446,58 @@ mod test {
                 }
                 ScalarFuncSig::IfString => {
                     let lhs = op.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
-                    let rhs = expected.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
+                    let rhs = expected
+                        .eval_string(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[]).unwrap().unwrap().into_owned().as_f64().unwrap();
-                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap().unwrap().into_owned().as_f64().unwrap();
+                    let lhs = op.eval_decimal(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .as_f64()
+                        .unwrap();
+                    let rhs = expected
+                        .eval_decimal(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .as_f64()
+                        .unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfTime => {
-                    let lhs = op.eval_time(&ctx, &[]).unwrap().unwrap().into_owned().to_numeric_str();
-                    let rhs = expected.eval_time(&ctx, &[]).unwrap().unwrap().into_owned().to_numeric_str();
+                    let lhs = op.eval_time(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .to_numeric_str();
+                    let rhs = expected
+                        .eval_time(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .to_numeric_str();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfDuration => {
-                    let lhs = op.eval_duration(&ctx, &[]).unwrap().unwrap().into_owned().to_nanos();
-                    let rhs = expected.eval_duration(&ctx, &[]).unwrap().unwrap().into_owned().to_nanos();
+                    let lhs = op.eval_duration(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .to_nanos();
+                    let rhs = expected
+                        .eval_duration(&ctx, &[])
+                        .unwrap()
+                        .unwrap()
+                        .into_owned()
+                        .to_nanos();
                     assert_eq!(lhs, rhs);
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
     }

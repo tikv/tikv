@@ -22,8 +22,8 @@ impl FnCall {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         let arg1 = try!(self.children[1].eval_int(ctx, row));
         match (arg0, arg1) {
-            (None, None) => Ok(None),
             (Some(0), _) | (_, Some(0)) => Ok(Some(0)),
+            (None, _) | (_, None) => Ok(None),
             _ => Ok(Some(1)),
         }
     }
@@ -140,8 +140,7 @@ fn eval_is_null<T>(arg: Option<T>) -> Result<Option<i64>> {
 mod test {
     use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::{Time, Duration};
-    use chrono::DateTime;
+    use coprocessor::codec::mysql::Duration;
     use coprocessor::dag::expr::{Expression, StatementContext};
     use coprocessor::dag::expr::test::{fncall_expr, str2dec};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
@@ -195,7 +194,7 @@ mod test {
                 ScalarFuncSig::LogicalAnd,
                 Datum::Null,
                 Datum::I64(1),
-                Datum::I64(0),
+                Datum::Null,
             ),
             (
                 ScalarFuncSig::LogicalOr,
@@ -301,14 +300,12 @@ mod test {
             let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
             let op = Expression::build(fncall_expr(tt.0, &[arg1, arg2]), 0).unwrap();
             match tt.0 {
-                ScalarFuncSig::LogicalAnd |
-                ScalarFuncSig::LogicalOr |
-                ScalarFuncSig::LogicalXor => {
+                ScalarFuncSig::LogicalAnd | ScalarFuncSig::LogicalOr | ScalarFuncSig::LogicalXor => {
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
                     let rhs = expected.eval_int(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
     }
@@ -316,121 +313,37 @@ mod test {
     #[test]
     fn test_unary_op() {
         let tests = vec![
-            (
-                ScalarFuncSig::UnaryNot,
-                Datum::I64(1),
-                Datum::I64(0),
-            ),
-            (
-                ScalarFuncSig::UnaryNot,
-                Datum::I64(0),
-                Datum::I64(1),
-            ),
-            (
-                ScalarFuncSig::UnaryNot,
-                Datum::I64(123),
-                Datum::I64(0),
-            ),
-            (
-                ScalarFuncSig::UnaryNot,
-                Datum::I64(-123),
-                Datum::I64(0),
-            ),
-            (
-                ScalarFuncSig::UnaryNot,
-                Datum::Null,
-                Datum::Null,
-            ),
-            (
-                ScalarFuncSig::RealIsTrue,
-                Datum::F64(0.25),
-                Datum::I64(1),
-            ),
-            (
-                ScalarFuncSig::RealIsTrue,
-                Datum::F64(0.0),
-                Datum::I64(0),
-            ),
-            (
-                ScalarFuncSig::RealIsNull,
-                Datum::F64(1.25),
-                Datum::I64(0),
-            ),
-            (
-                ScalarFuncSig::RealIsNull,
-                Datum::Null,
-                Datum::I64(1),
-            ),
-            (
-                ScalarFuncSig::DecimalIsTrue,
-                str2dec("1.1"),
-                Datum::I64(1),
-            ),
-            (
-                ScalarFuncSig::DecimalIsTrue,
-                str2dec("0"),
-                Datum::I64(0),
-            ),
-            (
-                ScalarFuncSig::DecimalIsNull,
-                str2dec("1.1"),
-                Datum::I64(0),
-            ),
-            (
-                ScalarFuncSig::DecimalIsNull,
-                Datum::Null,
-                Datum::I64(1),
-            ),
-            (
-                ScalarFuncSig::IntIsFalse,
-                Datum::I64(0),
-                Datum::I64(1),
-            ),
-            (
-                ScalarFuncSig::IntIsFalse,
-                Datum::I64(1),
-                Datum::I64(0),
-            ),
-            (
-                ScalarFuncSig::IntIsNull,
-                Datum::I64(1),
-                Datum::I64(0),
-            ),
-            (
-                ScalarFuncSig::IntIsNull,
-                Datum::Null,
-                Datum::I64(1),
-            ),
-            (
-                ScalarFuncSig::StringIsNull,
-                Datum::Null,
-                Datum::I64(1),
-            ),
+            (ScalarFuncSig::UnaryNot, Datum::I64(1), Datum::I64(0)),
+            (ScalarFuncSig::UnaryNot, Datum::I64(0), Datum::I64(1)),
+            (ScalarFuncSig::UnaryNot, Datum::I64(123), Datum::I64(0)),
+            (ScalarFuncSig::UnaryNot, Datum::I64(-123), Datum::I64(0)),
+            (ScalarFuncSig::UnaryNot, Datum::Null, Datum::Null),
+            (ScalarFuncSig::RealIsTrue, Datum::F64(0.25), Datum::I64(1)),
+            (ScalarFuncSig::RealIsTrue, Datum::F64(0.0), Datum::I64(0)),
+            (ScalarFuncSig::RealIsNull, Datum::F64(1.25), Datum::I64(0)),
+            (ScalarFuncSig::RealIsNull, Datum::Null, Datum::I64(1)),
+            (ScalarFuncSig::DecimalIsTrue, str2dec("1.1"), Datum::I64(1)),
+            (ScalarFuncSig::DecimalIsTrue, str2dec("0"), Datum::I64(0)),
+            (ScalarFuncSig::DecimalIsNull, str2dec("1.1"), Datum::I64(0)),
+            (ScalarFuncSig::DecimalIsNull, Datum::Null, Datum::I64(1)),
+            (ScalarFuncSig::IntIsFalse, Datum::I64(0), Datum::I64(1)),
+            (ScalarFuncSig::IntIsFalse, Datum::I64(1), Datum::I64(0)),
+            (ScalarFuncSig::IntIsNull, Datum::I64(1), Datum::I64(0)),
+            (ScalarFuncSig::IntIsNull, Datum::Null, Datum::I64(1)),
+            (ScalarFuncSig::StringIsNull, Datum::Null, Datum::I64(1)),
             (
                 ScalarFuncSig::StringIsNull,
                 Datum::Bytes(b"abc".to_vec()),
                 Datum::I64(0),
             ),
-            (
-                ScalarFuncSig::TimeIsNull,
-                Datum::Null,
-                Datum::I64(1),
-            ),
-            (
-                ScalarFuncSig::TimeIsNull,
-                Datum::Time(Time::new(DateTime::parse_from_rfc2822("Fri, 28 Nov 2014 21:00:09 +0900").unwrap(), 1, 1).unwrap()),
-                Datum::I64(0),
-            ),
+            (ScalarFuncSig::TimeIsNull, Datum::Null, Datum::I64(1)),
+            // TODO: add Time related tests after Time is implementted in Expression::build
             (
                 ScalarFuncSig::DurationIsNull,
                 Datum::Dur(Duration::zero()),
                 Datum::I64(0),
             ),
-            (
-                ScalarFuncSig::DurationIsNull,
-                Datum::Null,
-                Datum::I64(1),
-            ),
+            (ScalarFuncSig::DurationIsNull, Datum::Null, Datum::I64(1)),
         ];
         let ctx = StatementContext::default();
         for tt in tests {
@@ -444,7 +357,7 @@ mod test {
                 ScalarFuncSig::RealIsTrue |
                 ScalarFuncSig::RealIsNull |
                 ScalarFuncSig::DecimalIsNull |
-                ScalarFuncSig:: DecimalIsTrue |
+                ScalarFuncSig::DecimalIsTrue |
                 ScalarFuncSig::StringIsNull |
                 ScalarFuncSig::TimeIsNull |
                 ScalarFuncSig::DurationIsNull => {
@@ -452,7 +365,7 @@ mod test {
                     let rhs = expected.eval_int(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
     }

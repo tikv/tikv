@@ -180,6 +180,23 @@ impl Expression {
                 ScalarFuncSig::NEJson => f.compare_json(ctx, row, CmpOp::NE),
                 ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
 
+                ScalarFuncSig::LogicalAnd => f.logic_and(ctx, row),
+                ScalarFuncSig::LogicalOr => f.logic_or(ctx, row),
+                ScalarFuncSig::LogicalXor => f.logic_xor(ctx, row),
+
+                ScalarFuncSig::UnaryNot => f.unary_not(ctx, row),
+                ScalarFuncSig::IntIsNull => f.int_is_null(ctx, row),
+                ScalarFuncSig::IntIsFalse => f.int_is_false(ctx, row),
+                ScalarFuncSig::RealIsTrue => f.real_is_true(ctx, row),
+                ScalarFuncSig::RealIsNull => f.real_is_null(ctx, row),
+                ScalarFuncSig::DecimalIsNull => f.decimal_is_null(ctx, row),
+                ScalarFuncSig::DecimalIsTrue => f.decimal_is_true(ctx, row),
+                ScalarFuncSig::StringIsNull => f.string_is_null(ctx, row),
+                ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
+                ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
+                ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
+                ScalarFuncSig::IfInt => f.if_int(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -189,7 +206,11 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
+                ScalarFuncSig::IfReal => f.if_real(ctx, row),
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
@@ -201,7 +222,11 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_decimal(),
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
+                ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
@@ -213,7 +238,11 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullString => f.if_null_string(ctx, row),
+                ScalarFuncSig::IfString => f.if_string(ctx, row),
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
@@ -225,7 +254,11 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_time(),
             Expression::ColumnRef(ref column) => column.eval_time(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullTime => f.if_null_time(ctx, row),
+                ScalarFuncSig::IfTime => f.if_time(ctx, row),
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
@@ -237,7 +270,11 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullDuration => f.if_null_duration(ctx, row),
+                ScalarFuncSig::IfDuration => f.if_duration(ctx, row),
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
@@ -372,10 +409,7 @@ mod test {
             (colref.clone(), 2, true),
             (constant.clone(), 0, true),
             (
-                fncall_expr(
-                    ScalarFuncSig::LTInt,
-                    &[colref.clone(), constant.clone()],
-                ),
+                fncall_expr(ScalarFuncSig::LTInt, &[colref.clone(), constant.clone()]),
                 2,
                 true,
             ),
