@@ -503,28 +503,25 @@ pub fn check_version(version_path: &Path, db_path: &Path) -> Result<File, String
             Err("miss version".to_owned())
         }
     } else {
-        let previous_ver = Version::parse(&ver).map_err(|e| format!("{:?}", e))?;
-        let current_ver = Version::parse(super::VERSION)
-            .map_err(|e| format!("{:?}", e))?;
-        if previous_ver.major == current_ver.major {
-            if previous_ver.minor <= current_ver.minor {
-                Ok(version_lock)
-            } else {
-                Err(format!(
-                    "use newer version of data,\
-                     previous version {:?}, current version {:?}",
-                    previous_ver,
-                    current_ver
-                ))
-            }
-        } else {
-            Err(format!(
-                "previous version is different from currnet version,\
-                 previous version {:?}, current version {:?}",
-                previous_ver,
-                current_ver
-            ))
-        }
+        check_version_compatiblity(&ver, super::VERSION)?;
+        Ok(version_lock)
+    }
+}
+
+// It fails when the the major versions are different.
+fn check_version_compatiblity(previous_ver: &str, current_ver: &str) -> Result<(), String> {
+    let previous_ver = Version::parse(previous_ver).map_err(|e| format!("{:?}", e))?;
+    let current_ver = Version::parse(current_ver)
+        .map_err(|e| format!("{:?}", e))?;
+    if previous_ver.major == current_ver.major {
+        Ok(())
+    } else {
+        Err(format!(
+            "previous version is different from currnet version,\
+            previous version {:?}, current version {:?}",
+            previous_ver,
+            current_ver
+        ))
     }
 }
 
@@ -755,6 +752,34 @@ mod tests {
             let mut f = File::create(&version_path).unwrap();
             f.write_all(super::super::VERSION.as_bytes()).unwrap();
             check_version(&version_path, &db_path).unwrap();
+        }
+
+        {
+            // VERSION can not be locked twice.
+            let root = TempDir::new("test-version").unwrap();
+            let path = root.path();
+            let (version_path, db_path, _) = init_store_dir(path).unwrap();
+            // A different VERSION.
+            let mut f = File::create(&version_path).unwrap();
+            f.write_all(super::super::VERSION.as_bytes()).unwrap();
+            let _lock = check_version(&version_path, &db_path).unwrap();
+            check_version(&version_path, &db_path).unwrap_err();
+        }
+
+        // Test compatiblity
+        {
+            check_version_compatiblity("1.9.1", "1.9.1").unwrap();
+            check_version_compatiblity("1.9.0", "1.9.1").unwrap();
+            check_version_compatiblity("1.8.1", "1.9.1").unwrap();
+            check_version_compatiblity("1.10.0", "1.9.1").unwrap();
+            check_version_compatiblity("1.9.1-beta", "1.9.1").unwrap();
+            check_version_compatiblity("1.9.0-beta", "1.9.1").unwrap();
+            check_version_compatiblity("1.8.1-beta", "1.9.1").unwrap();
+            check_version_compatiblity("1.8.0-beta", "1.9.1").unwrap();
+            check_version_compatiblity("2.0.0", "1.9.1").unwrap_err();
+            check_version_compatiblity("2.1.0", "1.9.1").unwrap_err();
+            check_version_compatiblity("2.0.0-beta", "1.9.1").unwrap_err();
+            check_version_compatiblity("2.1.0-beta", "1.9.1").unwrap_err();
         }
     }
 }
