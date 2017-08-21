@@ -274,8 +274,11 @@ fn main() {
     let long_version: String = {
         let (hash, branch, time, rust_ver) = util::build_info();
         format!(
-            "{}\nGit Commit Hash:   {}\nGit Commit Branch: {}\nUTC Build Time:    {}\nRust \
-             Version:      {}",
+            "\nRelease Version:   {}\
+             \nGit Commit Hash:   {}\
+             \nGit Commit Branch: {}\
+             \nUTC Build Time:    {}\
+             \nRust Version:      {}",
             crate_version!(),
             hash,
             branch,
