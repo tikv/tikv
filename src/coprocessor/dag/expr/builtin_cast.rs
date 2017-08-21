@@ -32,11 +32,7 @@ impl FnCall {
     }
 
     pub fn cast_real_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val = try!(self.children[0].eval_real(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
         if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
             let uval = try!(convert_float_to_uint(val, u64::MAX, types::DOUBLE));
             Ok(Some(uval as i64))
@@ -51,14 +47,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<i64>> {
-        let val = try!(self.children[0].eval_decimal(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap()
-            .into_owned()
-            .round(0, RoundMode::HalfEven)
-            .unwrap();
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
         if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
             let uint = val.as_u64().unwrap();
             // TODO:handle overflow
@@ -74,11 +64,7 @@ impl FnCall {
         if self.children[0].is_hybrid_type() {
             return self.children[0].eval_int(ctx, row);
         }
-        let val = try!(self.children[0].eval_string(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
         let negative_flag = b'-';
         let is_negative = match val.iter().skip_while(|x| x.is_ascii_whitespace()).next() {
             Some(&negative_flag) => true,
@@ -97,11 +83,8 @@ impl FnCall {
     }
 
     pub fn cast_time_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val = try!(self.children[0].eval_time(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let dec = try!(val.unwrap().to_decimal());
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let dec = try!(val.to_decimal());
         let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
         let res = dec.as_i64().unwrap();
@@ -113,11 +96,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<i64>> {
-        let val = try!(self.children[0].eval_duration(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let dec = try!(val.unwrap().to_decimal());
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dec = try!(val.to_decimal());
         let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
         let res = dec.as_i64().unwrap();
@@ -125,21 +105,13 @@ impl FnCall {
     }
 
     pub fn cast_json_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val = try!(self.children[0].eval_json(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
         let res = val.cast_to_int();
         Ok(Some(res))
     }
 
     pub fn cast_int_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try!(self.children[0].eval_int(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
         if !mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
             Ok(Some(
                 try!(self.produce_float_with_specified_tp(ctx, val as f64)),
@@ -153,13 +125,8 @@ impl FnCall {
     }
 
     pub fn cast_real_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try!(self.children[0].eval_real(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(try!(
-            self.produce_float_with_specified_tp(ctx, val.unwrap())
-        )))
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(try!(self.produce_float_with_specified_tp(ctx, val))))
     }
 
     pub fn cast_decimal_as_real(
@@ -167,11 +134,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<f64>> {
-        let val = try!(self.children[0].eval_decimal(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let res = try!(val.as_f64());
         Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
@@ -180,21 +143,14 @@ impl FnCall {
         if self.children[0].is_hybrid_type() {
             return self.children[0].eval_real(ctx, row);
         }
-        let val = try!(self.children[0].eval_string(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
         let res = try!(convert::bytes_to_f64(ctx, &val));
         Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_time_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try!(self.children[0].eval_time(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = try!(val.unwrap().to_decimal());
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let val = try!(val.to_decimal());
         let res = try!(val.as_f64());
         Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
@@ -204,34 +160,24 @@ impl FnCall {
         ctx: &StatementContext,
         row: &[Datum],
     ) -> Result<Option<f64>> {
-        let val = try!(self.children[0].eval_duration(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = try!(val.unwrap().to_decimal());
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let val = try!(val.to_decimal());
         let res = try!(val.as_f64());
         Ok(Some(try!(self.produce_float_with_specified_tp(ctx, res))))
     }
 
     pub fn cast_json_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try!(self.children[0].eval_json(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap().cast_to_real();
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let val = val.cast_to_real();
         Ok(Some(try!(self.produce_float_with_specified_tp(ctx, val))))
     }
 
     pub fn cast_int_as_decimal<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
-        row: &'a [Datum],
+        row: &[Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try!(self.children[0].eval_int(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
         let field_type = &self.children[0].get_tp();
         let res = if !mysql::has_unsigned_flag(field_type.get_flag() as u64) {
             Decimal::from(val)
@@ -247,11 +193,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try!(self.children[0].eval_real(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let res = try!(Decimal::from_f64(val.unwrap()));
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let res = try!(Decimal::from_f64(val));
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, res))))
     }
 
@@ -260,14 +203,10 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try!(self.children[0].eval_decimal(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(try!(self.produce_dec_with_specified_tp(
-            ctx,
-            val.unwrap().into_owned()
-        ))))
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        Ok(Some(try!(
+            self.produce_dec_with_specified_tp(ctx, val.into_owned())
+        )))
     }
 
     pub fn cast_str_as_decimal<'a, 'b: 'a>(
@@ -278,12 +217,8 @@ impl FnCall {
         if self.children[0].is_hybrid_type() {
             return self.children[0].eval_decimal(ctx, row);
         }
-        let val = try!(self.children[0].eval_string(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let bs = val.unwrap();
-        let dec = match try!(Decimal::from_bytes(&bs)) {
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let dec = match try!(Decimal::from_bytes(&val)) {
             Res::Ok(d) | Res::Overflow(d) => d,
             Res::Truncated(d) => {
                 try!(convert::handle_truncate(ctx, true));
@@ -298,11 +233,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try!(self.children[0].eval_time(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let dec = try!(val.unwrap().to_decimal());
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let dec = try!(val.to_decimal());
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
 
@@ -311,11 +243,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try!(self.children[0].eval_duration(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let dec = try!(val.unwrap().to_decimal());
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dec = try!(val.to_decimal());
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
 
@@ -325,11 +254,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try!(self.children[0].eval_json(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap().cast_to_real();
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let val = val.cast_to_real();
         let dec = try!(Decimal::from_f64(val));
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
@@ -339,19 +265,12 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        let val = try!(self.children[0].eval_int(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
-            let uval = try!(convert_int_to_uint(
-                val.unwrap(),
-                u64::MAX,
-                types::LONG_LONG
-            ));
+            let uval = try!(convert_int_to_uint(val, u64::MAX, types::LONG_LONG));
             format!("{}", uval)
         } else {
-            format!("{}", val.unwrap())
+            format!("{}", val)
         };
         Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
@@ -361,11 +280,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        let val = try!(self.children[0].eval_real(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = format!("{}", val.unwrap());
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let s = format!("{}", val);
         Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
@@ -374,11 +290,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        let val = try!(self.children[0].eval_decimal(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = val.unwrap().to_string();
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let s = val.to_string();
         Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
@@ -387,11 +300,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        let val = try!(self.children[0].eval_string(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = try!(String::from_utf8(val.unwrap().into_owned()));
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try!(String::from_utf8(val.into_owned()));
         Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
@@ -400,11 +310,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        let val = try!(self.children[0].eval_time(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = format!("{}", val.unwrap());
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let s = format!("{}", val);
         Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
@@ -414,11 +321,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        let val = try!(self.children[0].eval_duration(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = format!("{}", val.unwrap());
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let s = format!("{}", val);
         Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
@@ -427,11 +331,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        let val = try!(self.children[0].eval_json(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = val.unwrap().to_string();
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let s = val.to_string();
         Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
@@ -440,11 +341,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try!(self.children[0].eval_int(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = format!("{}", val.unwrap());
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        let s = format!("{}", val);
         Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
@@ -453,11 +351,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try!(self.children[0].eval_real(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = format!("{}", val.unwrap());
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let s = format!("{}", val);
         Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
@@ -466,11 +361,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try!(self.children[0].eval_decimal(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = val.unwrap().to_string();
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let s = val.to_string();
         Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
@@ -479,11 +371,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try!(self.children[0].eval_string(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = try!(String::from_utf8(val.unwrap().into_owned()));
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try!(String::from_utf8(val.into_owned()));
         Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
@@ -492,11 +381,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try!(self.children[0].eval_time(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let mut val = val.unwrap().into_owned();
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let mut val = val.into_owned();
         try!(val.round_frac(self.tp.get_decimal() as i8));
         // TODO: tidb only update tp when tp is Date
         try!(val.set_tp(self.tp.get_tp() as u8));
@@ -508,11 +394,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try!(self.children[0].eval_duration(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let mut val = try!(Time::from_duration(&ctx.tz, val.unwrap().as_ref()));
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let mut val = try!(Time::from_duration(&ctx.tz, val.as_ref()));
         try!(val.round_frac(self.tp.get_decimal() as i8));
         try!(val.set_tp(self.tp.get_tp() as u8));
         Ok(Some(Cow::Owned(val)))
@@ -523,11 +406,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try!(self.children[0].eval_json(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = try!(val.unwrap().unquote());
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let s = try!(val.unquote());
         Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
@@ -536,11 +416,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try!(self.children[0].eval_int(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = format!("{}", val.unwrap());
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        let s = format!("{}", val);
         let dur = try!(Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8));
         Ok(Some(Cow::Owned(dur)))
     }
@@ -550,11 +427,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try!(self.children[0].eval_real(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = format!("{}", val.unwrap());
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let s = format!("{}", val);
         let dur = try!(Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8));
         Ok(Some(Cow::Owned(dur)))
     }
@@ -564,11 +438,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try!(self.children[0].eval_decimal(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = val.unwrap().to_string();
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let s = val.to_string();
         let dur = try!(Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8));
         Ok(Some(Cow::Owned(dur)))
     }
@@ -578,11 +449,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try!(self.children[0].eval_string(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = val.unwrap();
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
         // TODO: tidb would handle truncate here
         let dur = try!(Duration::parse(val.as_ref(), self.tp.get_decimal() as i8));
         Ok(Some(Cow::Owned(dur)))
@@ -593,11 +460,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try!(self.children[0].eval_time(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let mut res = try!(val.unwrap().to_duration());
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let mut res = try!(val.to_duration());
         try!(res.round_frac(self.tp.get_decimal() as i8));
         Ok(Some(Cow::Owned(res)))
     }
@@ -607,11 +471,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try!(self.children[0].eval_duration(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let mut res = val.unwrap().into_owned();
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let mut res = val.into_owned();
         try!(res.round_frac(self.tp.get_decimal() as i8));
         Ok(Some(Cow::Owned(res)))
     }
@@ -621,11 +482,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try!(self.children[0].eval_json(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = try!(val.unwrap().unquote());
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let s = try!(val.unquote());
         // TODO: tidb would handle truncate here
         let d = try!(Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8));
         Ok(Some(Cow::Owned(d)))
@@ -636,14 +494,11 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try!(self.children[0].eval_int(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
         let j = if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
-            Json::U64(val.unwrap() as u64)
+            Json::U64(val as u64)
         } else {
-            Json::I64(val.unwrap())
+            Json::I64(val)
         };
         Ok(Some(Cow::Owned(j)))
     }
@@ -653,11 +508,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try!(self.children[0].eval_real(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(Cow::Owned(Json::Double(val.unwrap()))))
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(Cow::Owned(Json::Double(val))))
     }
 
     pub fn cast_decimal_as_json<'a, 'b: 'a>(
@@ -665,11 +517,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try!(self.children[0].eval_decimal(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let val = try!(val.unwrap().as_f64());
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let val = try!(val.as_f64());
         Ok(Some(Cow::Owned(Json::Double(val))))
     }
 
@@ -678,11 +527,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try!(self.children[0].eval_string(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let s = try!(String::from_utf8(val.unwrap().into_owned()));
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try!(String::from_utf8(val.into_owned()));
         if self.tp.get_decimal() == 0 {
             let j: Json = try!(s.parse());
             Ok(Some(Cow::Owned(j)))
@@ -696,11 +542,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try!(self.children[0].eval_time(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let mut val = val.unwrap().into_owned();
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let mut val = val.into_owned();
         if val.get_tp() == types::DATETIME || val.get_tp() == types::TIMESTAMP {
             val.set_fsp(mysql::MAX_FSP as u8);
         }
@@ -713,11 +556,8 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try!(self.children[0].eval_duration(ctx, row));
-        if val.is_none() {
-            return Ok(None);
-        }
-        let mut val = val.unwrap().into_owned();
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let mut val = val.into_owned();
         val.fsp = mysql::MAX_FSP as u8;
         let s = format!("{}", val);
         Ok(Some(Cow::Owned(Json::String(s))))

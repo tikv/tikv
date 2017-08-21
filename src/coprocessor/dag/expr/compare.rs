@@ -34,9 +34,8 @@ impl FnCall {
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_int(ctx, row));
-        let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_compare(lhs, rhs, op, |l, r| {
+        let e = |i: usize| self.children[i].eval_int(ctx, row);
+        do_compare(e, op, |l, r| {
             let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
             let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
             Ok(cmp_i64_with_unsigned_flag(l, lhs_unsigned, r, rhs_unsigned))
@@ -49,11 +48,8 @@ impl FnCall {
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_real(ctx, row));
-        let rhs = try!(self.children[1].eval_real(ctx, row));
         do_compare(
-            lhs,
-            rhs,
+            |i| self.children[i].eval_real(ctx, row),
             op,
             |l, r| datum::cmp_f64(l, r).map_err(Error::from),
         )
@@ -65,9 +61,8 @@ impl FnCall {
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_decimal(ctx, row));
-        let rhs = try!(self.children[1].eval_decimal(ctx, row));
-        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
+        let e = |i: usize| self.children[i].eval_decimal(ctx, row);
+        do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
     pub fn compare_string(
@@ -76,9 +71,8 @@ impl FnCall {
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_string(ctx, row));
-        let rhs = try!(self.children[1].eval_string(ctx, row));
-        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
+        let e = |i: usize| self.children[i].eval_string(ctx, row);
+        do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
     pub fn compare_time(
@@ -87,9 +81,8 @@ impl FnCall {
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_time(ctx, row));
-        let rhs = try!(self.children[1].eval_time(ctx, row));
-        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
+        let e = |i: usize| self.children[i].eval_time(ctx, row);
+        do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
     pub fn compare_duration(
@@ -98,9 +91,8 @@ impl FnCall {
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_duration(ctx, row));
-        let rhs = try!(self.children[1].eval_duration(ctx, row));
-        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
+        let e = |i: usize| self.children[i].eval_duration(ctx, row);
+        do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
     pub fn compare_json(
@@ -109,18 +101,23 @@ impl FnCall {
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_json(ctx, row));
-        let rhs = try!(self.children[1].eval_json(ctx, row));
-        do_compare(lhs, rhs, op, |l, r| Ok(l.cmp(&r)))
+        let e = |i: usize| self.children[i].eval_json(ctx, row);
+        do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 }
 
-fn do_compare<T, F>(lhs: Option<T>, rhs: Option<T>, op: CmpOp, get_order: F) -> Result<Option<i64>>
+fn do_compare<T, E, F>(e: E, op: CmpOp, get_order: F) -> Result<Option<i64>>
 where
+    E: Fn(usize) -> Result<Option<T>>,
     F: Fn(T, T) -> Result<Ordering>,
 {
+    let lhs = try!(e(0));
+    if lhs.is_none() && op != CmpOp::NullEQ {
+        return Ok(None);
+    }
+    let rhs = try!(e(1));
     match (lhs, rhs) {
-        (None, None) if op == CmpOp::NullEQ => Ok(Some(1)),
+        (None, None) => Ok(Some(1)),
         (Some(lhs), Some(rhs)) => {
             let ordering = try!(get_order(lhs, rhs));
             let r = match op {
