@@ -531,8 +531,8 @@ impl FnCall {
             return Ok(f);
         }
         match convert::truncate_f64(f, flen as u8, decimal as u8) {
-            Res::Ok(d) | Res::Truncated(d) => Ok(d),
-            Res::Overflow(d) => {
+            Res::Ok(d) => Ok(d),
+            Res::Overflow(d) | Res::Truncated(d) => {
                 //TODO process warning with ctx
                 try!(convert::handle_truncate(ctx, true));
                 Ok(d)
