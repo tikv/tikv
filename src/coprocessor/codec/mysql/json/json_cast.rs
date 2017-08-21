@@ -12,34 +12,27 @@
 // limitations under the License.
 
 use super::Json;
-use super::Result;
 
 impl Json {
-    pub fn cast_to_int(self) -> Result<i64> {
-        match self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => Ok(0),
-            Json::Boolean(true) => Ok(1),
-            Json::I64(d) => Ok(d),
-            Json::U64(d) => Ok(d as i64),
-            Json::Double(d) => Ok(d as i64),
-            Json::String(s) => {
-                let ret = s.parse::<i64>().unwrap_or(0);
-                Ok(ret)
-            }
+    pub fn cast_to_int(&self) -> i64 {
+        match *self {
+            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0,
+            Json::Boolean(true) => 1,
+            Json::I64(d) => d,
+            Json::U64(d) => d as i64,
+            Json::Double(d) => d as i64,
+            Json::String(ref s) => s.parse::<i64>().unwrap_or(0),
         }
     }
 
-    pub fn cast_to_real(self) -> Result<f64> {
-        match self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => Ok(0f64),
-            Json::Boolean(true) => Ok(1f64),
-            Json::I64(d) => Ok(d as f64),
-            Json::U64(d) => Ok(d as f64),
-            Json::Double(d) => Ok(d),
-            Json::String(s) => {
-                let ret = s.parse::<f64>().unwrap_or(0f64);
-                Ok(ret)
-            }
+    pub fn cast_to_real(&self) -> f64 {
+        match *self {
+            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0f64,
+            Json::Boolean(true) => 1f64,
+            Json::I64(d) => d as f64,
+            Json::U64(d) => d as f64,
+            Json::Double(d) => d,
+            Json::String(ref s) => s.parse::<f64>().unwrap_or(0f64),
         }
     }
 }
@@ -67,7 +60,7 @@ mod test {
 
         for (jstr, exp) in test_cases {
             let json: Json = jstr.parse().unwrap();
-            let get = json.cast_to_int().unwrap();
+            let get = json.cast_to_int();
             assert_eq!(get, exp, "cast_to_int get: {}, exp: {}", get, exp);
         }
     }
@@ -89,7 +82,7 @@ mod test {
 
         for (jstr, exp) in test_cases {
             let json: Json = jstr.parse().unwrap();
-            let get = json.cast_to_real().unwrap();
+            let get = json.cast_to_real();
             assert!(
                 (get - exp).abs() < f64::EPSILON,
                 "cast_to_int get: {}, exp: {}",

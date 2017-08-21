@@ -71,7 +71,7 @@ impl<'s> DAGContext<'s> {
             match exec.next() {
                 Ok(Some(row)) => {
                     try!(check_if_outdated(self.deadline, REQ_TYPE_DAG));
-                    let mut chunk = get_chunk(&mut chunks);
+                    let chunk = get_chunk(&mut chunks);
                     let length = chunk.get_rows_data().len();
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);

@@ -30,7 +30,7 @@ use super::resolve::StoreAddrResolver;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::raft_client::RaftClient;
 
-const DEFAULT_COPROCESSOR_BATCH: usize = 50;
+const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
@@ -243,7 +243,7 @@ mod tests {
             router,
             snapshot_status_sender,
             MockResolver { addr: addr.clone() },
-            SnapManager::new("", None, true),
+            SnapManager::new("", None),
         ).unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 

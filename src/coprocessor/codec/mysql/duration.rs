@@ -277,9 +277,9 @@ impl Ord for Duration {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::mysql::MAX_FSP;
     use util::escape;
     use super::*;
-    use super::super::MAX_FSP;
 
     #[test]
     fn test_parse() {
@@ -369,9 +369,11 @@ mod test {
             ("11:30:45.123456", 4, "11:30:45.1235"),
             ("11:30:45.123456", 6, "11:30:45.123456"),
             ("11:30:45.123456", 0, "11:30:45"),
+            ("11:59:59.999999", 3, "12:00:00.000"),
             ("1 11:30:45.123456", 1, "35:30:45.1"),
             ("1 11:30:45.999999", 4, "35:30:46.0000"),
             ("-1 11:30:45.999999", 0, "-35:30:46"),
+            ("-1 11:59:59.9999", 2, "-36:00:00.00"),
         ];
         for (input, fsp, exp) in cases {
             let mut t = Duration::parse(input.as_bytes(), MAX_FSP).unwrap();

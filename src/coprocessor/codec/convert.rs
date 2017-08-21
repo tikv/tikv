@@ -15,7 +15,7 @@ use std::{self, str, i64};
 use std::borrow::Cow;
 
 use coprocessor::select::xeval::EvalContext;
-use super::mysql::{Decimal, Res};
+use super::mysql::Res;
 use super::Result;
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
 pub const UNSPECIFIED_LENGTH: i32 = -1;
@@ -27,6 +27,32 @@ pub fn truncate_str(mut s: String, flen: isize) -> String {
     } else {
         s
     }
+}
+
+/// `truncate_f64` (`TruncateFloat` in tidb) tries to truncate f.
+/// If the result exceeds the max/min float that flen/decimal
+/// allowed, returns the max/min float allowed.
+pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
+    if f.is_nan() {
+        return Res::Overflow(0f64);
+    }
+    let shift = 10u64.pow(decimal as u32) as f64;
+    let maxf = 10u64.pow((flen - decimal) as u32) as f64 - 1.0 / shift;
+    if f.is_finite() {
+        let tmp = f * shift;
+        if tmp.is_finite() {
+            f = tmp.round() / shift
+        }
+    };
+
+    if f > maxf {
+        return Res::Overflow(maxf);
+    }
+
+    if f < -maxf {
+        return Res::Overflow(-maxf);
+    }
+    Res::Ok(f)
 }
 
 // `overflow` returns an overflowed error.
@@ -166,14 +192,6 @@ pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
     let vs = try!(get_valid_float_prefix(ctx, s));
 
     bytes_to_f64_without_context(vs.as_bytes())
-}
-
-pub fn dec_to_i64(dec: Decimal) -> Result<i64> {
-    match dec.as_i64() {
-        Res::Ok(t) => Ok(t),
-        Res::Truncated(_) => Err(box_err!("[1265] Data Truncated")),
-        Res::Overflow(_) => Err(box_err!("[1264] Data Out of Range")),
-    }
 }
 
 #[inline]
@@ -539,30 +557,18 @@ mod test {
     }
 
     #[test]
-    fn test_decimal_to_i64() {
+    fn test_truncate_f64() {
         let cases = vec![
-            ("-1", -1),
-            ("1", 1),
-            ("-9223372036854775807", -9223372036854775807),
-            ("-9223372036854775808", -9223372036854775808),
+            (100.114, 10, 2, Res::Ok(100.11)),
+            (100.115, 10, 2, Res::Ok(100.12)),
+            (100.1156, 10, 3, Res::Ok(100.116)),
+            (100.1156, 3, 1, Res::Overflow(99.9)),
+            (1.36, 10, 2, Res::Ok(1.36)),
+            (f64::NAN, 10, 1, Res::Overflow(0f64)),
         ];
-
-        for (dec_str, exp) in cases {
-            let dec: Decimal = dec_str.parse().unwrap();
-            let i = dec_to_i64(dec).unwrap();
-            assert_eq!(i, exp);
-        }
-
-        let illegal_cases = vec![
-            "9223372036854775808",
-            "-9223372036854775809",
-            "18446744073709551615",
-            "-1.23",
-        ];
-        for case in illegal_cases {
-            let dec: Decimal = case.parse().unwrap();
-            let ret = dec_to_i64(dec);
-            assert!(ret.is_err());
+        for (f, flen, decimal, exp) in cases {
+            let res = truncate_f64(f, flen, decimal);
+            assert_eq!(res, exp);
         }
     }
 }

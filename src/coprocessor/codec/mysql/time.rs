@@ -333,7 +333,7 @@ impl Time {
         Time::new(t, tp, fsp as i8)
     }
 
-    pub fn from_duration(tz: &FixedOffset, d: MyDuration) -> Result<Time> {
+    pub fn from_duration(tz: &FixedOffset, d: &MyDuration) -> Result<Time> {
         let local = Local::now();
         let t = try!(ymd_hms_nanos(
             tz,
@@ -400,11 +400,8 @@ impl Time {
         let base = 10u32.pow(NANO_WIDTH - fsp as u32);
         let expect_nanos = ((nanos as f64 / base as f64).round() as u32) * base;
         let diff = nanos as i64 - expect_nanos as i64;
-        let new_time = if diff < 0 {
-            self.time.checked_sub_signed(Duration::nanoseconds(-diff))
-        } else {
-            self.time.checked_add_signed(Duration::nanoseconds(diff))
-        };
+        let new_time = self.time.checked_add_signed(Duration::nanoseconds(diff));
+
         if new_time.is_none() {
             Err(box_err!("round_frac {} overflows", self.time))
         } else {
@@ -836,7 +833,7 @@ mod test {
         let tz = FixedOffset::east(0);
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
-            let get = Time::from_duration(&tz, d.clone()).unwrap();
+            let get = Time::from_duration(&tz, &d).unwrap();
             let get_today = get.time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
                 .unwrap();

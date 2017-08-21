@@ -16,6 +16,7 @@
 
 use std::{str, i64, u64};
 use std::ascii::AsciiExt;
+use std::borrow::Cow;
 
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
@@ -54,7 +55,10 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = val.unwrap().round(0, RoundMode::HalfEven).unwrap();
+        let val = val.unwrap()
+            .into_owned()
+            .round(0, RoundMode::HalfEven)
+            .unwrap();
         if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
             let uint = val.as_u64().unwrap();
             // TODO:handle overflow
@@ -97,10 +101,10 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = val.unwrap();
-        try!(val.round_frac(mysql::DEFAULT_FSP));
-        let dec = try!(val.to_decimal());
-        let res = try!(convert::dec_to_i64(dec));
+        let dec = try!(val.unwrap().to_decimal());
+        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+            .unwrap();
+        let res = dec.as_i64().unwrap();
         Ok(Some(res))
     }
 
@@ -113,10 +117,10 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = val.unwrap();
-        try!(val.round_frac(mysql::DEFAULT_FSP));
-        let dec = try!(val.to_decimal());
-        let res = try!(convert::dec_to_i64(dec));
+        let dec = try!(val.unwrap().to_decimal());
+        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+            .unwrap();
+        let res = dec.as_i64().unwrap();
         Ok(Some(res))
     }
 
@@ -126,7 +130,7 @@ impl FnCall {
             return Ok(None);
         }
         let val = val.unwrap();
-        let res = try!(val.cast_to_int());
+        let res = val.cast_to_int();
         Ok(Some(res))
     }
 
@@ -214,15 +218,15 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let val = try!(val.unwrap().cast_to_real());
+        let val = val.unwrap().cast_to_real();
         Ok(Some(try!(self.produce_float_with_specified_tp(ctx, val))))
     }
 
-    pub fn cast_int_as_decimal(
-        &self,
+    pub fn cast_int_as_decimal<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Decimal>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try!(self.children[0].eval_int(ctx, row));
         if val.is_none() {
             return Ok(None);
@@ -238,11 +242,11 @@ impl FnCall {
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, res))))
     }
 
-    pub fn cast_real_as_decimal(
-        &self,
+    pub fn cast_real_as_decimal<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Decimal>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try!(self.children[0].eval_real(ctx, row));
         if val.is_none() {
             return Ok(None);
@@ -251,25 +255,26 @@ impl FnCall {
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, res))))
     }
 
-    pub fn cast_decimal_as_decimal(
-        &self,
+    pub fn cast_decimal_as_decimal<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Decimal>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try!(self.children[0].eval_decimal(ctx, row));
         if val.is_none() {
             return Ok(None);
         }
-        Ok(Some(
-            try!(self.produce_dec_with_specified_tp(ctx, val.unwrap())),
-        ))
+        Ok(Some(try!(self.produce_dec_with_specified_tp(
+            ctx,
+            val.unwrap().into_owned()
+        ))))
     }
 
-    pub fn cast_str_as_decimal(
-        &self,
+    pub fn cast_str_as_decimal<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Decimal>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
         if self.children[0].is_hybrid_type() {
             return self.children[0].eval_decimal(ctx, row);
         }
@@ -288,11 +293,11 @@ impl FnCall {
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
 
-    pub fn cast_time_as_decimal(
-        &self,
+    pub fn cast_time_as_decimal<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Decimal>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try!(self.children[0].eval_time(ctx, row));
         if val.is_none() {
             return Ok(None);
@@ -301,11 +306,11 @@ impl FnCall {
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
 
-    pub fn cast_duration_as_decimal(
-        &self,
+    pub fn cast_duration_as_decimal<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Decimal>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try!(self.children[0].eval_duration(ctx, row));
         if val.is_none() {
             return Ok(None);
@@ -315,16 +320,16 @@ impl FnCall {
     }
 
 
-    pub fn cast_json_as_decimal(
-        &self,
+    pub fn cast_json_as_decimal<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Decimal>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try!(self.children[0].eval_json(ctx, row));
         if val.is_none() {
             return Ok(None);
         }
-        let val = try!(val.unwrap().cast_to_real());
+        let val = val.unwrap().cast_to_real();
         let dec = try!(Decimal::from_f64(val));
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
     }
@@ -386,7 +391,7 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let s = try!(String::from_utf8(val.unwrap()));
+        let s = try!(String::from_utf8(val.unwrap().into_owned()));
         Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
     }
 
@@ -466,20 +471,24 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let s = try!(String::from_utf8(val.unwrap()));
+        let s = try!(String::from_utf8(val.unwrap().into_owned()));
         Ok(Some(try!(self.produce_time_with_str(ctx, s))))
     }
 
-    pub fn cast_time_as_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Time>> {
+    pub fn cast_time_as_time<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
         let val = try!(self.children[0].eval_time(ctx, row));
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = val.unwrap();
+        let mut val = val.unwrap().into_owned();
         try!(val.round_frac(self.tp.get_decimal() as i8));
         // TODO: tidb only update tp when tp is Date
         try!(val.set_tp(self.tp.get_tp() as u8));
-        Ok(Some(val))
+        Ok(Some(Cow::Owned(val)))
     }
 
     pub fn cast_duration_as_time(
@@ -491,7 +500,7 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = try!(Time::from_duration(&ctx.tz, val.unwrap()));
+        let mut val = try!(Time::from_duration(&ctx.tz, val.unwrap().as_ref()));
         try!(val.round_frac(self.tp.get_decimal() as i8));
         try!(val.set_tp(self.tp.get_tp() as u8));
         Ok(Some(val))
@@ -581,34 +590,33 @@ impl FnCall {
         Ok(Some(res))
     }
 
-    pub fn cast_duration_as_duration(
-        &self,
+    pub fn cast_duration_as_duration<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Duration>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try!(self.children[0].eval_duration(ctx, row));
         if val.is_none() {
             return Ok(None);
         }
-        let mut res = val.unwrap();
+        let mut res = val.unwrap().into_owned();
         try!(res.round_frac(self.tp.get_decimal() as i8));
-        Ok(Some(res))
+        Ok(Some(Cow::Owned(res)))
     }
 
-    pub fn cast_json_as_duration(
-        &self,
+    pub fn cast_json_as_duration<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<Duration>> {
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try!(self.children[0].eval_json(ctx, row));
         if val.is_none() {
             return Ok(None);
         }
         let s = try!(val.unwrap().unquote());
         // TODO: tidb would handle truncate here
-        Ok(Some(try!(
-            Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)
-        )))
+        let d = try!(Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8));
+        Ok(Some(Cow::Owned(d)))
     }
 
     pub fn cast_int_as_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
@@ -649,7 +657,7 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let s = try!(String::from_utf8(val.unwrap()));
+        let s = try!(String::from_utf8(val.unwrap().into_owned()));
         if self.tp.get_decimal() == 0 {
             let j: Json = try!(s.parse());
             Ok(Some(j))
@@ -663,7 +671,7 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = val.unwrap();
+        let mut val = val.unwrap().into_owned();
         if val.get_tp() == types::DATETIME || val.get_tp() == types::TIMESTAMP {
             val.set_fsp(mysql::MAX_FSP as u8);
         }
@@ -680,13 +688,17 @@ impl FnCall {
         if val.is_none() {
             return Ok(None);
         }
-        let mut val = val.unwrap();
+        let mut val = val.unwrap().into_owned();
         val.fsp = mysql::MAX_FSP as u8;
         let s = format!("{}", val);
         Ok(Some(Json::String(s)))
     }
 
-    pub fn cast_json_as_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<Json>> {
+    pub fn cast_json_as_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
         self.children[0].eval_json(ctx, row)
     }
 
@@ -694,28 +706,14 @@ impl FnCall {
         &self,
         ctx: &StatementContext,
         val: Decimal,
-    ) -> Result<Decimal> {
+    ) -> Result<Cow<Decimal>> {
         let flen = self.tp.get_flen();
         let decimal = self.tp.get_decimal();
         if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
-            return Ok(val);
+            return Ok(Cow::Owned(val));
         }
         let res = try!(val.convert_to(ctx, flen as u8, decimal as u8));
-        Ok(res)
-    }
-
-    /// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
-    /// a new float64 according to `flen` and `decimal` in `self.tp`.
-    /// TODO port tests from tidb(tidb haven't implemented now)
-    fn produce_float_with_specified_tp(&self, ctx: &StatementContext, f: f64) -> Result<f64> {
-        let flen = self.tp.get_flen();
-        let decimal = self.tp.get_decimal();
-        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
-            return Ok(f);
-        }
-        let dec = try!(Decimal::from_f64(f));
-        let ret = try!(dec.convert_to(ctx, flen as u8, decimal as u8));
-        Ok(try!(ret.as_f64()))
+        Ok(Cow::Owned(res))
     }
 
     /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces
@@ -775,5 +773,24 @@ impl FnCall {
         ));
         try!(t.set_tp(self.tp.get_tp() as u8));
         Ok(t)
+    }
+
+    /// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
+    /// a new float64 according to `flen` and `decimal` in `self.tp`.
+    /// TODO port tests from tidb(tidb haven't implemented now)
+    fn produce_float_with_specified_tp(&self, ctx: &StatementContext, f: f64) -> Result<f64> {
+        let flen = self.tp.get_flen();
+        let decimal = self.tp.get_decimal();
+        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+            return Ok(f);
+        }
+        match convert::truncate_f64(f, flen as u8, decimal as u8) {
+            Res::Ok(d) => Ok(d),
+            Res::Overflow(d) | Res::Truncated(d) => {
+                //TODO process warning with ctx
+                try!(convert::handle_truncate(ctx, true));
+                Ok(d)
+            }
+        }
     }
 }

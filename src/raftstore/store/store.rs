@@ -413,7 +413,7 @@ impl<T, C> Store<T, C> {
 
     fn report_snapshot_status(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         self.sent_snapshot_count -= 1;
-        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+        if let Some(peer) = self.region_peers.get_mut(&region_id) {
             let to_peer = match peer.get_peer_from_cache(to_peer_id) {
                 Some(peer) => peer,
                 None => {
@@ -534,7 +534,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let timer = self.raft_metrics.process_tick.start_timer();
+        let timer = self.raft_metrics.process_tick.start_coarse_timer();
         for peer in &mut self.region_peers.values_mut() {
             if peer.pending_remove {
                 continue;
@@ -1189,7 +1189,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         first_index: u64,
         state: RaftTruncatedState,
     ) {
-        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
         let total_cnt = peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
         let remain_cnt = peer.last_applying_idx - state.get_index() - 1;
@@ -1433,7 +1433,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut resp = RaftCmdResponse::new();
         let region_id = msg.get_header().get_region_id();
-        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
         bind_term(&mut resp, term);
         if peer.propose(cb, msg, resp, &mut self.raft_metrics.propose) {
@@ -1466,7 +1466,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             let region_id = msg.get_header().get_region_id();
-            let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+            let peer = self.region_peers.get_mut(&region_id).unwrap();
             ret.push(peer.propose_snapshot(msg, &mut self.raft_metrics.propose));
         }
         on_finished.call_box((ret,));
@@ -1896,11 +1896,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        let mut snap_keys = try!(self.snap_mgr.list_idle_snap());
+        let snap_keys = try!(self.snap_mgr.list_idle_snap());
         if snap_keys.is_empty() {
             return Ok(());
         }
-        snap_keys.sort();
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
         let mut is_applying_snap = false;
         for (key, is_sending) in snap_keys {
@@ -2018,7 +2017,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
-        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+        if let Some(peer) = self.region_peers.get_mut(&region_id) {
             peer.raft_group.report_unreachable(to_peer_id);
         }
     }
