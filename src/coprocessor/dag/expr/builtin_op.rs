@@ -41,12 +41,16 @@ impl FnCall {
     pub fn logic_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         let arg1 = try!(self.children[1].eval_int(ctx, row));
-        match (arg0, arg1) {
-            (None, _) | (_, None) => Ok(None),
-            (Some(0), Some(0)) => Ok(Some(0)),
-            (Some(0), _) | (_, Some(0)) => Ok(Some(1)),
-            _ => Ok(Some(0)),
+        if arg0.is_none() || arg1.is_none() {
+            return Ok(None);
         }
+        if arg0.unwrap() == 0 && arg1.unwrap() == 0 {
+            return Ok(Some(0));
+        }
+        if arg0.unwrap() == 0 || arg1.unwrap() == 0 {
+            return Ok(Some(1));
+        }
+        Ok(Some(0))
     }
 
     pub fn real_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
