@@ -31,7 +31,7 @@ impl FnCall {
     pub fn logic_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         if arg0.is_some() && arg0.unwrap() != 0 {
-            return Ok(Some(1))
+            return Ok(Some(1));
         }
         let arg1 = try!(self.children[1].eval_int(ctx, row));
         match (arg0, arg1) {
@@ -44,11 +44,11 @@ impl FnCall {
     pub fn logic_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         if arg0.is_none() {
-            return Ok(None)
+            return Ok(None);
         }
         let arg1 = try!(self.children[1].eval_int(ctx, row));
         if arg1.is_none() {
-            return Ok(None)
+            return Ok(None);
         }
         let arg0 = arg0.unwrap();
         let arg1 = arg1.unwrap();
