@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: remove following later
-#![allow(dead_code)]
-
 use super::{FnCall, Result, StatementContext};
 use coprocessor::codec::Datum;
 
@@ -42,16 +39,10 @@ impl FnCall {
     }
 
     pub fn logic_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
-        if arg0.is_none() {
-            return Ok(None);
-        }
-        let arg1 = try!(self.children[1].eval_int(ctx, row));
-        if arg1.is_none() {
-            return Ok(None);
-        }
-        let arg0 = arg0.unwrap();
-        let arg1 = arg1.unwrap();
+        let arg0 = try_opt!(self.children[0].eval_int(ctx, row));
+        let arg1 = try_opt!(self.children[1].eval_int(ctx, row));
+        let arg0 = arg0;
+        let arg1 = arg1;
         Ok(Some(((arg0 == 0) ^ (arg1 == 0)) as i64))
     }
 
@@ -77,10 +68,9 @@ impl FnCall {
     }
 
     pub fn unary_not(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try!(self.children[0].eval_int(ctx, row));
+        let arg = try_opt!(self.children[0].eval_int(ctx, row));
         match arg {
-            None => Ok(None),
-            Some(0) => Ok(Some(1)),
+            0 => Ok(Some(1)),
             _ => Ok(Some(0)),
         }
     }
