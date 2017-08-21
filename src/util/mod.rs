@@ -492,11 +492,14 @@ pub fn check_version(version_path: &Path, db_path: &Path) -> Result<File, String
     })?;
 
     let mut ver = String::new();
-    version_lock.read_to_string(&mut ver).map_err(|e| format!("{:?}", e))?;
+    version_lock
+        .read_to_string(&mut ver)
+        .map_err(|e| format!("{:?}", e))?;
     if ver.is_empty() {
         let db_entries = db_path.read_dir().map_err(|e| format!("{:?}", e))?;
         if db_entries.count() == 0 {
-            version_lock.write_all(super::VERSION.as_bytes())
+            version_lock
+                .write_all(super::VERSION.as_bytes())
                 .map_err(|e| format!("{:?}", e))?;
             Ok(version_lock)
         } else {
@@ -510,15 +513,15 @@ pub fn check_version(version_path: &Path, db_path: &Path) -> Result<File, String
 
 // It fails when the the major versions are different.
 fn check_version_compatiblity(previous_ver: &str, current_ver: &str) -> Result<(), String> {
-    let previous_ver = Version::parse(previous_ver).map_err(|e| format!("{:?}", e))?;
-    let current_ver = Version::parse(current_ver)
+    let previous_ver = Version::parse(previous_ver)
         .map_err(|e| format!("{:?}", e))?;
+    let current_ver = Version::parse(current_ver).map_err(|e| format!("{:?}", e))?;
     if previous_ver.major == current_ver.major {
         Ok(())
     } else {
         Err(format!(
             "previous version is different from currnet version,\
-            previous version {:?}, current version {:?}",
+             previous version {:?}, current version {:?}",
             previous_ver,
             current_ver
         ))
