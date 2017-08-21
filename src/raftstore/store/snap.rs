@@ -1377,7 +1377,7 @@ mod test {
     use kvproto::raft_serverpb::{RaftSnapshotData, SnapshotMeta};
     use rocksdb::DB;
 
-    use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::{rocksdb, HandyRwLock};
     use raftstore::Result;
     use raftstore::store::keys;
@@ -1622,7 +1622,7 @@ mod test {
         let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
-        let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK];
+        let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
         let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs).unwrap());
         let options = ApplyOptions {
             db: dst_db.clone(),

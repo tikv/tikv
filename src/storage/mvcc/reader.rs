@@ -555,7 +555,8 @@ mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
-    use storage::{make_key, Mutation, Options, Statistics, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use storage::{make_key, Mutation, Options, Statistics, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
+                  CF_WRITE};
     use storage::engine::Modify;
     use storage::mvcc::{MvccReader, MvccTxn};
     use tempdir::TempDir;
@@ -671,6 +672,7 @@ mod tests {
         }
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
             CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];

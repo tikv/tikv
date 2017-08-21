@@ -33,6 +33,7 @@ use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING
 use raftstore::store::{self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey,
                        SnapManager};
 use raftstore::store::snap::{Error, Result};
+use storage::CF_RAFT;
 
 use super::metrics::*;
 
@@ -188,15 +189,16 @@ impl SnapContext {
         info!("[region {}] begin apply snap data", region_id);
         try!(check_abort(&abort));
         let region_key = keys::region_state_key(region_id);
-        let mut region_state: RegionLocalState = match box_try!(self.kv_db.get_msg(&region_key)) {
-            Some(state) => state,
-            None => {
-                return Err(box_err!(
-                    "failed to get region_state from {}",
-                    escape(&region_key)
-                ))
-            }
-        };
+        let mut region_state: RegionLocalState =
+            match box_try!(self.kv_db.get_msg_cf(CF_RAFT, &region_key)) {
+                Some(state) => state,
+                None => {
+                    return Err(box_err!(
+                        "failed to get region_state from {}",
+                        escape(&region_key)
+                    ))
+                }
+            };
 
         // clear up origin data.
         let region = region_state.get_region().clone();
@@ -205,15 +207,16 @@ impl SnapContext {
         box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState = match box_try!(self.kv_db.get_msg(&state_key)) {
-            Some(state) => state,
-            None => {
-                return Err(box_err!(
-                    "failed to get raftstate from {}",
-                    escape(&state_key)
-                ))
-            }
-        };
+        let apply_state: RaftApplyState =
+            match box_try!(self.kv_db.get_msg_cf(CF_RAFT, &state_key)) {
+                Some(state) => state,
+                None => {
+                    return Err(box_err!(
+                        "failed to get raftstate from {}",
+                        escape(&state_key)
+                    ))
+                }
+            };
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
@@ -237,8 +240,12 @@ impl SnapContext {
 
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
-        box_try!(wb.put_msg(&region_key, &region_state));
-        box_try!(wb.delete(&keys::snapshot_raft_state_key(region_id)));
+        let handle = box_try!(rocksdb::get_cf_handle(&self.kv_db, CF_RAFT));
+        box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
+        box_try!(wb.delete_cf(
+            handle,
+            &keys::snapshot_raft_state_key(region_id)
+        ));
         self.kv_db.write(wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });

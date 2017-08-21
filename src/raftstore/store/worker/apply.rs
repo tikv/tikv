@@ -30,7 +30,7 @@ use util::worker::Runnable;
 use util::{escape, rocksdb};
 use util::time::SlowTimer;
 use util::collections::{HashMap, HashMapEntry as MapEntry};
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK};
+use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{cmd_resp, keys, util, Store};
@@ -376,10 +376,16 @@ impl ApplyDelegate {
     }
 
     fn write_apply_state(&self, wb: &WriteBatch) {
-        wb.put_msg(
-            &keys::apply_state_key(self.region.get_id()),
-            &self.apply_state,
-        ).unwrap_or_else(|e| {
+        rocksdb::get_cf_handle(&self.engine, CF_RAFT)
+            .map_err(From::from)
+            .and_then(|handle| {
+                wb.put_msg_cf(
+                    handle,
+                    &keys::apply_state_key(self.region.get_id()),
+                    &self.apply_state,
+                )
+            })
+            .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save apply state to write batch, error: {:?}",
                     self.tag,
@@ -803,7 +809,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(ctx.wb, &region, state) {
+        if let Err(e) = write_peer_state(&self.engine, ctx.wb, &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -883,9 +889,13 @@ impl ApplyDelegate {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        write_peer_state(ctx.wb, &region, PeerState::Normal)
-            .and_then(|_| write_peer_state(ctx.wb, &new_region, PeerState::Normal))
-            .and_then(|_| write_initial_apply_state(ctx.wb, new_region.get_id()))
+        write_peer_state(&self.engine, ctx.wb, &region, PeerState::Normal)
+            .and_then(|_| {
+                write_peer_state(&self.engine, ctx.wb, &new_region, PeerState::Normal)
+            })
+            .and_then(|_| {
+                write_initial_apply_state(&self.engine, ctx.wb, new_region.get_id())
+            })
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save split region {:?}: {:?}",
@@ -1737,7 +1747,8 @@ mod tests {
             assert_eq!(delegate.term, 11);
             assert_eq!(delegate.applied_index_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
-            let apply_state: RaftApplyState = db.get_msg(&apply_state_key).unwrap().unwrap();
+            let apply_state: RaftApplyState =
+                db.get_msg_cf(CF_RAFT, &apply_state_key).unwrap().unwrap();
             assert_eq!(apply_state, delegate.apply_state);
         }
 

@@ -393,7 +393,12 @@ impl Peer {
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
         try!(self.mut_store().clear_meta(&kv_wb, &raft_wb));
-        try!(write_peer_state(&kv_wb, &region, PeerState::Tombstone));
+        try!(write_peer_state(
+            &self.kv_engine,
+            &kv_wb,
+            &region,
+            PeerState::Tombstone
+        ));
         // write kv rocksdb first in case of restart happen between two write
         try!(self.kv_engine.write(kv_wb));
         try!(self.raft_engine.write(raft_wb));

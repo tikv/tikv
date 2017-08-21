@@ -16,7 +16,7 @@ use std::path::Path;
 use tikv::raftstore::store::{bootstrap_store, create_event_loop, keys, Engines, Peekable,
                              SnapManager};
 use tikv::server::Node;
-use tikv::storage::ALL_CFS;
+use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::util::rocksdb;
 use tempdir::TempDir;
 use kvproto::metapb;
@@ -87,7 +87,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let region_state_key = keys::region_state_key(region.get_id());
     assert!(
         engine
-            .get_msg::<RegionLocalState>(&region_state_key)
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .is_some()
     );
@@ -109,7 +109,7 @@ fn test_node_bootstrap_with_prepared_data() {
     );
     assert!(
         engine
-            .get_msg::<RegionLocalState>(&region_state_key)
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .is_none()
     );

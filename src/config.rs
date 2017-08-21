@@ -23,7 +23,7 @@ use sys_info;
 use server::Config as ServerConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
-use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, DEFAULT_DATA_DIR,
+use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_DATA_DIR,
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
@@ -360,6 +360,7 @@ impl DbConfig {
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
             CFOptions::new(CF_WRITE, self.writecf.build_opt()),
+            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
         ]
     }
 

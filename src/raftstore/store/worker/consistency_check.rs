@@ -20,6 +20,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 use raftstore::store::{keys, Msg};
 use raftstore::store::engine::{Iterable, Peekable, Snapshot};
+use storage::CF_RAFT;
 use util::worker::Runnable;
 
 use super::metrics::*;
@@ -93,7 +94,7 @@ impl<C: MsgSender> Runner<C> {
         }
         let region_state_key = keys::region_state_key(region_id);
         digest.write(&region_state_key);
-        match snap.get_value(&region_state_key) {
+        match snap.get_value_cf(CF_RAFT, &region_state_key) {
             Err(e) => {
                 REGION_HASH_COUNTER_VEC
                     .with_label_values(&["compute", "failed"])
@@ -140,7 +141,7 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
 mod test {
     use rocksdb::Writable;
     use tempdir::TempDir;
-    use storage::CF_DEFAULT;
+    use storage::{CF_DEFAULT, CF_RAFT};
     use crc::crc32::{self, Digest, Hasher32};
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
@@ -155,7 +156,7 @@ mod test {
     #[test]
     fn test_consistency_check() {
         let path = TempDir::new("tikv-store-test").unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap();
         let db = Arc::new(db);
 
         let mut region = Region::new();

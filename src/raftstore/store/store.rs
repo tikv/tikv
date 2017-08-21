@@ -44,7 +44,7 @@ use util::worker::{FutureWorker, Scheduler, Worker};
 use util::transport::SendCh;
 use util::{rocksdb, RingQueue};
 use util::collections::{HashMap, HashSet};
-use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
@@ -262,7 +262,8 @@ impl<T, C> Store<T, C> {
         let t = Instant::now();
         let mut kv_wb = WriteBatch::new();
         let mut raft_wb = WriteBatch::new();
-        try!(kv_engine.scan(
+        try!(kv_engine.scan_cf(
+            CF_RAFT,
             start_key,
             end_key,
             false,
@@ -353,13 +354,15 @@ impl<T, C> Store<T, C> {
         };
 
         peer_storage::clear_meta(
+            &self.kv_engine,
+            &self.raft_engine,
             kv_wb,
             raft_wb,
-            &self.raft_engine,
             region.get_id(),
             &raft_state,
         ).unwrap();
-        peer_storage::write_peer_state(kv_wb, region, PeerState::Tombstone).unwrap();
+        peer_storage::write_peer_state(&self.kv_engine, kv_wb, region, PeerState::Tombstone)
+            .unwrap();
     }
 
     /// `clear_stale_data` clean up all possible garbage data.
@@ -872,7 +875,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // no exist, check with tombstone key.
         let state_key = keys::region_state_key(region_id);
-        if let Some(local_state) = try!(self.kv_engine.get_msg::<RegionLocalState>(&state_key)) {
+        if let Some(local_state) = try!(
+            self.kv_engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)
+        ) {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
                 if util::is_first_vote_msg(msg) {

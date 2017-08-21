@@ -308,7 +308,7 @@ mod tests {
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::{CacheQueryStats, PeerStorage};
-    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS};
+    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
     use util::{escape, rocksdb, worker};
 
     use super::*;
@@ -322,7 +322,7 @@ mod tests {
                 rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
             ),
             Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[]).unwrap(),
+                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
             ),
         )
     }

@@ -25,7 +25,7 @@ use futures::Future;
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::*;
 use tikv::config::TiKvConfig;
-use tikv::storage::ALL_CFS;
+use tikv::storage::{ALL_CFS, CF_DEFAULT};
 use super::util::*;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -128,7 +128,7 @@ impl<T: Simulator> Cluster<T> {
             );
             let raft_path = item.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[]).unwrap(),
+                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
             );
             self.dbs.push(Engines::new(engine, raft_engine));
         }
