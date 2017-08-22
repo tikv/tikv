@@ -17,6 +17,7 @@ mod column;
 mod constant;
 mod fncall;
 mod builtin_cast;
+mod builtin_op;
 mod compare;
 use self::compare::CmpOp;
 
@@ -187,6 +188,21 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsInt => f.cast_time_as_int(ctx, row),
                 ScalarFuncSig::CastDurationAsInt => f.cast_duration_as_int(ctx, row),
                 ScalarFuncSig::CastJsonAsInt => f.cast_json_as_int(ctx, row),
+
+                ScalarFuncSig::LogicalAnd => f.logical_and(ctx, row),
+                ScalarFuncSig::LogicalOr => f.logical_or(ctx, row),
+                ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
+
+                ScalarFuncSig::UnaryNot => f.unary_not(ctx, row),
+                ScalarFuncSig::IntIsNull => f.int_is_null(ctx, row),
+                ScalarFuncSig::IntIsFalse => f.int_is_false(ctx, row),
+                ScalarFuncSig::RealIsTrue => f.real_is_true(ctx, row),
+                ScalarFuncSig::RealIsNull => f.real_is_null(ctx, row),
+                ScalarFuncSig::DecimalIsNull => f.decimal_is_null(ctx, row),
+                ScalarFuncSig::DecimalIsTrue => f.decimal_is_true(ctx, row),
+                ScalarFuncSig::StringIsNull => f.string_is_null(ctx, row),
+                ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
+                ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
 
                 _ => Err(box_err!("Unknown signature")),
             },
@@ -407,11 +423,16 @@ mod test {
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use super::Expression;
 
-    pub fn fncall_expr(sig: ScalarFuncSig, ft: FieldType, children: &[Expr]) -> Expr {
+    #[inline]
+    pub fn str2dec(s: &str) -> Datum {
+        Datum::Dec(s.parse().unwrap())
+    }
+
+    pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(sig);
-        expr.set_field_type(ft);
+        expr.set_field_type(FieldType::new());
         for child in children {
             expr.mut_children().push(child.clone());
         }
@@ -428,16 +449,12 @@ mod test {
             (colref.clone(), 2, true),
             (constant.clone(), 0, true),
             (
-                fncall_expr(
-                    ScalarFuncSig::LTInt,
-                    FieldType::new(),
-                    &[colref.clone(), constant.clone()],
-                ),
+                fncall_expr(ScalarFuncSig::LTInt, &[colref.clone(), constant.clone()]),
                 2,
                 true,
             ),
             (
-                fncall_expr(ScalarFuncSig::LTInt, FieldType::new(), &[colref.clone()]),
+                fncall_expr(ScalarFuncSig::LTInt, &[colref.clone()]),
                 0,
                 false,
             ),
