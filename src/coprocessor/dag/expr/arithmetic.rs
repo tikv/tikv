@@ -46,18 +46,23 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
-        let res_us = match (lus | (lhs >= 0), rus | (rhs >= 0)) {
-            (true, true) => {
-                try!((lhs as u64).checked_add(rhs as u64).ok_or(Error::Overflow));
-                true
-            }
-            (false, false) => try!(lhs.checked_add(rhs).ok_or(Error::Overflow)) > 0,
-            (true, false) if lhs as u64 > i64::MAX as u64 => true,
-            (false, true) if rhs as u64 > i64::MAX as u64 => true,
-            _ => false,
+        let res = match (lus, rus) {
+            (true, true) => try!((lhs as u64).checked_add(rhs as u64).ok_or(Error::Overflow)),
+            (true, false) => if rhs >= 0 {
+                try!((lhs as u64).checked_add(rhs as u64).ok_or(Error::Overflow))
+            } else {
+                let rhs = try!(rhs.checked_neg().ok_or(Error::Overflow)) as u64;
+                try!((lhs as u64).checked_sub(rhs).ok_or(Error::Overflow))
+            },
+            (false, true) => if lhs >= 0 {
+                try!((lhs as u64).checked_add(rhs as u64).ok_or(Error::Overflow))
+            } else {
+                let lhs = try!(lhs.checked_neg().ok_or(Error::Overflow)) as u64;
+                try!((rhs as u64).checked_sub(lhs).ok_or(Error::Overflow))
+            },
+            (false, false) => try!(lhs.checked_add(rhs).ok_or(Error::Overflow)) as u64,
         };
-        let us = mysql::has_unsigned_flag(self.tp.get_flag());
-        check_integer_overflow(us, (Wrapping(lhs) + Wrapping(rhs)).0, res_us)
+        Ok(Some(res as i64))
     }
 
     pub fn minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -86,31 +91,22 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
-        let res_us = match (lus, rus) {
-            (true, true) => {
-                try!((lhs as u64).checked_sub(rhs as u64).ok_or(Error::Overflow));
-                true
-            }
+        let res = match (lus, rus) {
+            (true, true) => try!((lhs as u64).checked_sub(rhs as u64).ok_or(Error::Overflow)),
             (true, false) => if rhs >= 0 {
-                lhs as u64 > rhs as u64
+                try!((lhs as u64).checked_sub(rhs as u64).ok_or(Error::Overflow))
             } else {
-                try!((lhs as u64).checked_add(-rhs as u64).ok_or(Error::Overflow));
-                true
+                let rhs = try!(rhs.checked_neg().ok_or(Error::Overflow)) as u64;
+                try!((lhs as u64).checked_add(rhs).ok_or(Error::Overflow))
             },
-            (false, true) => {
-                let l = (lhs - i64::MIN) as u64;
-                try!(l.checked_sub(rhs as u64).ok_or(Error::Overflow));
-                false
-            }
-            (false, false) => if lhs > 0 && rhs < 0 {
-                true
+            (false, true) => if lhs >= 0 {
+                try!((lhs as u64).checked_sub(rhs as u64).ok_or(Error::Overflow))
             } else {
-                try!(lhs.checked_sub(rhs).ok_or(Error::Overflow));
-                false
+                try!(Err(Error::Overflow))
             },
+            (false, false) => try!(lhs.checked_sub(rhs).ok_or(Error::Overflow)) as u64,
         };
-        let us = mysql::has_unsigned_flag(self.tp.get_flag());
-        check_integer_overflow(us, (Wrapping(lhs) - Wrapping(rhs)).0, res_us)
+        Ok(Some(res as i64))
     }
 
     pub fn multiply_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -150,15 +146,13 @@ impl FnCall {
             b_neg = true;
             r = Wrapping(rhs).neg().0 as u64;
         }
-
         let res = try!(l.checked_mul(r).ok_or(Error::Overflow));
-        let us = mysql::has_unsigned_flag(self.tp.get_flag());
         if a_neg != b_neg {
             try!((i64::MAX as u64).checked_sub(res).ok_or(Error::Overflow));
             let res = try!((res as i64).checked_neg().ok_or(Error::Overflow));
-            check_integer_overflow(us, res, false)
+            Ok(Some(res))
         } else {
-            check_integer_overflow(us, (res as i64), true)
+            Ok(Some(res as i64))
         }
     }
 }
