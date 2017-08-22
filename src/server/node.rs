@@ -25,7 +25,7 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
-use raftstore::store::{self, keys, Config as StoreConfig, Msg, Peekable, SnapManager,
+use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SnapManager,
                        SnapshotStatusMsg, Store, StoreChannel, Transport};
 use super::Result;
 use server::Config as ServerConfig;
@@ -120,7 +120,7 @@ where
     pub fn start<T>(
         &mut self,
         event_loop: EventLoop<Store<T, C>>,
-        engine: Arc<DB>,
+        engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
         snap_status_receiver: Receiver<SnapshotStatusMsg>,
@@ -129,9 +129,9 @@ where
         T: Transport + 'static,
     {
         let bootstrapped = try!(self.check_cluster_bootstrapped());
-        let mut store_id = try!(self.check_store(&engine));
+        let mut store_id = try!(self.check_store(&engines));
         if store_id == INVALID_ID {
-            store_id = try!(self.bootstrap_store(&engine));
+            store_id = try!(self.bootstrap_store(&engines));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
             return Err(box_err!(
@@ -144,12 +144,12 @@ where
         }
 
         self.store.set_id(store_id);
-        try!(self.check_prepare_bootstrap_cluster(&engine));
+        try!(self.check_prepare_bootstrap_cluster(&engines));
         if !bootstrapped {
             // cluster is not bootstrapped, and we choose first store to bootstrap
             // prepare bootstrap.
-            let region = try!(self.prepare_bootstrap_cluster(&engine, store_id));
-            try!(self.bootstrap_cluster(&engine, region));
+            let region = try!(self.prepare_bootstrap_cluster(&engines, store_id));
+            try!(self.bootstrap_cluster(&engines, region));
         }
 
         // inform pd.
@@ -157,7 +157,7 @@ where
         try!(self.start_store(
             event_loop,
             store_id,
-            engine,
+            engines,
             trans,
             snap_mgr,
             snap_status_receiver
@@ -175,8 +175,12 @@ where
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engine: &DB) -> Result<u64> {
-        let res = try!(engine.get_msg::<StoreIdent>(&keys::store_ident_key()));
+    fn check_store(&self, engines: &Engines) -> Result<u64> {
+        let res = try!(
+            engines
+                .kv_engine
+                .get_msg::<StoreIdent>(&keys::store_ident_key())
+        );
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -205,16 +209,20 @@ where
         Ok(id)
     }
 
-    fn bootstrap_store(&self, engine: &DB) -> Result<u64> {
+    fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
         let store_id = try!(self.alloc_id());
         info!("alloc store id {} ", store_id);
 
-        try!(store::bootstrap_store(engine, self.cluster_id, store_id));
+        try!(store::bootstrap_store(engines, self.cluster_id, store_id));
 
         Ok(store_id)
     }
 
-    pub fn prepare_bootstrap_cluster(&self, engine: &DB, store_id: u64) -> Result<metapb::Region> {
+    pub fn prepare_bootstrap_cluster(
+        &self,
+        engines: &Engines,
+        store_id: u64,
+    ) -> Result<metapb::Region> {
         let region_id = try!(self.alloc_id());
         info!(
             "alloc first region id {} for cluster {}, store {}",
@@ -230,7 +238,7 @@ where
         );
 
         let region = try!(store::prepare_bootstrap(
-            engine,
+            engines,
             store_id,
             region_id,
             peer_id
@@ -238,8 +246,12 @@ where
         Ok(region)
     }
 
-    fn check_prepare_bootstrap_cluster(&self, engine: &DB) -> Result<()> {
-        let res = try!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
+    fn check_prepare_bootstrap_cluster(&self, engines: &Engines) -> Result<()> {
+        let res = try!(
+            engines
+                .kv_engine
+                .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+        );
         if res.is_none() {
             return Ok(());
         }
@@ -250,10 +262,10 @@ where
                 Ok(region) => {
                     if region.get_id() == first_region.get_id() {
                         try!(check_region_epoch(&region, &first_region));
-                        try!(store::clear_prepare_bootstrap_state(engine));
+                        try!(store::clear_prepare_bootstrap_state(engines));
                     } else {
                         try!(store::clear_prepare_bootstrap(
-                            engine,
+                            engines,
                             first_region.get_id()
                         ));
                     }
@@ -271,18 +283,18 @@ where
         Err(box_err!("check cluster prepare bootstrapped failed"))
     }
 
-    fn bootstrap_cluster(&mut self, engine: &DB, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(&mut self, engines: &Engines, region: metapb::Region) -> Result<()> {
         let region_id = region.get_id();
         match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
             Err(PdError::ClusterBootstrapped(_)) => {
                 error!("cluster {} is already bootstrapped", self.cluster_id);
-                try!(store::clear_prepare_bootstrap(engine, region_id));
+                try!(store::clear_prepare_bootstrap(engines, region_id));
                 Ok(())
             }
             // TODO: should we clean region for other errors too?
             Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
             Ok(_) => {
-                try!(store::clear_prepare_bootstrap_state(engine));
+                try!(store::clear_prepare_bootstrap_state(engines));
                 info!("bootstrap cluster {} ok", self.cluster_id);
                 Ok(())
             }
@@ -308,7 +320,7 @@ where
         &mut self,
         mut event_loop: EventLoop<Store<T, C>>,
         store_id: u64,
-        db: Arc<DB>,
+        engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
         snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
@@ -334,7 +346,7 @@ where
                 sender: sender,
                 snapshot_status_receiver: snapshot_status_receiver,
             };
-            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
+            let mut store = match Store::new(ch, store, cfg, engines, trans, pd_client, snap_mgr) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };

@@ -18,6 +18,7 @@ use sys_info;
 use util::config;
 
 pub const DEFAULT_DATA_DIR: &'static str = "";
+pub const DEFAULT_ROCKSDB_SUB_DIR: &'static str = "db";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;

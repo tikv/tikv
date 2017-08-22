@@ -584,12 +584,17 @@ impl<'de> Deserialize<'de> for ReadableDuration {
 }
 
 pub fn canonicalize_path(path: &str) -> Result<String, Box<Error>> {
-    let p = Path::new(path);
+    canonicalize_sub_path(path, "")
+}
+
+pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<Error>> {
+    let parent = Path::new(path);
+    let p = parent.join(Path::new(sub_path));
     if p.exists() && p.is_file() {
-        return Err(format!("{} is not a directory!", path).into());
+        return Err(format!("{}/{} is not a directory!", path, sub_path).into());
     }
     if !p.exists() {
-        try!(fs::create_dir_all(p));
+        try!(fs::create_dir_all(p.as_path()));
     }
     Ok(format!("{}", try!(p.canonicalize()).display()))
 }

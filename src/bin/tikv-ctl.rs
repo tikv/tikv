@@ -53,6 +53,11 @@ fn main() {
                 .help("set rocksdb path"),
         )
         .arg(
+            Arg::with_name("raftdb")
+                .takes_value(true)
+                .help("set raft rocksdb path"),
+        )
+        .arg(
             Arg::with_name("hex-to-escaped")
                 .short("h")
                 .takes_value(true)
@@ -244,6 +249,9 @@ fn main() {
     };
     let db_path = matches.value_of("db").unwrap();
     let db = util::rocksdb::open(db_path, ALL_CFS).unwrap();
+    let raft_db_path = matches.value_of("raftdb").unwrap();
+    let raft_db = util::rocksdb::open(raft_db_path, &[]).unwrap();
+
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
         let key = String::from(matches.value_of("key").unwrap());
@@ -258,15 +266,15 @@ fn main() {
                 }
                 Some(k) => unescape(k),
             };
-            dump_raft_log_entry(db, &key);
+            dump_raft_log_entry(raft_db, &key);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");
             match matches.value_of("region") {
                 Some(id) => {
-                    dump_region_info(&db, id.parse().unwrap(), skip_tombstone);
+                    dump_region_info(&db, &raft_db, id.parse().unwrap(), skip_tombstone);
                 }
                 None => {
-                    dump_all_region_info(&db, skip_tombstone);
+                    dump_all_region_info(&db, &raft_db, skip_tombstone);
                 }
             }
         } else {
@@ -460,12 +468,12 @@ fn dump_raw_value(db: DB, cf: &str, key: String) {
     println!("value: {}", value.map_or("None".to_owned(), |v| escape(&v)));
 }
 
-fn dump_raft_log_entry(db: DB, idx_key: &[u8]) {
+fn dump_raft_log_entry(raft_db: DB, idx_key: &[u8]) {
     let (region_id, idx) = keys::decode_raft_log_key(idx_key).unwrap();
     println!("idx_key: {}", escape(idx_key));
     println!("region: {}", region_id);
     println!("log index: {}", idx);
-    let mut ent: Entry = db.get_msg_cf(CF_RAFT, idx_key).unwrap().unwrap();
+    let mut ent: Entry = raft_db.get_msg(idx_key).unwrap().unwrap();
     let data = ent.take_data();
     println!("entry {:?}", ent);
     let mut msg = RaftCmdRequest::new();
@@ -477,19 +485,20 @@ fn dump_raft_log_entry(db: DB, idx_key: &[u8]) {
 fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
     println!("region id: {}", region_id);
     let region_state_key = keys::region_state_key(region_id);
-    let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
+    let region_state: RegionLocalState =
+        db.get_msg_cf(CF_RAFT, &region_state_key).unwrap().unwrap();
     println!("db1 region state: {:?}", region_state);
-    let region_state2: RegionLocalState = db2.get_msg(&region_state_key).unwrap().unwrap();
+    let region_state2: RegionLocalState =
+        db2.get_msg_cf(CF_RAFT, &region_state_key).unwrap().unwrap();
     println!("db2 region state: {:?}", region_state2);
 
     let raft_state_key = keys::apply_state_key(region_id);
 
-    let apply_state: RaftApplyState = db.get_msg_cf("raft", &raft_state_key).unwrap().unwrap();
+    let apply_state: RaftApplyState = db.get_msg_cf(CF_RAFT, &raft_state_key).unwrap().unwrap();
     println!("db1 apply state: {:?}", apply_state);
 
-    let apply_state: RaftApplyState = db2.get_msg_cf("raft", &raft_state_key).unwrap().unwrap();
+    let apply_state: RaftApplyState = db2.get_msg_cf(CF_RAFT, &raft_state_key).unwrap().unwrap();
     println!("db2 apply state: {:?}", apply_state);
-
 
     let region = region_state.get_region();
     let start_key = &keys::data_key(region.get_start_key());
@@ -560,9 +569,9 @@ fn dump_diff(db: &DB, db2: &DB, region_id: u64) {
     }
 }
 
-fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
+fn dump_region_info(db: &DB, raft_db: &DB, region_id: u64, skip_tombstone: bool) {
     let region_state_key = keys::region_state_key(region_id);
-    let region_state: Option<RegionLocalState> = db.get_msg(&region_state_key).unwrap();
+    let region_state: Option<RegionLocalState> = db.get_msg_cf(CF_RAFT, &region_state_key).unwrap();
     if skip_tombstone &&
         region_state
             .as_ref()
@@ -575,7 +584,7 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
 
     let raft_state_key = keys::raft_state_key(region_id);
     println!("raft state key: {}", escape(&raft_state_key));
-    let raft_state: Option<RaftLocalState> = db.get_msg_cf(CF_RAFT, &raft_state_key).unwrap();
+    let raft_state: Option<RaftLocalState> = raft_db.get_msg(&raft_state_key).unwrap();
     println!("raft state: {:?}", raft_state);
 
     let apply_state_key = keys::apply_state_key(region_id);
@@ -613,10 +622,10 @@ fn dump_region_size(db: &DB, region_id: u64, cf: Option<&str>) {
     println!("region size: {}", convert_gbmb(size));
 }
 
-fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
+fn dump_all_region_info(db: &DB, raft_db: &DB, skip_tombstone: bool) {
     let region_ids = get_all_region_ids(db);
     for region_id in region_ids {
-        dump_region_info(db, region_id, skip_tombstone);
+        dump_region_info(db, raft_db, region_id, skip_tombstone);
     }
 }
 
@@ -643,7 +652,7 @@ fn get_all_region_ids(db: &DB) -> Vec<u64> {
     let start_key = keys::REGION_META_MIN_KEY;
     let end_key = keys::REGION_META_MAX_KEY;
     let mut region_ids = vec![];
-    db.scan(start_key, end_key, false, &mut |key, _| {
+    db.scan_cf(CF_RAFT, start_key, end_key, false, &mut |key, _| {
         let (region_id, suffix) = keys::decode_region_meta_key(key)?;
         if suffix != keys::REGION_STATE_SUFFIX {
             return Ok(true);
@@ -656,7 +665,8 @@ fn get_all_region_ids(db: &DB) -> Vec<u64> {
 
 fn get_region_size(db: &DB, region_id: u64, cf: Option<&str>) -> u64 {
     let region_state_key = keys::region_state_key(region_id);
-    let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
+    let region_state: RegionLocalState =
+        db.get_msg_cf(CF_RAFT, &region_state_key).unwrap().unwrap();
     let region = region_state.get_region();
     let start_key = &keys::data_key(region.get_start_key());
     let end_key = &keys::data_end_key(region.get_end_key());
