@@ -17,22 +17,22 @@ use coprocessor::codec::Datum;
 impl FnCall {
     pub fn logical_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
-        if arg0.is_some() && arg0.unwrap() == 0 {
+        if arg0.map_or(false, |v| v == 0) {
             return Ok(Some(0));
         }
         let arg1 = try!(self.children[1].eval_int(ctx, row));
-        if arg1.is_some() && arg1.unwrap() == 0 {
+        if arg1.map_or(false, |v| v == 0) {
             return Ok(Some(0));
         }
         if arg0.is_none() || arg1.is_none() {
-            return Ok(None)
+            return Ok(None);
         }
         Ok(Some(1))
     }
 
     pub fn logical_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
-        if arg0.is_some() && arg0.unwrap() != 0 {
+        if arg0.map_or(false, |v| v != 0) {
             return Ok(Some(1));
         }
         let arg1 = try!(self.children[1].eval_int(ctx, row));
@@ -56,7 +56,9 @@ impl FnCall {
 
     pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_decimal(ctx, row));
-        Ok(Some(input.map_or(0, |dec| !dec.into_owned().is_zero() as i64)))
+        Ok(Some(
+            input.map_or(0, |dec| !dec.into_owned().is_zero() as i64),
+        ))
     }
 
     pub fn int_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
