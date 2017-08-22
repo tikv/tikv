@@ -21,7 +21,14 @@ use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::u64;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::fs::DirBuilder;
+use std::path::{Path, PathBuf};
+use std::fs::File;
 
+use fs2::FileExt;
+use semver::Version;
 use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
@@ -454,6 +461,73 @@ pub fn is_even(n: usize) -> bool {
     n & 1 == 0
 }
 
+/// Initialize store-dir, create VERSION file, db directory and snap directory.
+pub fn init_store_dir(store_path: &Path) -> io::Result<(PathBuf, PathBuf, PathBuf)> {
+    let mut builder = DirBuilder::new();
+    builder.recursive(true);
+    let version_path = store_path.join(Path::new("VERSION"));
+    let db_path = store_path.join(Path::new("db"));
+    builder.create(&db_path)?;
+    let snap_path = store_path.join(Path::new("snap"));
+    builder.create(&snap_path)?;
+
+    Ok((version_path, db_path, snap_path))
+}
+
+/// Check `TiKV` version.
+/// Note: MUST keep the returned file for holding the lock.
+pub fn check_version(version_path: &Path, db_path: &Path) -> Result<File, String> {
+    let mut version_lock = OpenOptions::new()
+        .write(true)
+        .read(true)
+        .create(true)
+        .open(version_path)
+        .map_err(|e| format!("{:?}", e))?;
+    version_lock.try_lock_exclusive().map_err(|e| {
+        format!(
+            "lock {:?} failed, maybe another instance is using this directory, err {:?}",
+            version_path,
+            e
+        )
+    })?;
+
+    let mut ver = String::new();
+    version_lock
+        .read_to_string(&mut ver)
+        .map_err(|e| format!("{:?}", e))?;
+    if ver.is_empty() {
+        let db_entries = db_path.read_dir().map_err(|e| format!("{:?}", e))?;
+        if db_entries.count() == 0 {
+            version_lock
+                .write_all(super::VERSION.as_bytes())
+                .map_err(|e| format!("{:?}", e))?;
+            Ok(version_lock)
+        } else {
+            Err("miss version".to_owned())
+        }
+    } else {
+        check_version_compatiblity(&ver, super::VERSION)?;
+        Ok(version_lock)
+    }
+}
+
+// It fails when the the major versions are different.
+fn check_version_compatiblity(previous_ver: &str, current_ver: &str) -> Result<(), String> {
+    let previous_ver = Version::parse(previous_ver)
+        .map_err(|e| format!("{:?}", e))?;
+    let current_ver = Version::parse(current_ver).map_err(|e| format!("{:?}", e))?;
+    if previous_ver.major == current_ver.major {
+        Ok(())
+    } else {
+        Err(format!(
+            "previous version is different from currnet version,\
+             previous version {:?}, current version {:?}",
+            previous_ver,
+            current_ver
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::*;
@@ -461,8 +535,12 @@ mod tests {
     use std::rc::Rc;
     use std::cmp;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::fs::File;
+
+    use tempdir::TempDir;
     use kvproto::eraftpb::Entry;
     use protobuf::Message;
+
     use super::*;
 
     #[test]
@@ -618,5 +696,93 @@ mod tests {
         let a_diff_d = cfs_diff(&a, &d);
         assert!(a_diff_d.is_empty());
         assert_eq!(vec!["4"], cfs_diff(&d, &a));
+    }
+
+    #[test]
+    fn test_version() {
+        {
+            // Empty dirs should pass the check.
+            let root = TempDir::new("test-version").unwrap();
+            let path = root.path();
+            let (version_path, db_path, _) = init_store_dir(path).unwrap();
+            check_version(&version_path, &db_path).unwrap();
+        }
+
+        {
+            // Non-empty db dirs with an empty VERSION should fail the check.
+            let root = TempDir::new("test-version").unwrap();
+            let path = root.path();
+            let (version_path, db_path, _) = init_store_dir(path).unwrap();
+            // Non-empty dir.
+            File::create(db_path.join("LOG")).unwrap();
+            // Empty VERSION.
+            File::create(&version_path).unwrap();
+            check_version(&version_path, &db_path).unwrap_err();
+        }
+
+        {
+            // Non-empty db dirs with a different VERSION should fail the check.
+            let root = TempDir::new("test-version").unwrap();
+            let path = root.path();
+            let (version_path, db_path, _) = init_store_dir(path).unwrap();
+            // Non-empty dir.
+            File::create(db_path.join("LOG")).unwrap();
+            // A different VERSION.
+            let mut f = File::create(&version_path).unwrap();
+            f.write_all(b"100.0.1").unwrap();
+            check_version(&version_path, &db_path).unwrap_err();
+        }
+
+        {
+            // Non-empty db dirs with the same VERSION should pass the check.
+            let root = TempDir::new("test-version").unwrap();
+            let path = root.path();
+            let (version_path, db_path, _) = init_store_dir(path).unwrap();
+            // Non-empty dir.
+            File::create(db_path.join("LOG")).unwrap();
+            // A different VERSION.
+            let mut f = File::create(&version_path).unwrap();
+            f.write_all(super::super::VERSION.as_bytes()).unwrap();
+            check_version(&version_path, &db_path).unwrap();
+        }
+
+        {
+            // Empty db dirs with the same VERSION should pass the check.
+            let root = TempDir::new("test-version").unwrap();
+            let path = root.path();
+            let (version_path, db_path, _) = init_store_dir(path).unwrap();
+            // A different VERSION.
+            let mut f = File::create(&version_path).unwrap();
+            f.write_all(super::super::VERSION.as_bytes()).unwrap();
+            check_version(&version_path, &db_path).unwrap();
+        }
+
+        {
+            // VERSION can not be locked twice.
+            let root = TempDir::new("test-version").unwrap();
+            let path = root.path();
+            let (version_path, db_path, _) = init_store_dir(path).unwrap();
+            // A different VERSION.
+            let mut f = File::create(&version_path).unwrap();
+            f.write_all(super::super::VERSION.as_bytes()).unwrap();
+            let _lock = check_version(&version_path, &db_path).unwrap();
+            check_version(&version_path, &db_path).unwrap_err();
+        }
+
+        // Test compatiblity
+        {
+            check_version_compatiblity("1.9.1", "1.9.1").unwrap();
+            check_version_compatiblity("1.9.0", "1.9.1").unwrap();
+            check_version_compatiblity("1.8.1", "1.9.1").unwrap();
+            check_version_compatiblity("1.10.0", "1.9.1").unwrap();
+            check_version_compatiblity("1.9.1-beta", "1.9.1").unwrap();
+            check_version_compatiblity("1.9.0-beta", "1.9.1").unwrap();
+            check_version_compatiblity("1.8.1-beta", "1.9.1").unwrap();
+            check_version_compatiblity("1.8.0-beta", "1.9.1").unwrap();
+            check_version_compatiblity("2.0.0", "1.9.1").unwrap_err();
+            check_version_compatiblity("2.1.0", "1.9.1").unwrap_err();
+            check_version_compatiblity("2.0.0-beta", "1.9.1").unwrap_err();
+            check_version_compatiblity("2.1.0-beta", "1.9.1").unwrap_err();
+        }
     }
 }

@@ -74,6 +74,7 @@ extern crate serde;
 extern crate serde_derive;
 extern crate toml;
 extern crate sys_info;
+extern crate semver;
 
 #[macro_use]
 pub mod util;
@@ -86,3 +87,6 @@ pub mod server;
 pub mod coprocessor;
 
 pub use storage::Storage;
+
+/// The version of `TiKV`.
+pub const VERSION: &'static str = env!("CARGO_PKG_VERSION");
