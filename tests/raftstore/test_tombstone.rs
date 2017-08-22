@@ -23,6 +23,8 @@ use super::transport_simulate::*;
 use super::server::new_server_cluster;
 use super::util::*;
 use tikv::raftstore::store::{keys, Iterable, Mutable, Peekable};
+use tikv::storage::CF_RAFT;
+use tikv::util::rocksdb::get_cf_handle;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
@@ -146,7 +148,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.stop_node(3);
 
     let key = keys::region_state_key(1);
-    let state: RegionLocalState = engine_3.get_msg(&key).unwrap().unwrap();
+    let state: RegionLocalState = engine_3.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // Force add some dirty data.
@@ -251,12 +253,14 @@ fn test_server_stale_meta() {
 
     let engine_3 = cluster.get_engine(3);
     let mut state: RegionLocalState = engine_3
-        .get_msg(&keys::region_state_key(1))
+        .get_msg_cf(CF_RAFT, &keys::region_state_key(1))
         .unwrap()
         .unwrap();
     state.set_state(PeerState::Tombstone);
+
+    let handle = get_cf_handle(&engine_3, CF_RAFT).unwrap();
     engine_3
-        .put_msg(&keys::region_state_key(1), &state)
+        .put_msg_cf(handle, &keys::region_state_key(1), &state)
         .unwrap();
     cluster.clear_send_filters();
 
