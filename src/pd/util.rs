@@ -22,8 +22,8 @@ use futures::{task, Async, BoxFuture, Future, Poll, Stream};
 use futures::task::Task;
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
-use grpc::{ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-           Result as GrpcResult, CallOption};
+use grpc::{CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+           Result as GrpcResult};
 use tokio_timer::Timer;
 use rand::{self, Rng};
 use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
@@ -32,8 +32,8 @@ use kvproto::pdpb_grpc::PdClient;
 use prometheus::HistogramTimer;
 
 use util::{Either, HandyRwLock};
-use pd::{Error, PdFuture, Result};
-use pd::metrics::PD_SEND_MSG_HISTOGRAM;
+use super::{Error, PdFuture, Result, REQUEST_TIMEOUT};
+use super::metrics::PD_SEND_MSG_HISTOGRAM;
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -373,14 +373,12 @@ pub fn validate_endpoints(
     }
 }
 
-const CONNECTION_TIMEOUT: u64 = 2; // 2s
-
 fn connect(env: Arc<Environment>, addr: &str) -> Result<(PdClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
     let addr = addr.trim_left_matches("http://");
     let channel = ChannelBuilder::new(env).connect(addr);
     let client = PdClient::new(channel);
-    let option = CallOption::default().timeout(Duration::from_secs(CONNECTION_TIMEOUT));
+    let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
     match client.get_members_opt(GetMembersRequest::new(), option) {
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
