@@ -365,14 +365,13 @@ impl Expression {
 #[cfg(test)]
 mod test {
     use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::Decimal;
     use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use super::Expression;
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
-        Datum::Dec(s.parse::<Decimal>().unwrap())
+        Datum::Dec(s.parse().unwrap())
     }
 
     pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {

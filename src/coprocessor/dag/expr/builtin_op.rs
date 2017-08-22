@@ -56,9 +56,7 @@ impl FnCall {
 
     pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_decimal(ctx, row));
-        Ok(Some(
-            input.map_or(0, |dec| !dec.is_zero() as i64),
-        ))
+        Ok(Some(input.map_or(0, |dec| !dec.is_zero() as i64)))
     }
 
     pub fn int_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -160,12 +158,7 @@ mod test {
                 Datum::Null,
                 Some(0),
             ),
-            (
-                ScalarFuncSig::LogicalAnd,
-                Datum::Null,
-                Datum::I64(1),
-                None,
-            ),
+            (ScalarFuncSig::LogicalAnd, Datum::Null, Datum::I64(1), None),
             (
                 ScalarFuncSig::LogicalOr,
                 Datum::I64(1),
@@ -196,12 +189,7 @@ mod test {
                 Datum::Null,
                 Some(1),
             ),
-            (
-                ScalarFuncSig::LogicalOr,
-                Datum::Null,
-                Datum::I64(0),
-                None,
-            ),
+            (ScalarFuncSig::LogicalOr, Datum::Null, Datum::I64(0), None),
             (
                 ScalarFuncSig::LogicalXor,
                 Datum::I64(1),
@@ -226,25 +214,16 @@ mod test {
                 Datum::I64(-1),
                 Some(0),
             ),
-            (
-                ScalarFuncSig::LogicalXor,
-                Datum::I64(0),
-                Datum::Null,
-                None,
-            ),
-            (
-                ScalarFuncSig::LogicalXor,
-                Datum::Null,
-                Datum::I64(1),
-                None,
-            ),
+            (ScalarFuncSig::LogicalXor, Datum::I64(0), Datum::Null, None),
+            (ScalarFuncSig::LogicalXor, Datum::Null, Datum::I64(1), None),
         ];
         let ctx = StatementContext::default();
         for (op, lhs, rhs, exp) in tests {
             let arg1 = datum_expr(lhs);
             let arg2 = datum_expr(rhs);
             {
-                let op = Expression::build(fncall_expr(op, &[arg1.clone(), arg2.clone()]), 0).unwrap();
+                let op =
+                    Expression::build(fncall_expr(op, &[arg1.clone(), arg2.clone()]), 0).unwrap();
                 let res = op.eval_int(&ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
