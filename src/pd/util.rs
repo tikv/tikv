@@ -23,7 +23,7 @@ use futures::task::Task;
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
 use grpc::{ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-           Result as GrpcResult};
+           Result as GrpcResult, CallOption};
 use tokio_timer::Timer;
 use rand::{self, Rng};
 use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
@@ -373,12 +373,15 @@ pub fn validate_endpoints(
     }
 }
 
+const CONNECTION_TIMEOUT: u64 = 2; // 2s
+
 fn connect(env: Arc<Environment>, addr: &str) -> Result<(PdClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
     let addr = addr.trim_left_matches("http://");
     let channel = ChannelBuilder::new(env).connect(addr);
     let client = PdClient::new(channel);
-    match client.get_members(GetMembersRequest::new()) {
+    let option = CallOption::default().timeout(Duration::from_secs(CONNECTION_TIMEOUT));
+    match client.get_members_opt(GetMembersRequest::new(), option) {
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
     }
