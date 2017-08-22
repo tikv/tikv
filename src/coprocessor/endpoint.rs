@@ -26,7 +26,7 @@ use kvproto::kvrpcpb::CommandPri;
 use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
-use util::threadpool::{FifoQueue, ThreadPool};
+use util::threadpool::{Context, ContextFactory, ThreadPool, DEFAULT_TASKS_PER_TICK};
 use server::OnResponse;
 use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
 use storage::engine::Error as EngineError;
@@ -67,14 +67,35 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<FifoQueue<u64>, u64>,
-    low_priority_pool: ThreadPool<FifoQueue<u64>, u64>,
-    high_priority_pool: ThreadPool<FifoQueue<u64>, u64>,
+    pool: ThreadPool<DummyContext>,
+    low_priority_pool: ThreadPool<DummyContext>,
+    high_priority_pool: ThreadPool<DummyContext>,
     max_running_task_count: usize,
+}
+
+// TODO: remove these dummy structures.
+#[derive(Clone)]
+struct DummyContext {}
+
+unsafe impl Send for DummyContext {}
+
+impl Context for DummyContext {
+    fn on_task_started(&mut self) {}
+    fn on_task_finished(&mut self) {}
+    fn on_tick(&mut self) {}
+}
+
+struct DummyContextFactory {}
+
+impl ContextFactory<DummyContext> for DummyContextFactory {
+    fn create(&self) -> DummyContext {
+        DummyContext {}
+    }
 }
 
 impl Host {
     pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, concurrency: usize) -> Host {
+        // TODO: use true ContextFactory instead of DummyContextFactory
         Host {
             engine: engine,
             sched: scheduler,
@@ -84,17 +105,20 @@ impl Host {
             pool: ThreadPool::new(
                 thd_name!("endpoint-normal-pool"),
                 concurrency,
-                FifoQueue::new(),
+                DEFAULT_TASKS_PER_TICK,
+                DummyContextFactory {},
             ),
             low_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-low-pool"),
                 concurrency,
-                FifoQueue::new(),
+                DEFAULT_TASKS_PER_TICK,
+                DummyContextFactory {},
             ),
             high_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-high-pool"),
                 concurrency,
-                FifoQueue::new(),
+                DEFAULT_TASKS_PER_TICK,
+                DummyContextFactory {},
             ),
         }
     }
@@ -128,14 +152,13 @@ impl Host {
                 .with_label_values(&[type_str, pri_str])
                 .add(1.0);
             let end_point = TiDbEndPoint::new(snap.clone());
-            let txn_id = req.start_ts.unwrap_or_default();
 
             let pool = match pri {
                 CommandPri::Low => &mut self.low_priority_pool,
                 CommandPri::High => &mut self.high_priority_pool,
                 CommandPri::Normal => &mut self.pool,
             };
-            pool.execute(txn_id, move || {
+            pool.execute(move |_: &mut DummyContext| {
                 end_point.handle_request(req);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
