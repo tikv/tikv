@@ -835,6 +835,17 @@ pub enum RoundMode {
 }
 
 impl Decimal {
+    /// ceil the Decimal into a new Decimal.
+    pub fn ceil(&self) -> Res<Decimal> {
+        let target = if self.frac_cnt > 0 && !self.negative {
+            let dec1 = Decimal::from(1i64);
+            self + &dec1
+        } else {
+            Res::Ok(self.clone())
+        };
+        target.round(0, RoundMode::Truncate)
+    }
+
     /// create a new decimal for internal usage.
     fn new(int_cnt: u8, frac_cnt: u8, negative: bool) -> Decimal {
         Decimal {
@@ -1337,8 +1348,7 @@ impl Decimal {
                 mini_shift = r_mini_shift as i8;
             }
             new_point += mini_shift as isize;
-            if shift + mini_shift as isize == 0 &&
-                (new_point - int_cnt) < DIGITS_PER_WORD as isize
+            if shift + mini_shift as isize == 0 && (new_point - int_cnt) < DIGITS_PER_WORD as isize
             {
                 res.int_cnt = int_cnt as u8;
                 res.frac_cnt = frac_cnt as u8;
