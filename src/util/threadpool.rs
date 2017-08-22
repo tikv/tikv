@@ -20,7 +20,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::fmt::Write;
 
-pub const DEFAULT_BATCH_SIZE: usize = 50;
+pub const DEFAULT_TASKS_PER_TICK: usize = 50;
 const WORKER_WAIT_TIME: u64 = 20; // ms
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
@@ -95,7 +95,7 @@ where
     pub fn new<C: ContextFactory<Ctx>>(
         name: String,
         num_threads: usize,
-        batch_size: usize,
+        tasks_per_tick: usize,
         f: C,
     ) -> ThreadPool<Ctx> {
         assert!(num_threads >= 1);
@@ -112,7 +112,7 @@ where
             let thread = Builder::new()
                 .name(name.clone())
                 .spawn(move || {
-                    let mut worker = Worker::new(tasks, task_num, batch_size, stop, ctx);
+                    let mut worker = Worker::new(tasks, task_num, tasks_per_tick, stop, ctx);
                     worker.run();
                 })
                 .unwrap();
@@ -170,7 +170,7 @@ struct Worker<C> {
     stop_flag: Arc<AtomicBool>,
     task_queue: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
     task_count: Arc<AtomicUsize>,
-    batch_size: usize,
+    tasks_per_tick: usize,
     task_counter: usize,
     ctx: C,
 }
@@ -182,7 +182,7 @@ where
     fn new(
         task_queue: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
         task_count: Arc<AtomicUsize>,
-        batch_size: usize,
+        tasks_per_tick: usize,
         stop_flag: Arc<AtomicBool>,
         ctx: C,
     ) -> Worker<C> {
@@ -190,7 +190,7 @@ where
             stop_flag: stop_flag,
             task_queue: task_queue,
             task_count: task_count,
-            batch_size: batch_size,
+            tasks_per_tick: tasks_per_tick,
             task_counter: 0,
             ctx: ctx,
         }
@@ -215,7 +215,7 @@ where
                 self.ctx.on_task_finished();
                 self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
                 self.task_counter += 1;
-                if self.task_counter == self.batch_size {
+                if self.task_counter == self.tasks_per_tick {
                     self.task_counter = 0;
                     self.ctx.on_tick();
                 }
@@ -229,7 +229,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Context, ContextFactory, ThreadPool, DEFAULT_BATCH_SIZE};
+    use super::{Context, ContextFactory, ThreadPool, DEFAULT_TASKS_PER_TICK};
     use std::time::Duration;
     use std::sync::mpsc::{channel, Sender};
     use std::sync::{Arc, Mutex};
@@ -259,7 +259,7 @@ mod test {
         let name = thd_name!("test_get_task_count");
         let concurrency = 1;
         let f = DummyContextFactory {};
-        let mut task_pool = ThreadPool::new(name, concurrency, DEFAULT_BATCH_SIZE, f);
+        let mut task_pool = ThreadPool::new(name, concurrency, DEFAULT_TASKS_PER_TICK, f);
         let (tx, rx) = channel();
         let (ftx, frx) = channel();
         let receiver = Arc::new(Mutex::new(rx));
@@ -336,7 +336,7 @@ mod test {
 
         let name = thd_name!("test_tasks_with_contexts");
         let concurrency = 5;
-        let mut task_pool = ThreadPool::new(name, concurrency, DEFAULT_BATCH_SIZE, f);
+        let mut task_pool = ThreadPool::new(name, concurrency, DEFAULT_TASKS_PER_TICK, f);
 
         for _ in 0..10 {
             task_pool.execute(move |_: &mut TestContext| {});

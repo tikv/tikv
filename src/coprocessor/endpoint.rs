@@ -26,7 +26,7 @@ use kvproto::kvrpcpb::CommandPri;
 use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
-use util::threadpool::{Context, ContextFactory, ThreadPool, DEFAULT_BATCH_SIZE};
+use util::threadpool::{Context, ContextFactory, ThreadPool, DEFAULT_TASKS_PER_TICK};
 use server::OnResponse;
 use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
 use storage::engine::Error as EngineError;
@@ -105,19 +105,19 @@ impl Host {
             pool: ThreadPool::new(
                 thd_name!("endpoint-normal-pool"),
                 concurrency,
-                DEFAULT_BATCH_SIZE,
+                DEFAULT_TASKS_PER_TICK,
                 DummyContextFactory {},
             ),
             low_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-low-pool"),
                 concurrency,
-                DEFAULT_BATCH_SIZE,
+                DEFAULT_TASKS_PER_TICK,
                 DummyContextFactory {},
             ),
             high_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-high-pool"),
                 concurrency,
-                DEFAULT_BATCH_SIZE,
+                DEFAULT_TASKS_PER_TICK,
                 DummyContextFactory {},
             ),
         }
