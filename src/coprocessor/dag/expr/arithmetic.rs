@@ -12,8 +12,6 @@
 // limitations under the License.
 
 use std::{f64, i64, u64};
-use std::ops::Neg;
-use std::num::Wrapping;
 use std::borrow::Cow;
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::Decimal;
@@ -38,7 +36,7 @@ impl FnCall {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
         let result: Result<Decimal> = (lhs.as_ref() + rhs.as_ref()).into();
-        result.map(Cow::Owned).map(Some)
+        result.map(|t| Some(Cow::Owned(t)))
     }
 
     pub fn plus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -47,22 +45,20 @@ impl FnCall {
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
         let res = match (lus, rus) {
-            (true, true) => try!((lhs as u64).checked_add(rhs as u64).ok_or(Error::Overflow)),
+            (true, true) => (lhs as u64).checked_add(rhs as u64).map(|t| t as i64),
             (true, false) => if rhs >= 0 {
-                try!((lhs as u64).checked_add(rhs as u64).ok_or(Error::Overflow))
+                (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
             } else {
-                let rhs = try!(rhs.checked_neg().ok_or(Error::Overflow)) as u64;
-                try!((lhs as u64).checked_sub(rhs).ok_or(Error::Overflow))
+                (lhs as u64).checked_sub(opp_neg!(rhs)).map(|t| t as i64)
             },
             (false, true) => if lhs >= 0 {
-                try!((lhs as u64).checked_add(rhs as u64).ok_or(Error::Overflow))
+                (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
             } else {
-                let lhs = try!(lhs.checked_neg().ok_or(Error::Overflow)) as u64;
-                try!((rhs as u64).checked_sub(lhs).ok_or(Error::Overflow))
+                (rhs as u64).checked_sub(opp_neg!(lhs)).map(|t| t as i64)
             },
-            (false, false) => try!(lhs.checked_add(rhs).ok_or(Error::Overflow)) as u64,
+            (false, false) => lhs.checked_add(rhs),
         };
-        Ok(Some(res as i64))
+        res.ok_or(Error::Overflow).map(Some)
     }
 
     pub fn minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -92,21 +88,20 @@ impl FnCall {
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
         let res = match (lus, rus) {
-            (true, true) => try!((lhs as u64).checked_sub(rhs as u64).ok_or(Error::Overflow)),
+            (true, true) => (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64),
             (true, false) => if rhs >= 0 {
-                try!((lhs as u64).checked_sub(rhs as u64).ok_or(Error::Overflow))
+                (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                let rhs = try!(rhs.checked_neg().ok_or(Error::Overflow)) as u64;
-                try!((lhs as u64).checked_add(rhs).ok_or(Error::Overflow))
+                (lhs as u64).checked_add(opp_neg!(rhs)).map(|t| t as i64)
             },
             (false, true) => if lhs >= 0 {
-                try!((lhs as u64).checked_sub(rhs as u64).ok_or(Error::Overflow))
+                (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                try!(Err(Error::Overflow))
+                None
             },
-            (false, false) => try!(lhs.checked_sub(rhs).ok_or(Error::Overflow)) as u64,
+            (false, false) => lhs.checked_sub(rhs),
         };
-        Ok(Some(res as i64))
+        res.ok_or(Error::Overflow).map(Some)
     }
 
     pub fn multiply_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -140,15 +135,17 @@ impl FnCall {
         let (mut l, mut r) = (lhs as u64, rhs as u64);
         if !lus && lhs < 0 {
             a_neg = true;
-            l = Wrapping(lhs).neg().0 as u64;
+            l = opp_neg!(lhs);
         }
         if !rus && rhs < 0 {
             b_neg = true;
-            r = Wrapping(rhs).neg().0 as u64;
+            r = opp_neg!(rhs);
         }
         let res = try!(l.checked_mul(r).ok_or(Error::Overflow));
         if a_neg != b_neg {
-            try!((i64::MAX as u64).checked_sub(res).ok_or(Error::Overflow));
+            if (i64::MAX as u64) < res {
+                return Err(Error::Overflow);
+            }
             let res = try!((res as i64).checked_neg().ok_or(Error::Overflow));
             Ok(Some(res))
         } else {
@@ -204,10 +201,22 @@ mod test {
                 Datum::I64(13),
             ),
             (
+                ScalarFuncSig::PlusInt,
+                Datum::I64(i64::MIN),
+                Datum::U64(i64::MAX as u64 + 1),
+                Datum::U64(0),
+            ),
+            (
                 ScalarFuncSig::MinusInt,
                 Datum::I64(12),
                 Datum::I64(1),
                 Datum::I64(11),
+            ),
+            (
+                ScalarFuncSig::MinusInt,
+                Datum::U64(0),
+                Datum::I64(i64::MIN),
+                Datum::U64(i64::MAX as u64 + 1),
             ),
             (
                 ScalarFuncSig::MultiplyInt,
