@@ -136,6 +136,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let lock_path = store_path.join(Path::new("LOCK"));
     let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
+    let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
 
     let f = File::create(lock_path).unwrap_or_else(|e| exit_with_err(e));
     if f.try_lock_exclusive().is_err() {
@@ -182,11 +183,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let trans = server.transport();
 
     // Create raft engine.
-    let raft_db_path = if cfg.raft_store.raftdb_path.is_empty() {
-        store_path.join(Path::new("raft"))
-    } else {
-        Path::new(&cfg.raft_store.raftdb_path).to_path_buf()
-    };
     let raft_db_opts = cfg.raftdb.build_opt();
     let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
     let raft_engine = Arc::new(

@@ -27,7 +27,7 @@ use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, D
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
-use util::rocksdb::{CFOptions, EventListener, FixedPrefixSliceTransform,
+use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
@@ -248,6 +248,45 @@ impl LockCfConfig {
     }
 }
 
+cf_config!(RaftCfConfig);
+
+impl Default for RaftCfConfig {
+    fn default() -> RaftCfConfig {
+        RaftCfConfig {
+            block_size: ReadableSize::kb(16),
+            block_cache_size: ReadableSize::mb(128),
+            cache_index_and_filter_blocks: true,
+            use_bloom_filter: true,
+            whole_key_filtering: true,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            compression_per_level: [DBCompressionType::No; 7],
+            write_buffer_size: ReadableSize::mb(128),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(128),
+            target_file_size_base: ReadableSize::mb(32),
+            level0_file_num_compaction_trigger: 1,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::ByCompensatedSize,
+        }
+    }
+}
+
+impl RaftCfConfig {
+    pub fn build_opt(&self) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self);
+        let f = Box::new(NoopSliceTransform);
+        cf_opts
+            .set_prefix_extractor("NoopSliceTransform", f)
+            .unwrap();
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        cf_opts
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -277,6 +316,7 @@ pub struct DbConfig {
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
+    pub raftcf: RaftCfConfig,
 }
 
 impl Default for DbConfig {
@@ -306,6 +346,7 @@ impl Default for DbConfig {
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
+            raftcf: RaftCfConfig::default(),
         }
     }
 }
@@ -360,7 +401,7 @@ impl DbConfig {
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
             CFOptions::new(CF_WRITE, self.writecf.build_opt()),
-            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
         ]
     }
 
@@ -616,18 +657,30 @@ impl TiKvConfig {
             );
         }
 
+        self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
+            try!(config::canonicalize_sub_path(
+                &self.storage.data_dir,
+                "raft"
+            ))
+        } else {
+            try!(config::canonicalize_path(&self.raft_store.raftdb_path))
+        };
+
         let kv_db_path = try!(config::canonicalize_sub_path(
             &self.storage.data_dir,
             DEFAULT_ROCKSDB_SUB_DIR
         ));
-        if !self.raft_store.raftdb_path.is_empty() {
-            self.raft_store.raftdb_path =
-                try!(config::canonicalize_path(&self.raft_store.raftdb_path));
-        }
+
         if kv_db_path == self.raft_store.raftdb_path {
             return Err(
                 "raft_store.raftdb_path can not same with storage.data_dir/db".into(),
             );
+        }
+        if db_exist(&kv_db_path) && !db_exist(&self.raft_store.raftdb_path) {
+            return Err("default rocksdb exist, buf raftdb not exist".into());
+        }
+        if !db_exist(&kv_db_path) && db_exist(&self.raft_store.raftdb_path) {
+            return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
         try!(self.rocksdb.validate());
