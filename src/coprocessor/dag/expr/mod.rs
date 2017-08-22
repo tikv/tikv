@@ -194,6 +194,7 @@ impl Expression {
                 ScalarFuncSig::StringIsNull => f.string_is_null(ctx, row),
                 ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
                 ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
+
                 ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
                 ScalarFuncSig::IfInt => f.if_int(ctx, row),
 
