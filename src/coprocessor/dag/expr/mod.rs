@@ -137,6 +137,7 @@ impl Expression {
         }
     }
 
+    #[cfg(test)]
     #[inline]
     fn mut_tp(&mut self) -> &mut FieldType {
         match *self {
