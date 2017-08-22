@@ -51,6 +51,8 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
+        read_bytes: u64,
+        read_keys: u64,
         approximate_size: u64,
     },
     StoreHeartbeat {
@@ -410,6 +412,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
+                read_bytes,
+                read_keys,
                 approximate_size,
             } => self.handle_heartbeat(
                 handle,
@@ -420,6 +424,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     pending_peers,
                     written_bytes,
                     written_keys,
+                    read_bytes,
+                    read_keys,
                     approximate_size,
                 ),
             ),
