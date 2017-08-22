@@ -682,13 +682,15 @@ mod test {
     use coprocessor::dag::expr::{Expression, StatementContext};
     use util::codec::number::NumberEncoder;
 
-    pub fn col_expr(col_id: i64, field_type: FieldType) -> Expr {
+    pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ColumnRef);
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(col_id).unwrap();
         expr.set_val(buf);
-        expr.set_field_type(field_type);
+        let mut fp = FieldType::new();
+        fp.set_tp(tp);
+        expr.set_field_type(fp);
         expr
     }
 
@@ -704,6 +706,24 @@ mod test {
         expr
     }
 
+    fn expr_with_flen_and_decimal(
+        sig: ScalarFuncSig,
+        children: Vec<Expr>,
+        cols: usize,
+        flen: i32,
+        decimal: i32,
+    ) -> Expression {
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_children(RepeatedField::from_vec(children));
+        expr.set_sig(sig);
+        let mut fp = FieldType::new();
+        fp.set_flen(flen);
+        fp.set_decimal(decimal);
+        expr.set_field_type(fp);
+        Expression::build(expr, cols).unwrap()
+    }
+
     #[test]
     fn test_cast_as_decimal() {
         let mut ctx = StatementContext::default();
@@ -716,56 +736,90 @@ mod test {
                 ScalarFuncSig::CastIntAsDecimal,
                 types::LONG_LONG,
                 vec![Datum::I64(1)],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
+            ),
+            (
+                ScalarFuncSig::CastIntAsDecimal,
+                types::LONG_LONG,
+                vec![Datum::I64(1234)],
+                7,
+                3,
+                Decimal::from_f64(1234.000).unwrap(),
             ),
             (
                 ScalarFuncSig::CastStringAsDecimal,
                 types::STRING,
                 vec![Datum::Bytes(b"1".to_vec())],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
+            ),
+            (
+                ScalarFuncSig::CastStringAsDecimal,
+                types::STRING,
+                vec![Datum::Bytes(b"1234".to_vec())],
+                7,
+                3,
+                Decimal::from_f64(1234.000).unwrap(),
             ),
             (
                 ScalarFuncSig::CastRealAsDecimal,
                 types::DOUBLE,
                 vec![Datum::F64(1f64)],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
+            ),
+            (
+                ScalarFuncSig::CastRealAsDecimal,
+                types::DOUBLE,
+                vec![Datum::F64(1234.123)],
+                8,
+                4,
+                Decimal::from_f64(1234.1230).unwrap(),
             ),
             (
                 ScalarFuncSig::CastTimeAsDecimal,
                 types::DATETIME,
                 vec![Datum::Time(t)],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
                 Decimal::from(int_t),
             ),
             (
                 ScalarFuncSig::CastDurationAsDecimal,
                 types::DURATION,
                 vec![Datum::Dur(duration_t)],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
                 Decimal::from(120023),
             ),
             (
                 ScalarFuncSig::CastJsonAsDecimal,
                 types::JSON,
                 vec![Datum::Json(Json::I64(1))],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
             ),
             (
                 ScalarFuncSig::CastDecimalAsDecimal,
                 types::NEW_DECIMAL,
                 vec![Datum::Dec(Decimal::from(1))],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
             ),
         ];
 
         let null_cols = vec![Datum::Null];
-        for (sig, tp, col, exp) in cases {
-            let mut fp = FieldType::new();
-            fp.set_tp(tp as i32);
-            let col_expr = col_expr(0, fp);
-            let expr = sig_expr(sig, vec![col_expr]);
-            let e = Expression::build(expr, 1).unwrap();
+        for (sig, tp, col, flen, decimal, exp) in cases {
+            let col_expr = col_expr(0, tp as i32);
+            let e = expr_with_flen_and_decimal(sig, vec![col_expr], 1, flen as i32, decimal as i32);
             let res = e.eval_decimal(&ctx, &col).unwrap();
             assert_eq!(res.unwrap().into_owned(), exp);
-
             // test None
             let res = e.eval_decimal(&ctx, &null_cols).unwrap();
             assert!(res.is_none());
