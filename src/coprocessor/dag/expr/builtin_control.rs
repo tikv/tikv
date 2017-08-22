@@ -239,12 +239,12 @@ mod test {
             // TODO: add Time related tests after Time is implementted in Expression::build
         ];
         let ctx = StatementContext::default();
-        for tt in tests {
-            let arg1 = datum_expr(tt.1);
-            let arg2 = datum_expr(tt.2);
-            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
-            let op = Expression::build(fncall_expr(tt.0, &[arg1, arg2]), 0).unwrap();
-            match tt.0 {
+        for (operator, branch1, branch2, exp) in tests {
+            let arg1 = datum_expr(branch1);
+            let arg2 = datum_expr(branch2);
+            let expected = Expression::build(datum_expr(exp), 0).unwrap();
+            let op = Expression::build(fncall_expr(operator, &[arg1, arg2]), 0).unwrap();
+            match operator {
                 ScalarFuncSig::IfNullInt => {
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
                     let rhs = expected.eval_int(&ctx, &[]).unwrap();
@@ -391,13 +391,13 @@ mod test {
             // TODO: add Time related tests after Time is implementted in Expression::build
         ];
         let ctx = StatementContext::default();
-        for tt in tests {
-            let arg1 = datum_expr(tt.1);
-            let arg2 = datum_expr(tt.2);
-            let arg3 = datum_expr(tt.3);
-            let expected = Expression::build(datum_expr(tt.4), 0).unwrap();
-            let op = Expression::build(fncall_expr(tt.0, &[arg1, arg2, arg3]), 0).unwrap();
-            match tt.0 {
+        for (operator, cond, branch1, branch2, exp) in tests {
+            let arg1 = datum_expr(cond);
+            let arg2 = datum_expr(branch1);
+            let arg3 = datum_expr(branch2);
+            let expected = Expression::build(datum_expr(exp), 0).unwrap();
+            let op = Expression::build(fncall_expr(operator, &[arg1, arg2, arg3]), 0).unwrap();
+            match operator {
                 ScalarFuncSig::IfInt => {
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
                     let rhs = expected.eval_int(&ctx, &[]).unwrap();
