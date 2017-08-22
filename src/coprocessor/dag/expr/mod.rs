@@ -314,7 +314,9 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_json(),
             Expression::ColumnRef(ref column) => column.eval_json(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
