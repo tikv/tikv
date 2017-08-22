@@ -671,3 +671,104 @@ impl FnCall {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+    use protobuf::RepeatedField;
+
+    use coprocessor::codec::{convert, Datum};
+    use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
+    use coprocessor::dag::expr::{Expression, StatementContext};
+    use util::codec::number::NumberEncoder;
+
+    pub fn col_expr(col_id: i64, field_type: FieldType) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ColumnRef);
+        let mut buf = Vec::with_capacity(8);
+        buf.encode_i64(col_id).unwrap();
+        expr.set_val(buf);
+        expr.set_field_type(field_type);
+        expr
+    }
+
+    pub fn sig_expr(sig: ScalarFuncSig, children: Vec<Expr>) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_children(RepeatedField::from_vec(children));
+        expr.set_sig(sig);
+        let mut fp = FieldType::new();
+        fp.set_flen(convert::UNSPECIFIED_LENGTH);
+        fp.set_decimal(convert::UNSPECIFIED_LENGTH);
+        expr.set_field_type(fp);
+        expr
+    }
+
+    #[test]
+    fn test_cast_as_decimal() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
+        let int_t = 20121212120023u64;
+        let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
+        let cases = vec![
+            (
+                ScalarFuncSig::CastIntAsDecimal,
+                types::LONG_LONG,
+                vec![Datum::I64(1)],
+                Decimal::from(1),
+            ),
+            (
+                ScalarFuncSig::CastStringAsDecimal,
+                types::STRING,
+                vec![Datum::Bytes(b"1".to_vec())],
+                Decimal::from(1),
+            ),
+            (
+                ScalarFuncSig::CastRealAsDecimal,
+                types::DOUBLE,
+                vec![Datum::F64(1f64)],
+                Decimal::from(1),
+            ),
+            (
+                ScalarFuncSig::CastTimeAsDecimal,
+                types::DATETIME,
+                vec![Datum::Time(t)],
+                Decimal::from(int_t),
+            ),
+            (
+                ScalarFuncSig::CastDurationAsDecimal,
+                types::DURATION,
+                vec![Datum::Dur(duration_t)],
+                Decimal::from(120023),
+            ),
+            (
+                ScalarFuncSig::CastJsonAsDecimal,
+                types::JSON,
+                vec![Datum::Json(Json::I64(1))],
+                Decimal::from(1),
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsDecimal,
+                types::NEW_DECIMAL,
+                vec![Datum::Dec(Decimal::from(1))],
+                Decimal::from(1),
+            ),
+        ];
+
+        let null_cols = vec![Datum::Null];
+        for (sig, tp, col, exp) in cases {
+            let mut fp = FieldType::new();
+            fp.set_tp(tp as i32);
+            let col_expr = col_expr(0, fp);
+            let expr = sig_expr(sig, vec![col_expr]);
+            let e = Expression::build(expr, 1).unwrap();
+            let res = e.eval_decimal(&ctx, &col).unwrap();
+            assert_eq!(res.unwrap().into_owned(), exp);
+
+            // test None
+            let res = e.eval_decimal(&ctx, &null_cols).unwrap();
+            assert!(res.is_none());
+        }
+    }
+}
