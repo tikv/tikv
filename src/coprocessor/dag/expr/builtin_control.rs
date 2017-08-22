@@ -256,52 +256,23 @@ mod test {
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfNullString => {
-                    let lhs = op.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
-                    let rhs = expected
-                        .eval_string(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned();
+                    let lhs = op.eval_string(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_string(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfNullDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned();
-                    let rhs = expected
-                        .eval_decimal(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned();
+                    let lhs = op.eval_decimal(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfNullTime => {
-                    let lhs = op.eval_time(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned()
-                        .to_packed_u64();
-                    let rhs = expected
-                        .eval_time(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned()
-                        .to_packed_u64();
+                    let lhs = op.eval_time(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_time(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfNullDuration => {
-                    let lhs = op.eval_duration(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned()
-                        .to_nanos();
-                    let rhs = expected
-                        .eval_duration(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned()
-                        .to_nanos();
+                    let lhs = op.eval_duration(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_duration(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 _ => unreachable!(),
@@ -438,52 +409,23 @@ mod test {
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfString => {
-                    let lhs = op.eval_string(&ctx, &[]).unwrap().unwrap().into_owned();
-                    let rhs = expected
-                        .eval_string(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned();
+                    let lhs = op.eval_string(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_string(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned();
-                    let rhs = expected
-                        .eval_decimal(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned();
+                    let lhs = op.eval_decimal(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfTime => {
-                    let lhs = op.eval_time(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned()
-                        .to_packed_u64();
-                    let rhs = expected
-                        .eval_time(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned()
-                        .to_packed_u64();
+                    let lhs = op.eval_time(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_time(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfDuration => {
-                    let lhs = op.eval_duration(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned()
-                        .to_nanos();
-                    let rhs = expected
-                        .eval_duration(&ctx, &[])
-                        .unwrap()
-                        .unwrap()
-                        .into_owned()
-                        .to_nanos();
+                    let lhs = op.eval_duration(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_duration(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
                 }
                 _ => unreachable!(),
