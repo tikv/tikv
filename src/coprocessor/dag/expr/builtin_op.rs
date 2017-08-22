@@ -15,7 +15,7 @@ use super::{FnCall, Result, StatementContext};
 use coprocessor::codec::Datum;
 
 impl FnCall {
-    pub fn logic_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn logical_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         if arg0.is_some() && arg0.unwrap() == 0 {
             return Ok(Some(0));
@@ -30,7 +30,7 @@ impl FnCall {
         Ok(Some(1))
     }
 
-    pub fn logic_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn logical_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         if arg0.is_some() && arg0.unwrap() != 0 {
             return Ok(Some(1));
@@ -43,41 +43,30 @@ impl FnCall {
         }
     }
 
-    pub fn logic_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn logical_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try_opt!(self.children[0].eval_int(ctx, row));
         let arg1 = try_opt!(self.children[1].eval_int(ctx, row));
-        let arg0 = arg0;
-        let arg1 = arg1;
         Ok(Some(((arg0 == 0) ^ (arg1 == 0)) as i64))
     }
 
     pub fn real_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_real(ctx, row));
-        Ok(Some(input.map_or(false, |i| i != 0f64) as i64))
+        Ok(Some(input.map_or(0, |i| (i != 0f64) as i64)))
     }
 
     pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_decimal(ctx, row));
-        if input.is_none() || input.unwrap().into_owned().is_zero() {
-            return Ok(Some(0));
-        }
-        Ok(Some(1))
+        Ok(Some(input.map_or(0, |dec| !dec.into_owned().is_zero() as i64)))
     }
 
     pub fn int_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_int(ctx, row));
-        match input {
-            Some(0) => Ok(Some(1)),
-            _ => Ok(Some(0)),
-        }
+        Ok(Some(input.map_or(0, |i| (i == 0) as i64)))
     }
 
     pub fn unary_not(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try_opt!(self.children[0].eval_int(ctx, row));
-        match arg {
-            0 => Ok(Some(1)),
-            _ => Ok(Some(0)),
-        }
+        Ok(Some((arg == 0) as i64))
     }
 
     pub fn unary_minus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -98,39 +87,32 @@ impl FnCall {
 
     pub fn decimal_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try!(self.children[0].eval_decimal(ctx, row));
-        eval_is_null(arg)
+        Ok(Some(arg.is_none() as i64))
     }
 
     pub fn int_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try!(self.children[0].eval_int(ctx, row));
-        eval_is_null(arg)
+        Ok(Some(arg.is_none() as i64))
     }
 
     pub fn real_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try!(self.children[0].eval_real(ctx, row));
-        eval_is_null(arg)
+        Ok(Some(arg.is_none() as i64))
     }
 
     pub fn string_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try!(self.children[0].eval_string(ctx, row));
-        eval_is_null(arg)
+        Ok(Some(arg.is_none() as i64))
     }
 
     pub fn time_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try!(self.children[0].eval_time(ctx, row));
-        eval_is_null(arg)
+        Ok(Some(arg.is_none() as i64))
     }
 
     pub fn duration_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try!(self.children[0].eval_duration(ctx, row));
-        eval_is_null(arg)
-    }
-}
-
-fn eval_is_null<T>(arg: Option<T>) -> Result<Option<i64>> {
-    match arg {
-        None => Ok(Some(1)),
-        _ => Ok(Some(0)),
+        Ok(Some(arg.is_none() as i64))
     }
 }
 
@@ -330,7 +312,7 @@ mod test {
                 Datum::I64(0),
             ),
             (ScalarFuncSig::TimeIsNull, Datum::Null, Datum::I64(1)),
-            // TODO: add Time related tests after Time is implementted in Expression::build
+            // TODO: add Time related tests after Time is implemented in Expression::build
             (
                 ScalarFuncSig::DurationIsNull,
                 Datum::Dur(Duration::zero()),

@@ -179,9 +179,9 @@ impl Expression {
                 ScalarFuncSig::NEJson => f.compare_json(ctx, row, CmpOp::NE),
                 ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
 
-                ScalarFuncSig::LogicalAnd => f.logic_and(ctx, row),
-                ScalarFuncSig::LogicalOr => f.logic_or(ctx, row),
-                ScalarFuncSig::LogicalXor => f.logic_xor(ctx, row),
+                ScalarFuncSig::LogicalAnd => f.logical_and(ctx, row),
+                ScalarFuncSig::LogicalOr => f.logical_or(ctx, row),
+                ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
 
                 ScalarFuncSig::UnaryNot => f.unary_not(ctx, row),
                 ScalarFuncSig::IntIsNull => f.int_is_null(ctx, row),
