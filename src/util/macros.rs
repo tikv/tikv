@@ -201,3 +201,15 @@ macro_rules! wait_op {
         }
     }
 }
+
+/// `try_opt` check `Result<Option<T>>`, return early when met `Err` or `Ok(None)`.
+#[macro_export]
+macro_rules! try_opt {
+    ($expr:expr) => ({
+        match $expr {
+            Err(e) => return Err(e.into()),
+            Ok(None) => return Ok(None),
+            Ok(Some(res)) => res,
+        }
+    });
+}

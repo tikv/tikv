@@ -287,7 +287,7 @@ mod tests {
         thread::sleep(interval);
         // Expire the cache, and the address will be refreshed.
         {
-            let mut s = runner.store_addrs.get_mut(&store_id).unwrap();
+            let s = runner.store_addrs.get_mut(&store_id).unwrap();
             let now = Instant::now();
             s.last_update = now.sub(Duration::from_secs(STORE_ADDRESS_REFRESH_SECONDS + 1));
         }

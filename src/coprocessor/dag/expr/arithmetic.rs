@@ -11,23 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{f64, i64};
+use std::{f64, i64, u64};
+use std::ops::Neg;
+use std::num::Wrapping;
 use std::borrow::Cow;
-use coprocessor::codec::Datum;
+use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::Decimal;
 use super::{Error, FnCall, Result, StatementContext};
 
 impl FnCall {
     pub fn plus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let lhs = try!(self.children[0].eval_real(ctx, row));
-        let rhs = try!(self.children[1].eval_real(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let res = l + r;
-            if !res.is_finite() {
-                return Err(Error::Overflow);
-            }
-            Ok(res)
-        })
+        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+        let res = lhs + rhs;
+        if !res.is_finite() {
+            return Err(Error::Overflow);
+        }
+        Ok(Some(res))
     }
 
     pub fn plus_decimal<'a, 'b: 'a>(
@@ -35,39 +35,39 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let lhs = try!(self.children[0].eval_decimal(ctx, row));
-        let rhs = try!(self.children[1].eval_decimal(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let result: Result<Decimal> = (l.as_ref() + r.as_ref()).into();
-            result.map(Cow::Owned)
-        })
+        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let result: Result<Decimal> = (lhs.as_ref() + rhs.as_ref()).into();
+        result.map(Cow::Owned).map(Some)
     }
 
     pub fn plus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_int(ctx, row));
-        let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| l.checked_add(r).ok_or(Error::Overflow))
-    }
-
-    pub fn plus_uint(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_int(ctx, row));
-        let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let res = (l as u64).checked_add(r as u64).ok_or(Error::Overflow);
-            res.map(|u| u as i64)
-        })
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+        let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+        let res_us = match (lus | (lhs >= 0), rus | (rhs >= 0)) {
+            (true, true) => {
+                try!((lhs as u64).checked_add(rhs as u64).ok_or(Error::Overflow));
+                true
+            }
+            (false, false) => try!(lhs.checked_add(rhs).ok_or(Error::Overflow)) > 0,
+            (true, false) if lhs as u64 > i64::MAX as u64 => true,
+            (false, true) if rhs as u64 > i64::MAX as u64 => true,
+            _ => false,
+        };
+        let us = mysql::has_unsigned_flag(self.tp.get_flag());
+        check_integer_overflow(us, (Wrapping(lhs) + Wrapping(rhs)).0, res_us)
     }
 
     pub fn minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let lhs = try!(self.children[0].eval_real(ctx, row));
-        let rhs = try!(self.children[1].eval_real(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let res = l - r;
-            if !res.is_finite() {
-                return Err(Error::Overflow);
-            }
-            Ok(res)
-        })
+        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+        let res = lhs - rhs;
+        if !res.is_finite() {
+            return Err(Error::Overflow);
+        }
+        Ok(Some(res))
     }
 
     pub fn minus_decimal<'a, 'b: 'a>(
@@ -75,39 +75,52 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let lhs = try!(self.children[0].eval_decimal(ctx, row));
-        let rhs = try!(self.children[1].eval_decimal(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let result: Result<Decimal> = (l.as_ref() - r.as_ref()).into();
-            result.map(Cow::Owned)
-        })
+        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let result: Result<Decimal> = (lhs.as_ref() - rhs.as_ref()).into();
+        result.map(Cow::Owned).map(Some)
     }
 
     pub fn minus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_int(ctx, row));
-        let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| l.checked_sub(r).ok_or(Error::Overflow))
-    }
-
-    pub fn minus_uint(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_int(ctx, row));
-        let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let res = (l as u64).checked_sub(r as u64).ok_or(Error::Overflow);
-            res.map(|u| u as i64)
-        })
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+        let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+        let res_us = match (lus, rus) {
+            (true, true) => {
+                try!((lhs as u64).checked_sub(rhs as u64).ok_or(Error::Overflow));
+                true
+            }
+            (true, false) => if rhs >= 0 {
+                lhs as u64 > rhs as u64
+            } else {
+                try!((lhs as u64).checked_add(-rhs as u64).ok_or(Error::Overflow));
+                true
+            },
+            (false, true) => {
+                let l = (lhs - i64::MIN) as u64;
+                try!(l.checked_sub(rhs as u64).ok_or(Error::Overflow));
+                false
+            }
+            (false, false) => if lhs > 0 && rhs < 0 {
+                true
+            } else {
+                try!(lhs.checked_sub(rhs).ok_or(Error::Overflow));
+                false
+            },
+        };
+        let us = mysql::has_unsigned_flag(self.tp.get_flag());
+        check_integer_overflow(us, (Wrapping(lhs) - Wrapping(rhs)).0, res_us)
     }
 
     pub fn multiply_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let lhs = try!(self.children[0].eval_real(ctx, row));
-        let rhs = try!(self.children[1].eval_real(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let res = l * r;
-            if !res.is_finite() {
-                return Err(Error::Overflow);
-            }
-            Ok(res)
-        })
+        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+        let res = lhs * rhs;
+        if !res.is_finite() {
+            return Err(Error::Overflow);
+        }
+        Ok(Some(res))
     }
 
     pub fn multiply_decimal<'a, 'b: 'a>(
@@ -115,46 +128,55 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let lhs = try!(self.children[0].eval_decimal(ctx, row));
-        let rhs = try!(self.children[1].eval_decimal(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let result: Result<Decimal> = (l.as_ref() * r.as_ref()).into();
-            result.map(Cow::Owned)
-        })
+        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let result: Result<Decimal> = (lhs.as_ref() * rhs.as_ref()).into();
+        result.map(Cow::Owned).map(Some)
     }
 
     pub fn multiply_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_int(ctx, row));
-        let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| l.checked_mul(r).ok_or(Error::Overflow))
-    }
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+        let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
 
-    pub fn multiply_uint(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try!(self.children[0].eval_int(ctx, row));
-        let rhs = try!(self.children[1].eval_int(ctx, row));
-        do_arithmetic(lhs, rhs, |l, r| {
-            let res = (l as u64).checked_mul(r as u64).ok_or(Error::Overflow);
-            res.map(|u| u as i64)
-        })
+        let (mut a_neg, mut b_neg) = (false, false);
+        let (mut l, mut r) = (lhs as u64, rhs as u64);
+        if !lus && lhs < 0 {
+            a_neg = true;
+            l = Wrapping(lhs).neg().0 as u64;
+        }
+        if !rus && rhs < 0 {
+            b_neg = true;
+            r = Wrapping(rhs).neg().0 as u64;
+        }
+
+        let res = try!(l.checked_mul(r).ok_or(Error::Overflow));
+        let us = mysql::has_unsigned_flag(self.tp.get_flag());
+        if a_neg != b_neg {
+            try!((i64::MAX as u64).checked_sub(res).ok_or(Error::Overflow));
+            let res = try!((res as i64).checked_neg().ok_or(Error::Overflow));
+            check_integer_overflow(us, res, false)
+        } else {
+            check_integer_overflow(us, (res as i64), true)
+        }
     }
 }
 
 #[inline]
-fn do_arithmetic<T, F>(lhs: Option<T>, rhs: Option<T>, op: F) -> Result<Option<T>>
-where
-    F: Fn(T, T) -> Result<T>,
-{
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => op(lhs, rhs).map(|t| Some(t)),
-        _ => Ok(None),
+fn check_integer_overflow(us: bool, res: i64, res_us: bool) -> Result<Option<i64>> {
+    if (us && !res_us && res < 0) || (!us && res_us && res as u64 > i64::MAX as u64) {
+        return Err(Error::Overflow);
     }
+    Ok(Some(res))
 }
 
 #[cfg(test)]
 mod test {
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::Datum;
+    use coprocessor::codec::{mysql, Datum};
+    use coprocessor::codec::mysql::types;
     use coprocessor::dag::expr::{Error, Expression, StatementContext};
     use coprocessor::dag::expr::test::{fncall_expr, str2dec};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
@@ -167,7 +189,7 @@ mod test {
     }
 
     #[test]
-    fn test_arithmetic() {
+    fn test_arithmetic_int() {
         let tests = vec![
             (
                 ScalarFuncSig::PlusInt,
@@ -188,34 +210,49 @@ mod test {
                 Datum::I64(13),
             ),
             (
-                ScalarFuncSig::PlusIntUnsigned,
-                Datum::U64(12),
-                Datum::U64(1),
-                Datum::U64(13),
-            ),
-            (
-                ScalarFuncSig::PlusReal,
-                Datum::F64(1.01001),
-                Datum::F64(-0.01),
-                Datum::F64(1.00001),
-            ),
-            (
-                ScalarFuncSig::PlusDecimal,
-                str2dec("1.1"),
-                str2dec("2.2"),
-                str2dec("3.3"),
-            ),
-            (
                 ScalarFuncSig::MinusInt,
                 Datum::I64(12),
                 Datum::I64(1),
                 Datum::I64(11),
             ),
             (
-                ScalarFuncSig::MinusIntUnsigned,
-                Datum::U64(12),
-                Datum::U64(1),
-                Datum::U64(11),
+                ScalarFuncSig::MultiplyInt,
+                Datum::I64(12),
+                Datum::I64(1),
+                Datum::I64(12),
+            ),
+        ];
+        let ctx = StatementContext::default();
+        for tt in tests {
+            let lhs = datum_expr(tt.1);
+            let rhs = datum_expr(tt.2);
+
+            let lus = mysql::has_unsigned_flag(lhs.get_field_type().get_flag());
+            let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
+            let unsigned = lus | rus;
+
+            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
+            if unsigned {
+                // According to TiDB, the result is unsigned if any of arguments is unsigned.
+                op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+            }
+
+            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
+
+            let got = op.eval_int(&ctx, &[]).unwrap();
+            let exp = expected.eval_int(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_arithmetic_real() {
+        let tests = vec![
+            (
+                ScalarFuncSig::PlusReal,
+                Datum::F64(1.01001),
+                Datum::F64(-0.01),
+                Datum::F64(1.00001),
             ),
             (
                 ScalarFuncSig::MinusReal,
@@ -224,28 +261,40 @@ mod test {
                 Datum::F64(1.02001),
             ),
             (
-                ScalarFuncSig::MinusDecimal,
-                str2dec("1.1"),
-                str2dec("2.2"),
-                str2dec("-1.1"),
-            ),
-            (
-                ScalarFuncSig::MultiplyInt,
-                Datum::I64(12),
-                Datum::I64(1),
-                Datum::I64(12),
-            ),
-            (
-                ScalarFuncSig::MultiplyIntUnsigned,
-                Datum::U64(12),
-                Datum::U64(1),
-                Datum::U64(12),
-            ),
-            (
                 ScalarFuncSig::MultiplyReal,
                 Datum::F64(1.01001),
                 Datum::F64(-0.01),
                 Datum::F64(-0.0101001),
+            ),
+        ];
+        let ctx = StatementContext::default();
+        for tt in tests {
+            let lhs = datum_expr(tt.1);
+            let rhs = datum_expr(tt.2);
+
+            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
+            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
+
+            let got = op.eval_real(&ctx, &[]).unwrap();
+            let exp = expected.eval_real(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_arithmetic_decimal() {
+        let tests = vec![
+            (
+                ScalarFuncSig::PlusDecimal,
+                str2dec("1.1"),
+                str2dec("2.2"),
+                str2dec("3.3"),
+            ),
+            (
+                ScalarFuncSig::MinusDecimal,
+                str2dec("1.1"),
+                str2dec("2.2"),
+                str2dec("-1.1"),
             ),
             (
                 ScalarFuncSig::MultiplyDecimal,
@@ -254,48 +303,22 @@ mod test {
                 str2dec("2.42"),
             ),
         ];
-
         let ctx = StatementContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
-            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
+
             let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
-            match tt.0 {
-                ScalarFuncSig::PlusInt |
-                ScalarFuncSig::MinusInt |
-                ScalarFuncSig::MultiplyInt |
-                ScalarFuncSig::PlusIntUnsigned |
-                ScalarFuncSig::MinusIntUnsigned |
-                ScalarFuncSig::MultiplyIntUnsigned => {
-                    let lhs = op.eval_int(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::PlusReal | ScalarFuncSig::MinusReal => {
-                    let lhs = op.eval_real(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::MultiplyReal => {
-                    let lhs = op.eval_real(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::PlusDecimal |
-                ScalarFuncSig::MinusDecimal |
-                ScalarFuncSig::MultiplyDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                _ => unreachable!(),
-            }
+            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
+
+            let got = op.eval_decimal(&ctx, &[]).unwrap();
+            let exp = expected.eval_decimal(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_arithmetic_overflow() {
+    fn test_arithmetic_int_overflow() {
         let tests = vec![
             (
                 ScalarFuncSig::PlusInt,
@@ -307,30 +330,58 @@ mod test {
                 Datum::I64(i64::MIN),
                 Datum::I64(i64::MIN),
             ),
+            (ScalarFuncSig::PlusInt, Datum::I64(-2), Datum::U64(1)),
+            (ScalarFuncSig::PlusInt, Datum::U64(1), Datum::I64(-2)),
             (
-                ScalarFuncSig::PlusIntUnsigned,
-                Datum::U64(u64::MAX),
-                Datum::U64(u64::MAX),
+                ScalarFuncSig::MinusInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MAX),
             ),
+            (
+                ScalarFuncSig::MinusInt,
+                Datum::I64(i64::MAX),
+                Datum::I64(i64::MIN),
+            ),
+            (ScalarFuncSig::MinusInt, Datum::I64(-1), Datum::U64(2)),
+            (ScalarFuncSig::MinusInt, Datum::U64(1), Datum::I64(2)),
+            (
+                ScalarFuncSig::MultiplyInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::MultiplyInt,
+                Datum::U64(u64::MAX),
+                Datum::I64(i64::MAX),
+            ),
+        ];
+        let ctx = StatementContext::default();
+        for tt in tests {
+            let lhs = datum_expr(tt.1);
+            let rhs = datum_expr(tt.2);
+
+            let lus = mysql::has_unsigned_flag(lhs.get_field_type().get_flag());
+            let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
+            let unsigned = lus | rus;
+
+            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
+            if unsigned {
+                // According to TiDB, the result is unsigned if any of arguments is unsigned.
+                op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+            }
+
+            let got = op.eval_int(&ctx, &[]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_arithmetic_real_overflow() {
+        let tests = vec![
             (
                 ScalarFuncSig::PlusReal,
                 Datum::F64(f64::MAX),
                 Datum::F64(f64::MAX),
-            ),
-            (
-                ScalarFuncSig::MinusInt,
-                Datum::I64(i64::MIN),
-                Datum::I64(i64::MAX),
-            ),
-            (
-                ScalarFuncSig::MinusInt,
-                Datum::I64(i64::MAX),
-                Datum::I64(i64::MIN),
-            ),
-            (
-                ScalarFuncSig::MinusIntUnsigned,
-                Datum::U64(1u64),
-                Datum::U64(2u64),
             ),
             (
                 ScalarFuncSig::MinusReal,
@@ -338,53 +389,19 @@ mod test {
                 Datum::F64(f64::MAX),
             ),
             (
-                ScalarFuncSig::MultiplyInt,
-                Datum::I64(i64::MIN),
-                Datum::I64(i64::MAX),
-            ),
-            (
-                ScalarFuncSig::MultiplyIntUnsigned,
-                Datum::U64(u64::MAX),
-                Datum::U64(u64::MAX),
-            ),
-            (
                 ScalarFuncSig::MultiplyReal,
                 Datum::F64(f64::MIN),
                 Datum::F64(f64::MAX),
             ),
         ];
-
         let ctx = StatementContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
+
             let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
-            match tt.0 {
-                ScalarFuncSig::PlusInt |
-                ScalarFuncSig::MinusInt |
-                ScalarFuncSig::MultiplyInt |
-                ScalarFuncSig::PlusIntUnsigned |
-                ScalarFuncSig::MinusIntUnsigned |
-                ScalarFuncSig::MultiplyIntUnsigned => {
-                    let lhs = op.eval_int(&ctx, &[]).unwrap_err();
-                    assert!(check_overflow(lhs).is_ok());
-                }
-                ScalarFuncSig::PlusReal | ScalarFuncSig::MinusReal => {
-                    let lhs = op.eval_real(&ctx, &[]).unwrap_err();
-                    assert!(check_overflow(lhs).is_ok());
-                }
-                ScalarFuncSig::MultiplyReal => {
-                    let lhs = op.eval_real(&ctx, &[]).unwrap_err();
-                    assert!(check_overflow(lhs).is_ok());
-                }
-                ScalarFuncSig::PlusDecimal |
-                ScalarFuncSig::MinusDecimal |
-                ScalarFuncSig::MultiplyDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[]).unwrap_err();
-                    assert!(check_overflow(lhs).is_ok());
-                }
-                _ => unreachable!(),
-            }
+            let got = op.eval_real(&ctx, &[]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
         }
     }
 }

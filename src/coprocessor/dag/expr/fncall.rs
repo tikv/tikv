@@ -68,15 +68,12 @@ impl FnCall {
             ScalarFuncSig::NullEQJson |
             ScalarFuncSig::PlusReal |
             ScalarFuncSig::PlusDecimal |
-            ScalarFuncSig::PlusIntUnsigned |
             ScalarFuncSig::PlusInt |
             ScalarFuncSig::MinusReal |
             ScalarFuncSig::MinusDecimal |
-            ScalarFuncSig::MinusIntUnsigned |
             ScalarFuncSig::MinusInt |
             ScalarFuncSig::MultiplyReal |
             ScalarFuncSig::MultiplyDecimal |
-            ScalarFuncSig::MultiplyIntUnsigned |
             ScalarFuncSig::MultiplyInt => (2, 2),
 
             ScalarFuncSig::CastIntAsInt |

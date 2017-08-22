@@ -15,6 +15,7 @@ use std::{self, str, i64};
 use std::borrow::Cow;
 
 use coprocessor::select::xeval::EvalContext;
+use super::mysql::Res;
 use super::Result;
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
 pub const UNSPECIFIED_LENGTH: i32 = -1;
@@ -26,6 +27,32 @@ pub fn truncate_str(mut s: String, flen: isize) -> String {
     } else {
         s
     }
+}
+
+/// `truncate_f64` (`TruncateFloat` in tidb) tries to truncate f.
+/// If the result exceeds the max/min float that flen/decimal
+/// allowed, returns the max/min float allowed.
+pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
+    if f.is_nan() {
+        return Res::Overflow(0f64);
+    }
+    let shift = 10u64.pow(decimal as u32) as f64;
+    let maxf = 10u64.pow((flen - decimal) as u32) as f64 - 1.0 / shift;
+    if f.is_finite() {
+        let tmp = f * shift;
+        if tmp.is_finite() {
+            f = tmp.round() / shift
+        }
+    };
+
+    if f > maxf {
+        return Res::Overflow(maxf);
+    }
+
+    if f < -maxf {
+        return Res::Overflow(-maxf);
+    }
+    Res::Ok(f)
 }
 
 // `overflow` returns an overflowed error.
@@ -522,5 +549,21 @@ mod test {
         let s3 = truncate_str(s, 0);
         assert!(s3.is_empty());
         // TODO port tests from tidb(tidb haven't implemented now)
+    }
+
+    #[test]
+    fn test_truncate_f64() {
+        let cases = vec![
+            (100.114, 10, 2, Res::Ok(100.11)),
+            (100.115, 10, 2, Res::Ok(100.12)),
+            (100.1156, 10, 3, Res::Ok(100.116)),
+            (100.1156, 3, 1, Res::Overflow(99.9)),
+            (1.36, 10, 2, Res::Ok(1.36)),
+            (f64::NAN, 10, 1, Res::Overflow(0f64)),
+        ];
+        for (f, flen, decimal, exp) in cases {
+            let res = truncate_f64(f, flen, decimal);
+            assert_eq!(res, exp);
+        }
     }
 }
