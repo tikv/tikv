@@ -188,7 +188,7 @@ pub fn new_engine_opt(path: &str, opts: DBOptions, cfs_opts: Vec<CFOptions>) -> 
     check_and_open(path, opts, cfs_opts)
 }
 
-fn db_exist(path: &str) -> bool {
+pub fn db_exist(path: &str) -> bool {
     let path = Path::new(path);
     if !path.exists() || !path.is_dir() {
         return false;

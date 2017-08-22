@@ -16,11 +16,11 @@ use std::sync::mpsc::channel;
 use std::time::Duration;
 
 use tikv::util::HandyRwLock;
-use tikv::storage::{self, make_key, Engine, Mutation, Options, Storage, ALL_CFS};
+use tikv::storage::{self, make_key, Engine, Mutation, Options, Storage};
 use tikv::storage::{engine, mvcc, txn};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
-use raftstore::server::new_server_cluster_with_cfs;
+use raftstore::server::new_server_cluster;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::util::*;
@@ -157,7 +157,7 @@ fn test_raft_storage_store_not_match() {
 
 #[test]
 fn test_engine_leader_change_twice() {
-    let mut cluster = new_server_cluster_with_cfs(0, 3, ALL_CFS);
+    let mut cluster = new_server_cluster(0, 3);
     cluster.run();
 
     let region = cluster.get_region(b"");
@@ -192,7 +192,7 @@ fn test_engine_leader_change_twice() {
 
 #[test]
 fn test_scheduler_leader_change_twice() {
-    let mut cluster = new_server_cluster_with_cfs(0, 2, ALL_CFS);
+    let mut cluster = new_server_cluster(0, 2);
     cluster.run();
     let region0 = cluster.get_region(b"");
     let peers = region0.get_peers();
