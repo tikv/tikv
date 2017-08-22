@@ -268,16 +268,12 @@ mod test {
                     let lhs = op.eval_decimal(&ctx, &[])
                         .unwrap()
                         .unwrap()
-                        .into_owned()
-                        .as_f64()
-                        .unwrap();
+                        .into_owned();
                     let rhs = expected
                         .eval_decimal(&ctx, &[])
                         .unwrap()
                         .unwrap()
-                        .into_owned()
-                        .as_f64()
-                        .unwrap();
+                        .into_owned();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfNullTime => {
@@ -454,16 +450,12 @@ mod test {
                     let lhs = op.eval_decimal(&ctx, &[])
                         .unwrap()
                         .unwrap()
-                        .into_owned()
-                        .as_f64()
-                        .unwrap();
+                        .into_owned();
                     let rhs = expected
                         .eval_decimal(&ctx, &[])
                         .unwrap()
                         .unwrap()
-                        .into_owned()
-                        .as_f64()
-                        .unwrap();
+                        .into_owned();
                     assert_eq!(lhs, rhs);
                 }
                 ScalarFuncSig::IfTime => {
