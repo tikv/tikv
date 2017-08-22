@@ -128,11 +128,21 @@ impl Expression {
         })
     }
 
+    #[inline]
     fn get_tp(&self) -> &FieldType {
         match *self {
             Expression::Constant(ref c) => &c.tp,
             Expression::ColumnRef(ref c) => &c.tp,
             Expression::ScalarFn(ref c) => &c.tp,
+        }
+    }
+
+    #[inline]
+    fn mut_tp(&mut self) -> &mut FieldType {
+        match *self {
+            Expression::Constant(ref mut c) => &mut c.tp,
+            Expression::ColumnRef(ref mut c) => &mut c.tp,
+            Expression::ScalarFn(ref mut c) => &mut c.tp,
         }
     }
 
@@ -198,11 +208,8 @@ impl Expression {
                 ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
 
                 ScalarFuncSig::PlusInt => f.plus_int(ctx, row),
-                ScalarFuncSig::PlusIntUnsigned => f.plus_uint(ctx, row),
                 ScalarFuncSig::MinusInt => f.minus_int(ctx, row),
-                ScalarFuncSig::MinusIntUnsigned => f.minus_uint(ctx, row),
                 ScalarFuncSig::MultiplyInt => f.multiply_int(ctx, row),
-                ScalarFuncSig::MultiplyIntUnsigned => f.multiply_uint(ctx, row),
 
                 _ => Err(Error::Other("Unknown signature")),
             },
