@@ -678,7 +678,7 @@ mod test {
     use protobuf::RepeatedField;
 
     use coprocessor::codec::{convert, Datum};
-    use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
+    use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Time};
     use coprocessor::dag::expr::{Expression, StatementContext};
     use util::codec::number::NumberEncoder;
 
@@ -690,18 +690,6 @@ mod test {
         expr.set_val(buf);
         let mut fp = FieldType::new();
         fp.set_tp(tp);
-        expr.set_field_type(fp);
-        expr
-    }
-
-    pub fn sig_expr(sig: ScalarFuncSig, children: Vec<Expr>) -> Expr {
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ScalarFunc);
-        expr.set_children(RepeatedField::from_vec(children));
-        expr.set_sig(sig);
-        let mut fp = FieldType::new();
-        fp.set_flen(convert::UNSPECIFIED_LENGTH);
-        fp.set_decimal(convert::UNSPECIFIED_LENGTH);
         expr.set_field_type(fp);
         expr
     }
@@ -720,6 +708,7 @@ mod test {
         let mut fp = FieldType::new();
         fp.set_flen(flen);
         fp.set_decimal(decimal);
+        fp.set_charset(String::from(charset::CHARSET_UTF8));
         expr.set_field_type(fp);
         Expression::build(expr, cols).unwrap()
     }
@@ -783,18 +772,34 @@ mod test {
             (
                 ScalarFuncSig::CastTimeAsDecimal,
                 types::DATETIME,
-                vec![Datum::Time(t)],
+                vec![Datum::Time(t.clone())],
                 convert::UNSPECIFIED_LENGTH,
                 convert::UNSPECIFIED_LENGTH,
                 Decimal::from(int_t),
             ),
             (
+                ScalarFuncSig::CastTimeAsDecimal,
+                types::DATETIME,
+                vec![Datum::Time(t)],
+                15,
+                1,
+                format!("{}.0", int_t).parse::<Decimal>().unwrap(),
+            ),
+            (
                 ScalarFuncSig::CastDurationAsDecimal,
                 types::DURATION,
-                vec![Datum::Dur(duration_t)],
+                vec![Datum::Dur(duration_t.clone())],
                 convert::UNSPECIFIED_LENGTH,
                 convert::UNSPECIFIED_LENGTH,
                 Decimal::from(120023),
+            ),
+            (
+                ScalarFuncSig::CastDurationAsDecimal,
+                types::DURATION,
+                vec![Datum::Dur(duration_t)],
+                7,
+                1,
+                Decimal::from_f64(120023.0).unwrap(),
             ),
             (
                 ScalarFuncSig::CastJsonAsDecimal,
@@ -805,12 +810,28 @@ mod test {
                 Decimal::from(1),
             ),
             (
+                ScalarFuncSig::CastJsonAsDecimal,
+                types::JSON,
+                vec![Datum::Json(Json::I64(1))],
+                2,
+                1,
+                Decimal::from_f64(1.0).unwrap(),
+            ),
+            (
                 ScalarFuncSig::CastDecimalAsDecimal,
                 types::NEW_DECIMAL,
                 vec![Datum::Dec(Decimal::from(1))],
                 convert::UNSPECIFIED_LENGTH,
                 convert::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsDecimal,
+                types::NEW_DECIMAL,
+                vec![Datum::Dec(Decimal::from(1))],
+                2,
+                1,
+                Decimal::from_f64(1.0).unwrap(),
             ),
         ];
 
@@ -822,6 +843,142 @@ mod test {
             assert_eq!(res.unwrap().into_owned(), exp);
             // test None
             let res = e.eval_decimal(&ctx, &null_cols).unwrap();
+            assert!(res.is_none());
+        }
+    }
+
+    #[test]
+    fn test_cast_as_str() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let t_str = "2012-12-12 12:00:23";
+        let t = Time::parse_utc_datetime(t_str, 0).unwrap();
+        let int_t = 20121212120023u64;
+        let dur_str = b"12:00:23";
+        let duration_t = Duration::parse(dur_str, 0).unwrap();
+        let s = "您好world";
+        let exp_s = "您好w";
+        let cases = vec![
+            (
+                ScalarFuncSig::CastIntAsString,
+                types::LONG_LONG,
+                vec![Datum::I64(1)],
+                convert::UNSPECIFIED_LENGTH,
+                b"1".to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastIntAsString,
+                types::LONG_LONG,
+                vec![Datum::I64(1234)],
+                3,
+                b"123".to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastStringAsString,
+                types::STRING,
+                vec![Datum::Bytes(b"1234".to_vec())],
+                convert::UNSPECIFIED_LENGTH,
+                b"1234".to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastStringAsString,
+                types::STRING,
+                vec![Datum::Bytes(s.as_bytes().to_vec())],
+                3,
+                exp_s.as_bytes().to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastRealAsString,
+                types::DOUBLE,
+                vec![Datum::F64(1f64)],
+                convert::UNSPECIFIED_LENGTH,
+                b"1".to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastRealAsString,
+                types::DOUBLE,
+                vec![Datum::F64(1234.123)],
+                3,
+                b"123".to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastTimeAsString,
+                types::DATETIME,
+                vec![Datum::Time(t.clone())],
+                convert::UNSPECIFIED_LENGTH,
+                t_str.as_bytes().to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastTimeAsString,
+                types::DATETIME,
+                vec![Datum::Time(t)],
+                3,
+                t_str[0..3].as_bytes().to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastDurationAsString,
+                types::DURATION,
+                vec![Datum::Dur(duration_t.clone())],
+                convert::UNSPECIFIED_LENGTH,
+                dur_str.to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastDurationAsString,
+                types::DURATION,
+                vec![Datum::Dur(duration_t)],
+                3,
+                dur_str[0..3].to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastJsonAsString,
+                types::JSON,
+                vec![Datum::Json(Json::I64(1))],
+                convert::UNSPECIFIED_LENGTH,
+                b"1".to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastJsonAsString,
+                types::JSON,
+                vec![Datum::Json(Json::I64(1234))],
+                2,
+                b"12".to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsString,
+                types::NEW_DECIMAL,
+                vec![Datum::Dec(Decimal::from(1))],
+                convert::UNSPECIFIED_LENGTH,
+                b"1".to_vec(),
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsString,
+                types::NEW_DECIMAL,
+                vec![Datum::Dec(Decimal::from(1234))],
+                2,
+                b"12".to_vec(),
+            ),
+        ];
+
+        let null_cols = vec![Datum::Null];
+        for (sig, tp, col, flen, exp) in cases {
+            let col_expr = col_expr(0, tp as i32);
+            let e = expr_with_flen_and_decimal(
+                sig,
+                vec![col_expr],
+                1,
+                flen as i32,
+                convert::UNSPECIFIED_LENGTH as i32,
+            );
+            let res = e.eval_string(&ctx, &col).unwrap();
+            assert_eq!(
+                res.unwrap().into_owned(),
+                exp,
+                "sig: {:?} with flen {} failed",
+                sig,
+                flen
+            );
+            // test None
+            let res = e.eval_string(&ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
