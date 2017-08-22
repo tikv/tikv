@@ -35,10 +35,10 @@ impl FnCall {
         if arg0.map_or(false, |v| v != 0) {
             return Ok(Some(1));
         }
-        let arg1 = try!(self.children[1].eval_int(ctx, row));
+        let arg1 = try_opt!(self.children[1].eval_int(ctx, row));
         match (arg0, arg1) {
-            (None, None) => Ok(None),
-            (None, Some(0)) | (Some(0), None) | (Some(0), Some(0)) => Ok(Some(0)),
+            (None, 0) => Ok(None),
+            (Some(0), 0) => Ok(Some(0)),
             _ => Ok(Some(1)),
         }
     }
@@ -224,7 +224,7 @@ mod test {
                 ScalarFuncSig::LogicalOr,
                 Datum::Null,
                 Datum::I64(0),
-                Datum::I64(0),
+                Datum::Null,
             ),
             (
                 ScalarFuncSig::LogicalXor,
