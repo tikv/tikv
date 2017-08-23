@@ -74,7 +74,7 @@ impl MetricsFlusher {
 
 fn flush_metrics(db: &DB, name: &str) {
     for t in ENGINE_TICKER_TYPES {
-        let v = db.get_statistics_ticker_count(*t);
+        let v = db.get_and_reset_statistics_ticker_count(*t);
         flush_engine_ticker_metrics(*t, v, name);
     }
     for t in ENGINE_HIST_TYPES {
