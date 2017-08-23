@@ -25,7 +25,7 @@ use super::super::Result;
 use super::super::metrics::*;
 
 pub struct TableScanExecutor<'a> {
-    meta: TableScan,
+    desc: bool,
     col_ids: HashSet<i64>,
     cursor: usize,
     key_ranges: Vec<KeyRange>,
@@ -33,20 +33,25 @@ pub struct TableScanExecutor<'a> {
 }
 
 impl<'a> TableScanExecutor<'a> {
-    pub fn new(meta: TableScan,
-               key_ranges: Vec<KeyRange>,
-               store: SnapshotStore<'a>,
-               statistics: &'a mut Statistics)
-               -> TableScanExecutor<'a> {
+    pub fn new(
+        meta: TableScan,
+        mut key_ranges: Vec<KeyRange>,
+        store: SnapshotStore<'a>,
+        statistics: &'a mut Statistics,
+    ) -> TableScanExecutor<'a> {
         let col_ids = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = Scanner::new(store, meta.get_desc(), false, statistics);
+        let desc = meta.get_desc();
+        if desc {
+            key_ranges.reverse();
+        }
+        let scanner = Scanner::new(store, desc, false, statistics);
         COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
         TableScanExecutor {
-            meta: meta,
+            desc: desc,
             col_ids: col_ids,
             scanner: scanner,
             key_ranges: key_ranges,
@@ -63,7 +68,7 @@ impl<'a> TableScanExecutor<'a> {
         };
         let h = box_try!(table::decode_handle(&key));
         let row_data = box_try!(table::cut_row(value, &self.col_ids));
-        let seek_key = if self.meta.get_desc() {
+        let seek_key = if self.desc {
             box_try!(table::truncate_as_row_key(&key)).to_vec()
         } else {
             prefix_next(&key)
@@ -232,6 +237,18 @@ mod test {
         let mut statistics = Statistics::default();
         let mut wrapper = TableScanTestWrapper::default();
         wrapper.table_scan.set_desc(true);
+
+        // prepare range
+        let r1 = get_range(TABLE_ID, i64::MIN, 0);
+        let r2 = get_range(TABLE_ID, 0, (KEY_NUMBER / 2) as i64);
+
+        // prepare point get
+        let handle = KEY_NUMBER / 2;
+        let r3 = wrapper.get_point_range(handle as i64);
+
+        let r4 = get_range(TABLE_ID, (handle + 1) as i64, i64::MAX);
+        wrapper.ranges = vec![r1, r2, r3, r4];
+
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
         let mut table_scanner =
