@@ -84,16 +84,16 @@ impl FnCall {
     pub fn if_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(try!(self.children[2].eval_int(ctx, row))),
-            _ => Ok(try!(self.children[1].eval_int(ctx, row))),
+            None | Some(0) => self.children[2].eval_int(ctx, row),
+            _ => self.children[1].eval_int(ctx, row),
         }
     }
 
     pub fn if_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(try!(self.children[2].eval_real(ctx, row))),
-            _ => Ok(try!(self.children[1].eval_real(ctx, row))),
+            None | Some(0) => self.children[2].eval_real(ctx, row),
+            _ => self.children[1].eval_real(ctx, row),
         }
     }
 
@@ -104,8 +104,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(try!(self.children[2].eval_decimal(ctx, row))),
-            _ => Ok(try!(self.children[1].eval_decimal(ctx, row))),
+            None | Some(0) => self.children[2].eval_decimal(ctx, row),
+            _ => self.children[1].eval_decimal(ctx, row),
         }
     }
 
@@ -128,8 +128,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Time>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(try!(self.children[2].eval_time(ctx, row))),
-            _ => Ok(try!(self.children[1].eval_time(ctx, row))),
+            None | Some(0) => self.children[2].eval_time(ctx, row),
+            _ => self.children[1].eval_time(ctx, row),
         }
     }
 
@@ -140,8 +140,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Duration>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(try!(self.children[2].eval_duration(ctx, row))),
-            _ => Ok(try!(self.children[1].eval_duration(ctx, row))),
+            None | Some(0) => self.children[2].eval_duration(ctx, row),
+            _ => self.children[1].eval_duration(ctx, row),
         }
     }
 }
