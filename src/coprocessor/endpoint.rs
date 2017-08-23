@@ -77,7 +77,27 @@ pub struct Host {
 #[derive(Clone)]
 struct CopContext {
     raftstore_sender: Option<Sender<Statistics>>,
-    statistics: Statistics,
+    select_stats: Statistics,
+    index_stats: Statistics,
+    dag_stats: Statistics,
+}
+
+impl CopContext {
+    fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
+        self.get_statistics(type_str).add_statistics(stats);
+    }
+
+    fn get_statistics(&mut self, type_str: &str) -> &mut Statistics {
+        match type_str {
+            STR_REQ_TYPE_SELECT => &mut self.select_stats,
+            STR_REQ_TYPE_INDEX => &mut self.index_stats,
+            STR_REQ_TYPE_DAG => &mut self.dag_stats,
+            _ => {
+                warn!("unknown STR_REQ_TYPE: {}", type_str);
+                &mut self.select_stats
+            }
+        }
+    }
 }
 
 unsafe impl Send for CopContext {}
@@ -86,8 +106,20 @@ impl Context for CopContext {
     fn on_task_started(&mut self) {}
     fn on_task_finished(&mut self) {}
     fn on_tick(&mut self) {
+        let mut statistics: Statistics = Default::default();
+        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX, STR_REQ_TYPE_DAG] {
+            let this_statistics = self.get_statistics(type_str);
+            statistics.add_statistics(this_statistics);
+            for (cf, details) in this_statistics.details() {
+                for (tag, count) in details {
+                    COPR_SCAN_DETAILS
+                        .with_label_values(&[type_str, cf, tag])
+                        .observe(count as f64);
+                }
+            }
+        }
         if let Some(ref sender) = self.raftstore_sender {
-            if let Err(e) = sender.send(self.statistics.clone()) {
+            if let Err(e) = sender.send(statistics) {
                 warn!(
                     "coprocesser failed to send statistics to raftstore: {:?}",
                     e
@@ -105,7 +137,9 @@ impl ContextFactory<CopContext> for CopContextFactory {
     fn create(&self) -> CopContext {
         CopContext {
             raftstore_sender: self.raftstore_sender.clone(),
-            statistics: Default::default(),
+            select_stats: Default::default(),
+            index_stats: Default::default(),
+            dag_stats: Default::default(),
         }
     }
 }
@@ -187,7 +221,7 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let stats = end_point.handle_request(req);
-                ctx.statistics.add_statistics(&stats);
+                ctx.add_statistics(type_str, &stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
@@ -304,12 +338,6 @@ impl RequestTask {
             .with_label_values(&[type_str])
             .observe(self.statistics.total_op_count() as f64);
 
-        // for (cf, details) in self.statistics.details() {
-        //     for (tag, count) in details {
-        //         COPR_SCAN_DETAILS.with_label_values(&[type_str, cf, tag])
-        //             .observe(count as f64);
-        //     }
-        // }
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
