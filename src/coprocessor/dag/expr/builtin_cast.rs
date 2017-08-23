@@ -654,7 +654,6 @@ impl FnCall {
     }
 
     fn produce_time_with_str(&self, ctx: &StatementContext, s: String) -> Result<Cow<Time>> {
-        // TODO: it's a bug in tidb do not care tz here
         let mut t = try!(Time::parse_datetime(
             s.as_ref(),
             self.tp.get_decimal() as i8,
@@ -690,9 +689,10 @@ mod test {
     use protobuf::RepeatedField;
 
     use coprocessor::codec::{convert, Datum};
-    use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Time};
+    use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
     use coprocessor::dag::expr::{Expression, StatementContext};
     use util::codec::number::NumberEncoder;
+    use chrono::Utc;
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = Expr::new();
@@ -719,6 +719,25 @@ mod test {
         expr.set_sig(sig);
         let mut fp = FieldType::new();
         fp.set_flen(flen);
+        fp.set_decimal(decimal);
+        fp.set_charset(String::from(charset::CHARSET_UTF8));
+        expr.set_field_type(fp);
+        Expression::build(expr, cols).unwrap()
+    }
+
+    fn expr_with_tp_and_decimal(
+        sig: ScalarFuncSig,
+        children: Vec<Expr>,
+        cols: usize,
+        tp: i32,
+        decimal: i32,
+    ) -> Expression {
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_children(RepeatedField::from_vec(children));
+        expr.set_sig(sig);
+        let mut fp = FieldType::new();
+        fp.set_tp(tp);
         fp.set_decimal(decimal);
         fp.set_charset(String::from(charset::CHARSET_UTF8));
         expr.set_field_type(fp);
@@ -991,6 +1010,185 @@ mod test {
             );
             // test None
             let res = e.eval_string(&ctx, &null_cols).unwrap();
+            assert!(res.is_none());
+        }
+    }
+
+    #[test]
+    fn test_cast_as_time() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let today = Utc::now();
+        let t_dur_str = format!("{}", today.format("%H:%M:%S"));
+        let t_date_str = format!("{}", today.format("%Y-%m-%d"));
+        let t_time_str = format!("{}", today.format("%Y-%m-%d %H:%M:%S"));
+        let t_time = Time::parse_utc_datetime(t_time_str.as_ref(), 0).unwrap();
+        let t_date = {
+            let mut date = t_time.clone();
+            date.set_tp(types::DATE).unwrap();
+            date
+        };
+        let t_int = format!("{}", today.format("%Y%m%d%H%M%S"))
+            .parse::<u64>()
+            .unwrap();
+
+        let dur_str = "12:00:23";
+        let duration_t = Duration::parse(dur_str.as_bytes(), 0).unwrap();
+        let dur_to_time_str = format!("{} 12:00:23", t_date_str);
+        let dur_to_time = Time::parse_utc_datetime(&dur_to_time_str, 0).unwrap();
+        let mut dur_to_date = dur_to_time.clone();
+        dur_to_date.set_tp(types::DATE).unwrap();
+
+        let json_cols = vec![Datum::Json(Json::String(t_time_str.clone()))];
+        let int_cols = vec![Datum::U64(t_int)];
+        let str_cols = vec![Datum::Bytes(t_time_str.as_bytes().to_vec())];
+        let f64_cols = vec![Datum::F64(t_int as f64)];
+        let time_cols = vec![Datum::Time(t_time.clone())];
+        let duration_cols = vec![Datum::Dur(duration_t)];
+        let dec_cols = vec![Datum::Dec(Decimal::from(t_int))];
+
+        let cases = vec![
+            (
+                // cast int as time
+                ScalarFuncSig::CastIntAsTime,
+                types::LONG_LONG,
+                &int_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast int as datetime(6)  TODO
+                ScalarFuncSig::CastIntAsTime,
+                types::LONG_LONG,
+                &int_cols,
+                mysql::MAX_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                ScalarFuncSig::CastStringAsTime,
+                types::STRING,
+                &str_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast string as datetime(6)
+                ScalarFuncSig::CastStringAsTime,
+                types::STRING,
+                &str_cols,
+                mysql::MAX_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                ScalarFuncSig::CastRealAsTime,
+                types::DOUBLE,
+                &f64_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast real as date(0)
+                ScalarFuncSig::CastRealAsTime,
+                types::DOUBLE,
+                &f64_cols,
+                mysql::DEFAULT_FSP,
+                types::DATE,
+                &t_date,
+            ),
+            (
+                ScalarFuncSig::CastTimeAsTime,
+                types::DATETIME,
+                &time_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast time as date
+                ScalarFuncSig::CastTimeAsTime,
+                types::DATETIME,
+                &time_cols,
+                mysql::DEFAULT_FSP,
+                types::DATE,
+                &t_date,
+            ),
+            (
+                ScalarFuncSig::CastDurationAsTime,
+                types::DURATION,
+                &duration_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &dur_to_time,
+            ),
+            (
+                // cast duration as date
+                ScalarFuncSig::CastDurationAsTime,
+                types::DURATION,
+                &duration_cols,
+                mysql::MAX_FSP,
+                types::DATE,
+                &dur_to_date,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsTime,
+                types::JSON,
+                &json_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsTime,
+                types::JSON,
+                &json_cols,
+                mysql::DEFAULT_FSP,
+                types::DATE,
+                &t_date,
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsTime,
+                types::NEW_DECIMAL,
+                &dec_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast decimal as date
+                ScalarFuncSig::CastDecimalAsTime,
+                types::NEW_DECIMAL,
+                &dec_cols,
+                mysql::DEFAULT_FSP,
+                types::DATE,
+                &t_date,
+            ),
+        ];
+
+        let null_cols = vec![Datum::Null];
+        for (sig, tp, col, to_fsp, to_tp, exp) in cases {
+            let col_expr = col_expr(0, tp as i32);
+            let e = expr_with_tp_and_decimal(sig, vec![col_expr], 1, to_tp as i32, to_fsp as i32);
+            let res = e.eval_time(&ctx, col).unwrap();
+            let data = res.unwrap().into_owned();
+            let mut expt = exp.clone();
+            if to_fsp != mysql::UN_SPECIFIED_FSP {
+                expt.set_fsp(to_fsp as u8);
+            }
+            assert_eq!(
+                data.to_string(),
+                expt.to_string(),
+                "sig: {:?} with to tp {} and fsp {} failed",
+                sig,
+                to_tp,
+                to_fsp,
+            );
+            // test None
+            let res = e.eval_time(&ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
