@@ -610,13 +610,20 @@ impl FnCall {
         // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
         // char count and truncate to flen chars if it is too long.
         if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
-            let s_binary = s.into_owned();
-            let s = try!(String::from_utf8(s_binary));
-            let char_count = s.char_indices().count();
-            if char_count <= flen {
-                return Ok(Cow::Owned(s.into_bytes()));
+            let truncate_info = {
+                let s = try!(str::from_utf8(s.as_ref()));
+                let mut indices = s.char_indices().skip(flen);
+                if let Some((truncate_pos, _)) = indices.next() {
+                    let char_count = flen + 1 + indices.count();
+                    Some((char_count, truncate_pos))
+                } else {
+                    None
+                }
+            };
+            if truncate_info.is_none() {
+                return Ok(s);
             }
-
+            let (char_count, truncate_pos) = truncate_info.unwrap();
             if convert::handle_truncate_as_error(ctx) {
                 return Err(box_err!(
                     "Data Too Long, field len {}, data len {}",
@@ -624,8 +631,8 @@ impl FnCall {
                     char_count
                 ));
             }
-            let (truncate_pos, _) = s.char_indices().nth(flen).unwrap();
-            let res = convert::truncate_binary(s.into_bytes(), truncate_pos as isize);
+
+            let res = convert::truncate_binary(s.into_owned(), truncate_pos as isize);
             return Ok(Cow::Owned(res));
         }
 

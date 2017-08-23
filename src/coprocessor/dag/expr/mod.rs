@@ -24,6 +24,7 @@ use self::compare::CmpOp;
 use std::{error, io};
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
+use std::str::Utf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
@@ -72,6 +73,11 @@ quick_error! {
 impl From<FromUtf8Error> for Error {
     fn from(err: FromUtf8Error) -> Error {
         Error::Codec(CError::Encoding(err.utf8_error().into()))
+    }
+}
+impl From<Utf8Error> for Error {
+    fn from(err: Utf8Error) -> Error {
+        Error::Codec(CError::Encoding(err.into()))
     }
 }
 
