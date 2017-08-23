@@ -17,6 +17,7 @@ mod column;
 mod constant;
 mod fncall;
 mod builtin_cast;
+mod builtin_op;
 mod compare;
 mod arithmetic;
 use self::compare::CmpOp;
@@ -138,6 +139,7 @@ impl Expression {
         }
     }
 
+    #[cfg(test)]
     #[inline]
     fn mut_tp(&mut self) -> &mut FieldType {
         match *self {
@@ -211,6 +213,20 @@ impl Expression {
                 ScalarFuncSig::PlusInt => f.plus_int(ctx, row),
                 ScalarFuncSig::MinusInt => f.minus_int(ctx, row),
                 ScalarFuncSig::MultiplyInt => f.multiply_int(ctx, row),
+                ScalarFuncSig::LogicalAnd => f.logical_and(ctx, row),
+                ScalarFuncSig::LogicalOr => f.logical_or(ctx, row),
+                ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
+
+                ScalarFuncSig::UnaryNot => f.unary_not(ctx, row),
+                ScalarFuncSig::IntIsNull => f.int_is_null(ctx, row),
+                ScalarFuncSig::IntIsFalse => f.int_is_false(ctx, row),
+                ScalarFuncSig::RealIsTrue => f.real_is_true(ctx, row),
+                ScalarFuncSig::RealIsNull => f.real_is_null(ctx, row),
+                ScalarFuncSig::DecimalIsNull => f.decimal_is_null(ctx, row),
+                ScalarFuncSig::DecimalIsTrue => f.decimal_is_true(ctx, row),
+                ScalarFuncSig::StringIsNull => f.string_is_null(ctx, row),
+                ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
+                ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
 
                 _ => Err(Error::Other("Unknown signature")),
             },
@@ -225,7 +241,8 @@ impl Expression {
                 ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
                 ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
                 ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
-                _ => unimplemented!(),
+
+                _ => Err(Error::Other("Unknown signature")),
             },
         }
     }
@@ -242,7 +259,8 @@ impl Expression {
                 ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
                 ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
                 ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
-                _ => unimplemented!(),
+
+                _ => Err(Error::Other("Unknown signature")),
             },
         }
     }
@@ -255,7 +273,9 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
@@ -267,7 +287,9 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_time(),
             Expression::ColumnRef(ref column) => column.eval_time(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
@@ -279,7 +301,9 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
@@ -291,7 +315,9 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_json(),
             Expression::ColumnRef(ref column) => column.eval_json(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
@@ -390,14 +416,13 @@ impl Expression {
 #[cfg(test)]
 mod test {
     use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::Decimal;
     use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use super::Expression;
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
-        Datum::Dec(s.parse::<Decimal>().unwrap())
+        Datum::Dec(s.parse().unwrap())
     }
 
     pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
