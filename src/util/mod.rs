@@ -350,7 +350,7 @@ pub fn build_info() -> (String, String, String, String) {
 pub fn print_tikv_info() {
     let (hash, branch, date, rustc) = build_info();
     info!("Welcome to TiKV.");
-    info!("Version:");
+    info!("Release Version:   {}", env!("CARGO_PKG_VERSION"));
     info!("Git Commit Hash:   {}", hash);
     info!("Git Commit Branch: {}", branch);
     info!("UTC Build Time:    {}", date);

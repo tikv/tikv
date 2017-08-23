@@ -68,13 +68,16 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
+use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
-use tikv::raftstore::store::{self, SnapManager};
+use tikv::raftstore::store::{self, Engines, SnapManager};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERVAL};
+
+const RESERVED_OPEN_FDS: u64 = 1000;
 
 fn exit_with_err<E: Error>(e: E) -> ! {
     exit_with_msg(format!("{:?}", e))
@@ -112,7 +115,9 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 }
 
 fn check_system_config(config: &TiKvConfig) {
-    if let Err(e) = util::config::check_max_open_fds(config.rocksdb.max_open_files as u64) {
+    if let Err(e) = util::config::check_max_open_fds(
+        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
+    ) {
         exit_with_msg(format!("{:?}", e));
     }
 
@@ -129,8 +134,9 @@ fn check_system_config(config: &TiKvConfig) {
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
-    let db_path = store_path.join(Path::new("db"));
+    let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
+    let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
 
     let f = File::create(lock_path).unwrap_or_else(|e| exit_with_err(e));
     if f.try_lock_exclusive().is_err() {
@@ -147,14 +153,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
-    // Create engine, storage.
-    let opts = cfg.rocksdb.build_opt();
-    let cfs_opts = cfg.rocksdb.build_cf_opts();
-    let engine = Arc::new(
-        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), opts, cfs_opts)
+    // Create kv engine, storage.
+    let kv_db_opts = cfg.rocksdb.build_opt();
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+    let kv_engine = Arc::new(
+        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| exit_with_msg(s)),
     );
-    let mut storage = create_raft_storage(raft_router.clone(), engine.clone(), &cfg.storage)
+    let mut storage = create_raft_storage(raft_router.clone(), kv_engine.clone(), &cfg.storage)
         .unwrap_or_else(|e| exit_with_err(e));
 
     // Create pd client, snapshot manager, server.
@@ -176,11 +182,22 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     ).unwrap_or_else(|e| exit_with_err(e));
     let trans = server.transport();
 
+    // Create raft engine.
+    let raft_db_opts = cfg.raftdb.build_opt();
+    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+    let raft_engine = Arc::new(
+        rocksdb_util::new_engine_opt(
+            raft_db_path.to_str().unwrap(),
+            raft_db_opts,
+            raft_db_cf_opts,
+        ).unwrap_or_else(|s| exit_with_msg(s)),
+    );
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
+    let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
     node.start(
         event_loop,
-        engine.clone(),
+        engines.clone(),
         trans,
         snap_mgr,
         snap_status_receiver,
@@ -194,7 +211,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     }
 
     let mut metrics_flusher = MetricsFlusher::new(
-        engine.clone(),
+        engines.clone(),
         Duration::from_millis(DEFAULT_FLUSER_INTERVAL),
     );
 
@@ -207,7 +224,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     server
         .start(&cfg.server)
         .unwrap_or_else(|e| exit_with_err(e));
-    signal_handler::handle_signal(engine, &cfg.rocksdb.backup_dir);
+    signal_handler::handle_signal(engines, &cfg.rocksdb.backup_dir);
 
     // Stop.
     server.stop().unwrap_or_else(|e| exit_with_err(e));
@@ -274,8 +291,11 @@ fn main() {
     let long_version: String = {
         let (hash, branch, time, rust_ver) = util::build_info();
         format!(
-            "{}\nGit Commit Hash:   {}\nGit Commit Branch: {}\nUTC Build Time:    {}\nRust \
-             Version:      {}",
+            "\nRelease Version:   {}\
+             \nGit Commit Hash:   {}\
+             \nGit Commit Branch: {}\
+             \nUTC Build Time:    {}\
+             \nRust Version:      {}",
             crate_version!(),
             hash,
             branch,

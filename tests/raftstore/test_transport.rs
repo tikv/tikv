@@ -21,7 +21,7 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let (key, value) = (b"k1", b"v1");
     cluster.must_put(key, value);
-    must_get_equal(&cluster.engines[&1], key, value);
+    must_get_equal(&cluster.engines[&1].kv_engine, key, value);
 
     let region_id = cluster.get_region_id(key);
 

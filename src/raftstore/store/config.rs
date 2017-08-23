@@ -24,6 +24,7 @@ use util::config::{ReadableDuration, ReadableSize};
 pub struct Config {
     // true for high reliability, prevent data loss when power failure.
     pub sync_log: bool,
+    pub raftdb_path: String,
 
     // store capacity. 0 means no limit.
     pub capacity: ReadableSize,
@@ -102,6 +103,7 @@ impl Default for Config {
         let split_size = ReadableSize::mb(256);
         Config {
             sync_log: true,
+            raftdb_path: String::new(),
             capacity: ReadableSize(0),
             raft_base_tick_interval: ReadableDuration::secs(1),
             raft_heartbeat_ticks: 2,

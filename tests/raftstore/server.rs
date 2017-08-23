@@ -18,7 +18,6 @@ use std::time::Duration;
 use std::boxed::FnBox;
 
 use grpc::Environment;
-use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
@@ -29,10 +28,10 @@ use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{store, Error, Result};
-use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
+use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
 use tikv::util::transport::SendCh;
 use tikv::util::worker::Worker;
-use tikv::storage::{CfName, Engine, ALL_CFS};
+use tikv::storage::{CfName, Engine};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
@@ -78,7 +77,7 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, mut cfg: TiKvConfig, engine: Arc<DB>) -> u64 {
+    fn run_node(&mut self, node_id: u64, mut cfg: TiKvConfig, engines: Engines) -> u64 {
         assert!(node_id == 0 || !self.metas.contains_key(&node_id));
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -104,7 +103,8 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let mut store =
-            create_raft_storage(sim_router.clone(), engine.clone(), &cfg.storage).unwrap();
+            create_raft_storage(sim_router.clone(), engines.kv_engine.clone(), &cfg.storage)
+                .unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
@@ -134,7 +134,7 @@ impl Simulator for ServerCluster {
         );
         node.start(
             event_loop,
-            engine,
+            engines,
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
@@ -245,7 +245,7 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    new_server_cluster_with_cfs(id, count, ALL_CFS)
+    new_server_cluster_with_cfs(id, count, &[])
 }
 
 pub fn new_server_cluster_with_cfs(
