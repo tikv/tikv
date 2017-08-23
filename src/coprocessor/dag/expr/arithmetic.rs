@@ -98,7 +98,7 @@ impl FnCall {
             (false, true) => if lhs >= 0 {
                 (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                None
+                return Err(Error::Overflow);
             },
             (false, false) => lhs.checked_sub(rhs),
         };
