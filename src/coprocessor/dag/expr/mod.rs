@@ -20,6 +20,7 @@ mod builtin_cast;
 mod builtin_op;
 mod compare;
 mod arithmetic;
+mod math;
 use self::compare::CmpOp;
 
 use std::io;
@@ -228,6 +229,13 @@ impl Expression {
                 ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
                 ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
 
+                ScalarFuncSig::AbsInt => f.abs_int(ctx, row),
+                ScalarFuncSig::AbsUInt => f.abs_uint(ctx, row),
+                ScalarFuncSig::CeilIntToInt => f.ceil_int_int(ctx, row),
+                ScalarFuncSig::CeilDecToInt => f.ceil_dec_int(ctx, row),
+                ScalarFuncSig::FloorIntToInt => f.floor_int_int(ctx, row),
+                ScalarFuncSig::FloorDecToInt => f.floor_dec_int(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -241,6 +249,10 @@ impl Expression {
                 ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
                 ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
                 ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
+
+                ScalarFuncSig::AbsReal => f.abs_real(ctx, row),
+                ScalarFuncSig::CeilReal => f.ceil_real(ctx, row),
+                ScalarFuncSig::FloorReal => f.floor_real(ctx, row),
 
                 _ => Err(Error::Other("Unknown signature")),
             },
@@ -259,6 +271,12 @@ impl Expression {
                 ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
                 ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
                 ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
+
+                ScalarFuncSig::AbsDecimal => f.abs_decimal(ctx, row),
+                ScalarFuncSig::CeilDecToDec => f.ceil_dec_dec(ctx, row),
+                ScalarFuncSig::CeilIntToDec => f.ceil_int_dec(ctx, row),
+                ScalarFuncSig::FloorDecToDec => f.floor_dec_dec(ctx, row),
+                ScalarFuncSig::FloorIntToDec => f.floor_int_dec(ctx, row),
 
                 _ => Err(Error::Other("Unknown signature")),
             },

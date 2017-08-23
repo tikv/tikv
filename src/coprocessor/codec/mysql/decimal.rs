@@ -835,11 +835,33 @@ pub enum RoundMode {
 }
 
 impl Decimal {
+    /// abs the Decimal into a new Decimal.
+    #[inline]
+    pub fn abs(&self) -> Res<Decimal> {
+        let mut res = self.clone();
+        res.negative = false;
+        Res::Ok(res)
+    }
+
     /// ceil the Decimal into a new Decimal.
     pub fn ceil(&self) -> Res<Decimal> {
         let mut target = if self.frac_cnt > 0 && !self.negative {
             let dec1 = Decimal::from(1i64);
             self + &dec1
+        } else {
+            Res::Ok(self.clone())
+        };
+        if let Res::Ok(t) = target {
+            target = t.round(0, RoundMode::Truncate);
+        }
+        target
+    }
+
+    /// floor the Decimal into a new Decimal.
+    pub fn floor(&self) -> Res<Decimal> {
+        let mut target = if self.frac_cnt > 0 && !self.negative {
+            let dec1 = Decimal::from(1i64);
+            self - &dec1
         } else {
             Res::Ok(self.clone())
         };

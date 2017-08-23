@@ -95,7 +95,21 @@ impl FnCall {
             ScalarFuncSig::DecimalIsNull |
             ScalarFuncSig::StringIsNull |
             ScalarFuncSig::TimeIsNull |
-            ScalarFuncSig::DurationIsNull => (1, 1),
+            ScalarFuncSig::DurationIsNull |
+            ScalarFuncSig::AbsInt |
+            ScalarFuncSig::AbsUInt |
+            ScalarFuncSig::AbsReal |
+            ScalarFuncSig::AbsDecimal |
+            ScalarFuncSig::CeilReal |
+            ScalarFuncSig::CeilIntToInt |
+            ScalarFuncSig::CeilIntToDec |
+            ScalarFuncSig::CeilDecToDec |
+            ScalarFuncSig::CeilDecToInt |
+            ScalarFuncSig::FloorReal |
+            ScalarFuncSig::FloorIntToInt |
+            ScalarFuncSig::FloorIntToDec |
+            ScalarFuncSig::FloorDecToDec |
+            ScalarFuncSig::FloorDecToInt => (1, 1),
 
             _ => unimplemented!(),
         };
