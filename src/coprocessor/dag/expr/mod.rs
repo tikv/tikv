@@ -204,7 +204,7 @@ impl Expression {
                 ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
                 ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
 
-                _ => Err(box_err!("Unknown signature")),
+                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
             },
         }
     }

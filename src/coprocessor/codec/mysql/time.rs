@@ -131,16 +131,7 @@ impl Time {
     pub fn set_tp(&mut self, tp: u8) -> Result<()> {
         if self.tp != tp && tp == types::DATE {
             // Truncate hh:mm::ss part if the type is Date
-            self.time = try!(ymd_hms_nanos(
-                &self.time.timezone(),
-                self.time.year(),
-                self.time.month(),
-                self.time.day(),
-                0,
-                0,
-                0,
-                0
-            ));
+            self.time = self.time.date().and_hms(0, 0, 0);
         }
         if self.tp != tp && tp == types::TIMESTAMP {
             return Err(box_err!("can not convert datetime/date to timestamp"));
@@ -338,20 +329,12 @@ impl Time {
     }
 
     pub fn from_duration(tz: &FixedOffset, d: &MyDuration) -> Result<Time> {
-        let now = Utc::now().naive_utc();
-        let local = tz.from_utc_datetime(&now);
-        let t = try!(ymd_hms_nanos(
-            tz,
-            local.year(),
-            local.month(),
-            local.day(),
-            0,
-            0,
-            0,
-            0
-        ));
         let dur = Duration::nanoseconds(d.to_nanos());
-        let t = t.checked_add_signed(dur);
+        let t = Utc::now()
+            .with_timezone(tz)
+            .date()
+            .and_hms(0, 0, 0)
+            .checked_add_signed(dur);
         if t.is_none() {
             return Err(box_err!("parse from duration {} overflows", d));
         }

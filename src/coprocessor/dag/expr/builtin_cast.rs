@@ -179,12 +179,12 @@ impl FnCall {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let field_type = &self.children[0].get_tp();
         let res = if !mysql::has_unsigned_flag(field_type.get_flag() as u64) {
-            Decimal::from(val)
+            Cow::Owned(Decimal::from(val))
         } else {
             let uval = val as u64;
-            Decimal::from(uval)
+            Cow::Owned(Decimal::from(uval))
         };
-        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, res))))
+        self.produce_dec_with_specified_tp(ctx, res).map(Some)
     }
 
     pub fn cast_real_as_decimal<'a, 'b: 'a>(
@@ -194,7 +194,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let res = try!(Decimal::from_f64(val));
-        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, res))))
+        self.produce_dec_with_specified_tp(ctx, Cow::Owned(res))
+            .map(Some)
     }
 
     pub fn cast_decimal_as_decimal<'a, 'b: 'a>(
@@ -203,9 +204,8 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
-        Ok(Some(try!(
-            self.produce_dec_with_specified_tp(ctx, val.into_owned())
-        )))
+        self.produce_dec_with_specified_tp(ctx, val).map(Some)
+
     }
 
     pub fn cast_str_as_decimal<'a, 'b: 'a>(
@@ -218,13 +218,13 @@ impl FnCall {
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let dec = match try!(Decimal::from_bytes(&val)) {
-            Res::Ok(d) => d,
+            Res::Ok(d) => Cow::Owned(d),
             Res::Truncated(d) | Res::Overflow(d) => {
                 try!(convert::handle_truncate(ctx, true));
-                d
+                Cow::Owned(d)
             }
         };
-        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
+        self.produce_dec_with_specified_tp(ctx, dec).map(Some)
     }
 
     pub fn cast_time_as_decimal<'a, 'b: 'a>(
@@ -234,7 +234,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let dec = try!(val.to_decimal());
-        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
+        self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
+            .map(Some)
     }
 
     pub fn cast_duration_as_decimal<'a, 'b: 'a>(
@@ -244,7 +245,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let dec = try!(val.to_decimal());
-        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
+        self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
+            .map(Some)
     }
 
 
@@ -256,7 +258,8 @@ impl FnCall {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let val = val.cast_to_real();
         let dec = try!(Decimal::from_f64(val));
-        Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, dec))))
+        self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
+            .map(Some)
     }
 
     pub fn cast_int_as_str<'a, 'b: 'a>(
@@ -271,9 +274,8 @@ impl FnCall {
         } else {
             format!("{}", val)
         };
-        Ok(Some(try!(
-            self.produce_str_with_specified_tp(ctx, s.into_bytes())
-        )))
+        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+            .map(Some)
     }
 
     pub fn cast_real_as_str<'a, 'b: 'a>(
@@ -283,9 +285,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(try!(
-            self.produce_str_with_specified_tp(ctx, s.into_bytes())
-        )))
+        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+            .map(Some)
     }
 
     pub fn cast_decimal_as_str<'a, 'b: 'a>(
@@ -295,9 +296,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
-        Ok(Some(try!(
-            self.produce_str_with_specified_tp(ctx, s.into_bytes())
-        )))
+        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+            .map(Some)
     }
 
     pub fn cast_str_as_str<'a, 'b: 'a>(
@@ -306,9 +306,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        Ok(Some(try!(
-            self.produce_str_with_specified_tp(ctx, val.into_owned())
-        )))
+        self.produce_str_with_specified_tp(ctx, val).map(Some)
     }
 
     pub fn cast_time_as_str<'a, 'b: 'a>(
@@ -318,9 +316,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(try!(
-            self.produce_str_with_specified_tp(ctx, s.into_bytes())
-        )))
+        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+            .map(Some)
     }
 
 
@@ -331,9 +328,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(try!(
-            self.produce_str_with_specified_tp(ctx, s.into_bytes())
-        )))
+        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+            .map(Some)
     }
 
     pub fn cast_json_as_str<'a, 'b: 'a>(
@@ -343,9 +339,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.to_string();
-        Ok(Some(try!(
-            self.produce_str_with_specified_tp(ctx, s.into_bytes())
-        )))
+        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+            .map(Some)
     }
 
     pub fn cast_int_as_time<'a, 'b: 'a>(
@@ -585,37 +580,38 @@ impl FnCall {
         self.children[0].eval_json(ctx, row)
     }
 
-    fn produce_dec_with_specified_tp(
-        &self,
+    fn produce_dec_with_specified_tp<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        val: Decimal,
-    ) -> Result<Cow<Decimal>> {
+        val: Cow<'a, Decimal>,
+    ) -> Result<Cow<'a, Decimal>> {
         let flen = self.tp.get_flen();
         let decimal = self.tp.get_decimal();
         if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
-            return Ok(Cow::Owned(val));
+            return Ok(val);
         }
-        let res = try!(val.convert_to(ctx, flen as u8, decimal as u8));
+        let res = try!(val.into_owned().convert_to(ctx, flen as u8, decimal as u8));
         Ok(Cow::Owned(res))
     }
 
     /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces
     /// a new string according to `flen` and `chs`.
-    fn produce_str_with_specified_tp(
-        &self,
+    fn produce_str_with_specified_tp<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        mut s: Vec<u8>,
-    ) -> Result<Cow<Vec<u8>>> {
+        s: Cow<'a, Vec<u8>>,
+    ) -> Result<Cow<'a, Vec<u8>>> {
         let flen = self.tp.get_flen();
         let chs = self.tp.get_charset();
         if flen < 0 {
-            return Ok(Cow::Owned(s));
+            return Ok(s);
         }
         let flen = flen as usize;
         // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
         // char count and truncate to flen chars if it is too long.
         if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
-            let s = try!(String::from_utf8(s));
+            let s_binary = s.into_owned();
+            let s = try!(String::from_utf8(s_binary));
             let char_count = s.char_indices().count();
             if char_count <= flen {
                 return Ok(Cow::Owned(s.into_bytes()));
@@ -629,7 +625,7 @@ impl FnCall {
                 ));
             }
             let (truncate_pos, _) = s.char_indices().nth(flen).unwrap();
-            let res = convert::truncate_str(s, truncate_pos as isize).into_bytes();
+            let res = convert::truncate_binary(s.into_bytes(), truncate_pos as isize);
             return Ok(Cow::Owned(res));
         }
 
@@ -641,20 +637,20 @@ impl FnCall {
                     s.len()
                 ));
             }
-            let res = convert::truncate_binary(s, flen as isize);
+            let res = convert::truncate_binary(s.into_owned(), flen as isize);
             return Ok(Cow::Owned(res));
         }
 
         if self.tp.get_tp() == types::STRING as i32 && s.len() < flen {
             let to_pad = flen - s.len();
-            s.append(&mut vec![0; to_pad]);
+            let mut s = s.into_owned();
+            s.resize(to_pad, 0);
             return Ok(Cow::Owned(s));
         }
-        Ok(Cow::Owned(s))
+        Ok(s)
     }
 
     fn produce_time_with_str(&self, ctx: &StatementContext, s: String) -> Result<Cow<Time>> {
-        // TODO: it's a bug in tidb do not care tz here
         let mut t = try!(Time::parse_datetime(
             s.as_ref(),
             self.tp.get_decimal() as i8,
@@ -690,9 +686,10 @@ mod test {
     use protobuf::RepeatedField;
 
     use coprocessor::codec::{convert, Datum};
-    use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Time};
+    use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
     use coprocessor::dag::expr::{Expression, StatementContext};
     use util::codec::number::NumberEncoder;
+    use chrono::Utc;
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = Expr::new();
@@ -719,6 +716,25 @@ mod test {
         expr.set_sig(sig);
         let mut fp = FieldType::new();
         fp.set_flen(flen);
+        fp.set_decimal(decimal);
+        fp.set_charset(String::from(charset::CHARSET_UTF8));
+        expr.set_field_type(fp);
+        Expression::build(expr, cols).unwrap()
+    }
+
+    fn expr_with_tp_and_decimal(
+        sig: ScalarFuncSig,
+        children: Vec<Expr>,
+        cols: usize,
+        tp: i32,
+        decimal: i32,
+    ) -> Expression {
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_children(RepeatedField::from_vec(children));
+        expr.set_sig(sig);
+        let mut fp = FieldType::new();
+        fp.set_tp(tp);
         fp.set_decimal(decimal);
         fp.set_charset(String::from(charset::CHARSET_UTF8));
         expr.set_field_type(fp);
@@ -991,6 +1007,185 @@ mod test {
             );
             // test None
             let res = e.eval_string(&ctx, &null_cols).unwrap();
+            assert!(res.is_none());
+        }
+    }
+
+    #[test]
+    fn test_cast_as_time() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let today = Utc::now();
+        let t_dur_str = format!("{}", today.format("%H:%M:%S"));
+        let t_date_str = format!("{}", today.format("%Y-%m-%d"));
+        let t_time_str = format!("{}", today.format("%Y-%m-%d %H:%M:%S"));
+        let t_time = Time::parse_utc_datetime(t_time_str.as_ref(), 0).unwrap();
+        let t_date = {
+            let mut date = t_time.clone();
+            date.set_tp(types::DATE).unwrap();
+            date
+        };
+        let t_int = format!("{}", today.format("%Y%m%d%H%M%S"))
+            .parse::<u64>()
+            .unwrap();
+
+        let dur_str = "12:00:23";
+        let duration_t = Duration::parse(dur_str.as_bytes(), 0).unwrap();
+        let dur_to_time_str = format!("{} 12:00:23", t_date_str);
+        let dur_to_time = Time::parse_utc_datetime(&dur_to_time_str, 0).unwrap();
+        let mut dur_to_date = dur_to_time.clone();
+        dur_to_date.set_tp(types::DATE).unwrap();
+
+        let json_cols = vec![Datum::Json(Json::String(t_time_str.clone()))];
+        let int_cols = vec![Datum::U64(t_int)];
+        let str_cols = vec![Datum::Bytes(t_time_str.as_bytes().to_vec())];
+        let f64_cols = vec![Datum::F64(t_int as f64)];
+        let time_cols = vec![Datum::Time(t_time.clone())];
+        let duration_cols = vec![Datum::Dur(duration_t)];
+        let dec_cols = vec![Datum::Dec(Decimal::from(t_int))];
+
+        let cases = vec![
+            (
+                // cast int as time
+                ScalarFuncSig::CastIntAsTime,
+                types::LONG_LONG,
+                &int_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast int as datetime(6)  TODO
+                ScalarFuncSig::CastIntAsTime,
+                types::LONG_LONG,
+                &int_cols,
+                mysql::MAX_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                ScalarFuncSig::CastStringAsTime,
+                types::STRING,
+                &str_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast string as datetime(6)
+                ScalarFuncSig::CastStringAsTime,
+                types::STRING,
+                &str_cols,
+                mysql::MAX_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                ScalarFuncSig::CastRealAsTime,
+                types::DOUBLE,
+                &f64_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast real as date(0)
+                ScalarFuncSig::CastRealAsTime,
+                types::DOUBLE,
+                &f64_cols,
+                mysql::DEFAULT_FSP,
+                types::DATE,
+                &t_date,
+            ),
+            (
+                ScalarFuncSig::CastTimeAsTime,
+                types::DATETIME,
+                &time_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast time as date
+                ScalarFuncSig::CastTimeAsTime,
+                types::DATETIME,
+                &time_cols,
+                mysql::DEFAULT_FSP,
+                types::DATE,
+                &t_date,
+            ),
+            (
+                ScalarFuncSig::CastDurationAsTime,
+                types::DURATION,
+                &duration_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &dur_to_time,
+            ),
+            (
+                // cast duration as date
+                ScalarFuncSig::CastDurationAsTime,
+                types::DURATION,
+                &duration_cols,
+                mysql::MAX_FSP,
+                types::DATE,
+                &dur_to_date,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsTime,
+                types::JSON,
+                &json_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsTime,
+                types::JSON,
+                &json_cols,
+                mysql::DEFAULT_FSP,
+                types::DATE,
+                &t_date,
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsTime,
+                types::NEW_DECIMAL,
+                &dec_cols,
+                mysql::UN_SPECIFIED_FSP,
+                types::DATETIME,
+                &t_time,
+            ),
+            (
+                // cast decimal as date
+                ScalarFuncSig::CastDecimalAsTime,
+                types::NEW_DECIMAL,
+                &dec_cols,
+                mysql::DEFAULT_FSP,
+                types::DATE,
+                &t_date,
+            ),
+        ];
+
+        let null_cols = vec![Datum::Null];
+        for (sig, tp, col, to_fsp, to_tp, exp) in cases {
+            let col_expr = col_expr(0, tp as i32);
+            let e = expr_with_tp_and_decimal(sig, vec![col_expr], 1, to_tp as i32, to_fsp as i32);
+            let res = e.eval_time(&ctx, col).unwrap();
+            let data = res.unwrap().into_owned();
+            let mut expt = exp.clone();
+            if to_fsp != mysql::UN_SPECIFIED_FSP {
+                expt.set_fsp(to_fsp as u8);
+            }
+            assert_eq!(
+                data.to_string(),
+                expt.to_string(),
+                "sig: {:?} with to tp {} and fsp {} failed",
+                sig,
+                to_tp,
+                to_fsp,
+            );
+            // test None
+            let res = e.eval_time(&ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
