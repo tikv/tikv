@@ -116,8 +116,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(try!(self.children[2].eval_string(ctx, row))),
-            _ => Ok(try!(self.children[1].eval_string(ctx, row))),
+            None | Some(0) => self.children[2].eval_string(ctx, row),
+            _ => self.children[1].eval_string(ctx, row),
         }
     }
 
@@ -160,6 +160,12 @@ mod test {
         let tests = vec![
             (
                 ScalarFuncSig::IfNullInt,
+                Datum::I64(0),
+                Datum::I64(2),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::IfNullInt,
                 Datum::I64(1),
                 Datum::I64(2),
                 Datum::I64(1),
@@ -169,6 +175,12 @@ mod test {
                 Datum::Null,
                 Datum::I64(2),
                 Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IfNullInt,
+                Datum::F64(0.0),
+                Datum::F64(2.2),
+                Datum::F64(0.0),
             ),
             (
                 ScalarFuncSig::IfNullReal,
