@@ -518,9 +518,8 @@ pub fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
 
 fn respond(resp: Response, mut t: RequestTask) -> Statistics {
     t.stop_record_handling();
-    let res = t.statistics.clone();
     (t.on_resp)(resp);
-    res
+    t.statistics
 }
 
 pub struct TiDbEndPoint {
