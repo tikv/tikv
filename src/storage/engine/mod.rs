@@ -176,7 +176,7 @@ pub enum ScanMode {
 }
 
 /// Statistics collects the ops taken when fetching data.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CFStatistics {
     // How many keys that's effective to user. This counter should be increased
     // by the caller.
@@ -187,6 +187,8 @@ pub struct CFStatistics {
     pub seek: usize,
     pub seek_for_prev: usize,
 }
+
+unsafe impl Send for CFStatistics {}
 
 impl CFStatistics {
     #[inline]
@@ -205,14 +207,25 @@ impl CFStatistics {
             (STAT_SEEK_FOR_PREV, self.seek_for_prev),
         ]
     }
+
+    pub fn add_cf_statistics(&mut self, other: &Self) {
+        self.processed = self.processed.saturating_add(other.processed);
+        self.get = self.get.saturating_add(other.get);
+        self.next = self.next.saturating_add(other.next);
+        self.prev = self.prev.saturating_add(other.prev);
+        self.seek = self.seek.saturating_add(other.seek);
+        self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
+    }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Statistics {
     pub lock: CFStatistics,
     pub write: CFStatistics,
     pub data: CFStatistics,
 }
+
+unsafe impl Send for Statistics {}
 
 impl Statistics {
     pub fn total_op_count(&self) -> usize {
@@ -229,6 +242,12 @@ impl Statistics {
             (CF_LOCK, self.lock.details()),
             (CF_WRITE, self.write.details()),
         ]
+    }
+
+    pub fn add_statistics(&mut self, other: &Self) {
+        self.lock.add_cf_statistics(&other.lock);
+        self.write.add_cf_statistics(&other.write);
+        self.data.add_cf_statistics(&other.data);
     }
 }
 

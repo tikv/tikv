@@ -67,35 +67,70 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<DummyContext>,
-    low_priority_pool: ThreadPool<DummyContext>,
-    high_priority_pool: ThreadPool<DummyContext>,
+    pool: ThreadPool<CopContext>,
+    low_priority_pool: ThreadPool<CopContext>,
+    high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
 }
 
-// TODO: remove these dummy structures.
 #[derive(Clone)]
-struct DummyContext {}
-
-unsafe impl Send for DummyContext {}
-
-impl Context for DummyContext {
-    fn on_task_started(&mut self) {}
-    fn on_task_finished(&mut self) {}
-    fn on_tick(&mut self) {}
+struct CopContext {
+    select_stats: Statistics,
+    index_stats: Statistics,
+    dag_stats: Statistics,
 }
 
-struct DummyContextFactory {}
+impl CopContext {
+    fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
+        self.get_statistics(type_str).add_statistics(stats);
+    }
 
-impl ContextFactory<DummyContext> for DummyContextFactory {
-    fn create(&self) -> DummyContext {
-        DummyContext {}
+    fn get_statistics(&mut self, type_str: &str) -> &mut Statistics {
+        match type_str {
+            STR_REQ_TYPE_SELECT => &mut self.select_stats,
+            STR_REQ_TYPE_INDEX => &mut self.index_stats,
+            STR_REQ_TYPE_DAG => &mut self.dag_stats,
+            _ => {
+                warn!("unknown STR_REQ_TYPE: {}", type_str);
+                &mut self.select_stats
+            }
+        }
+    }
+}
+
+unsafe impl Send for CopContext {}
+
+impl Context for CopContext {
+    fn on_task_started(&mut self) {}
+    fn on_task_finished(&mut self) {}
+    fn on_tick(&mut self) {
+        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX, STR_REQ_TYPE_DAG] {
+            let this_statistics = self.get_statistics(type_str);
+            for (cf, details) in this_statistics.details() {
+                for (tag, count) in details {
+                    COPR_SCAN_DETAILS
+                        .with_label_values(&[type_str, cf, tag])
+                        .observe(count as f64);
+                }
+            }
+        }
+    }
+}
+
+struct CopContextFactory {}
+
+impl ContextFactory<CopContext> for CopContextFactory {
+    fn create(&self) -> CopContext {
+        CopContext {
+            select_stats: Default::default(),
+            index_stats: Default::default(),
+            dag_stats: Default::default(),
+        }
     }
 }
 
 impl Host {
     pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, concurrency: usize) -> Host {
-        // TODO: use true ContextFactory instead of DummyContextFactory
         Host {
             engine: engine,
             sched: scheduler,
@@ -106,19 +141,19 @@ impl Host {
                 thd_name!("endpoint-normal-pool"),
                 concurrency,
                 DEFAULT_TASKS_PER_TICK,
-                DummyContextFactory {},
+                CopContextFactory {},
             ),
             low_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-low-pool"),
                 concurrency,
                 DEFAULT_TASKS_PER_TICK,
-                DummyContextFactory {},
+                CopContextFactory {},
             ),
             high_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-high-pool"),
                 concurrency,
                 DEFAULT_TASKS_PER_TICK,
-                DummyContextFactory {},
+                CopContextFactory {},
             ),
         }
     }
@@ -158,8 +193,9 @@ impl Host {
                 CommandPri::High => &mut self.high_priority_pool,
                 CommandPri::Normal => &mut self.pool,
             };
-            pool.execute(move |_: &mut DummyContext| {
-                end_point.handle_request(req);
+            pool.execute(move |ctx: &mut CopContext| {
+                let stats = end_point.handle_request(req);
+                ctx.add_statistics(type_str, &stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
@@ -276,12 +312,6 @@ impl RequestTask {
             .with_label_values(&[type_str])
             .observe(self.statistics.total_op_count() as f64);
 
-        // for (cf, details) in self.statistics.details() {
-        //     for (tag, count) in details {
-        //         COPR_SCAN_DETAILS.with_label_values(&[type_str, cf, tag])
-        //             .observe(count as f64);
-        //     }
-        // }
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
@@ -465,7 +495,7 @@ fn err_resp(e: Error) -> Response {
     resp
 }
 
-fn on_error(e: Error, req: RequestTask) {
+fn on_error(e: Error, req: RequestTask) -> Statistics {
     let resp = err_resp(e);
     respond(resp, req)
 }
@@ -474,7 +504,7 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     debug!("failed to handle batch request: {:?}", e);
     let resp = err_resp(e.into());
     for t in reqs {
-        respond(resp.clone(), t)
+        respond(resp.clone(), t);
     }
 }
 
@@ -486,9 +516,11 @@ pub fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
     Ok(())
 }
 
-fn respond(resp: Response, mut t: RequestTask) {
+fn respond(resp: Response, mut t: RequestTask) -> Statistics {
     t.stop_record_handling();
-    (t.on_resp)(resp)
+    let res = t.statistics.clone();
+    (t.on_resp)(resp);
+    res
 }
 
 pub struct TiDbEndPoint {
@@ -502,11 +534,10 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask) {
+    fn handle_request(&self, mut t: RequestTask) -> Statistics {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
-            on_error(e, t);
-            return;
+            return on_error(e, t);
         }
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
