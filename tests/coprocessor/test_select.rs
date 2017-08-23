@@ -616,7 +616,7 @@ fn init_data_with_engine_and_commit(
         store.commit_with_ctx(ctx);
     }
     let mut end_point = Worker::new("test select worker");
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8);
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8, None);
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)
