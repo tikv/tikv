@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
+use std::path::Path;
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -24,6 +25,7 @@ use futures::Future;
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::*;
 use tikv::config::TiKvConfig;
+use tikv::storage::{ALL_CFS, CF_DEFAULT};
 use super::util::*;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -48,7 +50,7 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engine: Arc<DB>) -> u64;
+    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engines: Engines) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command_on_node(
@@ -75,10 +77,10 @@ pub struct Cluster<T: Simulator> {
     pub cfg: TiKvConfig,
     leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
-    dbs: Vec<Arc<DB>>,
+    dbs: Vec<Engines>,
 
-    // node id -> db engine.
-    pub engines: HashMap<u64, Arc<DB>>,
+    // node id -> {db, raft_db} engine.
+    pub engines: HashMap<u64, Engines>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -117,19 +119,27 @@ impl<T: Simulator> Cluster<T> {
             self.paths.push(TempDir::new("test_cluster").unwrap());
         }
 
+        let mut kv_cfs = vec![];
+        kv_cfs.extend_from_slice(ALL_CFS);
+        kv_cfs.extend_from_slice(cfs);
         for item in &self.paths {
-            self.dbs.push(Arc::new(
-                rocksdb::new_engine(item.path().to_str().unwrap(), cfs).unwrap(),
-            ));
+            let engine = Arc::new(
+                rocksdb::new_engine(item.path().to_str().unwrap(), &kv_cfs).unwrap(),
+            );
+            let raft_path = item.path().join(Path::new("raft"));
+            let raft_engine = Arc::new(
+                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
+            );
+            self.dbs.push(Engines::new(engine, raft_engine));
         }
     }
 
     pub fn start(&mut self) {
         if self.engines.is_empty() {
             let mut sim = self.sim.wl();
-            for engine in &self.dbs {
-                let node_id = sim.run_node(0, self.cfg.clone(), engine.clone());
-                self.engines.insert(node_id, engine.clone());
+            for engines in &self.dbs {
+                let node_id = sim.run_node(0, self.cfg.clone(), engines.clone());
+                self.engines.insert(node_id, engines.clone());
             }
         } else {
             // recover from last shutdown.
@@ -157,8 +167,9 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn run_node(&mut self, node_id: u64) {
         debug!("starting node {}", node_id);
-        let engine = self.engines[&node_id].clone();
-        self.sim.wl().run_node(node_id, self.cfg.clone(), engine);
+        self.sim
+            .wl()
+            .run_node(node_id, self.cfg.clone(), self.engines[&node_id].clone());
         debug!("node {} started", node_id);
     }
 
@@ -169,7 +180,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        self.engines[&node_id].clone()
+        self.engines[&node_id].kv_engine.clone()
+    }
+
+    pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
+        self.engines[&node_id].raft_engine.clone()
     }
 
     pub fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
@@ -350,9 +365,9 @@ impl<T: Simulator> Cluster<T> {
     // First region 1 is in all stores with peer 1, 2, .. 5.
     // Peer 1 is in node 1, store 1, etc.
     fn bootstrap_region(&mut self) -> Result<()> {
-        for (id, engine) in self.dbs.iter().enumerate() {
+        for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
-            self.engines.insert(id, engine.clone());
+            self.engines.insert(id, engines.clone());
         }
 
         let mut region = metapb::Region::new();
@@ -362,14 +377,14 @@ impl<T: Simulator> Cluster<T> {
         region.mut_region_epoch().set_version(1);
         region.mut_region_epoch().set_conf_ver(1);
 
-        for (&id, engine) in &self.engines {
+        for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(engine, self.id(), id).unwrap();
+            bootstrap_store(engines, self.id(), id).unwrap();
         }
 
-        for engine in self.engines.values() {
-            try!(write_prepare_bootstrap(engine, &region));
+        for engines in self.engines.values() {
+            try!(write_prepare_bootstrap(engines, &region));
         }
 
         self.bootstrap_cluster(region);
@@ -379,13 +394,13 @@ impl<T: Simulator> Cluster<T> {
 
     // Return first region id.
     fn bootstrap_conf_change(&mut self) -> u64 {
-        for (id, engine) in self.dbs.iter().enumerate() {
+        for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
-            self.engines.insert(id, engine.clone());
+            self.engines.insert(id, engines.clone());
         }
 
-        for (&id, engine) in &self.engines {
-            bootstrap_store(engine, self.id(), id).unwrap();
+        for (&id, engines) in &self.engines {
+            bootstrap_store(engines, self.id(), id).unwrap();
         }
 
         let node_id = 1;
@@ -419,8 +434,8 @@ impl<T: Simulator> Cluster<T> {
         }
         let half = self.engines.len() / 2;
         let mut qualified_cnt = 0;
-        for (id, engine) in &self.engines {
-            if !condition(engine) {
+        for (id, engines) in &self.engines {
+            if !condition(&engines.kv_engine) {
                 debug!("store {} is not qualified yet.", id);
                 continue;
             }
@@ -639,8 +654,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_flush(&mut self, sync: bool) {
-        for db in &self.dbs {
-            db.flush(sync).unwrap();
+        for engines in &self.dbs {
+            engines.kv_engine.flush(sync).unwrap();
+            engines.raft_engine.flush(sync).unwrap();
         }
     }
 

@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
-use tikv::storage::{Engine, Modify, Snapshot, ALL_CFS};
+use tikv::storage::{Engine, Modify, Snapshot};
 use tikv::storage::engine::{BatchCallback, Callback, Result};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
-use raftstore::server::new_server_cluster_with_cfs;
+use raftstore::server::new_server_cluster;
 use tikv::util::HandyRwLock;
 use super::sync_storage::SyncStorage;
 
@@ -142,7 +142,7 @@ impl Engine for BlockEngine {
 }
 
 pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
-    let mut cluster = new_server_cluster_with_cfs(0, count, ALL_CFS);
+    let mut cluster = new_server_cluster(0, count);
     cluster.run();
     // make sure leader has been elected.
     assert_eq!(cluster.must_get(b""), None);

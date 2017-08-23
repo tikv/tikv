@@ -74,7 +74,11 @@ impl FnCall {
             ScalarFuncSig::MinusInt |
             ScalarFuncSig::MultiplyReal |
             ScalarFuncSig::MultiplyDecimal |
-            ScalarFuncSig::MultiplyInt => (2, 2),
+            ScalarFuncSig::MultiplyInt |
+            ScalarFuncSig::LogicalAnd |
+            ScalarFuncSig::LogicalOr |
+            ScalarFuncSig::LogicalXor |
+            ScalarFuncSig::LTInt => (2, 2),
 
             ScalarFuncSig::CastIntAsInt |
             ScalarFuncSig::CastIntAsReal |
@@ -82,7 +86,17 @@ impl FnCall {
             ScalarFuncSig::CastIntAsDecimal |
             ScalarFuncSig::CastIntAsTime |
             ScalarFuncSig::CastIntAsDuration |
-            ScalarFuncSig::CastIntAsJson => (1, 1),
+            ScalarFuncSig::CastIntAsJson |
+            ScalarFuncSig::UnaryNot |
+            ScalarFuncSig::IntIsFalse |
+            ScalarFuncSig::IntIsNull |
+            ScalarFuncSig::RealIsTrue |
+            ScalarFuncSig::RealIsNull |
+            ScalarFuncSig::DecimalIsTrue |
+            ScalarFuncSig::DecimalIsNull |
+            ScalarFuncSig::StringIsNull |
+            ScalarFuncSig::TimeIsNull |
+            ScalarFuncSig::DurationIsNull => (1, 1),
             _ => unimplemented!(),
         };
         if args < min_args || args > max_args {

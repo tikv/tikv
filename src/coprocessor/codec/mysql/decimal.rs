@@ -1978,7 +1978,7 @@ impl Ord for Decimal {
 impl<'a> Add<&'a Decimal> for &'a Decimal {
     type Output = Res<Decimal>;
 
-    fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
+    fn add(self, rhs: &Decimal) -> Res<Decimal> {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
         let mut res = if self.negative == rhs.negative {
             do_add(self, rhs)
