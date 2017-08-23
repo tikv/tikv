@@ -150,7 +150,7 @@ impl FnCall {
             }
             let mut res = res as i64;
             if res >= 0 {
-                // The number equals to i64::MAX as u64 + 1.
+                // The number less than i64::MAX as u64 + 1.
                 res = try!(res.checked_neg().ok_or(Error::Overflow));
             }
             Ok(Some(res))
