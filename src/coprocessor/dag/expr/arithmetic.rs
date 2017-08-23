@@ -13,6 +13,7 @@
 
 use std::{f64, i64, u64};
 use std::borrow::Cow;
+use std::ops::{Add, Mul, Sub};
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::Decimal;
 use super::{Error, FnCall, Result, StatementContext};
@@ -35,7 +36,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let result: Result<Decimal> = (lhs.as_ref() + rhs.as_ref()).into();
+        let result: Result<Decimal> = lhs.add(&rhs).into();
         result.map(|t| Some(Cow::Owned(t)))
     }
 
@@ -78,7 +79,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let result: Result<Decimal> = (lhs.as_ref() - rhs.as_ref()).into();
+        let result: Result<Decimal> = lhs.sub(&rhs).into();
         result.map(Cow::Owned).map(Some)
     }
 
@@ -121,7 +122,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let result: Result<Decimal> = (lhs.as_ref() * rhs.as_ref()).into();
+        let result: Result<Decimal> = lhs.mul(&rhs).into();
         result.map(Cow::Owned).map(Some)
     }
 
