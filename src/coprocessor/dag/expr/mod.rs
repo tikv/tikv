@@ -364,13 +364,22 @@ impl Expression {
                 .map(Datum::F64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlTime => expr.get_val()
+            ExprType::MysqlTime => {
+                let ts = expr.get_val().decode_u64();
+            expr.get_val()
                 .decode_u64()
                 .and_then(|n| {
-                    Time::from_packed_u64(n, types::DATETIME, MAX_FSP, &FixedOffset::east(0))
+                    let tz = FixedOffset::east(0);
+                    let tm = Time::from_packed_u64(n, types::DATETIME, MAX_FSP, &tz)
+                        .map(|t| {
+                            t.
+                        })
+                    tm.get_fs
+                    
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
+            }
             ExprType::MysqlDuration => expr.get_val()
                 .decode_i64()
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
@@ -416,6 +425,7 @@ impl Expression {
 #[cfg(test)]
 mod test {
     use coprocessor::codec::Datum;
+    use coprocessor::codec::mysql::{Time, MAX_FSP};
     use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use super::Expression;
@@ -439,14 +449,18 @@ mod test {
     #[test]
     fn test_expression_build() {
         let colref = col_expr(1);
-        let constant = datum_expr(Datum::Null);
+        let const_null = datum_expr(Datum::Null);
+        let const_time = datum_expr(Datum::Time(
+            Time::parse_utc_datetime("1970-01-01 12:00:00", MAX_FSP).unwrap(),
+        ));
 
         let tests = vec![
             (colref.clone(), 1, false),
             (colref.clone(), 2, true),
-            (constant.clone(), 0, true),
+            (const_null.clone(), 0, true),
+            (const_time.clone(), 0, true),
             (
-                fncall_expr(ScalarFuncSig::LTInt, &[colref.clone(), constant.clone()]),
+                fncall_expr(ScalarFuncSig::LTInt, &[colref.clone(), const_null.clone()]),
                 2,
                 true,
             ),
