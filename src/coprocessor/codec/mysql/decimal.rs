@@ -837,13 +837,16 @@ pub enum RoundMode {
 impl Decimal {
     /// ceil the Decimal into a new Decimal.
     pub fn ceil(&self) -> Res<Decimal> {
-        let target = if self.frac_cnt > 0 && !self.negative {
+        let mut target = if self.frac_cnt > 0 && !self.negative {
             let dec1 = Decimal::from(1i64);
             self + &dec1
         } else {
             Res::Ok(self.clone())
         };
-        target.round(0, RoundMode::Truncate)
+        if let Res::Ok(t) = target {
+            target = t.round(0, RoundMode::Truncate);
+        }
+        target
     }
 
     /// create a new decimal for internal usage.
@@ -1975,10 +1978,10 @@ impl Ord for Decimal {
     }
 }
 
-impl<'a> Add<&'a Decimal> for &'a Decimal {
+impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
-    fn add(self, rhs: &Decimal) -> Res<Decimal> {
+    fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
         let mut res = if self.negative == rhs.negative {
             do_add(self, rhs)
@@ -1990,7 +1993,7 @@ impl<'a> Add<&'a Decimal> for &'a Decimal {
     }
 }
 
-impl<'a> Sub<&'a Decimal> for &'a Decimal {
+impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn sub(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2005,7 +2008,7 @@ impl<'a> Sub<&'a Decimal> for &'a Decimal {
     }
 }
 
-impl<'a> Mul for &'a Decimal {
+impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn mul(self, rhs: &'a Decimal) -> Res<Decimal> {
