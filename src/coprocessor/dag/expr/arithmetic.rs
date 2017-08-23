@@ -13,6 +13,7 @@
 
 use std::{f64, i64, u64};
 use std::borrow::Cow;
+use std::ops::{Add, Mul, Sub};
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::Decimal;
 use super::{Error, FnCall, Result, StatementContext};
@@ -35,7 +36,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let result: Result<Decimal> = (lhs.as_ref() + rhs.as_ref()).into();
+        let result: Result<Decimal> = lhs.add(&rhs).into();
         result.map(|t| Some(Cow::Owned(t)))
     }
 
@@ -78,7 +79,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let result: Result<Decimal> = (lhs.as_ref() - rhs.as_ref()).into();
+        let result: Result<Decimal> = lhs.sub(&rhs).into();
         result.map(Cow::Owned).map(Some)
     }
 
@@ -121,7 +122,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let result: Result<Decimal> = (lhs.as_ref() * rhs.as_ref()).into();
+        let result: Result<Decimal> = lhs.mul(&rhs).into();
         result.map(Cow::Owned).map(Some)
     }
 
@@ -142,11 +143,16 @@ impl FnCall {
             r = opp_neg!(rhs);
         }
         let res = try!(l.checked_mul(r).ok_or(Error::Overflow));
+        let us = mysql::has_unsigned_flag(self.tp.get_flag());
         if a_neg != b_neg {
-            if (i64::MAX as u64) < res {
+            if us || (i64::MAX as u64 + 1 < res) {
                 return Err(Error::Overflow);
             }
-            let res = try!((res as i64).checked_neg().ok_or(Error::Overflow));
+            let mut res = res as i64;
+            if res >= 0 {
+                // The number less than i64::MAX as u64 + 1.
+                res = try!(res.checked_neg().ok_or(Error::Overflow));
+            }
             Ok(Some(res))
         } else {
             Ok(Some(res as i64))
@@ -223,6 +229,12 @@ mod test {
                 Datum::I64(12),
                 Datum::I64(1),
                 Datum::I64(12),
+            ),
+            (
+                ScalarFuncSig::MultiplyInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(1),
+                Datum::I64(i64::MIN),
             ),
         ];
         let ctx = StatementContext::default();
@@ -321,7 +333,7 @@ mod test {
     }
 
     #[test]
-    fn test_arithmetic_int_overflow() {
+    fn test_arithmetic_overflow_int() {
         let tests = vec![
             (
                 ScalarFuncSig::PlusInt,
@@ -357,6 +369,11 @@ mod test {
                 Datum::U64(u64::MAX),
                 Datum::I64(i64::MAX),
             ),
+            (
+                ScalarFuncSig::MultiplyInt,
+                Datum::I64(i64::MIN),
+                Datum::U64(1),
+            ),
         ];
         let ctx = StatementContext::default();
         for tt in tests {
@@ -379,7 +396,7 @@ mod test {
     }
 
     #[test]
-    fn test_arithmetic_real_overflow() {
+    fn test_arithmetic_overflow_real() {
         let tests = vec![
             (
                 ScalarFuncSig::PlusReal,

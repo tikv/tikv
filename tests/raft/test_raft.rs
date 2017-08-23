@@ -642,6 +642,7 @@ fn test_leader_election_with_config(pre_vote: bool) {
             StateRole::Leader,
             1,
         ),
+
         // three logs futher along than 0, but in the same term so rejection
         // are returned instead of the votes being ignored.
         (
@@ -941,6 +942,7 @@ fn test_log_replicatioin() {
             vec![new_message(1, 1, MessageType::MsgPropose, 1)],
             2,
         ),
+
         (
             Network::new(vec![None, None, None]),
             vec![
@@ -1338,6 +1340,7 @@ fn test_commit() {
         (vec![1], vec![empty_entry(1, 1)], 2, 0),
         (vec![2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
         (vec![1], vec![empty_entry(2, 1)], 2, 1),
+
         // odd
         (
             vec![2, 1, 1],
@@ -1363,6 +1366,7 @@ fn test_commit() {
             2,
             0,
         ),
+
         // even
         (
             vec![2, 1, 1, 1],
@@ -1492,12 +1496,14 @@ fn test_handle_msg_append() {
         // Ensure 1
         (nm(2, 3, 2, 3, None), 2, 0, true), // previous log mismatch
         (nm(2, 3, 3, 3, None), 2, 0, true), // previous log non-exist
+
         // Ensure 2
         (nm(2, 1, 1, 1, None), 2, 1, false),
         (nm(2, 0, 0, 1, Some(vec![(1, 2)])), 1, 1, false),
         (nm(2, 2, 2, 3, Some(vec![(3, 2), (4, 2)])), 4, 3, false),
         (nm(2, 2, 2, 4, Some(vec![(3, 2)])), 3, 3, false),
         (nm(2, 1, 1, 4, Some(vec![(2, 2)])), 2, 2, false),
+
         // Ensure 3
         (nm(1, 1, 1, 3, None), 2, 1, false), // match entry 1, commit up to last new entry 1
         (nm(1, 1, 1, 3, Some(vec![(2, 2)])), 2, 2, false), // match entry 1, commit up to last new
@@ -1729,20 +1735,25 @@ fn test_recv_msg_request_vote_for_type(msg_type: MessageType) {
         (StateRole::Follower, 0, 1, INVALID_ID, true),
         (StateRole::Follower, 0, 2, INVALID_ID, true),
         (StateRole::Follower, 0, 3, INVALID_ID, false),
+
         (StateRole::Follower, 1, 0, INVALID_ID, true),
         (StateRole::Follower, 1, 1, INVALID_ID, true),
         (StateRole::Follower, 1, 2, INVALID_ID, true),
         (StateRole::Follower, 1, 3, INVALID_ID, false),
+
         (StateRole::Follower, 2, 0, INVALID_ID, true),
         (StateRole::Follower, 2, 1, INVALID_ID, true),
         (StateRole::Follower, 2, 2, INVALID_ID, false),
         (StateRole::Follower, 2, 3, INVALID_ID, false),
+
         (StateRole::Follower, 3, 0, INVALID_ID, true),
         (StateRole::Follower, 3, 1, INVALID_ID, true),
         (StateRole::Follower, 3, 2, INVALID_ID, false),
         (StateRole::Follower, 3, 3, INVALID_ID, false),
+
         (StateRole::Follower, 3, 2, 2, false),
         (StateRole::Follower, 3, 2, 1, true),
+
         (StateRole::Leader, 3, 3, 1, true),
         (StateRole::PreCandidate, 3, 3, 1, true),
         (StateRole::Candidate, 3, 3, 1, true),
@@ -1811,6 +1822,7 @@ fn test_state_transition() {
             INVALID_ID,
         ),
         (StateRole::Follower, StateRole::Leader, false, 0, INVALID_ID),
+
         (
             StateRole::PreCandidate,
             StateRole::Follower,
@@ -1833,6 +1845,7 @@ fn test_state_transition() {
             INVALID_ID,
         ),
         (StateRole::PreCandidate, StateRole::Leader, true, 0, 1),
+
         (
             StateRole::Candidate,
             StateRole::Follower,
@@ -1855,6 +1868,7 @@ fn test_state_transition() {
             INVALID_ID,
         ),
         (StateRole::Candidate, StateRole::Leader, true, 0, 1),
+
         (StateRole::Leader, StateRole::Follower, true, 1, INVALID_ID),
         (
             StateRole::Leader,
@@ -1873,7 +1887,7 @@ fn test_state_transition() {
         (StateRole::Leader, StateRole::Leader, true, 0, 1),
     ];
     for (i, (from, to, wallow, wterm, wlead)) in tests.drain(..).enumerate() {
-        let sm: &mut Raft<MemStorage> = &mut new_test_raft(1, vec![1], 10, 1, new_storage());
+        let mut sm: &mut Raft<MemStorage> = &mut new_test_raft(1, vec![1], 10, 1, new_storage());
         sm.state = from;
 
         let res = recover_safe!(|| {
