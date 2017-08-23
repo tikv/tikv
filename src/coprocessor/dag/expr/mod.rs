@@ -364,22 +364,15 @@ impl Expression {
                 .map(Datum::F64)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
-            ExprType::MysqlTime => {
-                let ts = expr.get_val().decode_u64();
-            expr.get_val()
+            ExprType::MysqlTime => expr.get_val()
                 .decode_u64()
-                .and_then(|n| {
-                    let tz = FixedOffset::east(0);
-                    let tm = Time::from_packed_u64(n, types::DATETIME, MAX_FSP, &tz)
-                        .map(|t| {
-                            t.
-                        })
-                    tm.get_fs
-                    
+                .and_then(|ts| {
+                    let fsp = expr.get_field_type().get_decimal() as i8;
+                    let tp = expr.get_field_type().get_tp() as u8;
+                    Time::from_packed_u64(ts, tp, fsp, &FixedOffset::east(0))
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
-            }
             ExprType::MysqlDuration => expr.get_val()
                 .decode_i64()
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
