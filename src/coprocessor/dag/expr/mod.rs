@@ -138,6 +138,7 @@ impl Expression {
         }
     }
 
+    #[cfg(test)]
     #[inline]
     fn mut_tp(&mut self) -> &mut FieldType {
         match *self {
@@ -240,6 +241,7 @@ impl Expression {
                 ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
                 ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
                 ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -257,6 +259,7 @@ impl Expression {
                 ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
                 ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
                 ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -312,7 +315,9 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_json(),
             Expression::ColumnRef(ref column) => column.eval_json(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 

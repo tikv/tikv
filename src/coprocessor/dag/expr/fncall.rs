@@ -77,8 +77,7 @@ impl FnCall {
             ScalarFuncSig::MultiplyInt |
             ScalarFuncSig::LogicalAnd |
             ScalarFuncSig::LogicalOr |
-            ScalarFuncSig::LogicalXor |
-            ScalarFuncSig::LTInt => (2, 2),
+            ScalarFuncSig::LogicalXor => (2, 2),
 
             ScalarFuncSig::CastIntAsInt |
             ScalarFuncSig::CastIntAsReal |
@@ -97,6 +96,7 @@ impl FnCall {
             ScalarFuncSig::StringIsNull |
             ScalarFuncSig::TimeIsNull |
             ScalarFuncSig::DurationIsNull => (1, 1),
+
             _ => unimplemented!(),
         };
         if args < min_args || args > max_args {

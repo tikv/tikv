@@ -12,9 +12,8 @@
 // limitations under the License.
 
 use std::{f64, i64, u64};
-use std::ops::Neg;
-use std::num::Wrapping;
 use std::borrow::Cow;
+use std::ops::{Add, Mul, Sub};
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::Decimal;
 use super::{Error, FnCall, Result, StatementContext};
@@ -37,8 +36,8 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let result: Result<Decimal> = (lhs.as_ref() + rhs.as_ref()).into();
-        result.map(Cow::Owned).map(Some)
+        let result: Result<Decimal> = lhs.add(&rhs).into();
+        result.map(|t| Some(Cow::Owned(t)))
     }
 
     pub fn plus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -46,18 +45,21 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
-        let res_us = match (lus | (lhs >= 0), rus | (rhs >= 0)) {
-            (true, true) => {
-                try!((lhs as u64).checked_add(rhs as u64).ok_or(Error::Overflow));
-                true
-            }
-            (false, false) => try!(lhs.checked_add(rhs).ok_or(Error::Overflow)) > 0,
-            (true, false) if lhs as u64 > i64::MAX as u64 => true,
-            (false, true) if rhs as u64 > i64::MAX as u64 => true,
-            _ => false,
+        let res = match (lus, rus) {
+            (true, true) => (lhs as u64).checked_add(rhs as u64).map(|t| t as i64),
+            (true, false) => if rhs >= 0 {
+                (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
+            } else {
+                (lhs as u64).checked_sub(opp_neg!(rhs)).map(|t| t as i64)
+            },
+            (false, true) => if lhs >= 0 {
+                (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
+            } else {
+                (rhs as u64).checked_sub(opp_neg!(lhs)).map(|t| t as i64)
+            },
+            (false, false) => lhs.checked_add(rhs),
         };
-        let us = mysql::has_unsigned_flag(self.tp.get_flag());
-        check_integer_overflow(us, (Wrapping(lhs) + Wrapping(rhs)).0, res_us)
+        res.ok_or(Error::Overflow).map(Some)
     }
 
     pub fn minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -77,7 +79,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let result: Result<Decimal> = (lhs.as_ref() - rhs.as_ref()).into();
+        let result: Result<Decimal> = lhs.sub(&rhs).into();
         result.map(Cow::Owned).map(Some)
     }
 
@@ -86,31 +88,21 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
-        let res_us = match (lus, rus) {
-            (true, true) => {
-                try!((lhs as u64).checked_sub(rhs as u64).ok_or(Error::Overflow));
-                true
-            }
+        let res = match (lus, rus) {
+            (true, true) => (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64),
             (true, false) => if rhs >= 0 {
-                lhs as u64 > rhs as u64
+                (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                try!((lhs as u64).checked_add(-rhs as u64).ok_or(Error::Overflow));
-                true
+                (lhs as u64).checked_add(opp_neg!(rhs)).map(|t| t as i64)
             },
-            (false, true) => {
-                let l = (lhs - i64::MIN) as u64;
-                try!(l.checked_sub(rhs as u64).ok_or(Error::Overflow));
-                false
-            }
-            (false, false) => if lhs > 0 && rhs < 0 {
-                true
+            (false, true) => if lhs >= 0 {
+                (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                try!(lhs.checked_sub(rhs).ok_or(Error::Overflow));
-                false
+                None
             },
+            (false, false) => lhs.checked_sub(rhs),
         };
-        let us = mysql::has_unsigned_flag(self.tp.get_flag());
-        check_integer_overflow(us, (Wrapping(lhs) - Wrapping(rhs)).0, res_us)
+        res.ok_or(Error::Overflow).map(Some)
     }
 
     pub fn multiply_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -130,7 +122,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let result: Result<Decimal> = (lhs.as_ref() * rhs.as_ref()).into();
+        let result: Result<Decimal> = lhs.mul(&rhs).into();
         result.map(Cow::Owned).map(Some)
     }
 
@@ -144,21 +136,26 @@ impl FnCall {
         let (mut l, mut r) = (lhs as u64, rhs as u64);
         if !lus && lhs < 0 {
             a_neg = true;
-            l = Wrapping(lhs).neg().0 as u64;
+            l = opp_neg!(lhs);
         }
         if !rus && rhs < 0 {
             b_neg = true;
-            r = Wrapping(rhs).neg().0 as u64;
+            r = opp_neg!(rhs);
         }
-
         let res = try!(l.checked_mul(r).ok_or(Error::Overflow));
         let us = mysql::has_unsigned_flag(self.tp.get_flag());
         if a_neg != b_neg {
-            try!((i64::MAX as u64).checked_sub(res).ok_or(Error::Overflow));
-            let res = try!((res as i64).checked_neg().ok_or(Error::Overflow));
-            check_integer_overflow(us, res, false)
+            if us || (i64::MAX as u64 + 1 < res) {
+                return Err(Error::Overflow);
+            }
+            let mut res = res as i64;
+            if res >= 0 {
+                // The number less than i64::MAX as u64 + 1.
+                res = try!(res.checked_neg().ok_or(Error::Overflow));
+            }
+            Ok(Some(res))
         } else {
-            check_integer_overflow(us, (res as i64), true)
+            Ok(Some(res as i64))
         }
     }
 }
@@ -210,16 +207,34 @@ mod test {
                 Datum::I64(13),
             ),
             (
+                ScalarFuncSig::PlusInt,
+                Datum::I64(i64::MIN),
+                Datum::U64(i64::MAX as u64 + 1),
+                Datum::U64(0),
+            ),
+            (
                 ScalarFuncSig::MinusInt,
                 Datum::I64(12),
                 Datum::I64(1),
                 Datum::I64(11),
             ),
             (
+                ScalarFuncSig::MinusInt,
+                Datum::U64(0),
+                Datum::I64(i64::MIN),
+                Datum::U64(i64::MAX as u64 + 1),
+            ),
+            (
                 ScalarFuncSig::MultiplyInt,
                 Datum::I64(12),
                 Datum::I64(1),
                 Datum::I64(12),
+            ),
+            (
+                ScalarFuncSig::MultiplyInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(1),
+                Datum::I64(i64::MIN),
             ),
         ];
         let ctx = StatementContext::default();
@@ -318,7 +333,7 @@ mod test {
     }
 
     #[test]
-    fn test_arithmetic_int_overflow() {
+    fn test_arithmetic_overflow_int() {
         let tests = vec![
             (
                 ScalarFuncSig::PlusInt,
@@ -354,6 +369,11 @@ mod test {
                 Datum::U64(u64::MAX),
                 Datum::I64(i64::MAX),
             ),
+            (
+                ScalarFuncSig::MultiplyInt,
+                Datum::I64(i64::MIN),
+                Datum::U64(1),
+            ),
         ];
         let ctx = StatementContext::default();
         for tt in tests {
@@ -376,7 +396,7 @@ mod test {
     }
 
     #[test]
-    fn test_arithmetic_real_overflow() {
+    fn test_arithmetic_overflow_real() {
         let tests = vec![
             (
                 ScalarFuncSig::PlusReal,
