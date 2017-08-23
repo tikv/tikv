@@ -275,24 +275,19 @@ mod test {
         let mut wrapper = IndexTestWrapper::default();
         wrapper.scan.set_desc(true);
 
-        let (ref start_key, _) = wrapper.data.kv_data[0];
-        let (ref split_key, _) = wrapper.data.kv_data[KEY_NUMBER / 2];
-        let (ref end_key, _) = wrapper.data.kv_data[KEY_NUMBER - 1];
-        let mut r1 = KeyRange::new();
-        r1.set_start(start_key.clone());
-        r1.set_end(split_key.clone());
-        let mut r2 = KeyRange::new();
-        r2.set_start(split_key.clone());
-        r2.set_end(end_key.clone());
-        wrapper.ranges = vec![r1, r2];
+        let r1 = get_idx_range(TABLE_ID, INDEX_ID, i64::MIN, 0);
+        let r2 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64);
+        let r3 = get_idx_range(TABLE_ID, INDEX_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
+        wrapper.ranges = vec![r1, r2, r3];
+
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
 
         let mut scanner =
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
 
-        for tid in 0..KEY_NUMBER - 1 {
-            let handle = KEY_NUMBER - tid - 2;
+        for tid in 0..KEY_NUMBER {
+            let handle = KEY_NUMBER - tid - 1;
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), 2);
