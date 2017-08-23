@@ -20,8 +20,8 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::fmt::Write;
 
-pub const DEFAULT_TASKS_PER_TICK: usize = 50;
-const WORKER_WAIT_TIME: u64 = 20; // ms
+pub const DEFAULT_TASKS_PER_TICK: usize = 500;
+const WORKER_WAIT_TIME: u64 = 500; // ms
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 
