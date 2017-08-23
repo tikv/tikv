@@ -17,6 +17,12 @@ use super::{Error, FnCall, Result};
 impl FnCall {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
         let (min_args, max_args) = match sig {
+            ScalarFuncSig::IfNullInt |
+            ScalarFuncSig::IfNullReal |
+            ScalarFuncSig::IfNullString |
+            ScalarFuncSig::IfNullDecimal |
+            ScalarFuncSig::IfNullTime |
+            ScalarFuncSig::IfNullDuration |
             ScalarFuncSig::LogicalAnd |
             ScalarFuncSig::LogicalOr |
             ScalarFuncSig::LogicalXor |
@@ -36,6 +42,13 @@ impl FnCall {
             ScalarFuncSig::TimeIsNull |
             ScalarFuncSig::DurationIsNull |
             ScalarFuncSig::CastIntAsInt => (1, 1),
+
+            ScalarFuncSig::IfInt |
+            ScalarFuncSig::IfReal |
+            ScalarFuncSig::IfString |
+            ScalarFuncSig::IfDecimal |
+            ScalarFuncSig::IfTime |
+            ScalarFuncSig::IfDuration => (3, 3),
 
             _ => unimplemented!(),
         };

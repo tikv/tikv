@@ -17,6 +17,7 @@ mod column;
 mod constant;
 mod fncall;
 mod builtin_cast;
+mod builtin_control;
 mod builtin_op;
 mod compare;
 use self::compare::CmpOp;
@@ -213,6 +214,9 @@ impl Expression {
                 ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
                 ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
 
+                ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
+                ScalarFuncSig::IfInt => f.if_int(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -224,6 +228,8 @@ impl Expression {
             Expression::ColumnRef(ref column) => column.eval_real(row),
             Expression::ScalarFn(ref f) => match f.sig {
                 ScalarFuncSig::UnaryMinusReal => f.unary_minus_real(ctx, row),
+                ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
+                ScalarFuncSig::IfReal => f.if_real(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -239,6 +245,8 @@ impl Expression {
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
             Expression::ScalarFn(ref f) => match f.sig {
                 ScalarFuncSig::UnaryMinusDecimal => f.unary_minus_decimal(ctx, row),
+                ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
+                ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -253,6 +261,8 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullString => f.if_null_string(ctx, row),
+                ScalarFuncSig::IfString => f.if_string(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -267,6 +277,8 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_time(),
             Expression::ColumnRef(ref column) => column.eval_time(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullTime => f.if_null_time(ctx, row),
+                ScalarFuncSig::IfTime => f.if_time(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -281,6 +293,8 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullDuration => f.if_null_duration(ctx, row),
+                ScalarFuncSig::IfDuration => f.if_duration(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
