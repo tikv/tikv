@@ -27,7 +27,7 @@ use std::string::FromUtf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
@@ -64,6 +64,14 @@ quick_error! {
             description(desc)
             display("error {}", desc)
         }
+        Truncated {
+            description("Truncated")
+            display("error Truncated")
+        }
+        Overflow {
+            description("Overflow")
+            display("error Overflow")
+        }
     }
 }
 
@@ -74,6 +82,16 @@ impl From<FromUtf8Error> for Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+impl<T> Into<Result<T>> for Res<T> {
+    fn into(self) -> Result<T> {
+        match self {
+            Res::Ok(t) => Ok(t),
+            Res::Truncated(_) => Err(Error::Truncated),
+            Res::Overflow(_) => Err(Error::Overflow),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -184,6 +202,7 @@ impl Expression {
                 ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
 
                 ScalarFuncSig::UnaryNot => f.unary_not(ctx, row),
+                ScalarFuncSig::UnaryMinusInt => f.unary_minus_int(ctx, row),
                 ScalarFuncSig::IntIsNull => f.int_is_null(ctx, row),
                 ScalarFuncSig::IntIsFalse => f.int_is_false(ctx, row),
                 ScalarFuncSig::RealIsTrue => f.real_is_true(ctx, row),
@@ -204,6 +223,7 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::UnaryMinusReal => f.unary_minus_real(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -218,6 +238,7 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_decimal(),
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::UnaryMinusDecimal => f.unary_minus_decimal(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
