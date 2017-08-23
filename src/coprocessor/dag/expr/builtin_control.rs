@@ -22,8 +22,7 @@ impl FnCall {
         if !arg0.is_none() {
             return Ok(arg0);
         }
-        let arg1 = try!(self.children[1].eval_int(ctx, row));
-        Ok(arg1)
+        self.children[1].eval_int(ctx, row)
     }
 
     pub fn if_null_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -31,8 +30,7 @@ impl FnCall {
         if !arg0.is_none() {
             return Ok(arg0);
         }
-        let arg1 = try!(self.children[1].eval_real(ctx, row));
-        Ok(arg1)
+        self.children[1].eval_real(ctx, row)
     }
 
     pub fn if_null_decimal<'a, 'b: 'a>(
@@ -44,8 +42,7 @@ impl FnCall {
         if !arg0.is_none() {
             return Ok(arg0);
         }
-        let arg1 = try!(self.children[1].eval_decimal(ctx, row));
-        Ok(arg1)
+        self.children[1].eval_decimal(ctx, row)
     }
 
     pub fn if_null_string<'a, 'b: 'a>(
@@ -57,8 +54,7 @@ impl FnCall {
         if !arg0.is_none() {
             return Ok(arg0);
         }
-        let arg1 = try!(self.children[1].eval_string(ctx, row));
-        Ok(arg1)
+        self.children[1].eval_string(ctx, row)
     }
 
     pub fn if_null_time<'a, 'b: 'a>(
@@ -70,8 +66,7 @@ impl FnCall {
         if !arg0.is_none() {
             return Ok(arg0);
         }
-        let arg1 = try!(self.children[1].eval_time(ctx, row));
-        Ok(arg1)
+        self.children[1].eval_time(ctx, row)
     }
 
     pub fn if_null_duration<'a, 'b: 'a>(
@@ -83,27 +78,22 @@ impl FnCall {
         if !arg0.is_none() {
             return Ok(arg0);
         }
-        let arg1 = try!(self.children[1].eval_duration(ctx, row));
-        Ok(arg1)
+        self.children[1].eval_duration(ctx, row)
     }
 
     pub fn if_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
-        let arg1 = try!(self.children[1].eval_int(ctx, row));
-        let arg2 = try!(self.children[2].eval_int(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2),
-            _ => Ok(arg1),
+            None | Some(0) => Ok(try!(self.children[2].eval_int(ctx, row))),
+            _ => Ok(try!(self.children[1].eval_int(ctx, row))),
         }
     }
 
     pub fn if_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
-        let arg1 = try!(self.children[1].eval_real(ctx, row));
-        let arg2 = try!(self.children[2].eval_real(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2),
-            _ => Ok(arg1),
+            None | Some(0) => Ok(try!(self.children[2].eval_real(ctx, row))),
+            _ => Ok(try!(self.children[1].eval_real(ctx, row))),
         }
     }
 
@@ -113,11 +103,9 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
-        let arg1 = try!(self.children[1].eval_decimal(ctx, row));
-        let arg2 = try!(self.children[2].eval_decimal(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2),
-            _ => Ok(arg1),
+            None | Some(0) => Ok(try!(self.children[2].eval_decimal(ctx, row))),
+            _ => Ok(try!(self.children[1].eval_decimal(ctx, row))),
         }
     }
 
@@ -127,11 +115,9 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
-        let arg1 = try!(self.children[1].eval_string(ctx, row));
-        let arg2 = try!(self.children[2].eval_string(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2),
-            _ => Ok(arg1),
+            None | Some(0) => Ok(try!(self.children[2].eval_string(ctx, row))),
+            _ => Ok(try!(self.children[1].eval_string(ctx, row))),
         }
     }
 
@@ -141,11 +127,9 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
-        let arg1 = try!(self.children[1].eval_time(ctx, row));
-        let arg2 = try!(self.children[2].eval_time(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2),
-            _ => Ok(arg1),
+            None | Some(0) => Ok(try!(self.children[2].eval_time(ctx, row))),
+            _ => Ok(try!(self.children[1].eval_time(ctx, row))),
         }
     }
 
@@ -155,11 +139,9 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let arg0 = try!(self.children[0].eval_int(ctx, row));
-        let arg1 = try!(self.children[1].eval_duration(ctx, row));
-        let arg2 = try!(self.children[2].eval_duration(ctx, row));
         match arg0 {
-            None | Some(0) => Ok(arg2),
-            _ => Ok(arg1),
+            None | Some(0) => Ok(try!(self.children[2].eval_duration(ctx, row))),
+            _ => Ok(try!(self.children[1].eval_duration(ctx, row))),
         }
     }
 }
