@@ -98,7 +98,7 @@ impl FnCall {
             (false, true) => if lhs >= 0 {
                 (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                None
+                return Err(Error::Overflow);
             },
             (false, false) => lhs.checked_sub(rhs),
         };
@@ -131,41 +131,19 @@ impl FnCall {
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
-
-        let (mut a_neg, mut b_neg) = (false, false);
-        let (mut l, mut r) = (lhs as u64, rhs as u64);
-        if !lus && lhs < 0 {
-            a_neg = true;
-            l = opp_neg!(lhs);
-        }
-        if !rus && rhs < 0 {
-            b_neg = true;
-            r = opp_neg!(rhs);
-        }
-        let res = try!(l.checked_mul(r).ok_or(Error::Overflow));
-        let us = mysql::has_unsigned_flag(self.tp.get_flag());
-        if a_neg != b_neg {
-            if us || (i64::MAX as u64 + 1 < res) {
-                return Err(Error::Overflow);
-            }
-            let mut res = res as i64;
-            if res >= 0 {
-                // The number less than i64::MAX as u64 + 1.
-                res = try!(res.checked_neg().ok_or(Error::Overflow));
-            }
-            Ok(Some(res))
+        let u64_mul_i64 = |u, s| if s >= 0 {
+            (u as u64).checked_mul(s as u64).map(|t| t as i64)
         } else {
-            Ok(Some(res as i64))
-        }
+            None
+        };
+        let res = match (lus, rus) {
+            (true, true) => (lhs as u64).checked_mul(rhs as u64).map(|t| t as i64),
+            (false, false) => lhs.checked_mul(rhs),
+            (true, false) => u64_mul_i64(lhs, rhs),
+            (false, true) => u64_mul_i64(rhs, lhs),
+        };
+        res.ok_or(Error::Overflow).map(Some)
     }
-}
-
-#[inline]
-fn check_integer_overflow(us: bool, res: i64, res_us: bool) -> Result<Option<i64>> {
-    if (us && !res_us && res < 0) || (!us && res_us && res as u64 > i64::MAX as u64) {
-        return Err(Error::Overflow);
-    }
-    Ok(Some(res))
 }
 
 #[cfg(test)]
