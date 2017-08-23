@@ -23,6 +23,9 @@ impl FnCall {
             ScalarFuncSig::LTInt => (2, 2),
 
             ScalarFuncSig::UnaryNot |
+            ScalarFuncSig::UnaryMinusInt |
+            ScalarFuncSig::UnaryMinusReal |
+            ScalarFuncSig::UnaryMinusDecimal |
             ScalarFuncSig::IntIsFalse |
             ScalarFuncSig::IntIsNull |
             ScalarFuncSig::RealIsTrue |
