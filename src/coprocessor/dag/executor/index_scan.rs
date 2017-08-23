@@ -39,12 +39,15 @@ pub struct IndexScanExecutor<'a> {
 impl<'a> IndexScanExecutor<'a> {
     pub fn new(
         mut meta: IndexScan,
-        key_ranges: Vec<KeyRange>,
+        mut key_ranges: Vec<KeyRange>,
         store: SnapshotStore<'a>,
         statistics: &'a mut Statistics,
     ) -> IndexScanExecutor<'a> {
         let mut pk_col = None;
         let desc = meta.get_desc();
+        if desc {
+            key_ranges.reverse();
+        }
         let cols = meta.mut_columns();
         if cols.last().map_or(false, |c| c.get_pk_handle()) {
             pk_col = Some(cols.pop().unwrap());
@@ -271,14 +274,25 @@ mod test {
         let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::default();
         wrapper.scan.set_desc(true);
+
+        let (ref start_key, _) = wrapper.data.kv_data[0];
+        let (ref split_key, _) = wrapper.data.kv_data[KEY_NUMBER / 2];
+        let (ref end_key, _) = wrapper.data.kv_data[KEY_NUMBER - 1];
+        let mut r1 = KeyRange::new();
+        r1.set_start(start_key.clone());
+        r1.set_end(split_key.clone());
+        let mut r2 = KeyRange::new();
+        r2.set_start(split_key.clone());
+        r2.set_end(end_key.clone());
+        wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
 
         let mut scanner =
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
 
-        for tid in 0..KEY_NUMBER {
-            let handle = KEY_NUMBER - tid - 1;
+        for tid in 0..KEY_NUMBER - 1 {
+            let handle = KEY_NUMBER - tid - 2;
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), 2);
