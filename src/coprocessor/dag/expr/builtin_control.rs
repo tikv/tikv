@@ -177,7 +177,7 @@ mod test {
                 Datum::I64(2),
             ),
             (
-                ScalarFuncSig::IfNullInt,
+                ScalarFuncSig::IfNullReal,
                 Datum::F64(0.0),
                 Datum::F64(2.2),
                 Datum::F64(0.0),
