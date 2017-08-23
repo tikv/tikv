@@ -73,7 +73,6 @@ pub struct Host {
     max_running_task_count: usize,
 }
 
-#[derive(Clone)]
 struct CopContext {
     select_stats: Statistics,
     index_stats: Statistics,
@@ -117,7 +116,7 @@ impl Context for CopContext {
     }
 }
 
-struct CopContextFactory {}
+struct CopContextFactory;
 
 impl ContextFactory<CopContext> for CopContextFactory {
     fn create(&self) -> CopContext {

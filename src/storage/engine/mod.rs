@@ -176,7 +176,7 @@ pub enum ScanMode {
 }
 
 /// Statistics collects the ops taken when fetching data.
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct CFStatistics {
     // How many keys that's effective to user. This counter should be increased
     // by the caller.
@@ -187,8 +187,6 @@ pub struct CFStatistics {
     pub seek: usize,
     pub seek_for_prev: usize,
 }
-
-unsafe impl Send for CFStatistics {}
 
 impl CFStatistics {
     #[inline]
@@ -218,14 +216,12 @@ impl CFStatistics {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct Statistics {
     pub lock: CFStatistics,
     pub write: CFStatistics,
     pub data: CFStatistics,
 }
-
-unsafe impl Send for Statistics {}
 
 impl Statistics {
     pub fn total_op_count(&self) -> usize {
