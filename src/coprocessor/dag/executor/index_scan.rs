@@ -39,12 +39,15 @@ pub struct IndexScanExecutor<'a> {
 impl<'a> IndexScanExecutor<'a> {
     pub fn new(
         mut meta: IndexScan,
-        key_ranges: Vec<KeyRange>,
+        mut key_ranges: Vec<KeyRange>,
         store: SnapshotStore<'a>,
         statistics: &'a mut Statistics,
     ) -> IndexScanExecutor<'a> {
         let mut pk_col = None;
         let desc = meta.get_desc();
+        if desc {
+            key_ranges.reverse();
+        }
         let cols = meta.mut_columns();
         if cols.last().map_or(false, |c| c.get_pk_handle()) {
             pk_col = Some(cols.pop().unwrap());
@@ -271,6 +274,12 @@ mod test {
         let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::default();
         wrapper.scan.set_desc(true);
+
+        let r1 = get_idx_range(TABLE_ID, INDEX_ID, i64::MIN, 0);
+        let r2 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64);
+        let r3 = get_idx_range(TABLE_ID, INDEX_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
+        wrapper.ranges = vec![r1, r2, r3];
+
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
 
