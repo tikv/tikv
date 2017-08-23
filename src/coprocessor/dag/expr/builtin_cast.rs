@@ -21,8 +21,7 @@ use std::borrow::Cow;
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
 use coprocessor::codec::mysql::decimal::RoundMode;
-use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint,
-                                  convert_int_to_uint};
+use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
 
 use super::{FnCall, Result, StatementContext};
 
@@ -117,7 +116,7 @@ impl FnCall {
                 try!(self.produce_float_with_specified_tp(ctx, val as f64)),
             ))
         } else {
-            let uval = try!(convert_int_to_uint(val, u64::MAX, types::LONG_LONG));
+            let uval = val as u64;
             Ok(Some(
                 try!(self.produce_float_with_specified_tp(ctx, uval as f64)),
             ))
@@ -182,7 +181,7 @@ impl FnCall {
         let res = if !mysql::has_unsigned_flag(field_type.get_flag() as u64) {
             Decimal::from(val)
         } else {
-            let uval = try!(convert_int_to_uint(val, u64::MAX, types::LONG_LONG));
+            let uval = val as u64;
             Decimal::from(uval)
         };
         Ok(Some(try!(self.produce_dec_with_specified_tp(ctx, res))))
@@ -219,8 +218,8 @@ impl FnCall {
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let dec = match try!(Decimal::from_bytes(&val)) {
-            Res::Ok(d) | Res::Overflow(d) => d,
-            Res::Truncated(d) => {
+            Res::Ok(d) => d,
+            Res::Truncated(d) | Res::Overflow(d) => {
                 try!(convert::handle_truncate(ctx, true));
                 d
             }
@@ -267,12 +266,14 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
-            let uval = try!(convert_int_to_uint(val, u64::MAX, types::LONG_LONG));
+            let uval = val as u64;
             format!("{}", uval)
         } else {
             format!("{}", val)
         };
-        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
+        Ok(Some(try!(
+            self.produce_str_with_specified_tp(ctx, s.into_bytes())
+        )))
     }
 
     pub fn cast_real_as_str<'a, 'b: 'a>(
@@ -282,7 +283,9 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
+        Ok(Some(try!(
+            self.produce_str_with_specified_tp(ctx, s.into_bytes())
+        )))
     }
 
     pub fn cast_decimal_as_str<'a, 'b: 'a>(
@@ -292,7 +295,9 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
-        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
+        Ok(Some(try!(
+            self.produce_str_with_specified_tp(ctx, s.into_bytes())
+        )))
     }
 
     pub fn cast_str_as_str<'a, 'b: 'a>(
@@ -301,8 +306,9 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let s = try!(String::from_utf8(val.into_owned()));
-        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
+        Ok(Some(try!(
+            self.produce_str_with_specified_tp(ctx, val.into_owned())
+        )))
     }
 
     pub fn cast_time_as_str<'a, 'b: 'a>(
@@ -312,7 +318,9 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
+        Ok(Some(try!(
+            self.produce_str_with_specified_tp(ctx, s.into_bytes())
+        )))
     }
 
 
@@ -323,7 +331,9 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
+        Ok(Some(try!(
+            self.produce_str_with_specified_tp(ctx, s.into_bytes())
+        )))
     }
 
     pub fn cast_json_as_str<'a, 'b: 'a>(
@@ -333,7 +343,9 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.to_string();
-        Ok(Some(try!(self.produce_str_with_specified_tp(ctx, s))))
+        Ok(Some(try!(
+            self.produce_str_with_specified_tp(ctx, s.into_bytes())
+        )))
     }
 
     pub fn cast_int_as_time<'a, 'b: 'a>(
@@ -592,17 +604,18 @@ impl FnCall {
     fn produce_str_with_specified_tp(
         &self,
         ctx: &StatementContext,
-        s: String,
+        mut s: Vec<u8>,
     ) -> Result<Cow<Vec<u8>>> {
         let flen = self.tp.get_flen();
         let chs = self.tp.get_charset();
         if flen < 0 {
-            return Ok(Cow::Owned(s.into_bytes()));
+            return Ok(Cow::Owned(s));
         }
         let flen = flen as usize;
         // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
         // char count and truncate to flen chars if it is too long.
         if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
+            let s = try!(String::from_utf8(s));
             let char_count = s.char_indices().count();
             if char_count <= flen {
                 return Ok(Cow::Owned(s.into_bytes()));
@@ -628,17 +641,16 @@ impl FnCall {
                     s.len()
                 ));
             }
-            let res = convert::truncate_str(s, flen as isize).into_bytes();
+            let res = convert::truncate_binary(s, flen as isize);
             return Ok(Cow::Owned(res));
         }
 
         if self.tp.get_tp() == types::STRING as i32 && s.len() < flen {
             let to_pad = flen - s.len();
-            let mut ret = s.into_bytes();
-            ret.append(&mut vec![0; to_pad]);
-            return Ok(Cow::Owned(ret));
+            s.append(&mut vec![0; to_pad]);
+            return Ok(Cow::Owned(s));
         }
-        Ok(Cow::Owned(s.into_bytes()))
+        Ok(Cow::Owned(s))
     }
 
     fn produce_time_with_str(&self, ctx: &StatementContext, s: String) -> Result<Cow<Time>> {

@@ -16,7 +16,7 @@ use std::cmp::Ordering;
 use std::str;
 use std::fmt::{self, Display, Formatter};
 
-use chrono::{DateTime, Datelike, Duration, FixedOffset, Local, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc};
 
 use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
 use coprocessor::codec::mysql::Decimal;
@@ -141,6 +141,9 @@ impl Time {
                 0,
                 0
             ));
+        }
+        if self.tp != tp && tp == types::TIMESTAMP {
+            return Err(box_err!("can not convert datetime/date to timestamp"));
         }
         self.tp = tp;
         Ok(())
@@ -271,6 +274,7 @@ impl Time {
         if y == 0 && m == 0 && d == 0 && h == 0 && minute == 0 && sec == 0 {
             return Ok(zero_datetime(tz));
         }
+        // it won't happen until 10000
         if y < 0 || y > 9999 {
             return Err(box_err!("unsupport year: {}", y));
         }
@@ -334,7 +338,8 @@ impl Time {
     }
 
     pub fn from_duration(tz: &FixedOffset, d: &MyDuration) -> Result<Time> {
-        let local = Local::now();
+        let now = Utc::now().naive_utc();
+        let local = tz.from_utc_datetime(&now);
         let t = try!(ymd_hms_nanos(
             tz,
             local.year(),
@@ -348,10 +353,17 @@ impl Time {
         let dur = Duration::nanoseconds(d.to_nanos());
         let t = t.checked_add_signed(dur);
         if t.is_none() {
-            Err(box_err!("parse from duration {} overflows", d))
-        } else {
-            Time::new(t.unwrap(), types::DATETIME, d.fsp as i8)
+            return Err(box_err!("parse from duration {} overflows", d));
         }
+
+        let t = t.unwrap();
+        if t.year() < 1000 || t.year() > 9999 {
+            return Err(box_err!(
+                "datetime :{:?} out of range ('1000-01-01' to '9999-12-31')",
+                t
+            ));
+        }
+        Time::new(t, types::DATETIME, d.fsp as i8)
     }
 
     pub fn to_duration(&self) -> Result<MyDuration> {
@@ -824,6 +836,8 @@ mod test {
             res.set_tp(types::DATETIME).unwrap();
             let ep = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
             assert_eq!(res, ep);
+            let res = res.set_tp(types::TIMESTAMP);
+            assert!(res.is_err());
         }
     }
 
@@ -837,7 +851,7 @@ mod test {
             let get_today = get.time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
                 .unwrap();
-            let now = Local::now();
+            let now = Utc::now();
             assert_eq!(get_today.year(), now.year());
             assert_eq!(get_today.month(), now.month());
             assert_eq!(get_today.day(), now.day());

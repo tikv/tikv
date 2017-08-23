@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{self, str, i64};
+use std::{self, str, i64, u64};
 use std::borrow::Cow;
 
 use coprocessor::select::xeval::EvalContext;
@@ -21,6 +21,15 @@ use super::Result;
 pub const UNSPECIFIED_LENGTH: i32 = -1;
 
 pub fn truncate_str(mut s: String, flen: isize) -> String {
+    if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
+        s.truncate(flen as usize);
+        s
+    } else {
+        s
+    }
+}
+
+pub fn truncate_binary(mut s: Vec<u8>, flen: isize) -> Vec<u8> {
     if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
         s.truncate(flen as usize);
         s
@@ -61,14 +70,6 @@ macro_rules! overflow {
     ($val:ident, $bound:ident) => ({
         Err(box_err!("constant {} overflows {}", $val, $bound))
     });
-}
-
-// `convert_int_to_uint` converts an int value to an uint value.
-pub fn convert_int_to_uint(val: i64, upper_bound: u64, tp: u8) -> Result<u64> {
-    if val as u64 > upper_bound {
-        return overflow!(val, tp);
-    }
-    Ok(val as u64)
 }
 
 // `convert_uint_to_int` converts an uint value to an int value.
@@ -508,14 +509,6 @@ mod test {
             let o = super::float_str_to_int_string(i);
             assert_eq!(o.unwrap(), *e);
         }
-    }
-
-    #[test]
-    fn test_convert_int_to_uint() {
-        assert!(convert_int_to_uint(i64::MIN, 0, types::LONG_LONG).is_err());
-        let v = convert_int_to_uint(i64::MAX, u64::MAX, types::LONG_LONG).unwrap();
-        assert_eq!(v, i64::MAX as u64);
-        // TODO port tests from tidb(tidb haven't implemented now)
     }
 
     #[test]
