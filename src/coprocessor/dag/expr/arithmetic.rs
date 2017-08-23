@@ -146,14 +146,6 @@ impl FnCall {
     }
 }
 
-#[inline]
-fn check_integer_overflow(us: bool, res: i64, res_us: bool) -> Result<Option<i64>> {
-    if (us && !res_us && res < 0) || (!us && res_us && res as u64 > i64::MAX as u64) {
-        return Err(Error::Overflow);
-    }
-    Ok(Some(res))
-}
-
 #[cfg(test)]
 mod test {
     use std::{f64, i64, u64};
