@@ -20,12 +20,6 @@ use super::Result;
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
 pub const UNSPECIFIED_LENGTH: i32 = -1;
 
-pub fn truncate_str(s: &mut String, flen: isize) {
-    if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
-        s.truncate(flen as usize);
-    }
-}
-
 pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
     if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
         s.truncate(flen as usize);
@@ -532,16 +526,16 @@ mod test {
     }
 
     #[test]
-    fn test_truncate_str() {
-        let s = String::from("123456789");
+    fn test_truncate_binary() {
+        let s = b"123456789".to_vec();
         let mut s1 = s.clone();
-        truncate_str(&mut s1, UNSPECIFIED_LENGTH as isize);
+        truncate_binary(&mut s1, UNSPECIFIED_LENGTH as isize);
         assert_eq!(s1, s);
         let mut s2 = s.clone();
-        truncate_str(&mut s2, isize::MAX);
+        truncate_binary(&mut s2, isize::MAX);
         assert_eq!(s2, s);
         let mut s3 = s;
-        truncate_str(&mut s3, 0);
+        truncate_binary(&mut s3, 0);
         assert!(s3.is_empty());
         // TODO port tests from tidb(tidb haven't implemented now)
     }

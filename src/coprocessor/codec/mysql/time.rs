@@ -20,7 +20,7 @@ use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc}
 
 use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
 use coprocessor::codec::mysql::Decimal;
-use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANO_WIDTH};
+use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
 use super::super::{Result, TEN_POW};
 
 
@@ -358,7 +358,7 @@ impl Time {
         if self.is_zero() {
             return Ok(MyDuration::zero());
         }
-        let nanos = self.time.num_seconds_from_midnight() as i64 * 10i64.pow(NANO_WIDTH) +
+        let nanos = self.time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC +
             self.time.nanosecond() as i64;
         MyDuration::from_nanos(nanos, self.fsp as i8)
     }

@@ -694,23 +694,18 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
-    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+    use tipb::expression::{Expr, FieldType, ScalarFuncSig};
 
-    use util::codec::number::NumberEncoder;
     use chrono::{FixedOffset, Utc};
 
     use coprocessor::codec::{convert, Datum};
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
     use coprocessor::dag::expr::{Expression, StatementContext};
     use coprocessor::dag::expr::test::fncall_expr;
-
+    use coprocessor::select::xeval::evaluator::test::col_expr as base_col_expr;
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ColumnRef);
-        let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(col_id).unwrap();
-        expr.set_val(buf);
+        let mut expr = base_col_expr(col_id);
         let mut fp = FieldType::new();
         fp.set_tp(tp);
         expr.set_field_type(fp);

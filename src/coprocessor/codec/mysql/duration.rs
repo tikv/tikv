@@ -21,7 +21,7 @@ use std::io::Write;
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
 
-const NANOS_PER_SEC: i64 = 1_000_000_000;
+pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 pub const NANO_WIDTH: u32 = 9;
 const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
