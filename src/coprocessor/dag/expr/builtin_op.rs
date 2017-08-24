@@ -13,7 +13,7 @@
 
 use std::i64;
 use std::borrow::Cow;
-use std::ops::Sub;
+use std::ops::Neg;
 use super::{Error, FnCall, Result, StatementContext};
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::Decimal;
@@ -94,9 +94,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let dec = try_opt!(self.children[0].eval_decimal(ctx, row)).into_owned();
-        let to = try!(Decimal::from_f64(0.0));
-        let result: Result<Decimal> = to.sub(&dec).into();
-        result.map(|t| Some(Cow::Owned(t)))
+        Ok(Some(Cow::Owned(dec.neg())))
     }
 
     pub fn unary_minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -139,9 +137,9 @@ impl FnCall {
 mod test {
     use std::i64;
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::Duration;
-    use coprocessor::dag::expr::{Expression, StatementContext};
+    use coprocessor::codec::{mysql, Datum};
+    use coprocessor::codec::mysql::{types, Duration};
+    use coprocessor::dag::expr::{Error, Expression, StatementContext};
     use coprocessor::dag::expr::test::{fncall_expr, str2dec};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
 
@@ -269,6 +267,7 @@ mod test {
                 Datum::I64(i64::MAX),
             ),
             (ScalarFuncSig::UnaryMinusInt, Datum::I64(0), Datum::I64(0)),
+            (ScalarFuncSig::UnaryMinusInt, Datum::I64((i64::MAX as u64 + 1) as i64), Datum::I64(i64::MIN)),
             (ScalarFuncSig::UnaryMinusInt, Datum::Null, Datum::Null),
             (
                 ScalarFuncSig::UnaryMinusReal,
@@ -364,6 +363,33 @@ mod test {
             let op = Expression::build(fncall_expr(op, &[arg1]), 0).unwrap();
             let res = op.eval_int(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
+        }
+    }
+
+    fn check_overflow(e: Error) -> Result<(), ()> {
+        match e {
+            Error::Overflow => Ok(()),
+            _ => Err(()),
+        }
+    }
+
+    #[test]
+    fn test_unary_op_overflow() {
+        let tests = vec![
+            (ScalarFuncSig::UnaryMinusInt, Datum::I64(i64::MIN)),
+             (ScalarFuncSig::UnaryMinusInt, Datum::U64(i64::MAX as u64 + 2)),
+
+        ];
+        let ctx = StatementContext::default();
+        for (op, argument) in tests {
+            let arg = datum_expr(argument);
+            let unsigned = mysql::has_unsigned_flag(arg.get_field_type().get_flag());
+            let mut op = Expression::build(fncall_expr(op, &[arg]), 0).unwrap();
+            if unsigned {
+                op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+            }
+            let got = op.eval_int(&ctx, &[]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
         }
     }
 }
