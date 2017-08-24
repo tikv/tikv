@@ -17,6 +17,64 @@ use super::{Error, FnCall, Result};
 impl FnCall {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
         let (min_args, max_args) = match sig {
+            ScalarFuncSig::LTInt |
+            ScalarFuncSig::LEInt |
+            ScalarFuncSig::GTInt |
+            ScalarFuncSig::GEInt |
+            ScalarFuncSig::EQInt |
+            ScalarFuncSig::NEInt |
+            ScalarFuncSig::NullEQInt |
+            ScalarFuncSig::LTReal |
+            ScalarFuncSig::LEReal |
+            ScalarFuncSig::GTReal |
+            ScalarFuncSig::GEReal |
+            ScalarFuncSig::EQReal |
+            ScalarFuncSig::NEReal |
+            ScalarFuncSig::NullEQReal |
+            ScalarFuncSig::LTDecimal |
+            ScalarFuncSig::LEDecimal |
+            ScalarFuncSig::GTDecimal |
+            ScalarFuncSig::GEDecimal |
+            ScalarFuncSig::EQDecimal |
+            ScalarFuncSig::NEDecimal |
+            ScalarFuncSig::NullEQDecimal |
+            ScalarFuncSig::LTString |
+            ScalarFuncSig::LEString |
+            ScalarFuncSig::GTString |
+            ScalarFuncSig::GEString |
+            ScalarFuncSig::EQString |
+            ScalarFuncSig::NEString |
+            ScalarFuncSig::NullEQString |
+            ScalarFuncSig::LTTime |
+            ScalarFuncSig::LETime |
+            ScalarFuncSig::GTTime |
+            ScalarFuncSig::GETime |
+            ScalarFuncSig::EQTime |
+            ScalarFuncSig::NETime |
+            ScalarFuncSig::NullEQTime |
+            ScalarFuncSig::LTDuration |
+            ScalarFuncSig::LEDuration |
+            ScalarFuncSig::GTDuration |
+            ScalarFuncSig::GEDuration |
+            ScalarFuncSig::EQDuration |
+            ScalarFuncSig::NEDuration |
+            ScalarFuncSig::NullEQDuration |
+            ScalarFuncSig::LTJson |
+            ScalarFuncSig::LEJson |
+            ScalarFuncSig::GTJson |
+            ScalarFuncSig::GEJson |
+            ScalarFuncSig::EQJson |
+            ScalarFuncSig::NEJson |
+            ScalarFuncSig::NullEQJson |
+            ScalarFuncSig::PlusReal |
+            ScalarFuncSig::PlusDecimal |
+            ScalarFuncSig::PlusInt |
+            ScalarFuncSig::MinusReal |
+            ScalarFuncSig::MinusDecimal |
+            ScalarFuncSig::MinusInt |
+            ScalarFuncSig::MultiplyReal |
+            ScalarFuncSig::MultiplyDecimal |
+            ScalarFuncSig::MultiplyInt |
             ScalarFuncSig::IfNullInt |
             ScalarFuncSig::IfNullReal |
             ScalarFuncSig::IfNullString |
@@ -25,9 +83,15 @@ impl FnCall {
             ScalarFuncSig::IfNullDuration |
             ScalarFuncSig::LogicalAnd |
             ScalarFuncSig::LogicalOr |
-            ScalarFuncSig::LogicalXor |
-            ScalarFuncSig::LTInt => (2, 2),
+            ScalarFuncSig::LogicalXor => (2, 2),
 
+            ScalarFuncSig::CastIntAsInt |
+            ScalarFuncSig::CastIntAsReal |
+            ScalarFuncSig::CastIntAsString |
+            ScalarFuncSig::CastIntAsDecimal |
+            ScalarFuncSig::CastIntAsTime |
+            ScalarFuncSig::CastIntAsDuration |
+            ScalarFuncSig::CastIntAsJson |
             ScalarFuncSig::UnaryNot |
             ScalarFuncSig::IntIsFalse |
             ScalarFuncSig::IntIsNull |
@@ -37,8 +101,7 @@ impl FnCall {
             ScalarFuncSig::DecimalIsNull |
             ScalarFuncSig::StringIsNull |
             ScalarFuncSig::TimeIsNull |
-            ScalarFuncSig::DurationIsNull |
-            ScalarFuncSig::CastIntAsInt => (1, 1),
+            ScalarFuncSig::DurationIsNull => (1, 1),
 
             ScalarFuncSig::IfInt |
             ScalarFuncSig::IfReal |
