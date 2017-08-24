@@ -18,11 +18,10 @@ use std::thread;
 
 use rocksdb::DB;
 use protobuf;
-use time::Duration as TimeDuration;
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
-use kvproto::raft_cmdpb::{CmdType, StatusCmdType, AdminCmdType};
+use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
+use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
 use kvproto::eraftpb::ConfChangeType;
 
@@ -30,8 +29,12 @@ use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::escape;
+use tikv::util::config::*;
+use tikv::config::TiKvConfig;
 
 pub use tikv::raftstore::store::util::find_peer;
+
+pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -48,12 +51,15 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     debug!("last try to get {}", escape(key));
     let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none() ||
-       value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap() {
+        value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
+    {
         return;
     }
-    panic!("can't get value {:?} for key {:?}",
-           value.map(escape),
-           escape(key))
+    panic!(
+        "can't get value {:?} for key {:?}",
+        value.map(escape),
+        escape(key)
+    )
 }
 
 pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
@@ -75,39 +81,46 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
 pub fn new_store_cfg() -> Config {
     Config {
         sync_log: false,
-        raft_base_tick_interval: 10,
+        raft_base_tick_interval: ReadableDuration::millis(10),
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 25,
-        raft_log_gc_tick_interval: 100,
+        raft_log_gc_tick_interval: ReadableDuration::millis(100),
         raft_log_gc_threshold: 1,
-        pd_heartbeat_tick_interval: 20,
-        region_check_size_diff: 10000,
+        pd_heartbeat_tick_interval: ReadableDuration::millis(20),
+        region_split_check_diff: ReadableSize(10000),
         // Use a value of 3 seconds as max_leader_missing_duration just for test.
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
-        max_leader_missing_duration: Duration::from_secs(3),
-        report_region_flow_interval: 100, // 100ms
-        raft_store_max_leader_lease: TimeDuration::milliseconds(25 * 10),
-        use_sst_file_snapshot: true,
+        max_leader_missing_duration: ReadableDuration::secs(3),
+        report_region_flow_interval: ReadableDuration::millis(100),
+        raft_store_max_leader_lease: ReadableDuration::millis(MAX_LEADER_LEASE),
         allow_remove_leader: true,
         ..Config::default()
     }
 }
 
 pub fn new_server_config(cluster_id: u64) -> ServerConfig {
-    let store_cfg = new_store_cfg();
-
     ServerConfig {
         cluster_id: cluster_id,
         addr: "127.0.0.1:0".to_owned(),
-        raft_store: store_cfg,
-        storage: StorageConfig { sched_worker_pool_size: 1, ..StorageConfig::default() },
         grpc_concurrency: 1,
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
         end_point_concurrency: 1,
         ..ServerConfig::default()
+    }
+}
+
+pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
+    TiKvConfig {
+        storage: StorageConfig {
+            scheduler_worker_pool_size: 1,
+            ..StorageConfig::default()
+        },
+        server: new_server_config(cluster_id),
+        raft_store: new_store_cfg(),
+        ..TiKvConfig::default()
     }
 }
 
@@ -120,11 +133,12 @@ pub fn new_base_request(region_id: u64, epoch: RegionEpoch, read_quorum: bool) -
     req
 }
 
-pub fn new_request(region_id: u64,
-                   epoch: RegionEpoch,
-                   requests: Vec<Request>,
-                   read_quorum: bool)
-                   -> RaftCmdRequest {
+pub fn new_request(
+    region_id: u64,
+    epoch: RegionEpoch,
+    requests: Vec<Request>,
+    read_quorum: bool,
+) -> RaftCmdRequest {
     let mut req = new_base_request(region_id, epoch, read_quorum);
     req.set_requests(protobuf::RepeatedField::from_vec(requests));
     req
@@ -162,10 +176,20 @@ pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
     cmd
 }
 
-pub fn new_status_request(region_id: u64,
-                          peer: metapb::Peer,
-                          request: StatusRequest)
-                          -> RaftCmdRequest {
+pub fn new_delete_range_cmd(cf: &str, start: &[u8], end: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::DeleteRange);
+    cmd.mut_delete_range().set_start_key(start.to_vec());
+    cmd.mut_delete_range().set_end_key(end.to_vec());
+    cmd.mut_delete_range().set_cf(cf.to_string());
+    cmd
+}
+
+pub fn new_status_request(
+    region_id: u64,
+    peer: metapb::Peer,
+    request: StatusRequest,
+) -> RaftCmdRequest {
     let mut req = new_base_request(region_id, RegionEpoch::new(), false);
     req.mut_header().set_peer(peer);
     req.set_status_request(request);
@@ -184,10 +208,11 @@ pub fn new_region_leader_cmd() -> StatusRequest {
     cmd
 }
 
-pub fn new_admin_request(region_id: u64,
-                         epoch: &RegionEpoch,
-                         request: AdminRequest)
-                         -> RaftCmdRequest {
+pub fn new_admin_request(
+    region_id: u64,
+    epoch: &RegionEpoch,
+    request: AdminRequest,
+) -> RaftCmdRequest {
     let mut req = new_base_request(region_id, epoch.clone(), false);
     req.set_admin_request(request);
     req
@@ -232,9 +257,10 @@ pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
 }
 
-pub fn new_pd_change_peer(change_type: ConfChangeType,
-                          peer: metapb::Peer)
-                          -> RegionHeartbeatResponse {
+pub fn new_pd_change_peer(
+    change_type: ConfChangeType,
+    peer: metapb::Peer,
+) -> RegionHeartbeatResponse {
     let mut change_peer = ChangePeer::new();
     change_peer.set_change_type(change_type.into());
     change_peer.set_peer(peer);
@@ -244,9 +270,10 @@ pub fn new_pd_change_peer(change_type: ConfChangeType,
     resp
 }
 
-pub fn new_pd_add_change_peer(region: &metapb::Region,
-                              peer: metapb::Peer)
-                              -> Option<RegionHeartbeatResponse> {
+pub fn new_pd_add_change_peer(
+    region: &metapb::Region,
+    peer: metapb::Peer,
+) -> Option<RegionHeartbeatResponse> {
     if let Some(p) = find_peer(region, peer.get_store_id()) {
         assert_eq!(p.get_id(), peer.get_id());
         return None;
@@ -255,9 +282,10 @@ pub fn new_pd_add_change_peer(region: &metapb::Region,
     Some(new_pd_change_peer(ConfChangeType::AddNode, peer))
 }
 
-pub fn new_pd_remove_change_peer(region: &metapb::Region,
-                                 peer: metapb::Peer)
-                                 -> Option<RegionHeartbeatResponse> {
+pub fn new_pd_remove_change_peer(
+    region: &metapb::Region,
+    peer: metapb::Peer,
+) -> Option<RegionHeartbeatResponse> {
     if find_peer(region, peer.get_store_id()).is_none() {
         return None;
     }

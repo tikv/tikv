@@ -9,7 +9,7 @@ time = "0.1"
 
 [features]
 default = []
-dev = ["clippy", "mem-profiling"]
+dev = ["clippy"]
 static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
@@ -48,7 +48,7 @@ clippy = {version = "*", optional = true}
 protobuf = "1.4"
 nix = "0.6.0"
 utime = "0.1"
-chrono = "0.2"
+chrono = "0.4"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
 clap = "2"
@@ -66,6 +66,7 @@ serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
 grpcio = "0.1"
+rustc-serialize = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
@@ -80,7 +81,7 @@ git = "https://github.com/pingcap/kvproto.git"
 git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus.git"
+version = "0.3"
 default-features = false
 features = ["nightly", "push", "process"]
 

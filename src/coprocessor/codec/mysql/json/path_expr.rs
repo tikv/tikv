@@ -79,8 +79,8 @@ pub struct PathExpression {
 impl PathExpression {
     pub fn contains_any_asterisk(&self) -> bool {
         (self.flags &
-         (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK)) !=
-        0
+            (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK)) !=
+            0
     }
 }
 
@@ -93,7 +93,11 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
         Some(i) => i,
         None => return Err(box_err!("Invalid JSON path: {}", path_expr)),
     };
-    if path_expr.index(0..dollar_index).char_indices().any(|(_, c)| !c.is_ascii_whitespace()) {
+    if path_expr
+        .index(0..dollar_index)
+        .char_indices()
+        .any(|(_, c)| !c.is_ascii_whitespace())
+    {
         return Err(box_err!("Invalid JSON path: {}", path_expr));
     }
 
@@ -107,7 +111,10 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
     let mut last_end = 0;
     for (start, end) in RE.find_iter(expr) {
         // Check all characters between two legs are blank.
-        if expr.index(last_end..start).char_indices().any(|(_, c)| !c.is_ascii_whitespace()) {
+        if expr.index(last_end..start)
+            .char_indices()
+            .any(|(_, c)| !c.is_ascii_whitespace())
+        {
             return Err(box_err!("Invalid JSON path: {}", path_expr));
         }
         last_end = end;
@@ -176,56 +183,69 @@ mod test {
 
     #[test]
     fn test_parse_json_path_expr() {
-        let mut test_cases = vec![("$",
-                                   true,
-                                   Some(PathExpression {
-                                      legs: vec![],
-                                      flags: PathExpressionFlag::default(),
-                                  })),
-                                  ("$.a",
-                                   true,
-                                   Some(PathExpression {
-                                      legs: vec![PathLeg::Key(String::from("a"))],
-                                      flags: PathExpressionFlag::default(),
-                                  })),
-                                  ("$.\"hello world\"",
-                                   true,
-                                   Some(PathExpression {
-                                      legs: vec![PathLeg::Key(String::from("hello world"))],
-                                      flags: PathExpressionFlag::default(),
-                                  })),
-                                  ("$[0]",
-                                   true,
-                                   Some(PathExpression {
-                                      legs: vec![PathLeg::Index(0)],
-                                      flags: PathExpressionFlag::default(),
-                                  })),
-                                  ("$**.a",
-                                   true,
-                                   Some(PathExpression {
-                                      legs: vec![PathLeg::DoubleAsterisk,
-                                                 PathLeg::Key(String::from("a"))],
-                                      flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                                  })),
-                                  // invalid path expressions
-                                  (".a", false, None),
-                                  ("xx$[1]", false, None),
-                                  ("$.a xx .b", false, None),
-                                  ("$[a]", false, None),
-                                  ("$.\"\\u33\"", false, None),
-                                  ("$**", false, None)];
+        let mut test_cases = vec![
+            (
+                "$",
+                true,
+                Some(PathExpression {
+                    legs: vec![],
+                    flags: PathExpressionFlag::default(),
+                }),
+            ),
+            (
+                "$.a",
+                true,
+                Some(PathExpression {
+                    legs: vec![PathLeg::Key(String::from("a"))],
+                    flags: PathExpressionFlag::default(),
+                }),
+            ),
+            (
+                "$.\"hello world\"",
+                true,
+                Some(PathExpression {
+                    legs: vec![PathLeg::Key(String::from("hello world"))],
+                    flags: PathExpressionFlag::default(),
+                }),
+            ),
+            (
+                "$[0]",
+                true,
+                Some(PathExpression {
+                    legs: vec![PathLeg::Index(0)],
+                    flags: PathExpressionFlag::default(),
+                }),
+            ),
+            (
+                "$**.a",
+                true,
+                Some(PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("a"))],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }),
+            ),
+            // invalid path expressions
+            (".a", false, None),
+            ("xx$[1]", false, None),
+            ("$.a xx .b", false, None),
+            ("$[a]", false, None),
+            ("$.\"\\u33\"", false, None),
+            ("$**", false, None),
+        ];
         for (i, (path_expr, no_error, expected)) in test_cases.drain(..).enumerate() {
             let r = parse_json_path_expr(path_expr);
             if no_error {
                 assert!(r.is_ok(), "#{} expect parse ok but got err {:?}", i, r);
                 let got = r.unwrap();
                 let expected = expected.unwrap();
-                assert_eq!(got,
-                           expected,
-                           "#{} expect {:?} but got {:?}",
-                           i,
-                           expected,
-                           got);
+                assert_eq!(
+                    got,
+                    expected,
+                    "#{} expect {:?} but got {:?}",
+                    i,
+                    expected,
+                    got
+                );
             } else {
                 assert!(r.is_err(), "#{} expect error but got {:?}", i, r);
             }

@@ -14,8 +14,9 @@
 //! A module contains test cases of stale peers gc.
 
 use kvproto::eraftpb::MessageType;
-use kvproto::raft_serverpb::{RegionLocalState, PeerState};
+use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::raftstore::store::{keys, Peekable};
+use tikv::storage::CF_RAFT;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -87,7 +88,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, key);
     must_get_none(&engine_2, key2);
     let state_key = keys::region_state_key(1);
-    let state: RegionLocalState = engine_2.get_msg(&state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine_2.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 }
 
@@ -148,8 +149,9 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
     };
     let new_region_id = new_region.get_id();
     // Block peer (3, 4) at receiving snapshot, but not the heartbeat
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(new_region_id, 3)
-        .msg_type(MessageType::MsgSnapshot)));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(new_region_id, 3).msg_type(MessageType::MsgSnapshot),
+    ));
 
     pd_client.must_add_peer(new_region_id, new_peer(3, 4));
 
@@ -174,7 +176,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
     // Before peer 4 is destroyed, a tombstone mark will be written into the engine.
     // So we could check the tombstone mark to make sure peer 4 is destroyed.
     let state_key = keys::region_state_key(new_region_id);
-    let state: RegionLocalState = engine3.get_msg(&state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // other region should not be affected.

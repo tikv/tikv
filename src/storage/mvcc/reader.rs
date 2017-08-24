@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::engine::{Snapshot, Cursor, ScanMode, Statistics};
+use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
 use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use super::{Error, Result};
 use super::lock::Lock;
@@ -19,7 +19,7 @@ use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
 use kvproto::kvrpcpb::IsolationLevel;
-use util::properties::GetPropertiesOptions;
+use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -40,13 +40,14 @@ pub struct MvccReader<'a> {
 }
 
 impl<'a> MvccReader<'a> {
-    pub fn new(snapshot: &'a Snapshot,
-               statistics: &'a mut Statistics,
-               scan_mode: Option<ScanMode>,
-               fill_cache: bool,
-               upper_bound: Option<Vec<u8>>,
-               isolation_level: IsolationLevel)
-               -> MvccReader<'a> {
+    pub fn new(
+        snapshot: &'a Snapshot,
+        statistics: &'a mut Statistics,
+        scan_mode: Option<ScanMode>,
+        fill_cache: bool,
+        upper_bound: Option<Vec<u8>>,
+        isolation_level: IsolationLevel,
+    ) -> MvccReader<'a> {
         MvccReader {
             snapshot: snapshot,
             statistics: statistics,
@@ -61,11 +62,8 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn reset(&mut self, upper_bound: Option<Vec<u8>>) {
-        self.upper_bound = upper_bound;
-        self.data_cursor = None;
-        self.lock_cursor = None;
-        self.write_cursor = None;
+    pub fn close(self) -> &'a mut Statistics {
+        self.statistics
     }
 
     pub fn set_key_only(&mut self, key_only: bool) {
@@ -103,7 +101,10 @@ impl<'a> MvccReader<'a> {
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
             let iter_opt = IterOption::new(None, true);
-            let iter = try!(self.snapshot.iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true)));
+            let iter = try!(
+                self.snapshot
+                    .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))
+            );
             self.lock_cursor = Some(iter);
         }
 
@@ -143,26 +144,31 @@ impl<'a> MvccReader<'a> {
         self.seek_write_impl(key, ts, true)
     }
 
-    fn seek_write_impl(&mut self,
-                       key: &Key,
-                       ts: u64,
-                       reverse: bool)
-                       -> Result<Option<(u64, Write)>> {
+    fn seek_write_impl(
+        &mut self,
+        key: &Key,
+        ts: u64,
+        reverse: bool,
+    ) -> Result<Option<(u64, Write)>> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
                 let iter_opt = IterOption::new(None, self.fill_cache);
-                let iter = try!(self.snapshot
-                    .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false)));
+                let iter = try!(
+                    self.snapshot
+                        .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))
+                );
                 self.write_cursor = Some(iter);
             }
         } else {
             // use prefix bloom filter
-            let iter_opt = IterOption::default().use_prefix_seek().set_prefix_same_as_start(true);
+            let iter_opt = IterOption::default()
+                .use_prefix_seek()
+                .set_prefix_same_as_start(true);
             let iter = try!(self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed));
             self.write_cursor = Some(iter);
         }
 
-        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
             try!(cursor.near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write))
         } else {
@@ -207,43 +213,40 @@ impl<'a> MvccReader<'a> {
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
-            IsolationLevel::SI => {
-                if let Some(new_ts) = try!(self.check_lock(key, ts)) {
-                    ts = new_ts;
-                }
-            }
+            IsolationLevel::SI => if let Some(new_ts) = try!(self.check_lock(key, ts)) {
+                ts = new_ts;
+            },
             IsolationLevel::RC => {}
         }
         loop {
             match try!(self.seek_write(key, ts)) {
-                Some((commit_ts, mut write)) => {
-                    match write.write_type {
-                        WriteType::Put => {
-                            self.statistics.write.processed += 1;
-                            if write.short_value.is_some() {
-                                if self.key_only {
-                                    return Ok(Some(vec![]));
-                                }
-                                return Ok(write.short_value.take());
+                Some((commit_ts, mut write)) => match write.write_type {
+                    WriteType::Put => {
+                        self.statistics.write.processed += 1;
+                        if write.short_value.is_some() {
+                            if self.key_only {
+                                return Ok(Some(vec![]));
                             }
-                            return self.load_data(key, write.start_ts).map(Some);
+                            return Ok(write.short_value.take());
                         }
-                        WriteType::Delete => {
-                            self.statistics.write.processed += 1;
-                            return Ok(None);
-                        }
-                        WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
+                        return self.load_data(key, write.start_ts).map(Some);
                     }
-                }
+                    WriteType::Delete => {
+                        self.statistics.write.processed += 1;
+                        return Ok(None);
+                    }
+                    WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
+                },
                 None => return Ok(None),
             }
         }
     }
 
-    pub fn get_txn_commit_info(&mut self,
-                               key: &Key,
-                               start_ts: u64)
-                               -> Result<Option<(u64, WriteType)>> {
+    pub fn get_txn_commit_info(
+        &mut self,
+        key: &Key,
+        start_ts: u64,
+    ) -> Result<Option<(u64, WriteType)>> {
         let mut seek_ts = start_ts;
         while let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, seek_ts)) {
             if write.start_ts == start_ts {
@@ -268,7 +271,10 @@ impl<'a> MvccReader<'a> {
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
             let iter_opt = IterOption::new(self.upper_bound.as_ref().cloned(), self.fill_cache);
-            let iter = try!(self.snapshot.iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false)));
+            let iter = try!(
+                self.snapshot
+                    .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))
+            );
             self.write_cursor = Some(iter);
         }
         Ok(())
@@ -277,7 +283,10 @@ impl<'a> MvccReader<'a> {
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
             let iter_opt = IterOption::new(self.upper_bound.as_ref().cloned(), true);
-            let iter = try!(self.snapshot.iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true)));
+            let iter = try!(
+                self.snapshot
+                    .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))
+            );
             self.lock_cursor = Some(iter);
         }
         Ok(())
@@ -288,12 +297,14 @@ impl<'a> MvccReader<'a> {
         assert!(self.scan_mode.is_some());
         try!(self.create_write_cursor());
 
-        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let cursor = self.write_cursor.as_mut().unwrap();
         let mut ok = cursor.seek_to_first(&mut self.statistics.write);
 
         while ok {
             if try!(Write::parse(cursor.value())).start_ts == ts {
-                return Ok(Some(try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts())));
+                return Ok(Some(
+                    try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts()),
+                ));
             }
             ok = cursor.next(&mut self.statistics.write);
         }
@@ -309,8 +320,8 @@ impl<'a> MvccReader<'a> {
 
         loop {
             key = {
-                let mut w_cur = self.write_cursor.as_mut().unwrap();
-                let mut l_cur = self.lock_cursor.as_mut().unwrap();
+                let w_cur = self.write_cursor.as_mut().unwrap();
+                let l_cur = self.lock_cursor.as_mut().unwrap();
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
                     if try!(w_cur.near_seek(&key, &mut self.statistics.write)) {
@@ -332,13 +343,11 @@ impl<'a> MvccReader<'a> {
                     (None, None) => return Ok(None),
                     (None, Some(k)) => Key::from_encoded(k.to_vec()),
                     (Some(k), None) => try!(Key::from_encoded(k.to_vec()).truncate_ts()),
-                    (Some(wk), Some(lk)) => {
-                        if wk < lk {
-                            try!(Key::from_encoded(wk.to_vec()).truncate_ts())
-                        } else {
-                            Key::from_encoded(lk.to_vec())
-                        }
-                    }
+                    (Some(wk), Some(lk)) => if wk < lk {
+                        try!(Key::from_encoded(wk.to_vec()).truncate_ts())
+                    } else {
+                        Key::from_encoded(lk.to_vec())
+                    },
                 }
             };
             if let Some(v) = try!(self.get(&key, ts)) {
@@ -357,8 +366,8 @@ impl<'a> MvccReader<'a> {
 
         loop {
             key = {
-                let mut w_cur = self.write_cursor.as_mut().unwrap();
-                let mut l_cur = self.lock_cursor.as_mut().unwrap();
+                let w_cur = self.write_cursor.as_mut().unwrap();
+                let l_cur = self.lock_cursor.as_mut().unwrap();
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
                     if try!(w_cur.near_reverse_seek(&key, &mut self.statistics.write)) {
@@ -380,13 +389,11 @@ impl<'a> MvccReader<'a> {
                     (None, None) => return Ok(None),
                     (None, Some(k)) => Key::from_encoded(k.to_vec()),
                     (Some(k), None) => try!(Key::from_encoded(k.to_vec()).truncate_ts()),
-                    (Some(wk), Some(lk)) => {
-                        if wk < lk {
-                            Key::from_encoded(lk.to_vec())
-                        } else {
-                            try!(Key::from_encoded(wk.to_vec()).truncate_ts())
-                        }
-                    }
+                    (Some(wk), Some(lk)) => if wk < lk {
+                        Key::from_encoded(lk.to_vec())
+                    } else {
+                        try!(Key::from_encoded(wk.to_vec()).truncate_ts())
+                    },
                 }
             };
             if let Some(v) = try!(self.get(&key, ts)) {
@@ -396,15 +403,17 @@ impl<'a> MvccReader<'a> {
     }
 
     #[allow(type_complexity)]
-    pub fn scan_lock<F>(&mut self,
-                        start: Option<Key>,
-                        filter: F,
-                        limit: Option<usize>)
-                        -> Result<(Vec<(Key, Lock)>, Option<Key>)>
-        where F: Fn(&Lock) -> bool
+    pub fn scan_lock<F>(
+        &mut self,
+        start: Option<Key>,
+        filter: F,
+        limit: Option<usize>,
+    ) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
+    where
+        F: Fn(&Lock) -> bool,
     {
         try!(self.create_lock_cursor());
-        let mut cursor = self.lock_cursor.as_mut().unwrap();
+        let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
             Some(ref x) => try!(cursor.seek(x, &mut self.statistics.lock)),
             None => cursor.seek_to_first(&mut self.statistics.lock),
@@ -430,10 +439,11 @@ impl<'a> MvccReader<'a> {
         Ok((locks, None))
     }
 
-    pub fn scan_keys(&mut self,
-                     mut start: Option<Key>,
-                     limit: usize)
-                     -> Result<(Vec<Key>, Option<Key>)> {
+    pub fn scan_keys(
+        &mut self,
+        mut start: Option<Key>,
+        limit: usize,
+    ) -> Result<(Vec<Key>, Option<Key>)> {
         let iter_opt = IterOption::new(None, self.fill_cache);
         let scan_mode = self.get_scan_mode(false);
         let mut cursor = try!(self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode));
@@ -459,7 +469,7 @@ impl<'a> MvccReader<'a> {
     // Get all Value of the given key in CF_DEFAULT
     pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(u64, Value)>> {
         try!(self.create_data_cursor());
-        let mut cursor = self.data_cursor.as_mut().unwrap();
+        let cursor = self.data_cursor.as_mut().unwrap();
         let mut ok = try!(cursor.seek(key, &mut self.statistics.data));
         if !ok {
             return Ok(vec![]);
@@ -487,11 +497,9 @@ impl<'a> MvccReader<'a> {
             return true;
         }
 
-        let mut opts = GetPropertiesOptions::default();
-        opts.max_ts = Some(safe_point);
-        let props = match self.snapshot.get_properties_cf(CF_WRITE, &opts) {
-            Ok(v) => v,
-            Err(_) => return true,
+        let props = match self.get_mvcc_properties(safe_point) {
+            Some(v) => v,
+            None => return true,
         };
 
         // No data older than safe_point to GC.
@@ -514,26 +522,48 @@ impl<'a> MvccReader<'a> {
         // A lot of MVCC versions of a single row to GC.
         props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
     }
+
+    fn get_mvcc_properties(&self, safe_point: u64) -> Option<MvccProperties> {
+        let collection = match self.snapshot.get_properties_cf(CF_WRITE) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        if collection.is_empty() {
+            return None;
+        }
+        // Aggregate MVCC properties.
+        let mut props = MvccProperties::new();
+        for (_, v) in &*collection {
+            let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
+                Ok(v) => v,
+                Err(_) => return None,
+            };
+            // Filter out properties after safe_point.
+            if mvcc.min_ts > safe_point {
+                continue;
+            }
+            props.add(&mvcc);
+        }
+        Some(props)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::u64;
     use kvproto::metapb::{Peer, Region};
     use kvproto::kvrpcpb::IsolationLevel;
-    use rocksdb::{self, DB, Writable, WriteBatch};
+    use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
-    use storage::{Options, Mutation, Statistics, ALL_CFS, CF_DEFAULT, CF_RAFT, CF_LOCK, CF_WRITE,
-                  make_key};
+    use storage::{make_key, Mutation, Options, Statistics, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
+                  CF_WRITE};
     use storage::engine::Modify;
-    use storage::mvcc::{MvccTxn, MvccReader};
+    use storage::mvcc::{MvccReader, MvccTxn};
     use tempdir::TempDir;
     use raftstore::coprocessor::RegionSnapshot;
-    use raftstore::errors::Result;
     use raftstore::store::keys;
     use util::rocksdb::{self as rocksdb_util, CFOptions};
-    use util::properties::{UserProperties, UserPropertiesCollectorFactory};
+    use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -607,6 +637,12 @@ mod tests {
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.delete_cf(handle, &k).unwrap();
                     }
+                    Modify::DeleteRange(cf, k1, k2) => {
+                        let k1 = keys::data_key(k1.encoded());
+                        let k2 = keys::data_key(k2.encoded());
+                        let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
+                        wb.delete_range_cf(handle, &k1, &k2).unwrap();
+                    }
                 }
             }
             db.write(wb).unwrap();
@@ -631,14 +667,18 @@ mod tests {
         let db_opts = rocksdb::DBOptions::new();
         let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
         if with_properties {
-            let f = Box::new(UserPropertiesCollectorFactory::default());
+            let f = Box::new(MvccPropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
-                            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
-                            CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
-                            CFOptions::new(CF_WRITE, cf_opts)];
-        Arc::new(rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
+        let cfs_opts = vec![
+            CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_WRITE, cf_opts),
+        ];
+        Arc::new(
+            rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap(),
+        )
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
@@ -653,18 +693,17 @@ mod tests {
         region
     }
 
-    fn get_properties(db: Arc<DB>, region: Region, safe_point: u64) -> Result<UserProperties> {
-        let mut opts = GetPropertiesOptions::default();
-        opts.max_ts = Some(safe_point);
-        let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
-        snap.get_properties_cf(CF_WRITE, &opts)
-    }
-
-    fn check_need_gc(db: Arc<DB>, region: Region, safe_point: u64, need_gc: bool) {
+    fn check_need_gc(
+        db: Arc<DB>,
+        region: Region,
+        safe_point: u64,
+        need_gc: bool,
+    ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
         let mut stat = Statistics::default();
         let reader = MvccReader::new(&snap, &mut stat, None, false, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
+        reader.get_mvcc_properties(safe_point)
     }
 
     #[test]
@@ -683,13 +722,11 @@ mod tests {
         // Put 2 keys.
         engine.put(&[1], 1, 1);
         engine.put(&[4], 2, 2);
-        assert!(get_properties(db.clone(), region.clone(), 10).is_err());
-        check_need_gc(db.clone(), region.clone(), 10, true);
+        assert!(check_need_gc(db.clone(), region.clone(), 10, true).is_none());
         engine.flush();
         // After this flush, we have a SST file without properties.
         // Without properties, we always need GC.
-        assert!(get_properties(db.clone(), region.clone(), 10).is_err());
-        check_need_gc(db.clone(), region.clone(), 10, true);
+        assert!(check_need_gc(db.clone(), region.clone(), 10, true).is_none());
     }
 
     #[allow(cyclomatic_complexity)]
@@ -704,20 +741,18 @@ mod tests {
         // After this flush, we have a SST file w/ properties, plus the SST
         // file w/o properties from previous flush. We always need GC as
         // long as we can't get properties from any SST files.
-        assert!(get_properties(db.clone(), region.clone(), 10).is_err());
-        check_need_gc(db.clone(), region.clone(), 10, true);
+        assert!(check_need_gc(db.clone(), region.clone(), 10, true).is_none());
         engine.compact();
         // After this compact, the two SST files are compacted into a new
         // SST file with properties. Now all SST files have properties and
         // all keys have only one version, so we don't need gc.
-        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 10, false).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 4);
         assert_eq!(props.num_rows, 4);
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 4);
         assert_eq!(props.max_row_versions, 1);
-        check_need_gc(db.clone(), region.clone(), 10, false);
 
         // Put 2 more keys and delete them.
         engine.put(&[5], 5, 5);
@@ -727,23 +762,21 @@ mod tests {
         engine.flush();
         // After this flush, keys 5,6 in the new SST file have more than one
         // versions, so we need gc.
-        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 10, true).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 8);
         assert_eq!(props.num_rows, 6);
         assert_eq!(props.num_puts, 6);
         assert_eq!(props.num_versions, 8);
         assert_eq!(props.max_row_versions, 2);
-        check_need_gc(db.clone(), region.clone(), 10, true);
         // But if the `safe_point` is older than all versions, we don't need gc too.
-        let props = get_properties(db.clone(), region.clone(), 0).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 0, false).unwrap();
         assert_eq!(props.min_ts, u64::MAX);
         assert_eq!(props.max_ts, 0);
         assert_eq!(props.num_rows, 0);
         assert_eq!(props.num_puts, 0);
         assert_eq!(props.num_versions, 0);
         assert_eq!(props.max_row_versions, 0);
-        check_need_gc(db.clone(), region.clone(), 0, false);
 
         // We gc the two deleted keys manually.
         engine.gc(&[5], 10);
@@ -751,25 +784,23 @@ mod tests {
         engine.compact();
         // After this compact, all versions of keys 5,6 are deleted,
         // no keys have more than one versions, so we don't need gc.
-        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 10, false).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 4);
         assert_eq!(props.num_rows, 4);
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 4);
         assert_eq!(props.max_row_versions, 1);
-        check_need_gc(db.clone(), region.clone(), 10, false);
 
         // A single lock version need gc.
         engine.lock(&[7], 9, 9);
         engine.flush();
-        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        let props = check_need_gc(db.clone(), region.clone(), 10, true).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 9);
         assert_eq!(props.num_rows, 5);
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 5);
         assert_eq!(props.max_row_versions, 1);
-        check_need_gc(db.clone(), region.clone(), 10, true);
     }
 }

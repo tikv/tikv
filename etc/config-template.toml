@@ -1,21 +1,20 @@
 # TiKV config template
 #  Human-readable big numbers:
-#   File size(based on byte): KB, MB, GB, TB, PB (or lowercase)
+#   File size(based on byte): KB, MB, GB, TB, PB
 #    e.g.: 1_048_576 = "1MB"
 #   Time(based on ms): ms, s, m, h
 #    e.g.: 78_000 = "1.3m"
+
+# log level: trace, debug, info, warn, error, off.
+log-level = "info"
+# file to store log, write to stderr if it's empty.
+# log-file = ""
 
 [server]
 # set listening address.
 addr = "127.0.0.1:20160"
 # set advertise listening address for client communication, if not set, use addr instead.
 #advertise-addr = ""
-# set the path to rocksdb directory.
-data-dir = "/tmp/tikv/store"
-# set attributes about this server, e.g. "zone=us-west-1,disk=ssd".
-labels = ""
-# log level: trace, debug, info, warn, error, off.
-log-level = "info"
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
@@ -33,19 +32,29 @@ messages-per-tick = 4096
 # size of thread pool for endpoint task, should less than total cpu cores.
 # end-point-concurrency = 8
 
-# concurrency for each transaction when endpoint is busy, should be in [1,end-point-concurrency].
-# The recommanded value is a quater of end-point-concurrency.
-# end-point-txn-concurrency-on-busy = 2
+# set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
+labels = {}
 
-# limit for small transaction's count of tasks. A transaction would be considered as small 
-# transaction when its total count of tasks is less than or equal to end-point-small-txn-tasks-limit.
-# end-point-small-txn-tasks-limit = 2
+[storage]
+# set the path to rocksdb directory.
+data-dir = "/tmp/tikv/store"
 
-# set store capacity, if no set, use disk capacity.
-# capacity = 0
+# notify capacity of scheduler's channel
+# scheduler-notify-capacity = 10240
 
-# set backup path, if not set, use "backup" under store path.
-# backup-dir = "/tmp/tikv/store/backup"
+# maximum number of messages can be processed in one tick
+# scheduler-messages-per-tick = 1024
+
+# the number of slots in scheduler latches, concurrency control for write.
+# scheduler-concurrency = 102400
+
+# scheduler's worker pool size, should increase it in heavy write cases,
+# also should less than total cpu cores.
+# scheduler-worker-pool-size = 4
+
+[pd]
+# pd endpoints
+endpoints = []
 
 [metric]
 # the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
@@ -58,6 +67,12 @@ job = "tikv"
 [raftstore]
 # true (default value) for high reliability, this can prevent data loss when power failure.
 sync-log = true
+
+# set the path to raftdb directory, default value is data-dir/raft
+# raftdb-path = ""
+
+# set store capacity, if no set, use disk capacity.
+# capacity = 0
 
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960
@@ -80,7 +95,7 @@ region-split-size = "256MB"
 region-split-check-diff = "32MB"
 
 # Interval to check region whether need to be split or not.
-split-region-check-tick-interval = "5s"
+split-region-check-tick-interval = "10s"
 
 # When raft entry exceed the max size, reject to propose the entry.
 # raft-entry-max-size = "8MB"
@@ -113,18 +128,7 @@ max-peer-down-duration = "5m"
 # Interval (s) to check region whether the data are consistent.
 # consistency-check-interval = 0
 
-[pd]
-# pd endpoints
-endpoints = ""
-
 [rocksdb]
-# RocksDB info log directory, if set, RocksDB will save the log in `info-log-dir/LOG`.
-# info-log-dir = ""
-# Maximal size of the info log, if new info log will be created if size is large than it.
-# info-log-max-size = 0
-# Time for the info log file to roll (in seconds).
-# info-log-roll-time = "0s"
-
 # Maximum number of concurrent background jobs (compactions and flushes)
 # max-background-jobs = 8
 
@@ -195,7 +199,7 @@ wal-recovery-mode = 2
 
 # Dump statistics periodically in information logs.
 # Same as rocksdb's default value (10 min).
-stats-dump-period-sec = 600
+stats-dump-period = "10m"
 
 # Due to Rocksdb FAQ: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ,
 # If you want to use rocksdb on multi disks or spinning disks, you should set value at
@@ -215,7 +219,10 @@ stats-dump-period-sec = 600
 # rate-bytes-per-sec = 0
 
 # Enable or disable the pipelined write
-# enable-pipelined-write = true 
+# enable-pipelined-write = true
+
+# set backup path, if not set, use "backup" under store path.
+# backup-dir = "/tmp/tikv/store/backup"
 
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
@@ -229,7 +236,7 @@ stats-dump-period-sec = 600
 #   zstd:   kZSTD
 
 # per level compression
-# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+# compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
 
 # Approximate size of user data packed per block.  Note that the
 # block size specified here corresponds to uncompressed data.
@@ -277,7 +284,7 @@ stats-dump-period-sec = 600
 # 1 : OldestLargestSeqFirst
 # 2 : OldestSmallestSeqFirst
 # 3 : MinOverlappingRatio
-# compaction-pri = 0
+# compaction-pri = 3
 
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read.
 # in normal cases should tune to 30%-50% system's total memory.
@@ -291,7 +298,7 @@ stats-dump-period-sec = 600
 # Options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
-# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+# compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
 # block-size = "64KB"
 # write-buffer-size = "128MB"
 # max-write-buffer-number = 5
@@ -306,29 +313,10 @@ stats-dump-period-sec = 600
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
-
-# options for Column Family raft.
-# Column Family raft is used to store raft log and raft states.
-[rocksdb.raftcf]
-# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
-# block-size = "64KB"
-# write-buffer-size = "128MB"
-# max-write-buffer-number = 5
-# min-write-buffer-number-to-merge = 1
-# max-bytes-for-level-base = "512MB"
-# target-file-size-base = "32MB"
-# compaction-pri = 0
-
-# should tune to 256MB~2GB.
-# block-cache-size = "256MB"
-# level0-file-num-compaction-trigger = 4
-# level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
-# cache-index-and-filter-blocks = true
-# compaction-pri = 0
+# compaction-pri = 3
 
 [rocksdb.lockcf]
-# compression-per-level = "no:no:no:no:no:no:no"
+# compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
 # block-size = "16KB"
 # write-buffer-size = "128MB"
 # max-write-buffer-number = 5
@@ -342,16 +330,35 @@ stats-dump-period-sec = 600
 # cache-index-and-filter-blocks = true
 # compaction-pri = 0
 
-[storage]
-# notify capacity of scheduler's channel
-# scheduler-notify-capacity = 10240
+[raftdb]
+# max-sub-compactions = 1
+# max-open-files = 40960
+max-manifest-file-size = "20MB"
+create-if-missing = true
+# writable-file-max-buffer-size = "1MB"
 
-# maximum number of messages can be processed in one tick
-# scheduler-messages-per-tick = 1024
+# enable-statistics = true
+stats-dump-period = "10m"
 
-# the number of slots in scheduler latches, concurrency control for write.
-# scheduler-concurrency = 102400
+# compaction-readahead-size = 0
+# writable-file-max-buffer-size = "1MB"
+# use-direct-io-for-flush-and-compaction = false
+# enable-pipelined-write = true
+# allow-concurrent-memtable-write = false
 
-# scheduler's worker pool size, should increase it in heavy write cases,
-# also should less than total cpu cores.
-# scheduler-worker-pool-size = 4
+[raftdb.defaultcf]
+# compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
+# block-size = "64KB"
+# write-buffer-size = "128MB"
+# max-write-buffer-number = 5
+# min-write-buffer-number-to-merge = 1
+# max-bytes-for-level-base = "512MB"
+# target-file-size-base = "32MB"
+
+# should tune to 256MB~2GB.
+# block-cache-size = "256MB"
+# level0-file-num-compaction-trigger = 4
+# level0-slowdown-writes-trigger = 20
+# level0-stop-writes-trigger = 36
+# cache-index-and-filter-blocks = true
+# compaction-pri = 0

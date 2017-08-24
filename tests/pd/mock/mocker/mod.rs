@@ -64,9 +64,10 @@ pub trait PdMocker {
         None
     }
 
-    fn region_heartbeat(&self,
-                        _: &RegionHeartbeatRequest)
-                        -> Option<Result<RegionHeartbeatResponse>> {
+    fn region_heartbeat(
+        &self,
+        _: &RegionHeartbeatRequest,
+    ) -> Option<Result<RegionHeartbeatResponse>> {
         None
     }
 
@@ -86,15 +87,17 @@ pub trait PdMocker {
         None
     }
 
-    fn get_cluster_config(&self,
-                          _: &GetClusterConfigRequest)
-                          -> Option<Result<GetClusterConfigResponse>> {
+    fn get_cluster_config(
+        &self,
+        _: &GetClusterConfigRequest,
+    ) -> Option<Result<GetClusterConfigResponse>> {
         None
     }
 
-    fn put_cluster_config(&self,
-                          _: &PutClusterConfigRequest)
-                          -> Option<Result<PutClusterConfigResponse>> {
+    fn put_cluster_config(
+        &self,
+        _: &PutClusterConfigRequest,
+    ) -> Option<Result<PutClusterConfigResponse>> {
         None
     }
 

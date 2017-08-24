@@ -13,6 +13,8 @@
 
 use std::sync::Arc;
 
+use tikv::util::config::*;
+
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
@@ -23,14 +25,16 @@ use super::pd::TestPdClient;
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     let engine = cluster.get_engine(1);
+    let raft_engine = cluster.get_raft_engine(1);
 
     let stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(stats.get_region_count(), 2);
 
-    let value = vec![0;1024];
+    let value = vec![0; 1024];
     for i in 0..1000 {
         let last_available = stats.get_available();
         cluster.must_put(format!("k{}", i).as_bytes(), &value);
+        raft_engine.flush(true).unwrap();
         engine.flush(true).unwrap();
         sleep_ms(20);
 
@@ -49,7 +53,7 @@ fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
-    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = 20;
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(20);
     cluster.run();
 
     // wait store reports stats.
@@ -62,6 +66,8 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     let engine = cluster.get_engine(1);
+    let raft_engine = cluster.get_raft_engine(1);
+    raft_engine.flush(true).unwrap();
     engine.flush(true).unwrap();
     let last_stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(last_stats.get_region_count(), 1);
@@ -71,6 +77,7 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region = pd_client.get_region(b"").unwrap();
     cluster.must_split(&region, b"k2");
+    raft_engine.flush(true).unwrap();
     engine.flush(true).unwrap();
 
     // wait report region count after split
@@ -98,7 +105,7 @@ fn test_node_simple_store_stats() {
 #[test]
 fn test_server_store_snap_stats() {
     let mut cluster = new_server_cluster(0, 2);
-    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = 600000;
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::secs(600);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.

@@ -11,20 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
 use std::fmt::{self, Write};
+use std::fs;
+use std::path::Path;
 use std::str::{self, FromStr};
 use std::ascii::AsciiExt;
 use std::time::Duration;
 use std::net::{SocketAddrV4, SocketAddrV6};
+use std::ops::{Div, Mul};
 
 use url;
-use regex::Regex;
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::{self, Unexpected, Visitor};
 
-use util::collections::HashMap;
 use util;
-use rocksdb::{DBCompressionType, DBRecoveryMode, CompactionPriority};
 
 quick_error! {
     #[derive(Debug)]
@@ -48,50 +49,153 @@ quick_error! {
     }
 }
 
-pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ConfigError> {
-    match &*tp.trim().to_lowercase() {
-        "no" => Ok(DBCompressionType::No),
-        "snappy" => Ok(DBCompressionType::Snappy),
-        "zlib" => Ok(DBCompressionType::Zlib),
-        "bzip2" => Ok(DBCompressionType::Bz2),
-        "lz4" => Ok(DBCompressionType::Lz4),
-        "lz4hc" => Ok(DBCompressionType::Lz4hc),
-        "zstd" => Ok(DBCompressionType::Zstd),
-        _ => Err(ConfigError::Value(format!("invalid compression type {:?}", tp))),
+pub mod compression_type_level_serde {
+    use std::fmt;
+
+    use serde::{Deserializer, Serializer};
+    use serde::de::{Error, SeqAccess, Unexpected, Visitor};
+    use serde::ser::SerializeSeq;
+
+    use rocksdb::DBCompressionType;
+
+    pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut s = try!(serializer.serialize_seq(Some(ts.len())));
+        for t in ts {
+            let name = match *t {
+                DBCompressionType::No => "no",
+                DBCompressionType::Snappy => "snappy",
+                DBCompressionType::Zlib => "zlib",
+                DBCompressionType::Bz2 => "bzip2",
+                DBCompressionType::Lz4 => "lz4",
+                DBCompressionType::Lz4hc => "lz4hc",
+                DBCompressionType::Zstd => "zstd",
+                DBCompressionType::ZstdNotFinal => "zstd-not-final",
+                DBCompressionType::Disable => "disable",
+            };
+            try!(s.serialize_element(name));
+        }
+        s.end()
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[DBCompressionType; 7], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SeqVisitor;
+        impl<'de> Visitor<'de> for SeqVisitor {
+            type Value = [DBCompressionType; 7];
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                write!(formatter, "a compression type vector")
+            }
+
+            fn visit_seq<S>(self, mut seq: S) -> Result<[DBCompressionType; 7], S::Error>
+            where
+                S: SeqAccess<'de>,
+            {
+                let mut seqs = [DBCompressionType::No; 7];
+                let mut i = 0;
+                while let Some(value) = try!(seq.next_element::<String>()) {
+                    if i == 7 {
+                        return Err(S::Error::invalid_value(
+                            Unexpected::Str(&value),
+                            &"only 7 compression types",
+                        ));
+                    }
+                    seqs[i] = match &*value.trim().to_lowercase() {
+                        "no" => DBCompressionType::No,
+                        "snappy" => DBCompressionType::Snappy,
+                        "zlib" => DBCompressionType::Zlib,
+                        "bzip2" => DBCompressionType::Bz2,
+                        "lz4" => DBCompressionType::Lz4,
+                        "lz4hc" => DBCompressionType::Lz4hc,
+                        "zstd" => DBCompressionType::Zstd,
+                        "zstd-not-final" => DBCompressionType::ZstdNotFinal,
+                        "disable" => DBCompressionType::Disable,
+                        _ => {
+                            return Err(S::Error::invalid_value(
+                                Unexpected::Str(&value),
+                                &"invalid compression type",
+                            ))
+                        }
+                    };
+                    i += 1;
+                }
+                if i < 7 {
+                    return Err(S::Error::invalid_length(i, &"7 compression types"));
+                }
+                Ok(seqs)
+            }
+        }
+
+        deserializer.deserialize_seq(SeqVisitor)
     }
 }
 
-pub fn parse_rocksdb_per_level_compression(tp: &str)
-                                           -> Result<Vec<DBCompressionType>, ConfigError> {
-    tp.split(':')
-        .map(parse_rocksdb_compression)
-        .collect()
-}
+pub mod order_map_serde {
+    use std::fmt;
+    use std::hash::Hash;
+    use std::marker::PhantomData;
 
-pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ConfigError> {
-    match mode {
-        0 => Ok(DBRecoveryMode::TolerateCorruptedTailRecords),
-        1 => Ok(DBRecoveryMode::AbsoluteConsistency),
-        2 => Ok(DBRecoveryMode::PointInTime),
-        3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
-        _ => Err(ConfigError::Value(format!("invalid recovery mode: {:?}", mode))),
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::de::{MapAccess, Visitor};
+    use serde::ser::SerializeMap;
+
+    use util::collections::HashMap;
+
+    pub fn serialize<S, K, V>(m: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        K: Serialize + Hash + Eq,
+        V: Serialize,
+    {
+        let mut s = try!(serializer.serialize_map(Some(m.len())));
+        for (k, v) in m {
+            try!(s.serialize_entry(k, v));
+        }
+        s.end()
     }
-}
 
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "DBCompressionType")]
-#[serde(rename_all = "kebab-case")]
-pub enum CompressionType {
-    No,
-    Snappy,
-    Zlib,
-    #[serde(rename = "bzip2")]
-    Bz2,
-    Lz4,
-    Lz4hc,
-    Zstd,
-    ZstdNotFinal,
-    Disable,
+    pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
+    where
+        D: Deserializer<'de>,
+        K: Deserialize<'de> + Eq + Hash,
+        V: Deserialize<'de>,
+    {
+        struct MapVisitor<K, V> {
+            phantom: PhantomData<HashMap<K, V>>,
+        }
+
+        impl<'de, K, V> Visitor<'de> for MapVisitor<K, V>
+        where
+            K: Deserialize<'de> + Eq + Hash,
+            V: Deserialize<'de>,
+        {
+            type Value = HashMap<K, V>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a map")
+            }
+
+            fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut map = HashMap::with_capacity(access.size_hint().unwrap_or(0));
+                while let Some((key, value)) = access.next_entry()? {
+                    map.insert(key, value);
+                }
+                Ok(map)
+            }
+        }
+
+        deserializer.deserialize_map(MapVisitor {
+            phantom: PhantomData,
+        })
+    }
 }
 
 macro_rules! numeric_enum_mod {
@@ -178,40 +282,11 @@ numeric_enum_mod!{recovery_mode_serde DBRecoveryMode {
     SkipAnyCorruptedRecords = 3,
 }}
 
-pub fn parse_rocksdb_compaction_pri(priority: i64) -> Result<CompactionPriority, ConfigError> {
-    match priority {
-        0 => Ok(CompactionPriority::ByCompensatedSize),
-        1 => Ok(CompactionPriority::OldestLargestSeqFirst),
-        2 => Ok(CompactionPriority::OldestSmallestSeqFirst),
-        3 => Ok(CompactionPriority::MinOverlappingRatio),
-        _ => Err(ConfigError::Value(format!("invalid Compaction priority: {:?}", priority))),
-    }
-}
-
-fn split_property(property: &str) -> Result<(f64, &str), ConfigError> {
-    let mut indx = 0;
-    for s in property.chars() {
-        match s {
-            '0'...'9' | '.' => {
-                indx += 1;
-            }
-            _ => {
-                break;
-            }
-        }
-    }
-
-    let (num, unit) = property.split_at(indx);
-    num.parse::<f64>()
-        .map(|f| (f, unit))
-        .or_else(|_| Err(ConfigError::Value(format!("cannot parse {:?} as f64", num))))
-}
-
 const UNIT: u64 = 1;
 const DATA_MAGNITUDE: u64 = 1024;
-const KB: u64 = UNIT * DATA_MAGNITUDE;
-const MB: u64 = KB * DATA_MAGNITUDE;
-const GB: u64 = MB * DATA_MAGNITUDE;
+pub const KB: u64 = UNIT * DATA_MAGNITUDE;
+pub const MB: u64 = KB * DATA_MAGNITUDE;
+pub const GB: u64 = MB * DATA_MAGNITUDE;
 
 // Make sure it will not overflow.
 const TB: u64 = (GB as u64) * (DATA_MAGNITUDE as u64);
@@ -224,64 +299,61 @@ const SECOND: u64 = MS * TIME_MAGNITUDE_1;
 const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
 
-pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
-    let (num, unit) = try!(split_property(size));
-
-    match &*unit.to_lowercase() {
-        // file size
-        "kb" => Ok((num * (KB as f64)) as i64),
-        "mb" => Ok((num * (MB as f64)) as i64),
-        "gb" => Ok((num * (GB as f64)) as i64),
-        "tb" => Ok((num * (TB as f64)) as i64),
-        "pb" => Ok((num * (PB as f64)) as i64),
-
-        // time
-        "ms" => Ok((num * (MS as f64)) as i64),
-        "s" => Ok((num * (SECOND as f64)) as i64),
-        "m" => Ok((num * (MINUTE as f64)) as i64),
-        "h" => Ok((num * (HOUR as f64)) as i64),
-
-        _ => Err(ConfigError::Value(format!("invalid unit {:?}", unit))),
-    }
-}
-
-pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, ConfigError> {
-    let mut map = HashMap::default();
-
-    let re = Regex::new(r"^[a-z0-9]([a-z0-9-._]*[a-z0-9])?$").unwrap();
-    for label in labels.split(',') {
-        if label.is_empty() {
-            continue;
-        }
-        let label = label.to_lowercase();
-        let kv: Vec<_> = label.split('=').collect();
-        match kv[..] {
-            [k, v] => {
-                if !re.is_match(k) || !re.is_match(v) {
-                    return Err(ConfigError::StoreLabels(format!("invalid label {:?}", label)));
-                }
-                if map.insert(k.to_owned(), v.to_owned()).is_some() {
-                    return Err(ConfigError::StoreLabels(format!("duplicated label {:?}", label)));
-                }
-            }
-            _ => {
-                return Err(ConfigError::StoreLabels(format!("invalid label {:?}", label)));
-            }
-        }
-    }
-
-    Ok(map)
-}
-
+#[derive(Clone, Debug, Copy)]
 pub struct ReadableSize(pub u64);
+
+impl ReadableSize {
+    pub fn kb(count: u64) -> ReadableSize {
+        ReadableSize(count * KB)
+    }
+
+    pub fn mb(count: u64) -> ReadableSize {
+        ReadableSize(count * MB)
+    }
+
+    pub fn gb(count: u64) -> ReadableSize {
+        ReadableSize(count * GB)
+    }
+
+    pub fn as_mb(&self) -> u64 {
+        self.0 / MB
+    }
+}
+
+impl Div<u64> for ReadableSize {
+    type Output = ReadableSize;
+
+    fn div(self, rhs: u64) -> ReadableSize {
+        ReadableSize(self.0 / rhs)
+    }
+}
+
+impl Div<ReadableSize> for ReadableSize {
+    type Output = u64;
+
+    fn div(self, rhs: ReadableSize) -> u64 {
+        self.0 / rhs.0
+    }
+}
+
+impl Mul<u64> for ReadableSize {
+    type Output = ReadableSize;
+
+    fn mul(self, rhs: u64) -> ReadableSize {
+        ReadableSize(self.0 * rhs)
+    }
+}
 
 impl Serialize for ReadableSize {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
+    where
+        S: Serializer,
     {
         let size = self.0;
         let mut buffer = String::new();
-        if size % PB == 0 {
+        if size == 0 {
+            write!(buffer, "{}KB", size).unwrap();
+        } else if size % PB == 0 {
             write!(buffer, "{}PB", size / PB).unwrap();
         } else if size % TB == 0 {
             write!(buffer, "{}TB", size / TB).unwrap();
@@ -300,7 +372,8 @@ impl Serialize for ReadableSize {
 
 impl<'de> Deserialize<'de> for ReadableSize {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where D: Deserializer<'de>
+    where
+        D: Deserializer<'de>,
     {
         struct SizeVisitor;
 
@@ -312,7 +385,8 @@ impl<'de> Deserialize<'de> for ReadableSize {
             }
 
             fn visit_i64<E>(self, size: i64) -> Result<ReadableSize, E>
-                where E: de::Error
+            where
+                E: de::Error,
             {
                 if size >= 0 {
                     self.visit_u64(size as u64)
@@ -322,13 +396,15 @@ impl<'de> Deserialize<'de> for ReadableSize {
             }
 
             fn visit_u64<E>(self, size: u64) -> Result<ReadableSize, E>
-                where E: de::Error
+            where
+                E: de::Error,
             {
                 Ok(ReadableSize(size))
             }
 
             fn visit_str<E>(self, size_str: &str) -> Result<ReadableSize, E>
-                where E: de::Error
+            where
+                E: de::Error,
             {
                 let err_msg = "valid size, only KB, MB, GB, TB, PB are supported.";
                 let size_str = size_str.trim();
@@ -372,13 +448,44 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ReadableDuration(pub Duration);
+
+impl ReadableDuration {
+    pub fn secs(secs: u64) -> ReadableDuration {
+        ReadableDuration(Duration::new(secs, 0))
+    }
+
+    pub fn millis(millis: u64) -> ReadableDuration {
+        ReadableDuration(Duration::new(
+            millis / 1000,
+            (millis % 1000) as u32 * 1_000_000,
+        ))
+    }
+
+    pub fn minutes(minutes: u64) -> ReadableDuration {
+        ReadableDuration::secs(minutes * 60)
+    }
+
+    pub fn hours(hours: u64) -> ReadableDuration {
+        ReadableDuration::minutes(hours * 60)
+    }
+
+    pub fn as_secs(&self) -> u64 {
+        self.0.as_secs()
+    }
+
+    pub fn as_millis(&self) -> u64 {
+        util::time::duration_to_ms(self.0)
+    }
+}
 
 impl Serialize for ReadableDuration {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
+    where
+        S: Serializer,
     {
-        let mut dur = util::duration_to_ms(self.0);
+        let mut dur = util::time::duration_to_ms(self.0);
         let mut buffer = String::new();
         if dur >= HOUR {
             write!(buffer, "{}h", dur / HOUR).unwrap();
@@ -395,13 +502,17 @@ impl Serialize for ReadableDuration {
         if dur > 0 {
             write!(buffer, "{}ms", dur).unwrap();
         }
+        if buffer.is_empty() && dur == 0 {
+            write!(buffer, "0s").unwrap();
+        }
         serializer.serialize_str(&buffer)
     }
 }
 
 impl<'de> Deserialize<'de> for ReadableDuration {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where D: Deserializer<'de>
+    where
+        D: Deserializer<'de>,
     {
         struct DurVisitor;
 
@@ -413,7 +524,8 @@ impl<'de> Deserialize<'de> for ReadableDuration {
             }
 
             fn visit_str<E>(self, dur_str: &str) -> Result<ReadableDuration, E>
-                where E: de::Error
+            where
+                E: de::Error,
             {
                 let dur_str = dur_str.trim();
                 if !dur_str.is_ascii() {
@@ -439,8 +551,10 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                         u
                     };
                     if unit >= last_unit {
-                        return Err(E::invalid_value(Unexpected::Str(dur_str),
-                                                    &"h, m, s, ms should occur in giving order."));
+                        return Err(E::invalid_value(
+                            Unexpected::Str(dur_str),
+                            &"h, m, s, ms should occur in giving order.",
+                        ));
                     }
                     // do we need to check 12h360m?
                     let number_str = unsafe { str::from_utf8_unchecked(first) };
@@ -454,8 +568,10 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                     return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg));
                 }
                 if dur.is_sign_negative() {
-                    return Err(E::invalid_value(Unexpected::Str(dur_str),
-                                                &"duration should be positive."));
+                    return Err(E::invalid_value(
+                        Unexpected::Str(dur_str),
+                        &"duration should be positive.",
+                    ));
                 }
                 let secs = dur as u64 / SECOND as u64;
                 let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
@@ -465,6 +581,22 @@ impl<'de> Deserialize<'de> for ReadableDuration {
 
         deserializer.deserialize_str(DurVisitor)
     }
+}
+
+pub fn canonicalize_path(path: &str) -> Result<String, Box<Error>> {
+    canonicalize_sub_path(path, "")
+}
+
+pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<Error>> {
+    let parent = Path::new(path);
+    let p = parent.join(Path::new(sub_path));
+    if p.exists() && p.is_file() {
+        return Err(format!("{}/{} is not a directory!", path, sub_path).into());
+    }
+    if !p.exists() {
+        try!(fs::create_dir_all(p.as_path()));
+    }
+    Ok(format!("{}", try!(p.canonicalize()).display()))
 }
 
 #[cfg(unix)]
@@ -492,10 +624,12 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
         if err == 0 {
             return Ok(());
         }
-        Err(ConfigError::Limit(format!("the maximum number of open file descriptors is too \
-                                        small, got {}, expect greater or equal to {}",
-                                       prev_limit,
-                                       expect)))
+        Err(ConfigError::Limit(format!(
+            "the maximum number of open file descriptors is too \
+             small, got {}, expect greater or equal to {}",
+            prev_limit,
+            expect
+        )))
     }
 }
 
@@ -515,18 +649,23 @@ mod check_kernel {
     pub type Checker = Fn(i64, i64) -> bool;
 
     // pub for tests.
-    pub fn check_kernel_params(param_path: &str,
-                               expect: i64,
-                               checker: Box<Checker>)
-                               -> Result<(), ConfigError> {
+    pub fn check_kernel_params(
+        param_path: &str,
+        expect: i64,
+        checker: Box<Checker>,
+    ) -> Result<(), ConfigError> {
         let mut buffer = String::new();
-        try!(fs::File::open(param_path)
-            .and_then(|mut f| f.read_to_string(&mut buffer))
-            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+        try!(
+            fs::File::open(param_path)
+                .and_then(|mut f| f.read_to_string(&mut buffer))
+                .map_err(|e| {
+                    ConfigError::Limit(format!("check_kernel_params failed {}", e))
+                })
+        );
 
-        let got = try!(buffer.trim_matches('\n')
-            .parse::<i64>()
-            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+        let got = try!(buffer.trim_matches('\n').parse::<i64>().map_err(|e| {
+            ConfigError::Limit(format!("check_kernel_params failed {}", e))
+        }));
 
         let mut param = String::new();
         // skip 3, ["", "proc", "sys", ...]
@@ -537,10 +676,12 @@ mod check_kernel {
         param.pop();
 
         if !checker(got, expect) {
-            return Err(ConfigError::Limit(format!("kernel parameters {} got {}, expect {}",
-                                                  param,
-                                                  got,
-                                                  expect)));
+            return Err(ConfigError::Limit(format!(
+                "kernel parameters {} got {}, expect {}",
+                param,
+                got,
+                expect
+            )));
         }
 
         info!("kernel parameters {}: {}", param, got);
@@ -556,11 +697,19 @@ mod check_kernel {
     pub fn check_kernel() -> Vec<ConfigError> {
         let params: Vec<(&str, i64, Box<Checker>)> = vec![
             // Check net.core.somaxconn.
-            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| got >= expect),
+            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| {
+                got >= expect
+            }),
             // Check net.ipv4.tcp_syncookies.
-            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| got == expect),
+            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| {
+                got == expect
+            }),
             // Check vm.swappiness.
-            ("/proc/sys/vm/swappiness", 0, box |got, expect| got == expect),
+            (
+                "/proc/sys/vm/swappiness",
+                0,
+                box |got, expect| got == expect,
+            ),
         ];
 
         let mut errors = Vec::with_capacity(params.len());
@@ -603,12 +752,14 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     }
 
     // Check Port.
-    let port: u16 = try!(parts[1]
-        .parse()
-        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))));
+    let port: u16 = try!(parts[1].parse().map_err(|_| {
+        ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
+    }));
     // Port = 0 is invalid.
     if port == 0 {
-        return Err(ConfigError::Address(format!("invalid addr, port can not be 0: {:?}", addr)));
+        return Err(ConfigError::Address(
+            format!("invalid addr, port can not be 0: {:?}", addr),
+        ));
     }
 
     // Check Host.
@@ -621,10 +772,33 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 
 #[cfg(test)]
 mod test {
+    use std::fs::File;
+    use std::path::Path;
+
     use super::*;
 
+    use rocksdb::DBCompressionType;
+    use tempdir::TempDir;
     use toml;
-    use rocksdb::DBRecoveryMode;
+
+    use util::collections::HashMap;
+
+    #[test]
+    fn test_readable_size() {
+        let s = ReadableSize::kb(2);
+        assert_eq!(s.0, 2048);
+        assert_eq!(s.as_mb(), 0);
+        let s = ReadableSize::mb(2);
+        assert_eq!(s.0, 2 * 1024 * 1024);
+        assert_eq!(s.as_mb(), 2);
+        let s = ReadableSize::gb(2);
+        assert_eq!(s.0, 2 * 1024 * 1024 * 1024);
+        assert_eq!(s.as_mb(), 2048);
+
+        assert_eq!((ReadableSize::mb(2) / 2).0, MB);
+        assert_eq!((ReadableSize::mb(1) / 2).0, 512 * KB);
+        assert_eq!(ReadableSize::mb(2) / ReadableSize::kb(1), 2048);
+    }
 
     #[test]
     fn test_parse_readable_size() {
@@ -634,6 +808,7 @@ mod test {
         }
 
         let legal_cases = vec![
+            (0, "0KB"),
             (2 * KB, "2KB"),
             (4 * MB, "4MB"),
             (5 * GB, "5GB"),
@@ -641,7 +816,9 @@ mod test {
             (11 * PB, "11PB"),
         ];
         for (size, exp) in legal_cases {
-            let c = SizeHolder { s: ReadableSize(size) };
+            let c = SizeHolder {
+                s: ReadableSize(size),
+            };
             let res_str = toml::to_string(&c).unwrap();
             let exp_str = format!("s = {:?}\n", exp);
             assert_eq!(res_str, exp_str);
@@ -649,7 +826,9 @@ mod test {
             assert_eq!(res_size.s.0, size);
         }
 
-        let c = SizeHolder { s: ReadableSize(512) };
+        let c = SizeHolder {
+            s: ReadableSize(512),
+        };
         let res_str = toml::to_string(&c).unwrap();
         assert_eq!(res_str, "s = 512\n");
         let res_size: SizeHolder = toml::from_str(&res_str).unwrap();
@@ -673,19 +852,57 @@ mod test {
             assert_eq!(res.s.0, exp);
         }
 
-        let illegal_cases = vec![
-            "0.5kb",
-            "0.5kB",
-            "0.5Kb",
-            "0.5k",
-            "0.5g",
-            "gb",
-            "1b",
-        ];
+        let illegal_cases = vec!["0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "gb", "1b"];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
         }
+    }
+
+    #[test]
+    fn test_parse_hash_map() {
+        #[derive(Serialize, Deserialize)]
+        struct MapHolder {
+            #[serde(with = "super::order_map_serde")]
+            m: HashMap<String, String>,
+        }
+
+        let legal_cases = vec![
+            (map![], ""),
+            (map!["k1".to_owned() => "v1".to_owned()], "k1 = \"v1\"\n"),
+        ];
+
+        for (src, exp) in legal_cases {
+            let m = MapHolder { m: src };
+            let res_str = toml::to_string(&m).unwrap();
+            let exp_str = format!("[m]\n{}", exp);
+            assert_eq!(res_str, exp_str);
+            let exp_m: MapHolder = toml::from_str(&exp_str).unwrap();
+            assert_eq!(m.m, exp_m.m);
+        }
+        // inline table should be supported.
+        let m: MapHolder = toml::from_str(r#"m = {"k1" = "v1"}"#).unwrap();
+        assert_eq!(m.m.get("k1").unwrap(), "v1");
+    }
+
+    #[test]
+    fn test_duration_construction() {
+        let mut dur = ReadableDuration::secs(1);
+        assert_eq!(dur.0, Duration::new(1, 0));
+        assert_eq!(dur.as_secs(), 1);
+        assert_eq!(dur.as_millis(), 1000);
+        dur = ReadableDuration::millis(1001);
+        assert_eq!(dur.0, Duration::new(1, 1_000_000));
+        assert_eq!(dur.as_secs(), 1);
+        assert_eq!(dur.as_millis(), 1001);
+        dur = ReadableDuration::minutes(2);
+        assert_eq!(dur.0, Duration::new(2 * 60, 0));
+        assert_eq!(dur.as_secs(), 120);
+        assert_eq!(dur.as_millis(), 120000);
+        dur = ReadableDuration::hours(2);
+        assert_eq!(dur.0, Duration::new(2 * 3600, 0));
+        assert_eq!(dur.as_secs(), 7200);
+        assert_eq!(dur.as_millis(), 7200000);
     }
 
     #[test]
@@ -696,6 +913,7 @@ mod test {
         }
 
         let legal_cases = vec![
+            (0, 0, "0s"),
             (0, 1, "1ms"),
             (2, 0, "2s"),
             (4 * 60, 0, "4m"),
@@ -704,7 +922,9 @@ mod test {
             (3600 + 2, 5, "1h2s5ms"),
         ];
         for (secs, ms, exp) in legal_cases {
-            let d = DurHolder { d: ReadableDuration(Duration::new(secs, ms * 1_000_000)) };
+            let d = DurHolder {
+                d: ReadableDuration(Duration::new(secs, ms * 1_000_000)),
+            };
             let res_str = toml::to_string(&d).unwrap();
             let exp_str = format!("d = {:?}\n", exp);
             assert_eq!(res_str, exp_str);
@@ -712,107 +932,30 @@ mod test {
             assert_eq!(res_dur.d.0, d.d.0);
         }
 
-        let decode_cases = vec![
-            (" 0.5 h2m ", 3600 / 2 + 2 * 60, 0),
-        ];
+        let decode_cases = vec![(" 0.5 h2m ", 3600 / 2 + 2 * 60, 0)];
         for (src, secs, ms) in decode_cases {
             let src = format!("d = {:?}", src);
             let res: DurHolder = toml::from_str(&src).unwrap();
             assert_eq!(res.d.0, Duration::new(secs, ms * 1_000_000));
         }
 
-        let illegal_cases = vec![
-            "1H",
-            "1M",
-            "1S",
-            "1MS",
-            "1h1h",
-            "h",
-        ];
+        let illegal_cases = vec!["1H", "1M", "1S", "1MS", "1h1h", "h"];
         for src in illegal_cases {
             let src_str = format!("d = {:?}", src);
             assert!(toml::from_str::<DurHolder>(&src_str).is_err(), "{}", src);
         }
         assert!(toml::from_str::<DurHolder>("d = 23").is_err());
     }
-    #[test]
-    fn test_parse_readable_int() {
-        // file size
-        assert_eq!(1_024, parse_readable_int("1KB").unwrap());
-        assert_eq!(1_048_576, parse_readable_int("1MB").unwrap());
-        assert_eq!(1_073_741_824, parse_readable_int("1GB").unwrap());
-        assert_eq!(1_099_511_627_776, parse_readable_int("1TB").unwrap());
-        assert_eq!(1_125_899_906_842_624, parse_readable_int("1PB").unwrap());
-
-        assert_eq!(1_024, parse_readable_int("1kb").unwrap());
-        assert_eq!(1_048_576, parse_readable_int("1mb").unwrap());
-        assert_eq!(1_073_741_824, parse_readable_int("1gb").unwrap());
-        assert_eq!(1_099_511_627_776, parse_readable_int("1tb").unwrap());
-        assert_eq!(1_125_899_906_842_624, parse_readable_int("1pb").unwrap());
-
-        assert_eq!(1_536, parse_readable_int("1.5KB").unwrap());
-        assert_eq!(1_572_864, parse_readable_int("1.5MB").unwrap());
-        assert_eq!(1_610_612_736, parse_readable_int("1.5GB").unwrap());
-        assert_eq!(1_649_267_441_664, parse_readable_int("1.5TB").unwrap());
-        assert_eq!(1_688_849_860_263_936, parse_readable_int("1.5PB").unwrap());
-
-        assert_eq!(100_663_296, parse_readable_int("96MB").unwrap());
-
-        assert_eq!(1_429_365_116_108, parse_readable_int("1.3TB").unwrap());
-        assert_eq!(1_463_669_878_895_411, parse_readable_int("1.3PB").unwrap());
-
-        assert!(parse_readable_int("KB").is_err());
-        assert!(parse_readable_int("MB").is_err());
-        assert!(parse_readable_int("GB").is_err());
-        assert!(parse_readable_int("TB").is_err());
-        assert!(parse_readable_int("PB").is_err());
-
-        // time
-        assert_eq!(1, parse_readable_int("1ms").unwrap());
-        assert_eq!(1_000, parse_readable_int("1s").unwrap());
-        assert_eq!(60_000, parse_readable_int("1m").unwrap());
-        assert_eq!(3_600_000, parse_readable_int("1h").unwrap());
-
-        assert_eq!(1, parse_readable_int("1.3ms").unwrap());
-        assert_eq!(1_000, parse_readable_int("1000ms").unwrap());
-        assert_eq!(1_300, parse_readable_int("1.3s").unwrap());
-        assert_eq!(1_500, parse_readable_int("1.5s").unwrap());
-        assert_eq!(10_000, parse_readable_int("10s").unwrap());
-        assert_eq!(78_000, parse_readable_int("1.3m").unwrap());
-        assert_eq!(90_000, parse_readable_int("1.5m").unwrap());
-        assert_eq!(4_680_000, parse_readable_int("1.3h").unwrap());
-        assert_eq!(5_400_000, parse_readable_int("1.5h").unwrap());
-
-        assert!(parse_readable_int("ms").is_err());
-        assert!(parse_readable_int("s").is_err());
-        assert!(parse_readable_int("m").is_err());
-        assert!(parse_readable_int("h").is_err());
-
-        assert!(parse_readable_int("1").is_err());
-        assert!(parse_readable_int("foo").is_err());
-    }
-
-    #[test]
-    fn test_parse_rocksdb_wal_recovery_mode() {
-        assert!(DBRecoveryMode::TolerateCorruptedTailRecords ==
-                parse_rocksdb_wal_recovery_mode(0).unwrap());
-        assert!(DBRecoveryMode::AbsoluteConsistency == parse_rocksdb_wal_recovery_mode(1).unwrap());
-        assert!(DBRecoveryMode::PointInTime == parse_rocksdb_wal_recovery_mode(2).unwrap());
-        assert!(DBRecoveryMode::SkipAnyCorruptedRecords ==
-                parse_rocksdb_wal_recovery_mode(3).unwrap());
-
-        assert!(parse_rocksdb_wal_recovery_mode(4).is_err());
-    }
 
     #[test]
     fn test_parse_compression_type() {
         #[derive(Serialize, Deserialize)]
         struct CompressionTypeHolder {
-            #[serde(with = "CompressionType")]
-            tp: DBCompressionType,
+            #[serde(with = "compression_type_level_serde")]
+            tp: [DBCompressionType; 7],
         }
 
-        let case = vec![
+        let all_tp = vec![
             (DBCompressionType::No, "no"),
             (DBCompressionType::Snappy, "snappy"),
             (DBCompressionType::Zlib, "zlib"),
@@ -823,29 +966,63 @@ mod test {
             (DBCompressionType::ZstdNotFinal, "zstd-not-final"),
             (DBCompressionType::Disable, "disable"),
         ];
-        for (tp, exp) in case {
-            let holder = CompressionTypeHolder { tp: tp };
-            let res = toml::to_string(&holder).unwrap();
-            let exp_str = format!("tp = {:?}\n", exp);
-            assert_eq!(res, exp_str);
+        for i in 0..all_tp.len() - 7 {
+            let mut src = [DBCompressionType::No; 7];
+            let mut exp = ["no"; 7];
+            for (i, &t) in all_tp[i..i + 7].iter().enumerate() {
+                src[i] = t.0;
+                exp[i] = t.1;
+            }
+            let holder = CompressionTypeHolder { tp: src };
+            let res_str = toml::to_string(&holder).unwrap();
+            let exp_str = format!("tp = [\"{}\"]\n", exp.join("\", \""));
+            assert_eq!(res_str, exp_str);
             let h: CompressionTypeHolder = toml::from_str(&exp_str).unwrap();
             assert_eq!(h.tp, holder.tp);
         }
 
-        assert!(toml::from_str::<CompressionTypeHolder>("tp = \"tp\"").is_err());
+        // length is wrong.
+        assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
+            "no", "no", "no", "no", "no", "no", "no", "no"
+        ]"#
+            ).is_err()
+        );
+        // value is wrong.
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
+            "no", "no", "no", "no", "no", "no", "yes"
+        ]"#
+            ).is_err()
+        );
     }
 
     #[test]
-    fn test_parse_rocksdb_compaction_pri() {
-        assert!(CompactionPriority::ByCompensatedSize == parse_rocksdb_compaction_pri(0).unwrap());
-        assert!(CompactionPriority::OldestLargestSeqFirst ==
-                parse_rocksdb_compaction_pri(1).unwrap());
-        assert!(CompactionPriority::OldestSmallestSeqFirst ==
-                parse_rocksdb_compaction_pri(2).unwrap());
-        assert!(CompactionPriority::MinOverlappingRatio ==
-                parse_rocksdb_compaction_pri(3).unwrap());
+    fn test_canonicalize_path() {
+        let tmp_dir = TempDir::new("test-canonicalize").unwrap();
+        let path1 = format!(
+            "{}",
+            tmp_dir.path().to_path_buf().join("test1.dump").display()
+        );
+        let res_path1 = canonicalize_path(&path1).unwrap();
+        assert!(Path::new(&path1).exists());
+        assert_eq!(
+            Path::new(&res_path1),
+            Path::new(&path1).canonicalize().unwrap()
+        );
 
-        assert!(parse_rocksdb_compaction_pri(4).is_err());
+        let path2 = format!(
+            "{}",
+            tmp_dir.path().to_path_buf().join("test2.dump").display()
+        );
+        {
+            File::create(&path2).unwrap();
+        }
+        assert!(canonicalize_path(&path2).is_err());
+        assert!(Path::new(&path2).exists());
     }
 
     #[cfg(target_os = "linux")]
@@ -856,9 +1033,19 @@ mod test {
 
         // The range of vm.swappiness is from 0 to 100.
         let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![
-            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got == expect), false),
+            (
+                "/proc/sys/vm/swappiness",
+                i64::MAX,
+                Box::new(|got, expect| got == expect),
+                false,
+            ),
 
-            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got < expect), true),
+            (
+                "/proc/sys/vm/swappiness",
+                i64::MAX,
+                Box::new(|got, expect| got < expect),
+                true,
+            ),
         ];
 
         for (path, expect, checker, is_ok) in table {
@@ -869,78 +1056,42 @@ mod test {
     #[test]
     fn test_check_addrs() {
         let table = vec![
-            ("127.0.0.1:8080",true),
-            ("[::1]:8080",true),
-            ("localhost:8080",true),
-            ("pingcap.com:8080",true),
-            ("funnydomain:8080",true),
+            ("127.0.0.1:8080", true),
+            ("[::1]:8080", true),
+            ("localhost:8080", true),
+            ("pingcap.com:8080", true),
+            ("funnydomain:8080", true),
 
-            ("127.0.0.1",false),
-            ("[::1]",false),
-            ("localhost",false),
-            ("pingcap.com",false),
-            ("funnydomain",false),
-            ("funnydomain:",false),
+            ("127.0.0.1", false),
+            ("[::1]", false),
+            ("localhost", false),
+            ("pingcap.com", false),
+            ("funnydomain", false),
+            ("funnydomain:", false),
 
-            ("root@google.com:8080",false),
-            ("http://google.com:8080",false),
-            ("google.com:8080/path",false),
-            ("http://google.com:8080/path",false),
-            ("http://google.com:8080/path?lang=en",false),
-            ("http://google.com:8080/path?lang=en#top",false),
+            ("root@google.com:8080", false),
+            ("http://google.com:8080", false),
+            ("google.com:8080/path", false),
+            ("http://google.com:8080/path", false),
+            ("http://google.com:8080/path?lang=en", false),
+            ("http://google.com:8080/path?lang=en#top", false),
 
-            ("ftp://ftp.is.co.za/rfc/rfc1808.txt",false),
-            ("http://www.ietf.org/rfc/rfc2396.txt",false),
-            ("ldap://[2001:db8::7]/c=GB?objectClass?one",false),
-            ("mailto:John.Doe@example.com",false),
-            ("news:comp.infosystems.www.servers.unix",false),
-            ("tel:+1-816-555-1212",false),
-            ("telnet://192.0.2.16:80/",false),
-            ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2",false),
+            ("ftp://ftp.is.co.za/rfc/rfc1808.txt", false),
+            ("http://www.ietf.org/rfc/rfc2396.txt", false),
+            ("ldap://[2001:db8::7]/c=GB?objectClass?one", false),
+            ("mailto:John.Doe@example.com", false),
+            ("news:comp.infosystems.www.servers.unix", false),
+            ("tel:+1-816-555-1212", false),
+            ("telnet://192.0.2.16:80/", false),
+            ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2", false),
 
-            (":8080",false),
-            ("8080",false),
-            ("8080:",false),
+            (":8080", false),
+            ("8080", false),
+            ("8080:", false),
         ];
 
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
         }
-    }
-
-    #[test]
-    fn test_store_labels() {
-        let cases = vec![
-            "abc",
-            "abc=",
-            "abc.012",
-            "abc,012",
-            "abc=123*",
-            ".123=-abc",
-            "abc,123=123.abc",
-            "abc=123,abc=abc",
-        ];
-
-        for case in cases {
-            assert!(parse_store_labels(case).is_err());
-        }
-
-        let map = parse_store_labels("").unwrap();
-        assert!(map.is_empty());
-
-        let map = parse_store_labels("a=0").unwrap();
-        assert_eq!(map.get("a").unwrap(), "0");
-
-        let map = parse_store_labels("a.1-2=b_1.2").unwrap();
-        assert_eq!(map.get("a.1-2").unwrap(), "b_1.2");
-
-        let map = parse_store_labels("a.1-2=b_1.2,cab-012=3ac.8b2").unwrap();
-        assert_eq!(map.get("a.1-2").unwrap(), "b_1.2");
-        assert_eq!(map.get("cab-012").unwrap(), "3ac.8b2");
-
-        let map = parse_store_labels("zone=us-west-1,disk=ssd,Test=Test").unwrap();
-        assert_eq!(map.get("zone").unwrap(), "us-west-1");
-        assert_eq!(map.get("disk").unwrap(), "ssd");
-        assert_eq!(map.get("test").unwrap(), "test");
     }
 }
