@@ -17,7 +17,6 @@ use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
-use std::collections::HashMap as StdHashMap;
 use std::mem;
 
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
@@ -77,7 +76,7 @@ pub struct Host {
     max_running_task_count: usize,
 }
 
-pub type ReadStats = Arc<StdHashMap<u64, (u64, u64)>>;
+pub type ReadStats = Arc<HashMap<u64, (u64, u64)>>;
 
 #[derive(Clone)]
 struct CopContext {
@@ -127,7 +126,7 @@ impl Context for CopContext {
             }
         }
         if let Some(ref sender) = self.raftstore_sender {
-            if let Err(e) = sender.send(mem::replace(&mut self.read_stats, Arc::new(StdHashMap::new()))) {
+            if let Err(e) = sender.send(mem::replace(&mut self.read_stats, Arc::new(HashMap::new()))) {
                 warn!(
                     "coprocesser failed to send statistics to raftstore: {:?}",
                     e
@@ -148,7 +147,7 @@ impl ContextFactory<CopContext> for CopContextFactory {
             select_stats: Default::default(),
             index_stats: Default::default(),
             dag_stats: Default::default(),
-            read_stats: Arc::new(StdHashMap::new()),
+            read_stats: Arc::new(HashMap::new()),
         }
     }
 }

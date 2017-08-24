@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap as StdHashMap};
+use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
@@ -1880,7 +1880,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let mut read_statistic: StdHashMap<u64, (u64, u64)> = StdHashMap::new();
+        let mut read_statistic: HashMap<u64, (u64, u64)> = HashMap::new();
         if let Some(ref recv) = self.read_stat_recv {
             while let Ok(m) = recv.try_recv() {
                 for (&key, val) in m.iter() {

@@ -427,6 +427,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         pending_peers,
                         written_bytes,
                         written_keys,
+                        read_bytes,
+                        read_keys,
                         approximate_size,
                     ),
                 )
