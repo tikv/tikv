@@ -74,14 +74,6 @@ quick_error! {
             description(desc)
             display("error {}", desc)
         }
-        Truncated {
-            description("Truncated")
-            display("error Truncated")
-        }
-        Overflow {
-            description("Overflow")
-            display("error Overflow")
-        }
     }
 }
 
@@ -278,7 +270,7 @@ impl Expression {
                 ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
                 ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
                 ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
-                
+
                 ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
                 ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
 
