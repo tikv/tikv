@@ -112,6 +112,7 @@ impl Context for CopContext {
                         .observe(count as f64);
                 }
             }
+            *this_statistics = Default::default();
         }
     }
 }
