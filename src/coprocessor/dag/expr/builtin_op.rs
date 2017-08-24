@@ -268,7 +268,7 @@ mod test {
             (ScalarFuncSig::UnaryMinusInt, Datum::I64(0), Datum::I64(0)),
             (
                 ScalarFuncSig::UnaryMinusInt,
-                Datum::I64((i64::MAX as u64 + 1) as i64),
+                Datum::U64(i64::MAX as u64 + 1),
                 Datum::I64(i64::MIN),
             ),
             (ScalarFuncSig::UnaryMinusInt, Datum::Null, Datum::Null),
@@ -299,10 +299,14 @@ mod test {
         let ctx = StatementContext::default();
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(fncall_expr(operator, &[arg1]), 0).unwrap();
+            let unsigned = mysql::has_unsigned_flag(arg1.get_field_type().get_flag());
+            let mut op = Expression::build(fncall_expr(operator, &[arg1]), 0).unwrap();
             let expected = Expression::build(datum_expr(exp), 0).unwrap();
             match operator {
                 ScalarFuncSig::UnaryMinusInt => {
+                    if unsigned {
+                        op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+                    }
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
                     let rhs = expected.eval_int(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
