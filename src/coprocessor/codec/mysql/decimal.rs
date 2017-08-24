@@ -840,10 +840,9 @@ pub enum RoundMode {
 impl Decimal {
     /// abs the Decimal into a new Decimal.
     #[inline]
-    pub fn abs(&self) -> Res<Decimal> {
-        let mut res = self.clone();
-        res.negative = false;
-        Res::Ok(res)
+    pub fn abs(mut self) -> Res<Decimal> {
+        self.negative = false;
+        Res::Ok(self)
     }
 
     /// ceil the Decimal into a new Decimal.
@@ -1376,7 +1375,8 @@ impl Decimal {
                 mini_shift = r_mini_shift as i8;
             }
             new_point += mini_shift as isize;
-            if shift + mini_shift as isize == 0 && (new_point - int_cnt) < DIGITS_PER_WORD as isize
+            if shift + mini_shift as isize == 0 &&
+                (new_point - int_cnt) < DIGITS_PER_WORD as isize
             {
                 res.int_cnt = int_cnt as u8;
                 res.frac_cnt = frac_cnt as u8;
@@ -1466,33 +1466,15 @@ impl Decimal {
         Res::Ok(x)
     }
 
-    /// `int_part` returns int part of the decimal. It's temporary and
-    /// after we adjust `as_i64`, it will be removed.
-    pub fn int_part(&self, ctx: &EvalContext) -> ::std::result::Result<i64, ExprError> {
-        let mut x = 0i64;
-        let int_word_cnt = word_cnt!(self.int_cnt) as usize;
-        for word_idx in 0..int_word_cnt {
-            let y = x;
-            x = x.wrapping_mul(WORD_BASE as i64)
-                .wrapping_sub(self.word_buf[word_idx] as i64);
-            if y < i64::MIN / WORD_BASE as i64 || x > y {
-                return Err(ExprError::Overflow);
+    /// `as_i64_with_ctx` returns int part of the decimal.
+    pub fn as_i64_with_ctx(&self, ctx: &EvalContext) -> ::std::result::Result<i64, ExprError> {
+        let res = self.as_i64();
+        if ctx.ignore_truncate || ctx.truncate_as_warning {
+            if let Res::Truncated(ref i) = res {
+                return Ok(*i);
             }
         }
-        if !self.negative && x == i64::MIN {
-            return Err(ExprError::Overflow);
-        }
-        if !self.negative {
-            x = -x;
-        }
-        if !ctx.ignore_truncate && !ctx.truncate_as_warning {
-            for i in int_word_cnt..int_word_cnt + word_cnt!(self.frac_cnt) as usize {
-                if self.word_buf[i] != 0 {
-                    return Err(ExprError::Truncated);
-                }
-            }
-        }
-        Ok(x)
+        res.into()
     }
 
     /// `as_u64` returns int part of the decimal

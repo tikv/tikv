@@ -31,7 +31,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let result: Result<Decimal> = d.abs().into();
+        let result: Result<Decimal> = d.as_ref().clone().abs().into();
         result.map(|t| Some(Cow::Owned(t)))
     }
 
@@ -75,7 +75,7 @@ impl FnCall {
         // FIXME: here we can't do same logic with TiDB.
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.ceil().into();
-        d.and_then(|dec| dec.int_part(ctx)).map(Some)
+        d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
     }
 
     #[inline]
@@ -115,7 +115,7 @@ impl FnCall {
         // FIXME: here we can't do same logic with TiDB.
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.floor().into();
-        d.and_then(|dec| dec.int_part(ctx)).map(Some)
+        d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
     }
 
     #[inline]
