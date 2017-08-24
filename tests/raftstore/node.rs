@@ -191,6 +191,7 @@ impl Simulator for NodeCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
+            None,
         ).unwrap();
         assert!(
             engines

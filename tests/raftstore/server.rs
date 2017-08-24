@@ -138,6 +138,7 @@ impl Simulator for ServerCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
+            None,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -145,7 +146,7 @@ impl Simulator for ServerCluster {
             self.snap_paths.insert(node_id, tmp);
         }
 
-        server.start(&cfg.server).unwrap();
+        server.start(&cfg.server, None).unwrap();
 
         self.metas.insert(
             node_id,

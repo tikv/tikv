@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
+use std::collections::HashMap as StdHashMap;
+use std::mem;
 
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
 use tipb::schema::ColumnInfo;
@@ -74,12 +77,17 @@ pub struct Host {
     max_running_task_count: usize,
 }
 
+pub type ReadStats = Arc<StdHashMap<u64, (u64, u64)>>;
+
 #[derive(Clone)]
 struct CopContext {
-    raftstore_sender: Option<Sender<Statistics>>,
+    raftstore_sender: Option<Sender<ReadStats>>,
     select_stats: Statistics,
     index_stats: Statistics,
     dag_stats: Statistics,
+    // region_id => read statistics of this region.
+    // region_id => (read bytes, read keys)
+    read_stats: ReadStats,
 }
 
 impl CopContext {
@@ -119,7 +127,7 @@ impl Context for CopContext {
             }
         }
         if let Some(ref sender) = self.raftstore_sender {
-            if let Err(e) = sender.send(statistics) {
+            if let Err(e) = sender.send(mem::replace(&mut self.read_stats, Arc::new(StdHashMap::new()))) {
                 warn!(
                     "coprocesser failed to send statistics to raftstore: {:?}",
                     e
@@ -130,7 +138,7 @@ impl Context for CopContext {
 }
 
 struct CopContextFactory {
-    raftstore_sender: Option<Sender<Statistics>>,
+    raftstore_sender: Option<Sender<ReadStats>>,
 }
 
 impl ContextFactory<CopContext> for CopContextFactory {
@@ -140,6 +148,7 @@ impl ContextFactory<CopContext> for CopContextFactory {
             select_stats: Default::default(),
             index_stats: Default::default(),
             dag_stats: Default::default(),
+            read_stats: Arc::new(StdHashMap::new()),
         }
     }
 }
@@ -149,7 +158,7 @@ impl Host {
         engine: Box<Engine>,
         scheduler: Scheduler<Task>,
         concurrency: usize,
-        sender: Option<Sender<Statistics>>,
+        sender: Option<Sender<ReadStats>>,
     ) -> Host {
         Host {
             engine: engine,
@@ -220,8 +229,12 @@ impl Host {
                 CommandPri::Normal => &mut self.pool,
             };
             pool.execute(move |ctx: &mut CopContext| {
+                let region_id = req.req.get_context().get_region_id();
                 let stats = end_point.handle_request(req);
                 ctx.add_statistics(type_str, &stats);
+                let m = Arc::make_mut(&mut ctx.read_stats);
+                m.entry(region_id).or_insert((0,0)).0 += stats.total_read_bytes();
+                m.entry(region_id).or_insert((0,0)).1 += stats.total_processed() as u64;
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();

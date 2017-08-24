@@ -24,6 +24,7 @@ use raftstore::store::{SnapManager, SnapshotStatusMsg};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
+use coprocessor::endpoint::ReadStats;
 use super::grpc_service::Service;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
@@ -119,12 +120,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.trans.clone()
     }
 
-    pub fn start(&mut self, cfg: &Config) -> Result<()> {
+    pub fn start(&mut self, cfg: &Config, sender: Option<Sender<ReadStats>>) -> Result<()> {
         let end_point = EndPointHost::new(
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
             cfg.end_point_concurrency,
-            None,
+            sender,
         );
         box_try!(
             self.end_point_worker
