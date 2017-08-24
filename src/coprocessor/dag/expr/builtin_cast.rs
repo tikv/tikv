@@ -213,15 +213,16 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        if self.children[0].is_hybrid_type() {
-            return self.children[0].eval_decimal(ctx, row);
-        }
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let dec = match try!(Decimal::from_bytes(&val)) {
-            Res::Ok(d) => Cow::Owned(d),
-            Res::Truncated(d) | Res::Overflow(d) => {
-                try!(convert::handle_truncate(ctx, true));
-                Cow::Owned(d)
+        let dec = if self.children[0].is_hybrid_type() {
+            try_opt!(self.children[0].eval_decimal(ctx, row))
+        } else {
+            let val = try_opt!(self.children[0].eval_string(ctx, row));
+            match try!(Decimal::from_bytes(&val)) {
+                Res::Ok(d) => Cow::Owned(d),
+                Res::Truncated(d) | Res::Overflow(d) => {
+                    try!(convert::handle_truncate(ctx, true));
+                    Cow::Owned(d)
+                }
             }
         };
         self.produce_dec_with_specified_tp(ctx, dec).map(Some)
