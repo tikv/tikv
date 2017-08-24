@@ -72,7 +72,27 @@ pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[
 pub const ENGINE_HIST_TYPES: &'static [HistType] = &[
     HistType::GetMicros,
     HistType::WriteMicros,
+    HistType::CompactionTime,
+    HistType::TableSyncMicros,
+    HistType::CompactionOutfileSyncMicros,
+    HistType::WalFileSyncMicros,
+    HistType::ManifestFileSyncMicros,
+    HistType::StallL0SlowdownCount,
+    HistType::StallMemtableCompactionCount,
+    HistType::StallL0NumFilesCount,
+    HistType::HardRateLimitDelayCount,
+    HistType::SoftRateLimitDelayCount,
+    HistType::NumFilesInSingleCompaction,
     HistType::SeekMicros,
+    HistType::WriteStall,
+    HistType::SSTReadMicros,
+    HistType::NumSubcompactionsScheduled,
+    HistType::BytesPerRead,
+    HistType::BytesPerWrite,
+    HistType::BytesCompressed,
+    HistType::BytesDecompressed,
+    HistType::CompressionTimesNanos,
+    HistType::DecompressionTimesNanos,
 ];
 
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
@@ -341,6 +361,196 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 .with_label_values(&[name, "write_standard_deviation"])
                 .set(value.standard_deviation);
         }
+        HistType::CompactionTime => {
+            STORE_ENGINE_COMPACTION_TIME_VEC
+                .with_label_values(&[name, "compaction_time_median"])
+                .set(value.median);
+            STORE_ENGINE_COMPACTION_TIME_VEC
+                .with_label_values(&[name, "compaction_time_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_COMPACTION_TIME_VEC
+                .with_label_values(&[name, "compaction_time_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_COMPACTION_TIME_VEC
+                .with_label_values(&[name, "compaction_time_average"])
+                .set(value.average);
+            STORE_ENGINE_COMPACTION_TIME_VEC
+                .with_label_values(&[name, "compaction_time_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::TableSyncMicros => {
+            STORE_ENGINE_TABLE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "table_sync_median"])
+                .set(value.median);
+            STORE_ENGINE_TABLE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "table_sync_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_TABLE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "table_sync_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_TABLE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "table_sync_average"])
+                .set(value.average);
+            STORE_ENGINE_TABLE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "table_sync_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::CompactionOutfileSyncMicros => {
+            STORE_ENGINE_COMPACTION_OUTFILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "compaction_outfile_sync_median"])
+                .set(value.median);
+            STORE_ENGINE_COMPACTION_OUTFILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "compaction_outfile_sync_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_COMPACTION_OUTFILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "compaction_outfile_sync_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_COMPACTION_OUTFILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "compaction_outfile_sync_average"])
+                .set(value.average);
+            STORE_ENGINE_COMPACTION_OUTFILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "compaction_outfile_sync_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::WalFileSyncMicros => {
+            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "wal_file_sync_median"])
+                .set(value.median);
+            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "wal_file_sync_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "wal_file_sync_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "wal_file_sync_average"])
+                .set(value.average);
+            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "wal_file_sync_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::ManifestFileSyncMicros => {
+            STORE_ENGINE_MANIFEST_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "manifest_file_sync_median"])
+                .set(value.median);
+            STORE_ENGINE_MANIFEST_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "manifest_file_sync_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_MANIFEST_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "manifest_file_sync_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_MANIFEST_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "manifest_file_sync_average"])
+                .set(value.average);
+            STORE_ENGINE_MANIFEST_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "manifest_file_sync_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::StallL0SlowdownCount => {
+            STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_slowdown_count_median"])
+                .set(value.median);
+            STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_slowdown_count_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_slowdown_count_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_slowdown_count_average"])
+                .set(value.average);
+            STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_slowdown_count_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::StallMemtableCompactionCount => {
+            STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC
+                .with_label_values(&[name, "stall_memtable_compaction_count_median"])
+                .set(value.median);
+            STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC
+                .with_label_values(&[name, "stall_memtable_compaction_count_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC
+                .with_label_values(&[name, "stall_memtable_compaction_count_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC
+                .with_label_values(&[name, "stall_memtable_compaction_count_average"])
+                .set(value.average);
+            STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC
+                .with_label_values(&[
+                    name,
+                    "stall_memtable_compaction_count_standard_deviation",
+                ])
+                .set(value.standard_deviation);
+        }
+        HistType::StallL0NumFilesCount => {
+            STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_num_files_count_median"])
+                .set(value.median);
+            STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_num_files_count_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_num_files_count_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_num_files_count_average"])
+                .set(value.average);
+            STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_num_files_count_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::HardRateLimitDelayCount => {
+            STORE_ENGINE_HARD_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "hard_rate_limit_delay_median"])
+                .set(value.median);
+            STORE_ENGINE_HARD_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "hard_rate_limit_delay_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_HARD_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "hard_rate_limit_delay_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_HARD_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "hard_rate_limit_delay_average"])
+                .set(value.average);
+            STORE_ENGINE_HARD_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "hard_rate_limit_delay_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::SoftRateLimitDelayCount => {
+            STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "soft_rate_limit_delay_median"])
+                .set(value.median);
+            STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "soft_rate_limit_delay_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "soft_rate_limit_delay_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "soft_rate_limit_delay_average"])
+                .set(value.average);
+            STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "soft_rate_limit_delay_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::NumFilesInSingleCompaction => {
+            STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC
+                .with_label_values(&[name, "num_files_in_single_compaction_median"])
+                .set(value.median);
+            STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC
+                .with_label_values(&[name, "num_files_in_single_compaction_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC
+                .with_label_values(&[name, "num_files_in_single_compaction_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC
+                .with_label_values(&[name, "num_files_in_single_compaction_average"])
+                .set(value.average);
+            STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC
+                .with_label_values(&[name, "num_files_in_single_compaction_standard_deviation"])
+                .set(value.standard_deviation);
+        }
         HistType::SeekMicros => {
             STORE_ENGINE_SEEK_MICROS_VEC
                 .with_label_values(&[name, "seek_median"])
@@ -358,6 +568,160 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 .with_label_values(&[name, "seek_standard_deviation"])
                 .set(value.standard_deviation);
         }
+        HistType::WriteStall => {
+            STORE_ENGINE_WRITE_STALL_VEC
+                .with_label_values(&[name, "write_stall_median"])
+                .set(value.median);
+            STORE_ENGINE_WRITE_STALL_VEC
+                .with_label_values(&[name, "write_stall_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_WRITE_STALL_VEC
+                .with_label_values(&[name, "write_stall_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_WRITE_STALL_VEC
+                .with_label_values(&[name, "write_stall_average"])
+                .set(value.average);
+            STORE_ENGINE_WRITE_STALL_VEC
+                .with_label_values(&[name, "write_stall_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::SSTReadMicros => {
+            STORE_ENGINE_SST_READ_MICROS_VEC
+                .with_label_values(&[name, "sst_read_micros_median"])
+                .set(value.median);
+            STORE_ENGINE_WRITE_MICROS_VEC
+                .with_label_values(&[name, "sst_read_micros_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_WRITE_MICROS_VEC
+                .with_label_values(&[name, "sst_read_micros_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_WRITE_MICROS_VEC
+                .with_label_values(&[name, "sst_read_micros_average"])
+                .set(value.average);
+            STORE_ENGINE_WRITE_MICROS_VEC
+                .with_label_values(&[name, "sst_read_micros_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::NumSubcompactionsScheduled => {
+            STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC
+                .with_label_values(&[name, "num_subcompaction_scheduled_median"])
+                .set(value.median);
+            STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC
+                .with_label_values(&[name, "num_subcompaction_scheduled_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC
+                .with_label_values(&[name, "num_subcompaction_scheduled_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC
+                .with_label_values(&[name, "num_subcompaction_scheduled_average"])
+                .set(value.average);
+            STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC
+                .with_label_values(&[name, "num_subcompaction_scheduled_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::BytesPerRead => {
+            STORE_ENGINE_BYTES_PER_READ_VEC
+                .with_label_values(&[name, "bytes_per_read_median"])
+                .set(value.median);
+            STORE_ENGINE_BYTES_PER_READ_VEC
+                .with_label_values(&[name, "bytes_per_read_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_BYTES_PER_READ_VEC
+                .with_label_values(&[name, "bytes_per_read_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_BYTES_PER_READ_VEC
+                .with_label_values(&[name, "bytes_per_read_average"])
+                .set(value.average);
+            STORE_ENGINE_BYTES_PER_READ_VEC
+                .with_label_values(&[name, "bytes_per_read_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::BytesPerWrite => {
+            STORE_ENGINE_BYTES_PER_WRITE_VEC
+                .with_label_values(&[name, "bytes_per_write_median"])
+                .set(value.median);
+            STORE_ENGINE_BYTES_PER_WRITE_VEC
+                .with_label_values(&[name, "bytes_per_write_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_BYTES_PER_WRITE_VEC
+                .with_label_values(&[name, "bytes_per_write_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_BYTES_PER_WRITE_VEC
+                .with_label_values(&[name, "bytes_per_write_average"])
+                .set(value.average);
+            STORE_ENGINE_BYTES_PER_WRITE_VEC
+                .with_label_values(&[name, "bytes_per_write_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::BytesCompressed => {
+            STORE_ENGINE_BYTES_COMPRESSED_VEC
+                .with_label_values(&[name, "bytes_compressed_median"])
+                .set(value.median);
+            STORE_ENGINE_BYTES_COMPRESSED_VEC
+                .with_label_values(&[name, "bytes_compressed_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_BYTES_COMPRESSED_VEC
+                .with_label_values(&[name, "bytes_compressed_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_BYTES_COMPRESSED_VEC
+                .with_label_values(&[name, "bytes_compressed_average"])
+                .set(value.average);
+            STORE_ENGINE_BYTES_COMPRESSED_VEC
+                .with_label_values(&[name, "bytes_compressed_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::BytesDecompressed => {
+            STORE_ENGINE_BYTES_DECOMPRESSED_VEC
+                .with_label_values(&[name, "bytes_decompressed_median"])
+                .set(value.median);
+            STORE_ENGINE_BYTES_DECOMPRESSED_VEC
+                .with_label_values(&[name, "bytes_decompressed_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_BYTES_DECOMPRESSED_VEC
+                .with_label_values(&[name, "bytes_decompressed_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_BYTES_DECOMPRESSED_VEC
+                .with_label_values(&[name, "bytes_decompressed_average"])
+                .set(value.average);
+            STORE_ENGINE_BYTES_DECOMPRESSED_VEC
+                .with_label_values(&[name, "bytes_decompressed_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::CompressionTimesNanos => {
+            STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "compression_time_nanos_median"])
+                .set(value.median);
+            STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "compression_time_nanos_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "compression_time_nanos_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "compression_time_nanos_average"])
+                .set(value.average);
+            STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "compression_time_nanos_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::DecompressionTimesNanos => {
+            STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "decompression_time_nanos_median"])
+                .set(value.median);
+            STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "decompression_time_nanos_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "decompression_time_nanos_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "decompression_time_nanos_average"])
+                .set(value.average);
+            STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "decompression_time_nanos_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        _ => {}
     }
 }
 
@@ -501,10 +865,150 @@ lazy_static!{
             &["db", "type"]
         ).unwrap();
 
+        pub static ref STORE_ENGINE_COMPACTION_TIME_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_compaction_time",
+            "Histogram of compaction time",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_TABLE_SYNC_MICROS_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_table_sync_micro_seconds",
+            "Histogram of table sync micros",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_COMPACTION_OUTFILE_SYNC_MICROS_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_compaction_outfile_sync_micro_seconds",
+            "Histogram of compaction outfile sync micros",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_MANIFEST_FILE_SYNC_MICROS_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_manifest_file_sync_micro_seconds",
+            "Histogram of manifest file sync micros",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_wal_file_sync_micro_seconds",
+            "Histogram of WAL file sync micros",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_stall_l0_slowdown_count",
+            "Histogram of stall l0 slowdown count",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_stall_memtable_compaction_count",
+            "Histogram of stall memtable compaction count",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_stall_l0_num_files_count",
+            "Histogram of stall l0 num files count",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_HARD_RATE_LIMIT_DELAY_COUNT_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_hard_rate_limit_delay_count",
+            "Histogram of hard rate limit delay count",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_COUNT_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_soft_rate_limit_delay_count",
+            "Histogram of soft rate limit delay count",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_num_files_in_single_compaction",
+            "Histogram of number of files in single compaction",
+            &["db", "type"]
+        ).unwrap();
+
     pub static ref STORE_ENGINE_SEEK_MICROS_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_engine_seek_micro_seconds",
             "Seek micros histogram.",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_WRITE_STALL_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_write_stall",
+            "Histogram of write stall",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_SST_READ_MICROS_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_sst_read_micros",
+            "Histogram of SST read micros",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_num_subcompaction_scheduled",
+            "Histogram of number of subcompaction scheduled",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_BYTES_PER_READ_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_bytes_per_read",
+            "Histogram of bytes per read",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_BYTES_PER_WRITE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_bytes_per_write",
+            "Histogram of bytes per write",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_BYTES_COMPRESSED_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_bytes_compressed",
+            "Histogram of bytes compressed",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_BYTES_DECOMPRESSED_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_bytes_decompressed",
+            "Histogram of bytes decompressed",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_compression_time_nanos",
+            "Histogram of compression time nanos",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_decompression_time_nanos",
+            "Histogram of decompression time nanos",
             &["db", "type"]
         ).unwrap();
 
