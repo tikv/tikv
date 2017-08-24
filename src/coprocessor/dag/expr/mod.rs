@@ -26,7 +26,6 @@ use self::compare::CmpOp;
 use std::io;
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
-use chrono::FixedOffset;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
@@ -385,12 +384,7 @@ impl Expression {
                 .and_then(|i| {
                     let fsp = expr.get_field_type().get_decimal() as i8;
                     let tp = expr.get_field_type().get_tp() as u8;
-                    let tz = if tp == types::TIMESTAMP {
-                        ctx.tz
-                    } else {
-                        FixedOffset::east(0)
-                    };
-                    Time::from_packed_u64(i, tp, fsp, &tz)
+                    Time::from_packed_u64(i, tp, fsp, &ctx.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
