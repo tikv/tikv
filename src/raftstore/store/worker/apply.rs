@@ -1428,7 +1428,8 @@ pub struct Runner {
 
 impl Runner {
     pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>) -> Runner {
-        let mut delegates = HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
+        let mut delegates =
+            HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
             delegates.insert(region_id, ApplyDelegate::from_peer(p));
         }

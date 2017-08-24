@@ -327,7 +327,8 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
 
 // `cut_idx_key` cuts encoded index key into RowColsDict and handle .
 pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option<i64>)> {
-    let mut meta_map: HashMap<i64, RowColMeta> = HashMap::with_capacity_and_hasher(col_ids.len(), Default::default());
+    let mut meta_map: HashMap<i64, RowColMeta> =
+        HashMap::with_capacity_and_hasher(col_ids.len(), Default::default());
     let handle = {
         let mut tmp_data: &[u8] = &key[PREFIX_LEN + ID_LEN..];
         let length = key.len();

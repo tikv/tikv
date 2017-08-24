@@ -184,7 +184,10 @@ pub mod order_map_serde {
             where
                 M: MapAccess<'de>,
             {
-                let mut map = HashMap::with_capacity_and_hasher(access.size_hint().unwrap_or(0), Default::default());
+                let mut map = HashMap::with_capacity_and_hasher(
+                    access.size_hint().unwrap_or(0),
+                    Default::default(),
+                );
                 while let Some((key, value)) = access.next_entry()? {
                     map.insert(key, value);
                 }

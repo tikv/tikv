@@ -357,7 +357,10 @@ impl Scheduler {
         Scheduler {
             engine: engine,
             cmd_ctxs: Default::default(),
-            grouped_cmds: Some(HashMap::with_capacity_and_hasher(CMD_BATCH_SIZE, Default::default())),
+            grouped_cmds: Some(HashMap::with_capacity_and_hasher(
+                CMD_BATCH_SIZE,
+                Default::default(),
+            )),
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
@@ -1403,7 +1406,10 @@ impl Scheduler {
                     (hash_ctx.0, cids)
                 });
                 self.batch_get_snapshot(batch.collect());
-                self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(CMD_BATCH_SIZE, Default::default()));
+                self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
+                    CMD_BATCH_SIZE,
+                    Default::default(),
+                ));
             }
         }
     }
