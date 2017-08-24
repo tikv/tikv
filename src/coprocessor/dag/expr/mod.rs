@@ -358,7 +358,7 @@ impl Expression {
 }
 
 impl Expression {
-    fn build(mut expr: Expr, row_len: usize) -> Result<Self> {
+    fn build(mut expr: Expr, row_len: usize, ctx: &StatementContext) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -382,10 +382,15 @@ impl Expression {
                 .map_err(Error::from),
             ExprType::MysqlTime => expr.get_val()
                 .decode_u64()
-                .and_then(|ts| {
+                .and_then(|i| {
                     let fsp = expr.get_field_type().get_decimal() as i8;
                     let tp = expr.get_field_type().get_tp() as u8;
-                    Time::from_packed_u64(ts, tp, fsp, &FixedOffset::east(0))
+                    let tz = if tp == types::TIMESTAMP {
+                        ctx.tz
+                    } else {
+                        FixedOffset::east(0)
+                    };
+                    Time::from_packed_u64(i, tp, fsp, &tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
@@ -407,7 +412,7 @@ impl Expression {
                 ));
                 expr.take_children()
                     .into_iter()
-                    .map(|child| Expression::build(child, row_len))
+                    .map(|child| Expression::build(child, row_len, ctx))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
@@ -437,7 +442,7 @@ mod test {
     use coprocessor::codec::mysql::{Time, MAX_FSP};
     use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-    use super::Expression;
+    use super::{Expression, StatementContext};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -480,8 +485,9 @@ mod test {
             ),
         ];
 
+        let ctx = StatementContext::default();
         for tt in tests {
-            let expr = Expression::build(tt.0, tt.1);
+            let expr = Expression::build(tt.0, tt.1, &ctx);
             assert_eq!(expr.is_ok(), tt.2);
         }
     }
