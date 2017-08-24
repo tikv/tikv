@@ -74,6 +74,7 @@ pub struct Host {
 }
 
 struct CopContext {
+    task_count: u64,
     select_stats: Statistics,
     index_stats: Statistics,
     dag_stats: Statistics,
@@ -103,17 +104,19 @@ impl Context for CopContext {
     fn on_task_started(&mut self) {}
     fn on_task_finished(&mut self) {}
     fn on_tick(&mut self) {
+        let task_count = self.task_count;
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX, STR_REQ_TYPE_DAG] {
             let this_statistics = self.get_statistics(type_str);
             for (cf, details) in this_statistics.details() {
                 for (tag, count) in details {
                     COPR_SCAN_DETAILS
                         .with_label_values(&[type_str, cf, tag])
-                        .observe(count as f64);
+                        .observe(count as f64 / task_count as f64);
                 }
             }
             *this_statistics = Default::default();
         }
+        self.task_count = 0;
     }
 }
 
@@ -122,6 +125,7 @@ struct CopContextFactory;
 impl ContextFactory<CopContext> for CopContextFactory {
     fn create(&self) -> CopContext {
         CopContext {
+            task_count: 0,
             select_stats: Default::default(),
             index_stats: Default::default(),
             dag_stats: Default::default(),
@@ -195,6 +199,7 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let stats = end_point.handle_request(req);
+                ctx.task_count += 1;
                 ctx.add_statistics(type_str, &stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
