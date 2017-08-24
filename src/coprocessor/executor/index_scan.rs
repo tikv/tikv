@@ -39,7 +39,7 @@ impl<'a> IndexScanExecutor<'a> {
                mut key_ranges: Vec<KeyRange>,
                store: SnapshotStore<'a>,
                statistics: &'a mut Statistics)
-	           -> IndexScanExecutor<'a> {
+               -> IndexScanExecutor<'a> {
         let mut pk_col = None;
         let desc = meta.get_desc();
         if desc {
