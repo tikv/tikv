@@ -17,8 +17,10 @@ mod column;
 mod constant;
 mod fncall;
 mod builtin_cast;
+mod builtin_control;
 mod builtin_op;
 mod compare;
+mod arithmetic;
 use self::compare::CmpOp;
 
 use std::{error, io};
@@ -28,7 +30,7 @@ use std::str::Utf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
@@ -61,6 +63,14 @@ quick_error! {
             description("column offset not found")
             display("illegal column offset: {}", offset)
         }
+        Truncated {
+            description("Truncated")
+            display("error Truncated")
+        }
+        Overflow {
+            description("Overflow")
+            display("error Overflow")
+        }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
@@ -82,6 +92,16 @@ impl From<Utf8Error> for Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+impl<T> Into<Result<T>> for Res<T> {
+    fn into(self) -> Result<T> {
+        match self {
+            Res::Ok(t) => Ok(t),
+            Res::Truncated(_) => Err(Error::Truncated),
+            Res::Overflow(_) => Err(Error::Overflow),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -118,11 +138,22 @@ impl Expression {
         })
     }
 
+    #[inline]
     fn get_tp(&self) -> &FieldType {
         match *self {
             Expression::Constant(ref c) => &c.tp,
             Expression::ColumnRef(ref c) => &c.tp,
             Expression::ScalarFn(ref c) => &c.tp,
+        }
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn mut_tp(&mut self) -> &mut FieldType {
+        match *self {
+            Expression::Constant(ref mut c) => &mut c.tp,
+            Expression::ColumnRef(ref mut c) => &mut c.tp,
+            Expression::ScalarFn(ref mut c) => &mut c.tp,
         }
     }
 
@@ -195,6 +226,9 @@ impl Expression {
                 ScalarFuncSig::CastDurationAsInt => f.cast_duration_as_int(ctx, row),
                 ScalarFuncSig::CastJsonAsInt => f.cast_json_as_int(ctx, row),
 
+                ScalarFuncSig::PlusInt => f.plus_int(ctx, row),
+                ScalarFuncSig::MinusInt => f.minus_int(ctx, row),
+                ScalarFuncSig::MultiplyInt => f.multiply_int(ctx, row),
                 ScalarFuncSig::LogicalAnd => f.logical_and(ctx, row),
                 ScalarFuncSig::LogicalOr => f.logical_or(ctx, row),
                 ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
@@ -209,6 +243,9 @@ impl Expression {
                 ScalarFuncSig::StringIsNull => f.string_is_null(ctx, row),
                 ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
                 ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
+
+                ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
+                ScalarFuncSig::IfInt => f.if_int(ctx, row),
 
                 _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
             },
@@ -227,7 +264,15 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsReal => f.cast_time_as_real(ctx, row),
                 ScalarFuncSig::CastDurationAsReal => f.cast_duration_as_real(ctx, row),
                 ScalarFuncSig::CastJsonAsReal => f.cast_json_as_real(ctx, row),
-                _ => Err(box_err!("Unknown signature")),
+
+                ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
+                ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
+                ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
+
+                ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
+                ScalarFuncSig::IfReal => f.if_real(ctx, row),
+
+                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
             },
         }
     }
@@ -248,7 +293,15 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsDecimal => f.cast_time_as_decimal(ctx, row),
                 ScalarFuncSig::CastDurationAsDecimal => f.cast_duration_as_decimal(ctx, row),
                 ScalarFuncSig::CastJsonAsDecimal => f.cast_json_as_decimal(ctx, row),
-                _ => Err(box_err!("Unknown signature")),
+
+                ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
+                ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
+                ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
+
+                ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
+                ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
+
+                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
             },
         }
     }
@@ -269,7 +322,10 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsString => f.cast_time_as_str(ctx, row),
                 ScalarFuncSig::CastDurationAsString => f.cast_duration_as_str(ctx, row),
                 ScalarFuncSig::CastJsonAsString => f.cast_json_as_str(ctx, row),
-                _ => Err(box_err!("Unknown signature")),
+
+                ScalarFuncSig::IfNullString => f.if_null_string(ctx, row),
+                ScalarFuncSig::IfString => f.if_string(ctx, row),
+                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
             },
         }
     }
@@ -290,7 +346,10 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsTime => f.cast_time_as_time(ctx, row),
                 ScalarFuncSig::CastDurationAsTime => f.cast_duration_as_time(ctx, row),
                 ScalarFuncSig::CastJsonAsTime => f.cast_json_as_time(ctx, row),
-                _ => Err(box_err!("Unknown signature")),
+
+                ScalarFuncSig::IfNullTime => f.if_null_time(ctx, row),
+                ScalarFuncSig::IfTime => f.if_time(ctx, row),
+                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
             },
         }
     }
@@ -311,7 +370,10 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsDuration => f.cast_time_as_duration(ctx, row),
                 ScalarFuncSig::CastDurationAsDuration => f.cast_duration_as_duration(ctx, row),
                 ScalarFuncSig::CastJsonAsDuration => f.cast_json_as_duration(ctx, row),
-                _ => Err(box_err!("Unknown signature")),
+
+                ScalarFuncSig::IfNullDuration => f.if_null_duration(ctx, row),
+                ScalarFuncSig::IfDuration => f.if_duration(ctx, row),
+                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
             },
         }
     }
@@ -332,7 +394,7 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsJson => f.cast_time_as_json(ctx, row),
                 ScalarFuncSig::CastDurationAsJson => f.cast_duration_as_json(ctx, row),
                 ScalarFuncSig::CastJsonAsJson => f.cast_json_as_json(ctx, row),
-                _ => Err(box_err!("Unknown signature")),
+                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
             },
         }
     }
