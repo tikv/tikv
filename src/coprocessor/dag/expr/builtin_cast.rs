@@ -696,7 +696,7 @@ mod test {
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
     use coprocessor::dag::expr::{Expression, StatementContext};
     use util::codec::number::NumberEncoder;
-    use chrono::Utc;
+    use chrono::{FixedOffset, Utc};
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = Expr::new();
@@ -1357,6 +1357,253 @@ mod test {
             // test None
             let res = e.eval_duration(&ctx, &null_cols).unwrap();
             assert!(res.is_none());
+        }
+    }
+
+    #[test]
+    fn test_cast_int_as_json() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let cases = vec![
+            (
+                Some(types::UNSIGNED_FLAG),
+                vec![Datum::U64(32)],
+                Some(Json::U64(32)),
+            ),
+            (None, vec![Datum::I64(-1)], Some(Json::I64(-1))),
+            (None, vec![Datum::Null], None),
+        ];
+        for (flag, cols, exp) in cases {
+            let mut col_expr = col_expr(0, types::LONG_LONG as i32);
+            if flag.is_some() {
+                col_expr.mut_field_type().set_flag(flag.unwrap() as u32);
+            }
+            let e = expr_for_sig(
+                ScalarFuncSig::CastIntAsJson,
+                vec![col_expr],
+                1,
+                None,
+                None,
+                None,
+            );
+            let res = e.eval_json(&ctx, &cols).unwrap();
+            if exp.is_none() {
+                assert!(res.is_none());
+                continue;
+            }
+            assert_eq!(res.unwrap().into_owned(), exp.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_cast_real_as_json() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let cases = vec![
+            (vec![Datum::F64(32.0001)], Some(Json::Double(32.0001))),
+            (vec![Datum::Null], None),
+        ];
+        for (cols, exp) in cases {
+            let col_expr = col_expr(0, types::DOUBLE as i32);
+            let e = expr_for_sig(
+                ScalarFuncSig::CastRealAsJson,
+                vec![col_expr],
+                1,
+                None,
+                None,
+                None,
+            );
+            let res = e.eval_json(&ctx, &cols).unwrap();
+            if exp.is_none() {
+                assert!(res.is_none());
+                continue;
+            }
+            assert_eq!(res.unwrap().into_owned(), exp.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_cast_decimal_as_json() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let cases = vec![
+            (
+                vec![Datum::Dec(Decimal::from_f64(32.0001).unwrap())],
+                Some(Json::Double(32.0001)),
+            ),
+            (vec![Datum::Null], None),
+        ];
+        for (cols, exp) in cases {
+            let col_expr = col_expr(0, types::NEW_DECIMAL as i32);
+            let e = expr_for_sig(
+                ScalarFuncSig::CastDecimalAsJson,
+                vec![col_expr],
+                1,
+                None,
+                None,
+                None,
+            );
+            let res = e.eval_json(&ctx, &cols).unwrap();
+            if exp.is_none() {
+                assert!(res.is_none());
+                continue;
+            }
+            assert_eq!(res.unwrap().into_owned(), exp.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_cast_str_as_json() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let cases = vec![
+            (
+                1,
+                vec![Datum::Bytes(b"[1,2,3]".to_vec())],
+                Some(Json::String(String::from("[1,2,3]"))),
+            ),
+            (
+                0,
+                vec![Datum::Bytes(b"[1,2,3]".to_vec())],
+                Some(Json::Array(vec![Json::I64(1), Json::I64(2), Json::I64(3)])),
+            ),
+            (0, vec![Datum::Null], None),
+        ];
+        for (decimal, cols, exp) in cases {
+            let col_expr = col_expr(0, types::STRING as i32);
+            let e = expr_for_sig(
+                ScalarFuncSig::CastStringAsJson,
+                vec![col_expr],
+                1,
+                None,
+                Some(decimal as i32),
+                None,
+            );
+            let res = e.eval_json(&ctx, &cols).unwrap();
+            if exp.is_none() {
+                assert!(res.is_none());
+                continue;
+            }
+            assert_eq!(res.unwrap().into_owned(), exp.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_cast_time_as_json() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let time_str = "2012-12-12 11:11:11";
+        let date_str = "2012-12-12";
+        let tz = FixedOffset::east(0);
+        let time = Time::parse_utc_datetime(time_str, mysql::DEFAULT_FSP).unwrap();
+        let time_stamp = {
+            let t = time.to_packed_u64();
+            Time::from_packed_u64(t, types::TIMESTAMP, mysql::DEFAULT_FSP, &tz).unwrap()
+        };
+        let date = {
+            let mut t = time.clone();
+            t.set_tp(types::DATE).unwrap();
+            t
+        };
+
+
+        let cases = vec![
+            (
+                types::DATETIME,
+                vec![Datum::Time(time)],
+                Some(Json::String(format!("{}.000000", time_str))),
+            ),
+            (
+                types::TIMESTAMP,
+                vec![Datum::Time(time_stamp)],
+                Some(Json::String(format!("{}.000000", time_str))),
+            ),
+            (
+                types::DATE,
+                vec![Datum::Time(date)],
+                Some(Json::String(String::from(date_str))),
+            ),
+            (0, vec![Datum::Null], None),
+        ];
+        for (tp, cols, exp) in cases {
+            let col_expr = col_expr(0, tp as i32);
+            let e = expr_for_sig(
+                ScalarFuncSig::CastTimeAsJson,
+                vec![col_expr],
+                1,
+                None,
+                None,
+                None,
+            );
+            let res = e.eval_json(&ctx, &cols).unwrap();
+            if exp.is_none() {
+                assert!(res.is_none());
+                continue;
+            }
+            assert_eq!(res.unwrap().into_owned(), exp.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_cast_duration_as_json() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let dur_str = "11:12:08";
+        let dur_str_expect = "11:12:08.000000";
+
+        let cases = vec![
+            (
+                vec![Datum::Dur(Duration::parse(dur_str.as_bytes(), 0).unwrap())],
+                Some(Json::String(String::from(dur_str_expect))),
+            ),
+            (vec![Datum::Null], None),
+        ];
+        for (cols, exp) in cases {
+            let col_expr = col_expr(0, types::STRING as i32);
+            let e = expr_for_sig(
+                ScalarFuncSig::CastDurationAsJson,
+                vec![col_expr],
+                1,
+                None,
+                None,
+                None,
+            );
+            let res = e.eval_json(&ctx, &cols).unwrap();
+            if exp.is_none() {
+                assert!(res.is_none());
+                continue;
+            }
+            assert_eq!(res.unwrap().into_owned(), exp.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_cast_json_as_json() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let cases = vec![
+            (
+                vec![Datum::Json(Json::Boolean(true))],
+                Some(Json::Boolean(true)),
+            ),
+            (vec![Datum::Null], None),
+        ];
+        for (cols, exp) in cases {
+            let col_expr = col_expr(0, types::STRING as i32);
+            let e = expr_for_sig(
+                ScalarFuncSig::CastJsonAsJson,
+                vec![col_expr],
+                1,
+                None,
+                None,
+                None,
+            );
+            let res = e.eval_json(&ctx, &cols).unwrap();
+            if exp.is_none() {
+                assert!(res.is_none());
+                continue;
+            }
+            assert_eq!(res.unwrap().into_owned(), exp.unwrap());
         }
     }
 }
