@@ -174,7 +174,6 @@ mod test {
         let cases = vec![
             (5, false, 3, false, Ordering::Greater),
             (u64::MAX as i64, false, 5 as i64, false, Ordering::Less),
-
             (
                 u64::MAX as i64,
                 true,
@@ -183,11 +182,9 @@ mod test {
                 Ordering::Greater,
             ),
             (u64::MAX as i64, true, 5 as i64, true, Ordering::Greater),
-
             (5, true, i64::MIN, false, Ordering::Greater),
             (u64::MAX as i64, true, i64::MIN, false, Ordering::Greater),
             (5, true, 3, false, Ordering::Greater),
-
             (i64::MIN, false, 3, true, Ordering::Less),
             (5, false, u64::MAX as i64, true, Ordering::Less),
             (5, false, 3, true, Ordering::Greater),

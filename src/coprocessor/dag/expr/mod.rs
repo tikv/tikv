@@ -20,6 +20,7 @@ mod builtin_cast;
 mod builtin_control;
 mod builtin_op;
 mod compare;
+mod arithmetic;
 use self::compare::CmpOp;
 
 use std::io;
@@ -60,6 +61,14 @@ quick_error! {
         ColumnOffset(offset: usize) {
             description("column offset not found")
             display("illegal column offset: {}", offset)
+        }
+        Truncated {
+            description("Truncated")
+            display("error Truncated")
+        }
+        Overflow {
+            description("Overflow")
+            display("error Overflow")
         }
         Other(desc: &'static str) {
             description(desc)
@@ -129,11 +138,22 @@ impl Expression {
         })
     }
 
+    #[inline]
     fn get_tp(&self) -> &FieldType {
         match *self {
             Expression::Constant(ref c) => &c.tp,
             Expression::ColumnRef(ref c) => &c.tp,
             Expression::ScalarFn(ref c) => &c.tp,
+        }
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn mut_tp(&mut self) -> &mut FieldType {
+        match *self {
+            Expression::Constant(ref mut c) => &mut c.tp,
+            Expression::ColumnRef(ref mut c) => &mut c.tp,
+            Expression::ScalarFn(ref mut c) => &mut c.tp,
         }
     }
 
@@ -198,6 +218,9 @@ impl Expression {
                 ScalarFuncSig::NEJson => f.compare_json(ctx, row, CmpOp::NE),
                 ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
 
+                ScalarFuncSig::PlusInt => f.plus_int(ctx, row),
+                ScalarFuncSig::MinusInt => f.minus_int(ctx, row),
+                ScalarFuncSig::MultiplyInt => f.multiply_int(ctx, row),
                 ScalarFuncSig::LogicalAnd => f.logical_and(ctx, row),
                 ScalarFuncSig::LogicalOr => f.logical_or(ctx, row),
                 ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
@@ -228,8 +251,14 @@ impl Expression {
             Expression::ColumnRef(ref column) => column.eval_real(row),
             Expression::ScalarFn(ref f) => match f.sig {
                 ScalarFuncSig::UnaryMinusReal => f.unary_minus_real(ctx, row),
+
+                ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
+                ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
+                ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
+
                 ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
                 ScalarFuncSig::IfReal => f.if_real(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -245,8 +274,14 @@ impl Expression {
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
             Expression::ScalarFn(ref f) => match f.sig {
                 ScalarFuncSig::UnaryMinusDecimal => f.unary_minus_decimal(ctx, row),
+
+                ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
+                ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
+                ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
+                
                 ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
                 ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -308,7 +343,9 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_json(),
             Expression::ColumnRef(ref column) => column.eval_json(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 
