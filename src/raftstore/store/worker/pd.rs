@@ -28,8 +28,9 @@ use util::escape;
 use util::transport::SendCh;
 use pd::{PdClient, RegionStat};
 use raftstore::store::Msg;
-use raftstore::store::util::is_epoch_stale;
+use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use raftstore::store::metrics::*;
+use rocksdb::DB;
 use fs2;
 use super::metrics::*;
 use raftstore::store::store::StoreInfo;
@@ -53,7 +54,6 @@ pub enum Task {
         written_keys: u64,
         read_bytes: u64,
         read_keys: u64,
-        approximate_size: u64,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -111,15 +111,17 @@ pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
+    db: Arc<DB>,
     is_hb_receiver_scheduled: bool,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>) -> Runner<T> {
+    pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
         Runner {
             store_id: store_id,
             pd_client: pd_client,
             ch: ch,
+            db: db,
             is_hb_receiver_scheduled: false,
         }
     }
@@ -414,21 +416,21 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 written_keys,
                 read_bytes,
                 read_keys,
-                approximate_size,
-            } => self.handle_heartbeat(
-                handle,
-                region,
-                peer,
-                RegionStat::new(
-                    down_peers,
-                    pending_peers,
-                    written_bytes,
-                    written_keys,
-                    read_bytes,
-                    read_keys,
-                    approximate_size,
-                ),
-            ),
+            } => {
+                let approximate_size = get_region_approximate_size(&self.db, &region).unwrap_or(0);
+                self.handle_heartbeat(
+                    handle,
+                    region,
+                    peer,
+                    RegionStat::new(
+                        down_peers,
+                        pending_peers,
+                        written_bytes,
+                        written_keys,
+                        approximate_size,
+                    ),
+                )
+            }
             Task::StoreHeartbeat { stats, store_info } => {
                 self.handle_store_heartbeat(handle, stats, store_info)
             }

@@ -1568,7 +1568,6 @@ impl Peer {
             written_keys: self.peer_stat.last_written_keys,
             read_bytes: self.peer_stat.read_bytes,
             read_keys: self.peer_stat.read_keys,
-            approximate_size: self.approximate_size().unwrap_or(0),
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

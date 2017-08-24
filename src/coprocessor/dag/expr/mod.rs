@@ -17,8 +17,10 @@ mod column;
 mod constant;
 mod fncall;
 mod builtin_cast;
+mod builtin_control;
 mod builtin_op;
 mod compare;
+mod arithmetic;
 use self::compare::CmpOp;
 
 use std::io;
@@ -27,7 +29,7 @@ use std::string::FromUtf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
@@ -60,6 +62,14 @@ quick_error! {
             description("column offset not found")
             display("illegal column offset: {}", offset)
         }
+        Truncated {
+            description("Truncated")
+            display("error Truncated")
+        }
+        Overflow {
+            description("Overflow")
+            display("error Overflow")
+        }
         Other(desc: &'static str) {
             description(desc)
             display("error {}", desc)
@@ -74,6 +84,16 @@ impl From<FromUtf8Error> for Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+impl<T> Into<Result<T>> for Res<T> {
+    fn into(self) -> Result<T> {
+        match self {
+            Res::Ok(t) => Ok(t),
+            Res::Truncated(_) => Err(Error::Truncated),
+            Res::Overflow(_) => Err(Error::Overflow),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -110,11 +130,22 @@ impl Expression {
         })
     }
 
+    #[inline]
     fn get_tp(&self) -> &FieldType {
         match *self {
             Expression::Constant(ref c) => &c.tp,
             Expression::ColumnRef(ref c) => &c.tp,
             Expression::ScalarFn(ref c) => &c.tp,
+        }
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn mut_tp(&mut self) -> &mut FieldType {
+        match *self {
+            Expression::Constant(ref mut c) => &mut c.tp,
+            Expression::ColumnRef(ref mut c) => &mut c.tp,
+            Expression::ScalarFn(ref mut c) => &mut c.tp,
         }
     }
 
@@ -179,6 +210,9 @@ impl Expression {
                 ScalarFuncSig::NEJson => f.compare_json(ctx, row, CmpOp::NE),
                 ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
 
+                ScalarFuncSig::PlusInt => f.plus_int(ctx, row),
+                ScalarFuncSig::MinusInt => f.minus_int(ctx, row),
+                ScalarFuncSig::MultiplyInt => f.multiply_int(ctx, row),
                 ScalarFuncSig::LogicalAnd => f.logical_and(ctx, row),
                 ScalarFuncSig::LogicalOr => f.logical_or(ctx, row),
                 ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
@@ -194,6 +228,9 @@ impl Expression {
                 ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
                 ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
 
+                ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
+                ScalarFuncSig::IfInt => f.if_int(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -204,6 +241,13 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
+                ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
+                ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
+
+                ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
+                ScalarFuncSig::IfReal => f.if_real(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -218,6 +262,13 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_decimal(),
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
+                ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
+                ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
+
+                ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
+                ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
+
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -232,6 +283,8 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullString => f.if_null_string(ctx, row),
+                ScalarFuncSig::IfString => f.if_string(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -246,6 +299,8 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_time(),
             Expression::ColumnRef(ref column) => column.eval_time(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullTime => f.if_null_time(ctx, row),
+                ScalarFuncSig::IfTime => f.if_time(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -260,6 +315,8 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::IfNullDuration => f.if_null_duration(ctx, row),
+                ScalarFuncSig::IfDuration => f.if_duration(ctx, row),
                 _ => Err(Error::Other("Unknown signature")),
             },
         }
@@ -273,7 +330,9 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_json(),
             Expression::ColumnRef(ref column) => column.eval_json(row),
-            _ => unimplemented!(),
+            Expression::ScalarFn(ref f) => match f.sig {
+                _ => Err(Error::Other("Unknown signature")),
+            },
         }
     }
 

@@ -675,8 +675,8 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
 pub mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
-    use coprocessor::codec::{datum, Datum};
-    use coprocessor::codec::mysql::{self, Decimal, DecimalEncoder, Duration, MAX_FSP};
+    use coprocessor::codec::{datum, mysql, Datum};
+    use coprocessor::codec::mysql::{types, Decimal, DecimalEncoder, Duration, MAX_FSP};
     use tipb::expression::FieldType;
 
     use std::i32;
@@ -699,6 +699,7 @@ pub mod test {
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
                 buf.encode_u64(u).unwrap();
                 expr.set_val(buf);
+                expr.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
             }
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
