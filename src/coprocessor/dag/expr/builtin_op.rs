@@ -13,7 +13,6 @@
 
 use std::i64;
 use std::borrow::Cow;
-use std::ops::Neg;
 use super::{Error, FnCall, Result, StatementContext};
 use coprocessor::codec::{mysql, Datum};
 use coprocessor::codec::mysql::Decimal;
@@ -94,7 +93,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let dec = try_opt!(self.children[0].eval_decimal(ctx, row)).into_owned();
-        Ok(Some(Cow::Owned(dec.neg())))
+        Ok(Some(Cow::Owned(-dec)))
     }
 
     pub fn unary_minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -267,7 +266,11 @@ mod test {
                 Datum::I64(i64::MAX),
             ),
             (ScalarFuncSig::UnaryMinusInt, Datum::I64(0), Datum::I64(0)),
-            (ScalarFuncSig::UnaryMinusInt, Datum::I64((i64::MAX as u64 + 1) as i64), Datum::I64(i64::MIN)),
+            (
+                ScalarFuncSig::UnaryMinusInt,
+                Datum::I64((i64::MAX as u64 + 1) as i64),
+                Datum::I64(i64::MIN),
+            ),
             (ScalarFuncSig::UnaryMinusInt, Datum::Null, Datum::Null),
             (
                 ScalarFuncSig::UnaryMinusReal,
@@ -377,8 +380,10 @@ mod test {
     fn test_unary_op_overflow() {
         let tests = vec![
             (ScalarFuncSig::UnaryMinusInt, Datum::I64(i64::MIN)),
-             (ScalarFuncSig::UnaryMinusInt, Datum::U64(i64::MAX as u64 + 2)),
-
+            (
+                ScalarFuncSig::UnaryMinusInt,
+                Datum::U64(i64::MAX as u64 + 2),
+            ),
         ];
         let ctx = StatementContext::default();
         for (op, argument) in tests {
