@@ -710,39 +710,28 @@ mod test {
         expr
     }
 
-    fn expr_with_flen_and_decimal(
+    fn expr_for_sig(
         sig: ScalarFuncSig,
         children: Vec<Expr>,
         cols: usize,
-        flen: i32,
-        decimal: i32,
+        flen: Option<i32>,
+        decimal: Option<i32>,
+        to_tp: Option<i32>,
     ) -> Expression {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_children(RepeatedField::from_vec(children));
         expr.set_sig(sig);
         let mut fp = FieldType::new();
-        fp.set_flen(flen);
-        fp.set_decimal(decimal);
-        fp.set_charset(String::from(charset::CHARSET_UTF8));
-        expr.set_field_type(fp);
-        Expression::build(expr, cols).unwrap()
-    }
-
-    fn expr_with_tp_and_decimal(
-        sig: ScalarFuncSig,
-        children: Vec<Expr>,
-        cols: usize,
-        tp: i32,
-        decimal: i32,
-    ) -> Expression {
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ScalarFunc);
-        expr.set_children(RepeatedField::from_vec(children));
-        expr.set_sig(sig);
-        let mut fp = FieldType::new();
-        fp.set_tp(tp);
-        fp.set_decimal(decimal);
+        if flen.is_some() {
+            fp.set_flen(flen.unwrap());
+        }
+        if decimal.is_some() {
+            fp.set_decimal(decimal.unwrap());
+        }
+        if to_tp.is_some() {
+            fp.set_tp(to_tp.unwrap());
+        }
         fp.set_charset(String::from(charset::CHARSET_UTF8));
         expr.set_field_type(fp);
         Expression::build(expr, cols).unwrap()
@@ -873,7 +862,14 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, decimal, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_with_flen_and_decimal(sig, vec![col_expr], 1, flen as i32, decimal as i32);
+            let e = expr_for_sig(
+                sig,
+                vec![col_expr],
+                1,
+                Some(flen as i32),
+                Some(decimal as i32),
+                None,
+            );
             let res = e.eval_decimal(&ctx, &col).unwrap();
             assert_eq!(res.unwrap().into_owned(), exp);
             // test None
@@ -997,12 +993,13 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_with_flen_and_decimal(
+            let e = expr_for_sig(
                 sig,
                 vec![col_expr],
                 1,
-                flen as i32,
-                convert::UNSPECIFIED_LENGTH as i32,
+                Some(flen as i32),
+                Some(convert::UNSPECIFIED_LENGTH as i32),
+                None,
             );
             let res = e.eval_string(&ctx, &col).unwrap();
             assert_eq!(
@@ -1062,7 +1059,7 @@ mod test {
                 &t_time,
             ),
             (
-                // cast int as datetime(6)  TODO
+                // cast int as datetime(6)
                 ScalarFuncSig::CastIntAsTime,
                 types::LONG_LONG,
                 &int_cols,
@@ -1176,7 +1173,14 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, to_tp, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_with_tp_and_decimal(sig, vec![col_expr], 1, to_tp as i32, to_fsp as i32);
+            let e = expr_for_sig(
+                sig,
+                vec![col_expr],
+                1,
+                None,
+                Some(to_fsp as i32),
+                Some(to_tp as i32),
+            );
             let res = e.eval_time(&ctx, col).unwrap();
             let data = res.unwrap().into_owned();
             let mut expt = exp.clone();
@@ -1193,6 +1197,165 @@ mod test {
             );
             // test None
             let res = e.eval_time(&ctx, &null_cols).unwrap();
+            assert!(res.is_none());
+        }
+    }
+
+    #[test]
+    fn test_cast_as_duration() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let today = Utc::now();
+        let t_date_str = format!("{}", today.format("%Y-%m-%d"));
+
+        let dur_str = "12:00:23";
+        let dur_int = 120023u64;
+        let duration = Duration::parse(dur_str.as_bytes(), 0).unwrap();
+        let dur_to_time_str = format!("{} 12:00:23", t_date_str);
+        let dur_to_time = Time::parse_utc_datetime(&dur_to_time_str, 0).unwrap();
+        let mut dur_to_date = dur_to_time.clone();
+        dur_to_date.set_tp(types::DATE).unwrap();
+
+        let json_cols = vec![Datum::Json(Json::String(String::from(dur_str)))];
+        let int_cols = vec![Datum::U64(dur_int)];
+        let str_cols = vec![Datum::Bytes(dur_str.as_bytes().to_vec())];
+        let f64_cols = vec![Datum::F64(dur_int as f64)];
+        let time_cols = vec![Datum::Time(dur_to_time)];
+        let duration_cols = vec![Datum::Dur(duration.clone())];
+        let dec_cols = vec![Datum::Dec(Decimal::from(dur_int))];
+
+        let cases = vec![
+            (
+                // cast int as duration
+                ScalarFuncSig::CastIntAsDuration,
+                types::LONG_LONG,
+                &int_cols,
+                mysql::UN_SPECIFIED_FSP,
+                &duration,
+            ),
+            (
+                // cast int as duration
+                ScalarFuncSig::CastIntAsDuration,
+                types::LONG_LONG,
+                &int_cols,
+                mysql::MAX_FSP,
+                &duration,
+            ),
+            (
+                // string as duration
+                ScalarFuncSig::CastStringAsDuration,
+                types::STRING,
+                &str_cols,
+                mysql::UN_SPECIFIED_FSP,
+                &duration,
+            ),
+            (
+                // cast string as duration
+                ScalarFuncSig::CastStringAsDuration,
+                types::STRING,
+                &str_cols,
+                4,
+                &duration,
+            ),
+            (
+                // cast real as duration
+                ScalarFuncSig::CastRealAsDuration,
+                types::DOUBLE,
+                &f64_cols,
+                mysql::UN_SPECIFIED_FSP,
+                &duration,
+            ),
+            (
+                // cast real as duration
+                ScalarFuncSig::CastRealAsDuration,
+                types::DOUBLE,
+                &f64_cols,
+                1,
+                &duration,
+            ),
+            (
+                // cast time as duration
+                ScalarFuncSig::CastTimeAsDuration,
+                types::DATETIME,
+                &time_cols,
+                mysql::UN_SPECIFIED_FSP,
+                &duration,
+            ),
+            (
+                // cast time as duration
+                ScalarFuncSig::CastTimeAsDuration,
+                types::DATETIME,
+                &time_cols,
+                5,
+                &duration,
+            ),
+            (
+                ScalarFuncSig::CastDurationAsDuration,
+                types::DURATION,
+                &duration_cols,
+                mysql::UN_SPECIFIED_FSP,
+                &duration,
+            ),
+            (
+                // cast duration as duration
+                ScalarFuncSig::CastDurationAsDuration,
+                types::DURATION,
+                &duration_cols,
+                mysql::MAX_FSP,
+                &duration,
+            ),
+            (
+                // cast json as duration
+                ScalarFuncSig::CastJsonAsDuration,
+                types::JSON,
+                &json_cols,
+                mysql::UN_SPECIFIED_FSP,
+                &duration,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsDuration,
+                types::JSON,
+                &json_cols,
+                5,
+                &duration,
+            ),
+            (
+                // cast decimal as duration
+                ScalarFuncSig::CastDecimalAsDuration,
+                types::NEW_DECIMAL,
+                &dec_cols,
+                mysql::UN_SPECIFIED_FSP,
+                &duration,
+            ),
+            (
+                // cast decimal as duration
+                ScalarFuncSig::CastDecimalAsDuration,
+                types::NEW_DECIMAL,
+                &dec_cols,
+                2,
+                &duration,
+            ),
+        ];
+
+        let null_cols = vec![Datum::Null];
+        for (sig, tp, col, to_fsp, exp) in cases {
+            let col_expr = col_expr(0, tp as i32);
+            let e = expr_for_sig(sig, vec![col_expr], 1, None, Some(to_fsp as i32), None);
+            let res = e.eval_duration(&ctx, col).unwrap();
+            let data = res.unwrap().into_owned();
+            let mut expt = exp.clone();
+            if to_fsp != mysql::UN_SPECIFIED_FSP {
+                expt.fsp = to_fsp as u8;
+            }
+            assert_eq!(
+                data.to_string(),
+                expt.to_string(),
+                "sig: {:?} with fsp {} failed",
+                sig,
+                to_fsp,
+            );
+            // test None
+            let res = e.eval_duration(&ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
