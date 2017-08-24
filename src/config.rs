@@ -786,3 +786,17 @@ impl TiKvConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use toml::{self, ser};
+
+    extern crate serde_test;
+    use self::serde_test::{Token, assert_de_tokens};
+
+    #[test]
+    fn test_serde() {
+    }
+}
