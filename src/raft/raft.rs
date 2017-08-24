@@ -751,7 +751,11 @@ impl<T: Storage> Raft<T> {
         // Becoming a pre-candidate changes our state.
         // but doesn't change anything else. In particular it does not increase
         // self.term or change self.vote.
-        self.leader_id = INVALID_ID;
+        if self.check_quorum {
+            // If network partition happen, and leader is in minority partition,
+            // it will step down, become follower without notifying others.
+            self.leader_id = INVALID_ID;
+        }
         self.votes = FlatMap::default();
         self.state = StateRole::PreCandidate;
         info!("{} became pre-candidate at term {}", self.tag, self.term);
