@@ -74,7 +74,7 @@ impl FnCall {
 
     pub fn unary_minus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
+        if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
             let uval = val as u64;
             if uval > i64::MAX as u64 + 1 {
                 return Err(Error::Overflow);
@@ -136,8 +136,8 @@ impl FnCall {
 mod test {
     use std::i64;
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::{mysql, Datum};
-    use coprocessor::codec::mysql::{types, Duration};
+    use coprocessor::codec::Datum;
+    use coprocessor::codec::mysql::Duration;
     use coprocessor::dag::expr::{Error, Expression, StatementContext};
     use coprocessor::dag::expr::test::{fncall_expr, str2dec};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
@@ -299,14 +299,10 @@ mod test {
         let ctx = StatementContext::default();
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let unsigned = mysql::has_unsigned_flag(arg1.get_field_type().get_flag());
-            let mut op = Expression::build(fncall_expr(operator, &[arg1]), 0).unwrap();
+            let op = Expression::build(fncall_expr(operator, &[arg1]), 0).unwrap();
             let expected = Expression::build(datum_expr(exp), 0).unwrap();
             match operator {
                 ScalarFuncSig::UnaryMinusInt => {
-                    if unsigned {
-                        op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
-                    }
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
                     let rhs = expected.eval_int(&ctx, &[]).unwrap();
                     assert_eq!(lhs, rhs);
@@ -392,11 +388,7 @@ mod test {
         let ctx = StatementContext::default();
         for (op, argument) in tests {
             let arg = datum_expr(argument);
-            let unsigned = mysql::has_unsigned_flag(arg.get_field_type().get_flag());
-            let mut op = Expression::build(fncall_expr(op, &[arg]), 0).unwrap();
-            if unsigned {
-                op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
-            }
+            let op = Expression::build(fncall_expr(op, &[arg]), 0).unwrap();
             let got = op.eval_int(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
