@@ -654,9 +654,8 @@ impl FnCall {
         }
 
         if self.tp.get_tp() == types::STRING as i32 && s.len() < flen {
-            let to_pad = flen - s.len();
             let mut s = s.into_owned();
-            s.resize(to_pad, 0);
+            s.resize(flen, 0);
             return Ok(Cow::Owned(s));
         }
         Ok(s)
@@ -719,6 +718,7 @@ mod test {
         flen: Option<i32>,
         decimal: Option<i32>,
         to_tp: Option<i32>,
+        charset: Option<String>,
     ) -> Expression {
         let mut exp = fncall_expr(sig, children);
         if flen.is_some() {
@@ -730,8 +730,9 @@ mod test {
         if to_tp.is_some() {
             exp.mut_field_type().set_tp(to_tp.unwrap());
         }
-        exp.mut_field_type()
-            .set_charset(String::from(charset::CHARSET_UTF8));
+        if charset.is_some() {
+            exp.mut_field_type().set_charset(charset.unwrap());
+        }
         Expression::build(exp, cols).unwrap()
     }
 
@@ -867,6 +868,7 @@ mod test {
                 Some(flen as i32),
                 Some(decimal as i32),
                 None,
+                None,
             );
             let res = e.eval_decimal(&ctx, &col).unwrap();
             assert_eq!(res.unwrap().into_owned(), exp);
@@ -891,6 +893,8 @@ mod test {
             (
                 ScalarFuncSig::CastIntAsString,
                 types::LONG_LONG,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::I64(1)],
                 convert::UNSPECIFIED_LENGTH,
                 b"1".to_vec(),
@@ -898,6 +902,8 @@ mod test {
             (
                 ScalarFuncSig::CastIntAsString,
                 types::LONG_LONG,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::I64(1234)],
                 3,
                 b"123".to_vec(),
@@ -905,13 +911,17 @@ mod test {
             (
                 ScalarFuncSig::CastStringAsString,
                 types::STRING,
+                charset::CHARSET_ASCII,
+                Some(types::STRING as i32),
                 vec![Datum::Bytes(b"1234".to_vec())],
-                convert::UNSPECIFIED_LENGTH,
+                6,
                 b"1234".to_vec(),
             ),
             (
                 ScalarFuncSig::CastStringAsString,
                 types::STRING,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::Bytes(s.as_bytes().to_vec())],
                 3,
                 exp_s.as_bytes().to_vec(),
@@ -919,6 +929,8 @@ mod test {
             (
                 ScalarFuncSig::CastRealAsString,
                 types::DOUBLE,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::F64(1f64)],
                 convert::UNSPECIFIED_LENGTH,
                 b"1".to_vec(),
@@ -926,6 +938,8 @@ mod test {
             (
                 ScalarFuncSig::CastRealAsString,
                 types::DOUBLE,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::F64(1234.123)],
                 3,
                 b"123".to_vec(),
@@ -933,6 +947,8 @@ mod test {
             (
                 ScalarFuncSig::CastTimeAsString,
                 types::DATETIME,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::Time(t.clone())],
                 convert::UNSPECIFIED_LENGTH,
                 t_str.as_bytes().to_vec(),
@@ -940,6 +956,8 @@ mod test {
             (
                 ScalarFuncSig::CastTimeAsString,
                 types::DATETIME,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::Time(t)],
                 3,
                 t_str[0..3].as_bytes().to_vec(),
@@ -947,6 +965,8 @@ mod test {
             (
                 ScalarFuncSig::CastDurationAsString,
                 types::DURATION,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::Dur(duration_t.clone())],
                 convert::UNSPECIFIED_LENGTH,
                 dur_str.to_vec(),
@@ -954,6 +974,8 @@ mod test {
             (
                 ScalarFuncSig::CastDurationAsString,
                 types::DURATION,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::Dur(duration_t)],
                 3,
                 dur_str[0..3].to_vec(),
@@ -961,6 +983,8 @@ mod test {
             (
                 ScalarFuncSig::CastJsonAsString,
                 types::JSON,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::Json(Json::I64(1))],
                 convert::UNSPECIFIED_LENGTH,
                 b"1".to_vec(),
@@ -968,6 +992,8 @@ mod test {
             (
                 ScalarFuncSig::CastJsonAsString,
                 types::JSON,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::Json(Json::I64(1234))],
                 2,
                 b"12".to_vec(),
@@ -975,6 +1001,8 @@ mod test {
             (
                 ScalarFuncSig::CastDecimalAsString,
                 types::NEW_DECIMAL,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::Dec(Decimal::from(1))],
                 convert::UNSPECIFIED_LENGTH,
                 b"1".to_vec(),
@@ -982,6 +1010,8 @@ mod test {
             (
                 ScalarFuncSig::CastDecimalAsString,
                 types::NEW_DECIMAL,
+                charset::CHARSET_UTF8,
+                None,
                 vec![Datum::Dec(Decimal::from(1234))],
                 2,
                 b"12".to_vec(),
@@ -989,7 +1019,7 @@ mod test {
         ];
 
         let null_cols = vec![Datum::Null];
-        for (sig, tp, col, flen, exp) in cases {
+        for (sig, tp, charset, to_tp, col, flen, mut exp) in cases {
             let col_expr = col_expr(0, tp as i32);
             let e = expr_for_sig(
                 sig,
@@ -997,8 +1027,12 @@ mod test {
                 1,
                 Some(flen as i32),
                 Some(convert::UNSPECIFIED_LENGTH as i32),
-                None,
+                to_tp,
+                Some(String::from(charset)),
             );
+            if flen != convert::UNSPECIFIED_LENGTH && exp.len() < flen as usize {
+                exp.resize(flen as usize, 0);
+            }
             let res = e.eval_string(&ctx, &col).unwrap();
             assert_eq!(
                 res.unwrap().into_owned(),
@@ -1178,6 +1212,7 @@ mod test {
                 None,
                 Some(to_fsp as i32),
                 Some(to_tp as i32),
+                None,
             );
             let res = e.eval_time(&ctx, col).unwrap();
             let data = res.unwrap().into_owned();
@@ -1338,7 +1373,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_for_sig(sig, &[col_expr], 1, None, Some(to_fsp as i32), None);
+            let e = expr_for_sig(sig, &[col_expr], 1, None, Some(to_fsp as i32), None, None);
             let res = e.eval_duration(&ctx, col).unwrap();
             let data = res.unwrap().into_owned();
             let mut expt = exp.clone();
@@ -1383,6 +1418,7 @@ mod test {
                 None,
                 None,
                 None,
+                None,
             );
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1407,6 +1443,7 @@ mod test {
                 ScalarFuncSig::CastRealAsJson,
                 &[col_expr],
                 1,
+                None,
                 None,
                 None,
                 None,
@@ -1437,6 +1474,7 @@ mod test {
                 ScalarFuncSig::CastDecimalAsJson,
                 &[col_expr],
                 1,
+                None,
                 None,
                 None,
                 None,
@@ -1475,6 +1513,7 @@ mod test {
                 1,
                 None,
                 Some(decimal as i32),
+                None,
                 None,
             );
             let res = e.eval_json(&ctx, &cols).unwrap();
@@ -1532,6 +1571,7 @@ mod test {
                 None,
                 None,
                 None,
+                None,
             );
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1565,6 +1605,7 @@ mod test {
                 None,
                 None,
                 None,
+                None,
             );
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
@@ -1592,6 +1633,7 @@ mod test {
                 ScalarFuncSig::CastJsonAsJson,
                 &[col_expr],
                 1,
+                None,
                 None,
                 None,
                 None,
