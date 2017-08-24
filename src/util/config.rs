@@ -58,23 +58,27 @@ pub mod compression_type_level_serde {
 
     use rocksdb::DBCompressionType;
 
+    pub fn db_compression_type_to_str(tp: &DBCompressionType) -> &'static str {
+        match *tp {
+            DBCompressionType::No => "no",
+            DBCompressionType::Snappy => "snappy",
+            DBCompressionType::Zlib => "zlib",
+            DBCompressionType::Bz2 => "bzip2",
+            DBCompressionType::Lz4 => "lz4",
+            DBCompressionType::Lz4hc => "lz4hc",
+            DBCompressionType::Zstd => "zstd",
+            DBCompressionType::ZstdNotFinal => "zstd-not-final",
+            DBCompressionType::Disable => "disable",
+        }
+    }
+
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         let mut s = try!(serializer.serialize_seq(Some(ts.len())));
         for t in ts {
-            let name = match *t {
-                DBCompressionType::No => "no",
-                DBCompressionType::Snappy => "snappy",
-                DBCompressionType::Zlib => "zlib",
-                DBCompressionType::Bz2 => "bzip2",
-                DBCompressionType::Lz4 => "lz4",
-                DBCompressionType::Lz4hc => "lz4hc",
-                DBCompressionType::Zstd => "zstd",
-                DBCompressionType::ZstdNotFinal => "zstd-not-final",
-                DBCompressionType::Disable => "disable",
-            };
+            let name = db_compression_type_to_str(t);
             try!(s.serialize_element(name));
         }
         s.end()
@@ -299,7 +303,7 @@ const SECOND: u64 = MS * TIME_MAGNITUDE_1;
 const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, PartialEq)]
 pub struct ReadableSize(pub u64);
 
 impl ReadableSize {
@@ -448,7 +452,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
 impl ReadableDuration {
@@ -783,6 +787,9 @@ mod test {
 
     use util::collections::HashMap;
 
+    extern crate serde_test;
+    use self::serde_test::{assert_de_tokens, assert_ser_tokens, Token};
+
     #[test]
     fn test_readable_size() {
         let s = ReadableSize::kb(2);
@@ -816,6 +823,7 @@ mod test {
             (11 * PB, "11PB"),
         ];
         for (size, exp) in legal_cases {
+            assert_ser_tokens(&ReadableSize(size), &[Token::Str(exp)]);
             let c = SizeHolder {
                 s: ReadableSize(size),
             };
@@ -847,6 +855,7 @@ mod test {
             ("0.5K", KB / 2),
         ];
         for (src, exp) in decode_cases {
+            assert_de_tokens(&ReadableSize(exp), &[Token::Str(src)]);
             let src = format!("s = {:?}", src);
             let res: SizeHolder = toml::from_str(&src).unwrap();
             assert_eq!(res.s.0, exp);
@@ -922,9 +931,9 @@ mod test {
             (3600 + 2, 5, "1h2s5ms"),
         ];
         for (secs, ms, exp) in legal_cases {
-            let d = DurHolder {
-                d: ReadableDuration(Duration::new(secs, ms * 1_000_000)),
-            };
+            let dur = ReadableDuration(Duration::new(secs, ms * 1_000_000));
+            assert_ser_tokens(&dur, &[Token::Str(exp)]);
+            let d = DurHolder { d: dur };
             let res_str = toml::to_string(&d).unwrap();
             let exp_str = format!("d = {:?}\n", exp);
             assert_eq!(res_str, exp_str);
@@ -934,9 +943,11 @@ mod test {
 
         let decode_cases = vec![(" 0.5 h2m ", 3600 / 2 + 2 * 60, 0)];
         for (src, secs, ms) in decode_cases {
+            let dur = ReadableDuration(Duration::new(secs, ms * 1_000_000));
+            assert_de_tokens(&dur, &[Token::Str(src)]);
             let src = format!("d = {:?}", src);
             let res: DurHolder = toml::from_str(&src).unwrap();
-            assert_eq!(res.d.0, Duration::new(secs, ms * 1_000_000));
+            assert_eq!(res.d.0, dur.0);
         }
 
         let illegal_cases = vec!["1H", "1M", "1S", "1MS", "1h1h", "h"];

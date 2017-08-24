@@ -54,8 +54,8 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 }
 
 macro_rules! cf_config {
-    ($name:ident) => {
-        #[derive(Clone, Serialize, Deserialize)]
+    ($name:ident, $test_name:ident) => {
+        #[derive(Clone, Serialize, Deserialize, PartialEq)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
@@ -80,7 +80,103 @@ macro_rules! cf_config {
             #[serde(with = "config::compaction_pri_serde")]
             pub compaction_pri: CompactionPriority,
         }
-    }
+
+        impl ::std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+                f.debug_struct(stringify!($name))
+                    .finish()
+            }
+        }
+
+        #[cfg(test)]
+        mod $test_name {
+            use util::config::compression_type_level_serde;
+            use super::*;
+
+            use toml::{self, ser};
+
+            extern crate serde_test;
+            use self::serde_test::{Token, assert_de_tokens};
+
+            #[test]
+            fn test_toml_roundtrippping() {
+                let value: $name = Default::default();
+                let dump = ser::to_string_pretty(&value).unwrap();
+                let load = toml::from_str(&dump).unwrap();
+                assert_eq!(value, load);
+            }
+
+            #[test]
+            fn test_de_tokens() {
+                let value: $name = Default::default();
+                assert_de_tokens(&value, &[
+                    Token::Struct { name: stringify!($name), len:18 },
+                        Token::Str("block-size"),
+                        Token::U64(value.block_size.0),
+
+                        Token::Str("block-cache-size"),
+                        Token::U64(value.block_cache_size.0),
+
+                        Token::Str("cache-index-and-filter-blocks"),
+                        Token::Bool(value.cache_index_and_filter_blocks),
+
+                        Token::Str("use-bloom-filter"),
+                        Token::Bool(value.use_bloom_filter),
+
+                        Token::Str("whole-key-filtering"),
+                        Token::Bool(value.whole_key_filtering),
+
+                        Token::Str("bloom-filter-bits-per-key"),
+                        Token::I32(value.bloom_filter_bits_per_key),
+
+                        Token::Str("block-based-bloom-filter"),
+                        Token::Bool(value.block_based_bloom_filter),
+
+                        Token::Str("compression-per-level"),
+                        Token::Seq { len: Some(7) },
+                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[0])),
+                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[1])),
+                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[2])),
+                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[3])),
+                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[4])),
+                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[5])),
+                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[6])),
+                        Token::SeqEnd,
+
+                        Token::Str("write-buffer-size"),
+                        Token::U64(value.write_buffer_size.0),
+
+                        Token::Str("max-write-buffer-number"),
+                        Token::I32(value.max_write_buffer_number),
+
+                        Token::Str("min-write-buffer-number-to-merge"),
+                        Token::I32(value.min_write_buffer_number_to_merge),
+
+                        Token::Str("max-bytes-for-level-base"),
+                        Token::U64(value.max_bytes_for_level_base.0),
+
+                        Token::Str("target-file-size-base"),
+                        Token::U64(value.target_file_size_base.0),
+
+                        Token::Str("level0-file-num-compaction-trigger"),
+                        Token::I32(value.level0_file_num_compaction_trigger),
+
+                        Token::Str("level0-slowdown-writes-trigger"),
+                        Token::I32(value.level0_slowdown_writes_trigger),
+
+                        Token::Str("level0-stop-writes-trigger"),
+                        Token::I32(value.level0_stop_writes_trigger),
+
+                        Token::Str("max-compaction-bytes"),
+                        Token::U64(value.max_compaction_bytes.0),
+
+                        Token::Str("compaction-pri"),
+                        Token::I64(value.compaction_pri as i64),
+                    Token::StructEnd,
+                ]);
+            }
+        }
+    };
 }
 
 macro_rules! build_cf_opt {
@@ -111,7 +207,7 @@ macro_rules! build_cf_opt {
     }};
 }
 
-cf_config!(DefaultCfConfig);
+cf_config!(DefaultCfConfig, default_cf_config_test);
 
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
@@ -155,7 +251,7 @@ impl DefaultCfConfig {
     }
 }
 
-cf_config!(WriteCfConfig);
+cf_config!(WriteCfConfig, write_cf_config_test);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
@@ -209,7 +305,7 @@ impl WriteCfConfig {
     }
 }
 
-cf_config!(LockCfConfig);
+cf_config!(LockCfConfig, lock_cf_config_test);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
@@ -248,7 +344,7 @@ impl LockCfConfig {
     }
 }
 
-cf_config!(RaftCfConfig);
+cf_config!(RaftCfConfig, raft_cf_config_test);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
@@ -413,7 +509,7 @@ impl DbConfig {
     }
 }
 
-cf_config!(RaftDefaultCfConfig);
+cf_config!(RaftDefaultCfConfig, raft_default_cf_config_test);
 
 impl Default for RaftDefaultCfConfig {
     fn default() -> RaftDefaultCfConfig {
