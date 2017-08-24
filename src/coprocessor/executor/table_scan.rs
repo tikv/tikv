@@ -36,8 +36,8 @@ impl<'a> TableScanExecutor<'a> {
     pub fn new(meta: TableScan,
                mut key_ranges: Vec<KeyRange>,
                store: SnapshotStore<'a>,
-               statistics: &'a mut Statistics,
-    ) -> TableScanExecutor<'a> {
+               statistics: &'a mut Statistics)
+	       -> TableScanExecutor<'a> {
         let col_ids = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
