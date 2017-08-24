@@ -73,7 +73,9 @@ impl FnCall {
     #[inline]
     pub fn ceil_dec_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         // FIXME: here we can't do same logic with TiDB.
-        self.cast_decimal_as_int(ctx, row)
+        let d = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let d: Result<Decimal> = d.ceil().into();
+        d.and_then(|dec| dec.int_part(ctx)).map(Some)
     }
 
     #[inline]
@@ -111,7 +113,9 @@ impl FnCall {
     #[inline]
     pub fn floor_dec_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         // FIXME: here we can't do same logic with TiDB.
-        self.cast_decimal_as_int(ctx, row)
+        let d = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let d: Result<Decimal> = d.floor().into();
+        d.and_then(|dec| dec.int_part(ctx)).map(Some)
     }
 
     #[inline]
@@ -128,9 +132,10 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
-    use std::{i64, u64};
+    use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::Datum;
+    use coprocessor::codec::{mysql, Datum};
+    use coprocessor::codec::mysql::types;
     use coprocessor::dag::expr::test::{check_overflow, fncall_expr, str2dec};
     use coprocessor::dag::expr::{Expression, StatementContext};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
@@ -186,11 +191,171 @@ mod test {
         let ctx = StatementContext::default();
         for tt in tests {
             let arg = datum_expr(tt.1);
-            let mut op = Expression::build(fncall_expr(tt.0, &[arg]), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[arg]), 0).unwrap();
             match tt.0 {
                 ScalarFuncSig::AbsInt | ScalarFuncSig::AbsUInt => {
                     let got = op.eval_int(&ctx, &[]).unwrap_err();
                     assert!(check_overflow(got).is_ok());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_ceil() {
+        let tests = vec![
+            (ScalarFuncSig::CeilReal, Datum::F64(3.45), Datum::F64(4f64)),
+            (
+                ScalarFuncSig::CeilReal,
+                Datum::F64(-3.45),
+                Datum::F64(-3f64),
+            ),
+            (
+                ScalarFuncSig::CeilReal,
+                Datum::F64(f64::MAX),
+                Datum::F64(f64::MAX),
+            ),
+            (
+                ScalarFuncSig::CeilReal,
+                Datum::F64(f64::MIN),
+                Datum::F64(f64::MIN),
+            ),
+            (
+                ScalarFuncSig::CeilIntToInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MIN),
+            ),
+            (
+                ScalarFuncSig::CeilIntToInt,
+                Datum::U64(u64::MAX),
+                Datum::U64(u64::MAX),
+            ),
+            (
+                ScalarFuncSig::CeilIntToDec,
+                Datum::I64(i64::MIN),
+                str2dec("-9223372036854775808"),
+            ),
+            (
+                ScalarFuncSig::CeilDecToInt,
+                str2dec("123.456"),
+                Datum::I64(124),
+            ),
+            (
+                ScalarFuncSig::CeilDecToInt,
+                str2dec("-123.456"),
+                Datum::I64(-123),
+            ),
+            (
+                ScalarFuncSig::CeilDecToDec,
+                str2dec("9223372036854775808"),
+                str2dec("9223372036854775808"),
+            ),
+        ];
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true; // for ceil decimal to int.
+        for tt in tests {
+            let arg = datum_expr(tt.1);
+            let mut op = Expression::build(fncall_expr(tt.0, &[arg.clone()]), 0).unwrap();
+            let expected = Expression::build(datum_expr(tt.2), 0).unwrap();
+            if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
+                op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+            }
+            match tt.0 {
+                ScalarFuncSig::CeilReal => {
+                    let got = op.eval_real(&ctx, &[]).unwrap();
+                    let exp = expected.eval_real(&ctx, &[]).unwrap();
+                    assert_eq!(got, exp);
+                }
+                ScalarFuncSig::CeilIntToInt | ScalarFuncSig::CeilDecToInt => {
+                    let got = op.eval_int(&ctx, &[]).unwrap();
+                    let exp = expected.eval_int(&ctx, &[]).unwrap();
+                    assert_eq!(got, exp);
+                }
+                ScalarFuncSig::CeilIntToDec | ScalarFuncSig::CeilDecToDec => {
+                    let got = op.eval_decimal(&ctx, &[]).unwrap();
+                    let exp = expected.eval_decimal(&ctx, &[]).unwrap();
+                    assert_eq!(got, exp);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_floor() {
+        let tests = vec![
+            (ScalarFuncSig::FloorReal, Datum::F64(3.45), Datum::F64(3f64)),
+            (
+                ScalarFuncSig::FloorReal,
+                Datum::F64(-3.45),
+                Datum::F64(-4f64),
+            ),
+            (
+                ScalarFuncSig::FloorReal,
+                Datum::F64(f64::MAX),
+                Datum::F64(f64::MAX),
+            ),
+            (
+                ScalarFuncSig::FloorReal,
+                Datum::F64(f64::MIN),
+                Datum::F64(f64::MIN),
+            ),
+            (
+                ScalarFuncSig::FloorIntToInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MIN),
+            ),
+            (
+                ScalarFuncSig::FloorIntToInt,
+                Datum::U64(u64::MAX),
+                Datum::U64(u64::MAX),
+            ),
+            (
+                ScalarFuncSig::FloorIntToDec,
+                Datum::I64(i64::MIN),
+                str2dec("-9223372036854775808"),
+            ),
+            (
+                ScalarFuncSig::FloorDecToInt,
+                str2dec("123.456"),
+                Datum::I64(123),
+            ),
+            (
+                ScalarFuncSig::FloorDecToInt,
+                str2dec("-123.456"),
+                Datum::I64(-124),
+            ),
+            (
+                ScalarFuncSig::FloorDecToDec,
+                str2dec("9223372036854775808"),
+                str2dec("9223372036854775808"),
+            ),
+        ];
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true; // for ceil decimal to int.
+        for tt in tests {
+            let arg = datum_expr(tt.1);
+            let mut op = Expression::build(fncall_expr(tt.0, &[arg.clone()]), 0).unwrap();
+            let expected = Expression::build(datum_expr(tt.2), 0).unwrap();
+            if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
+                op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+            }
+            match tt.0 {
+                ScalarFuncSig::FloorReal => {
+                    let got = op.eval_real(&ctx, &[]).unwrap();
+                    let exp = expected.eval_real(&ctx, &[]).unwrap();
+                    assert_eq!(got, exp);
+                }
+                ScalarFuncSig::FloorIntToInt | ScalarFuncSig::FloorDecToInt => {
+                    let got = op.eval_int(&ctx, &[]).unwrap();
+                    let exp = expected.eval_int(&ctx, &[]).unwrap();
+                    assert_eq!(got, exp);
+                }
+                ScalarFuncSig::FloorIntToDec | ScalarFuncSig::FloorDecToDec => {
+                    let got = op.eval_decimal(&ctx, &[]).unwrap();
+                    let exp = expected.eval_decimal(&ctx, &[]).unwrap();
+                    assert_eq!(got, exp);
                 }
                 _ => unreachable!(),
             }
