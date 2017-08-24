@@ -153,15 +153,8 @@ mod test {
     use coprocessor::codec::{mysql, Datum};
     use coprocessor::codec::mysql::types;
     use coprocessor::dag::expr::{Error, Expression, StatementContext};
-    use coprocessor::dag::expr::test::{fncall_expr, str2dec};
+    use coprocessor::dag::expr::test::{check_overflow, fncall_expr, str2dec};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
-
-    fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow => Ok(()),
-            _ => Err(()),
-        }
-    }
 
     #[test]
     fn test_arithmetic_int() {

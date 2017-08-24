@@ -445,11 +445,19 @@ mod test {
     use coprocessor::codec::Datum;
     use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-    use super::Expression;
+    use super::{Error, Expression};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
         Datum::Dec(s.parse().unwrap())
+    }
+
+    #[inline]
+    pub fn check_overflow(e: Error) -> Result<(), ()> {
+        match e {
+            Error::Overflow => Ok(()),
+            _ => Err(()),
+        }
     }
 
     pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {

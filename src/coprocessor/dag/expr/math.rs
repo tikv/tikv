@@ -131,7 +131,7 @@ mod test {
     use std::{i64, u64};
     use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{fncall_expr, str2dec};
+    use coprocessor::dag::expr::test::{check_overflow, fncall_expr, str2dec};
     use coprocessor::dag::expr::{Expression, StatementContext};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
 
@@ -174,6 +174,23 @@ mod test {
                     let got = op.eval_decimal(&ctx, &[]).unwrap();
                     let exp = expected.eval_decimal(&ctx, &[]).unwrap();
                     assert_eq!(got, exp);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_overflow_abs() {
+        let tests = vec![(ScalarFuncSig::AbsInt, Datum::I64(i64::MIN))];
+        let ctx = StatementContext::default();
+        for tt in tests {
+            let arg = datum_expr(tt.1);
+            let mut op = Expression::build(fncall_expr(tt.0, &[arg]), 0).unwrap();
+            match tt.0 {
+                ScalarFuncSig::AbsInt | ScalarFuncSig::AbsUInt => {
+                    let got = op.eval_int(&ctx, &[]).unwrap_err();
+                    assert!(check_overflow(got).is_ok());
                 }
                 _ => unreachable!(),
             }
