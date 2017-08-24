@@ -249,7 +249,7 @@ mod tests {
         ).unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 
-        server.start(&cfg).unwrap();
+        server.start(&cfg, None).unwrap();
 
         let mut trans = server.transport();
         for i in 0..10 {
