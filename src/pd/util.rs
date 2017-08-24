@@ -25,7 +25,6 @@ use futures::sync::mpsc::UnboundedSender;
 use grpc::{CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
            Result as GrpcResult};
 use tokio_timer::Timer;
-use rand::{self, Rng};
 use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
                     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader};
 use kvproto::pdpb_grpc::PdClient;
@@ -199,7 +198,7 @@ pub struct Request<Req, Resp, F> {
     timer: Option<HistogramTimer>,
 }
 
-const MAX_REQUEST_COUNT: usize = 5;
+const MAX_REQUEST_COUNT: usize = 3;
 
 impl<Req, Resp, F> Request<Req, Resp, F>
 where
@@ -389,16 +388,17 @@ pub fn try_connect_leader(
     env: Arc<Environment>,
     previous: &GetMembersResponse,
 ) -> Result<(PdClient, GetMembersResponse)> {
-    // Try to connect other members.
-    // Randomize endpoints.
+    let previous_leader = previous.get_leader();
     let members = previous.get_members();
-    let mut indexes: Vec<usize> = (0..members.len()).collect();
-    rand::thread_rng().shuffle(&mut indexes);
-
     let cluster_id = previous.get_header().get_cluster_id();
     let mut resp = None;
-    'outer: for i in indexes {
-        for ep in members[i].get_client_urls() {
+    // Try to connect to other members, then the previous leader.
+    'outer: for m in members
+        .into_iter()
+        .filter(|m| *m == previous_leader)
+        .chain(&[previous_leader.clone()])
+    {
+        for ep in m.get_client_urls() {
             match connect(env.clone(), ep.as_str()) {
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
