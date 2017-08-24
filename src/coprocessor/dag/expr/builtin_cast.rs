@@ -402,9 +402,12 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val = try!(Time::from_duration(&ctx.tz, val.as_ref()));
+        let mut val = try!(Time::from_duration(
+            &ctx.tz,
+            self.tp.get_tp() as u8,
+            val.as_ref()
+        ));
         try!(val.round_frac(self.tp.get_decimal() as i8));
-        try!(val.set_tp(self.tp.get_tp() as u8));
         Ok(Some(Cow::Owned(val)))
     }
 
@@ -457,7 +460,6 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        // TODO: tidb would handle truncate here
         let dur = try!(Duration::parse(val.as_ref(), self.tp.get_decimal() as i8));
         Ok(Some(Cow::Owned(dur)))
     }
@@ -632,7 +634,8 @@ impl FnCall {
                 ));
             }
 
-            let res = convert::truncate_binary(s.into_owned(), truncate_pos as isize);
+            let mut res = s.into_owned();
+            convert::truncate_binary(&mut res, truncate_pos as isize);
             return Ok(Cow::Owned(res));
         }
 
@@ -644,7 +647,8 @@ impl FnCall {
                     s.len()
                 ));
             }
-            let res = convert::truncate_binary(s.into_owned(), flen as isize);
+            let mut res = s.into_owned();
+            convert::truncate_binary(&mut res, flen as isize);
             return Ok(Cow::Owned(res));
         }
 
@@ -690,13 +694,15 @@ impl FnCall {
 #[cfg(test)]
 mod test {
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-    use protobuf::RepeatedField;
+
+    use util::codec::number::NumberEncoder;
+    use chrono::{FixedOffset, Utc};
 
     use coprocessor::codec::{convert, Datum};
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
     use coprocessor::dag::expr::{Expression, StatementContext};
-    use util::codec::number::NumberEncoder;
-    use chrono::{FixedOffset, Utc};
+    use coprocessor::dag::expr::test::fncall_expr;
+
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = Expr::new();
@@ -712,29 +718,25 @@ mod test {
 
     fn expr_for_sig(
         sig: ScalarFuncSig,
-        children: Vec<Expr>,
+        children: &[Expr],
         cols: usize,
         flen: Option<i32>,
         decimal: Option<i32>,
         to_tp: Option<i32>,
     ) -> Expression {
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ScalarFunc);
-        expr.set_children(RepeatedField::from_vec(children));
-        expr.set_sig(sig);
-        let mut fp = FieldType::new();
+        let mut exp = fncall_expr(sig, children);
         if flen.is_some() {
-            fp.set_flen(flen.unwrap());
+            exp.mut_field_type().set_flen(flen.unwrap());
         }
         if decimal.is_some() {
-            fp.set_decimal(decimal.unwrap());
+            exp.mut_field_type().set_decimal(decimal.unwrap());
         }
         if to_tp.is_some() {
-            fp.set_tp(to_tp.unwrap());
+            exp.mut_field_type().set_tp(to_tp.unwrap());
         }
-        fp.set_charset(String::from(charset::CHARSET_UTF8));
-        expr.set_field_type(fp);
-        Expression::build(expr, cols).unwrap()
+        exp.mut_field_type()
+            .set_charset(String::from(charset::CHARSET_UTF8));
+        Expression::build(exp, cols).unwrap()
     }
 
     #[test]
@@ -864,7 +866,7 @@ mod test {
             let col_expr = col_expr(0, tp as i32);
             let e = expr_for_sig(
                 sig,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 Some(flen as i32),
                 Some(decimal as i32),
@@ -995,7 +997,7 @@ mod test {
             let col_expr = col_expr(0, tp as i32);
             let e = expr_for_sig(
                 sig,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 Some(flen as i32),
                 Some(convert::UNSPECIFIED_LENGTH as i32),
@@ -1175,7 +1177,7 @@ mod test {
             let col_expr = col_expr(0, tp as i32);
             let e = expr_for_sig(
                 sig,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 None,
                 Some(to_fsp as i32),
@@ -1340,7 +1342,7 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_for_sig(sig, vec![col_expr], 1, None, Some(to_fsp as i32), None);
+            let e = expr_for_sig(sig, &[col_expr], 1, None, Some(to_fsp as i32), None);
             let res = e.eval_duration(&ctx, col).unwrap();
             let data = res.unwrap().into_owned();
             let mut expt = exp.clone();
@@ -1380,7 +1382,7 @@ mod test {
             }
             let e = expr_for_sig(
                 ScalarFuncSig::CastIntAsJson,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 None,
                 None,
@@ -1407,7 +1409,7 @@ mod test {
             let col_expr = col_expr(0, types::DOUBLE as i32);
             let e = expr_for_sig(
                 ScalarFuncSig::CastRealAsJson,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 None,
                 None,
@@ -1437,7 +1439,7 @@ mod test {
             let col_expr = col_expr(0, types::NEW_DECIMAL as i32);
             let e = expr_for_sig(
                 ScalarFuncSig::CastDecimalAsJson,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 None,
                 None,
@@ -1473,7 +1475,7 @@ mod test {
             let col_expr = col_expr(0, types::STRING as i32);
             let e = expr_for_sig(
                 ScalarFuncSig::CastStringAsJson,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 None,
                 Some(decimal as i32),
@@ -1529,7 +1531,7 @@ mod test {
             let col_expr = col_expr(0, tp as i32);
             let e = expr_for_sig(
                 ScalarFuncSig::CastTimeAsJson,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 None,
                 None,
@@ -1562,7 +1564,7 @@ mod test {
             let col_expr = col_expr(0, types::STRING as i32);
             let e = expr_for_sig(
                 ScalarFuncSig::CastDurationAsJson,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 None,
                 None,
@@ -1592,7 +1594,7 @@ mod test {
             let col_expr = col_expr(0, types::STRING as i32);
             let e = expr_for_sig(
                 ScalarFuncSig::CastJsonAsJson,
-                vec![col_expr],
+                &[col_expr],
                 1,
                 None,
                 None,

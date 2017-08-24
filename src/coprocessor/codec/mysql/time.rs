@@ -328,7 +328,7 @@ impl Time {
         Time::new(t, tp, fsp as i8)
     }
 
-    pub fn from_duration(tz: &FixedOffset, d: &MyDuration) -> Result<Time> {
+    pub fn from_duration(tz: &FixedOffset, tp: u8, d: &MyDuration) -> Result<Time> {
         let dur = Duration::nanoseconds(d.to_nanos());
         let t = Utc::now()
             .with_timezone(tz)
@@ -346,20 +346,20 @@ impl Time {
                 t
             ));
         }
-        Time::new(t, types::DATETIME, d.fsp as i8)
+        if tp == types::DATE {
+            let t = t.date().and_hms(0, 0, 0);
+            Time::new(t, tp, d.fsp as i8)
+        } else {
+            Time::new(t, tp, d.fsp as i8)
+        }
     }
 
     pub fn to_duration(&self) -> Result<MyDuration> {
         if self.is_zero() {
             return Ok(MyDuration::zero());
         }
-        let (hour, minute, second, nanosecs) = (
-            self.time.hour() as i64,
-            self.time.minute() as i64,
-            self.time.second() as i64,
-            self.time.nanosecond() as i64,
-        );
-        let nanos = ((hour * 60 + minute) * 60 + second) * 10i64.pow(NANO_WIDTH) + nanosecs;
+        let nanos = self.time.num_seconds_from_midnight() as i64 * 10i64.pow(NANO_WIDTH) +
+            self.time.nanosecond() as i64;
         MyDuration::from_nanos(nanos, self.fsp as i8)
     }
 
@@ -830,7 +830,7 @@ mod test {
         let tz = FixedOffset::east(0);
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
-            let get = Time::from_duration(&tz, &d).unwrap();
+            let get = Time::from_duration(&tz, types::DATETIME, &d).unwrap();
             let get_today = get.time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
                 .unwrap();
