@@ -184,7 +184,7 @@ pub mod order_map_serde {
             where
                 M: MapAccess<'de>,
             {
-                let mut map = HashMap::with_capacity(access.size_hint().unwrap_or(0));
+                let mut map = HashMap::with_capacity_and_hasher(access.size_hint().unwrap_or(0), Default::default());
                 while let Some((key, value)) = access.next_entry()? {
                     map.insert(key, value);
                 }
@@ -882,7 +882,7 @@ mod test {
         }
         // inline table should be supported.
         let m: MapHolder = toml::from_str(r#"m = {"k1" = "v1"}"#).unwrap();
-        assert_eq!(m.m.get("k1").unwrap(), "v1");
+        assert_eq!(&m.m["k1"], "v1");
     }
 
     #[test]

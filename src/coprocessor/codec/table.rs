@@ -227,7 +227,7 @@ pub trait TableDecoder: DatumDecoder {
         if values.len() & 1 == 1 {
             return Err(box_err!("decoded row values' length should be even!"));
         }
-        let mut row = HashMap::with_capacity(cols.len());
+        let mut row = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
         let mut drain = values.drain(..);
         loop {
             let id = match drain.next() {
@@ -308,7 +308,7 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     }
 
     let meta_map = {
-        let mut meta_map = HashMap::with_capacity(cols.len());
+        let mut meta_map = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && meta_map.len() < cols.len() {
@@ -327,7 +327,7 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
 
 // `cut_idx_key` cuts encoded index key into RowColsDict and handle .
 pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option<i64>)> {
-    let mut meta_map: HashMap<i64, RowColMeta> = HashMap::with_capacity(col_ids.len());
+    let mut meta_map: HashMap<i64, RowColMeta> = HashMap::with_capacity_and_hasher(col_ids.len(), Default::default());
     let handle = {
         let mut tmp_data: &[u8] = &key[PREFIX_LEN + ID_LEN..];
         let length = key.len();
@@ -395,7 +395,7 @@ mod test {
     }
 
     fn to_hash_map(row: &RowColsDict) -> HashMap<i64, Vec<u8>> {
-        let mut data = HashMap::with_capacity(row.cols.len());
+        let mut data = HashMap::with_capacity_and_hasher(row.cols.len(), Default::default());
         if row.is_empty() {
             return data;
         }

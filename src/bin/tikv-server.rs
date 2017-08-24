@@ -263,7 +263,7 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
     }
 
     if let Some(labels_vec) = matches.values_of("labels") {
-        let mut labels = HashMap::new();
+        let mut labels = HashMap::default();
         labels_vec
             .map(|s| {
                 let mut parts = s.split('=');
