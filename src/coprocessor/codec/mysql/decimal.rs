@@ -14,7 +14,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::str::{self, FromStr};
 use std::io::Write;
-use std::ops::{Add, Deref, DerefMut, Div, Mul, Rem, Sub};
+use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::{cmp, mem, i32, i64, u32, u64};
 use std::cmp::Ordering;
 
@@ -2029,6 +2029,17 @@ impl Rem for Decimal {
     }
 }
 
+impl Neg for Decimal {
+    type Output = Decimal;
+
+    fn neg(mut self) -> Decimal {
+        if !self.is_zero() {
+            self.negative = !self.negative;
+        }
+        self
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -2908,6 +2919,37 @@ mod test {
             let res = super::do_div_mod(lhs, rhs, frac_incr, true).map(|d| d.unwrap().to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()));
         }
+    }
+
+    #[test]
+    fn test_neg() {
+        let cases = vec![
+            ("123.45", "-123.45"),
+            ("1", "-1"),
+            ("1234500009876.5", "-1234500009876.5"),
+            ("1111.5551", "-1111.5551"),
+            ("0.555", "-0.555"),
+            ("0", "0"),
+            ("0.0", "0.0"),
+            ("0.00", "0.00"),
+        ];
+
+        for (pos, neg) in cases {
+            let pos_dec: Decimal = pos.parse().unwrap();
+            let res = -pos_dec.clone();
+            assert_eq!(format!("{}", res), neg);
+            assert!((&pos_dec + &res).is_zero());
+
+            let neg_dec: Decimal = neg.parse().unwrap();
+            let res = -neg_dec.clone();
+            assert_eq!(format!("{}", res), pos);
+            assert!((&neg_dec + &res).is_zero());
+        }
+
+        let max_dec = super::max_or_min_dec(false, 40, 20);
+        let min_dec = super::max_or_min_dec(true, 40, 20);
+        assert_eq!(min_dec, -max_dec.clone());
+        assert_eq!(max_dec, -min_dec.clone());
     }
 
     #[test]
