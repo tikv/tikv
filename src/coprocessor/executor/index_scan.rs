@@ -35,11 +35,10 @@ pub struct IndexScanExecutor<'a> {
 }
 
 impl<'a> IndexScanExecutor<'a> {
-    pub fn new(
-        mut meta: IndexScan,
-        mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<'a>,
-        statistics: &'a mut Statistics,
+    pub fn new(mut meta: IndexScan,
+               mut key_ranges: Vec<KeyRange>,
+               store: SnapshotStore<'a>,
+               statistics: &'a mut Statistics,
     ) -> IndexScanExecutor<'a> {
         let mut pk_col = None;
         let desc = meta.get_desc();
