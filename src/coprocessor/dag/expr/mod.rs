@@ -218,6 +218,7 @@ impl Expression {
                 ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
 
                 ScalarFuncSig::UnaryNot => f.unary_not(ctx, row),
+                ScalarFuncSig::UnaryMinusInt => f.unary_minus_int(ctx, row),
                 ScalarFuncSig::IntIsNull => f.int_is_null(ctx, row),
                 ScalarFuncSig::IntIsFalse => f.int_is_false(ctx, row),
                 ScalarFuncSig::RealIsTrue => f.real_is_true(ctx, row),
@@ -241,6 +242,8 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::UnaryMinusReal => f.unary_minus_real(ctx, row),
+
                 ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
                 ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
                 ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
@@ -262,6 +265,8 @@ impl Expression {
             Expression::Constant(ref constant) => constant.eval_decimal(),
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
             Expression::ScalarFn(ref f) => match f.sig {
+                ScalarFuncSig::UnaryMinusDecimal => f.unary_minus_decimal(ctx, row),
+
                 ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
                 ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
                 ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
