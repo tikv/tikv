@@ -224,13 +224,13 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
+            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
 
-            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
+            let expected = Expression::build(datum_expr(tt.3), 0, &ctx).unwrap();
 
             let got = op.eval_int(&ctx, &[]).unwrap();
             let exp = expected.eval_int(&ctx, &[]).unwrap();
@@ -265,8 +265,8 @@ mod test {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
-            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
+            let expected = Expression::build(datum_expr(tt.3), 0, &ctx).unwrap();
 
             let got = op.eval_real(&ctx, &[]).unwrap();
             let exp = expected.eval_real(&ctx, &[]).unwrap();
@@ -301,8 +301,8 @@ mod test {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
-            let expected = Expression::build(datum_expr(tt.3), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
+            let expected = Expression::build(datum_expr(tt.3), 0, &ctx).unwrap();
 
             let got = op.eval_decimal(&ctx, &[]).unwrap();
             let exp = expected.eval_decimal(&ctx, &[]).unwrap();
@@ -362,7 +362,7 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
+            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
@@ -397,7 +397,7 @@ mod test {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
             let got = op.eval_real(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }

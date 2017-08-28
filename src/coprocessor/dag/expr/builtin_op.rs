@@ -239,13 +239,13 @@ mod test {
             let arg1 = datum_expr(lhs);
             let arg2 = datum_expr(rhs);
             {
-                let op =
-                    Expression::build(fncall_expr(op, &[arg1.clone(), arg2.clone()]), 0).unwrap();
+                let op = Expression::build(fncall_expr(op, &[arg1.clone(), arg2.clone()]), 0, &ctx)
+                    .unwrap();
                 let res = op.eval_int(&ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
             {
-                let op = Expression::build(fncall_expr(op, &[arg2, arg1]), 0).unwrap();
+                let op = Expression::build(fncall_expr(op, &[arg2, arg1]), 0, &ctx).unwrap();
                 let res = op.eval_int(&ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
@@ -299,7 +299,7 @@ mod test {
         let ctx = StatementContext::default();
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(fncall_expr(operator, &[arg1]), 0).unwrap();
+            let op = Expression::build(fncall_expr(operator, &[arg1]), 0, &ctx).unwrap();
             let res: Datum = match operator {
                 ScalarFuncSig::UnaryMinusInt => op.eval_int(&ctx, &[]).unwrap().into(),
                 ScalarFuncSig::UnaryMinusReal => op.eval_real(&ctx, &[]).unwrap().into(),
@@ -351,7 +351,7 @@ mod test {
         let ctx = StatementContext::default();
         for (op, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(fncall_expr(op, &[arg1]), 0).unwrap();
+            let op = Expression::build(fncall_expr(op, &[arg1]), 0, &ctx).unwrap();
             let res = op.eval_int(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -376,7 +376,7 @@ mod test {
         let ctx = StatementContext::default();
         for (op, argument) in tests {
             let arg = datum_expr(argument);
-            let op = Expression::build(fncall_expr(op, &[arg]), 0).unwrap();
+            let op = Expression::build(fncall_expr(op, &[arg]), 0, &ctx).unwrap();
             let got = op.eval_int(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
