@@ -460,7 +460,7 @@ mod test {
     use coprocessor::codec::mysql::{Time, MAX_FSP};
     use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-    use super::{Expression, StatementContext, Error};
+    use super::{Error, Expression, StatementContext};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
