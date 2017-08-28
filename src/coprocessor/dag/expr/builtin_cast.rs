@@ -915,7 +915,7 @@ mod test {
                 Some(types::STRING as i32),
                 vec![Datum::Bytes(b"1234".to_vec())],
                 6,
-                b"1234".to_vec(),
+                b"1234\0\0".to_vec(),
             ),
             (
                 ScalarFuncSig::CastStringAsString,
@@ -1019,7 +1019,7 @@ mod test {
         ];
 
         let null_cols = vec![Datum::Null];
-        for (sig, tp, charset, to_tp, col, flen, mut exp) in cases {
+        for (sig, tp, charset, to_tp, col, flen, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
             let e = expr_for_sig(
                 sig,
@@ -1030,9 +1030,6 @@ mod test {
                 to_tp,
                 Some(String::from(charset)),
             );
-            if flen != convert::UNSPECIFIED_LENGTH && exp.len() < flen as usize {
-                exp.resize(flen as usize, 0);
-            }
             let res = e.eval_string(&ctx, &col).unwrap();
             assert_eq!(
                 res.unwrap().into_owned(),
