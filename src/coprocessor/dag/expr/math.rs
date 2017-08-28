@@ -162,8 +162,8 @@ mod test {
         let ctx = StatementContext::default();
         for tt in tests {
             let arg = datum_expr(tt.1);
-            let op = Expression::build(fncall_expr(tt.0, &[arg]), 0).unwrap();
-            let expected = Expression::build(datum_expr(tt.2), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[arg]), 0, &ctx).unwrap();
+            let expected = Expression::build(datum_expr(tt.2), 0, &ctx).unwrap();
             match tt.0 {
                 ScalarFuncSig::AbsInt | ScalarFuncSig::AbsUInt => {
                     let got = op.eval_int(&ctx, &[]).unwrap();
@@ -191,7 +191,7 @@ mod test {
         let ctx = StatementContext::default();
         for tt in tests {
             let arg = datum_expr(tt.1);
-            let op = Expression::build(fncall_expr(tt.0, &[arg]), 0).unwrap();
+            let op = Expression::build(fncall_expr(tt.0, &[arg]), 0, &ctx).unwrap();
             match tt.0 {
                 ScalarFuncSig::AbsInt | ScalarFuncSig::AbsUInt => {
                     let got = op.eval_int(&ctx, &[]).unwrap_err();
@@ -256,8 +256,8 @@ mod test {
         ctx.ignore_truncate = true; // for ceil decimal to int.
         for tt in tests {
             let arg = datum_expr(tt.1);
-            let mut op = Expression::build(fncall_expr(tt.0, &[arg.clone()]), 0).unwrap();
-            let expected = Expression::build(datum_expr(tt.2), 0).unwrap();
+            let mut op = Expression::build(fncall_expr(tt.0, &[arg.clone()]), 0, &ctx).unwrap();
+            let expected = Expression::build(datum_expr(tt.2), 0, &ctx).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
@@ -336,8 +336,8 @@ mod test {
         ctx.ignore_truncate = true; // for ceil decimal to int.
         for tt in tests {
             let arg = datum_expr(tt.1);
-            let mut op = Expression::build(fncall_expr(tt.0, &[arg.clone()]), 0).unwrap();
-            let expected = Expression::build(datum_expr(tt.2), 0).unwrap();
+            let mut op = Expression::build(fncall_expr(tt.0, &[arg.clone()]), 0, &ctx).unwrap();
+            let expected = Expression::build(datum_expr(tt.2), 0, &ctx).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
