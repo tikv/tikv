@@ -263,6 +263,8 @@ fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     false
 }
 
+static mut FLUSH_WAL: bool = false;
+
 #[derive(Debug)]
 pub struct ApplyDelegate {
     // peer_id
@@ -417,6 +419,14 @@ impl ApplyDelegate {
                     .unwrap_or_else(|e| {
                         panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                     });
+                unsafe {
+                    if FLUSH_WAL {
+                        self.engine.flush_wal(false).unwrap_or_else(|e| {
+                            panic!("{} failed to flush wal, error: {:?}", self.tag, e)
+                        });
+                        FLUSH_WAL = false;
+                    }
+                }
 
                 // call callback
                 for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -812,6 +822,9 @@ impl ApplyDelegate {
         if let Err(e) = write_peer_state(&self.engine, ctx.wb, &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
+        unsafe {
+            FLUSH_WAL = true;
+        }
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
@@ -904,6 +917,9 @@ impl ApplyDelegate {
                     e
                 )
             });
+        unsafe {
+            FLUSH_WAL = true;
+        }
 
         let mut resp = AdminResponse::new();
         if right_derive {
@@ -1483,6 +1499,15 @@ impl Runner {
         self.db
             .write(apply_ctx.wb.take().unwrap())
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
+
+        unsafe {
+            if FLUSH_WAL {
+                self.db
+                    .flush_wal(false)
+                    .unwrap_or_else(|e| panic!("failed to flush wal, error: {:?}", e));
+                FLUSH_WAL = false;
+            }
+        }
 
         // Call callbacks
         for (cb, resp) in apply_ctx.cbs.drain(..) {

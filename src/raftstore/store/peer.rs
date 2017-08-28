@@ -401,7 +401,9 @@ impl Peer {
         ));
         // write kv rocksdb first in case of restart happen between two write
         try!(self.kv_engine.write(kv_wb));
+        try!(self.kv_engine.flush_wal(self.cfg.sync_log));
         try!(self.raft_engine.write(raft_wb));
+        try!(self.raft_engine.flush_wal(self.cfg.sync_log));
 
         if self.get_store().is_initialized() {
             // If we meet panic when deleting data and raft log, the dirty data

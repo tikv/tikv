@@ -312,6 +312,7 @@ pub struct DbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
+    pub manual_wal_flush: bool,
     pub backup_dir: String,
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
@@ -342,6 +343,7 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            manual_wal_flush: true,
             backup_dir: "".to_owned(),
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -392,6 +394,7 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.manual_wal_flush(self.manual_wal_flush);
         opts.add_event_listener(EventListener::new("kv"));
         opts
     }
@@ -487,6 +490,7 @@ pub struct RaftDbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
     pub allow_concurrent_memtable_write: bool,
+    pub manual_wal_flush: bool,
     pub defaultcf: RaftDefaultCfConfig,
 }
 
@@ -512,6 +516,7 @@ impl Default for RaftDbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             allow_concurrent_memtable_write: false,
+            manual_wal_flush: true,
             defaultcf: RaftDefaultCfConfig::default(),
         }
     }
@@ -555,6 +560,7 @@ impl RaftDbConfig {
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
+        opts.manual_wal_flush(self.manual_wal_flush);
         opts.add_event_listener(EventListener::new("raft"));
         opts
     }

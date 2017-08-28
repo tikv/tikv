@@ -22,7 +22,6 @@ use std::thread;
 use std::u64;
 
 use rocksdb::{DBStatisticsTickerType as TickerType, WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use time::{self, Timespec};
@@ -319,10 +318,12 @@ impl<T, C> Store<T, C> {
 
         if !kv_wb.is_empty() {
             self.kv_engine.write(kv_wb).unwrap();
+            self.kv_engine.flush_wal(true).unwrap();
         }
 
         if !raft_wb.is_empty() {
             self.raft_engine.write(raft_wb).unwrap();
+            self.raft_engine.flush_wal(true).unwrap();
         }
 
         info!(
@@ -1085,23 +1086,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // but region state may not changed in disk.
         if !kv_wb.is_empty() {
             // RegionLocalState, ApplyState
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log);
-            self.kv_engine
-                .write_opt(kv_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save append state result: {:?}", self.tag, e);
-                });
+            self.kv_engine.write(kv_wb).unwrap_or_else(|e| {
+                panic!("{} failed to save append state result: {:?}", self.tag, e);
+            });
+            self.kv_engine.flush_wal(self.cfg.sync_log).unwrap_or_else(
+                |e| {
+                    panic!("{} failed to flush append state result: {:?}", self.tag, e);
+                },
+            );
         }
 
         if !raft_wb.is_empty() {
             // RaftLocalState, Raft Log Entry
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log);
+            self.raft_engine.write(raft_wb).unwrap_or_else(|e| {
+                panic!("{} failed to save raft append result: {:?}", self.tag, e);
+            });
             self.raft_engine
-                .write_opt(raft_wb, &write_opts)
+                .flush_wal(self.cfg.sync_log)
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to save raft append result: {:?}", self.tag, e);
+                    panic!("{} failed to flush raft append result: {:?}", self.tag, e);
                 });
         }
 

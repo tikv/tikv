@@ -155,6 +155,9 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
     if let Err(msg) = db.write(wb) {
         return Err(Error::RocksDb(msg));
     }
+    if let Err(msg) = db.flush_wal(false) {
+        return Err(Error::RocksDb(msg));
+    }
     Ok(())
 }
 

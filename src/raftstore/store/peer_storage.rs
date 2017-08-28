@@ -393,6 +393,7 @@ pub fn recover_from_applying_state(kv_engine: &DB, raft_engine: &DB, region_id: 
     // after restart, we need check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
         try!(raft_engine.put_msg(&raft_state_key, &snapshot_raft_state));
+        try!(raft_engine.flush_wal(false));
     }
     Ok(())
 }
@@ -409,6 +410,7 @@ fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> 
                 raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
                 raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
                 try!(raft_engine.put_msg(&state_key, &raft_state));
+                try!(raft_engine.flush_wal(false));
             }
             raft_state
         }

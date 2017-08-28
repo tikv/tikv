@@ -73,6 +73,7 @@ signal = "0.2"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
+branch = "javaforfun/manual_wal_flush"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"

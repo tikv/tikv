@@ -249,6 +249,10 @@ impl SnapContext {
         self.kv_db.write(wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
+        self.kv_db.flush_wal(false).unwrap_or_else(|e| {
+            panic!("{} failed to flush apply_snap result: {:?}", region_id, e);
+        });
+
         info!(
             "[region {}] apply new data takes {:?}",
             region_id,
