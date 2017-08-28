@@ -30,7 +30,7 @@ use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, DEFAULT_TASKS_PER_TICK};
-use server::OnResponse;
+use server::{Config, OnResponse};
 use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
 use storage::engine::Error as EngineError;
 
@@ -50,10 +50,6 @@ pub const BATCH_ROW_COUNT: usize = 64;
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
 const REQUEST_MAX_HANDLE_SECS: u64 = 60;
-// Assume a request can be finished in 0.1ms, a request at position x will wait about
-// 0.0001 * x secs to be actual started. Hence the queue should have at most
-// REQUEST_MAX_HANDLE_SECS / 0.0001 request.
-const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = REQUEST_MAX_HANDLE_SECS as usize * 10_000;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
@@ -109,22 +105,41 @@ impl CopContext {
 
 unsafe impl Send for CopContext {}
 
+impl CopContext {
+    fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
+        self.get_statistics(type_str).add_statistics(stats);
+    }
+
+    fn get_statistics(&mut self, type_str: &str) -> &mut Statistics {
+        match type_str {
+            STR_REQ_TYPE_SELECT => &mut self.select_stats,
+            STR_REQ_TYPE_INDEX => &mut self.index_stats,
+            STR_REQ_TYPE_DAG => &mut self.dag_stats,
+            _ => {
+                warn!("unknown STR_REQ_TYPE: {}", type_str);
+                &mut self.select_stats
+            }
+        }
+    }
+}
+
 impl Context for CopContext {
     fn on_task_started(&mut self) {}
     fn on_task_finished(&mut self) {}
     fn on_tick(&mut self) {
-        let mut statistics: Statistics = Default::default();
+        let task_count = self.task_count;
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX, STR_REQ_TYPE_DAG] {
             let this_statistics = self.get_statistics(type_str);
-            statistics.add_statistics(this_statistics);
             for (cf, details) in this_statistics.details() {
                 for (tag, count) in details {
                     COPR_SCAN_DETAILS
                         .with_label_values(&[type_str, cf, tag])
-                        .observe(count as f64);
+                        .observe(count as f64 / task_count as f64);
                 }
             }
+            *this_statistics = Default::default();
         }
+        self.task_count = 0;
         if let Some(ref sender) = self.raftstore_sender {
             if let Err(e) = sender.send(mem::replace(&mut self.read_stats, Arc::new(HashMap::new()))) {
                 warn!(
@@ -143,6 +158,7 @@ struct CopContextFactory {
 impl ContextFactory<CopContext> for CopContextFactory {
     fn create(&self) -> CopContext {
         CopContext {
+            task_count: 0,
             raftstore_sender: self.raftstore_sender.clone(),
             select_stats: Default::default(),
             index_stats: Default::default(),
@@ -153,21 +169,16 @@ impl ContextFactory<CopContext> for CopContextFactory {
 }
 
 impl Host {
-    pub fn new(
-        engine: Box<Engine>,
-        scheduler: Scheduler<Task>,
-        concurrency: usize,
-        sender: Option<Sender<ReadStats>>,
-    ) -> Host {
+    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config, sender: Option<Sender<ReadStats>>) -> Host {
         Host {
             engine: engine,
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
-            max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
+            max_running_task_count: cfg.end_point_max_tasks,
             pool: ThreadPool::new(
                 thd_name!("endpoint-normal-pool"),
-                concurrency,
+                cfg.end_point_concurrency,
                 DEFAULT_TASKS_PER_TICK,
                 CopContextFactory {
                     raftstore_sender: sender.clone(),
@@ -175,7 +186,7 @@ impl Host {
             ),
             low_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-low-pool"),
-                concurrency,
+                cfg.end_point_concurrency,
                 DEFAULT_TASKS_PER_TICK,
                 CopContextFactory {
                     raftstore_sender: sender.clone(),
@@ -183,7 +194,7 @@ impl Host {
             ),
             high_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-high-pool"),
-                concurrency,
+                cfg.end_point_concurrency,
                 DEFAULT_TASKS_PER_TICK,
                 CopContextFactory {
                     raftstore_sender: sender.clone(),
@@ -230,6 +241,7 @@ impl Host {
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
                 let stats = end_point.handle_request(req);
+                ctx.task_count += 1;
                 ctx.add_statistics(type_str, &stats);
                 let m = Arc::make_mut(&mut ctx.read_stats);
                 m.entry(region_id).or_insert((0,0)).0 += stats.total_read_bytes();
@@ -556,9 +568,8 @@ pub fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
 
 fn respond(resp: Response, mut t: RequestTask) -> Statistics {
     t.stop_record_handling();
-    let res = t.statistics.clone();
     (t.on_resp)(resp);
-    res
+    t.statistics
 }
 
 pub struct TiDbEndPoint {
@@ -727,7 +738,9 @@ mod tests {
     fn test_req_outdated() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let end_point = Host::new(engine, worker.scheduler(), 1, None);
+        let mut cfg = Config::default();
+        cfg.end_point_concurrency = 1;
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, None);
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
@@ -742,7 +755,9 @@ mod tests {
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut end_point = Host::new(engine, worker.scheduler(), 1, None);
+        let mut cfg = Config::default();
+        cfg.end_point_concurrency = 1;
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, None);
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();

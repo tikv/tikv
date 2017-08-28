@@ -11,8 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{FnCall, Result, StatementContext};
-use coprocessor::codec::Datum;
+use std::i64;
+use std::borrow::Cow;
+use super::{Error, FnCall, Result, StatementContext};
+use coprocessor::codec::{mysql, Datum};
+use coprocessor::codec::mysql::Decimal;
 
 impl FnCall {
     pub fn logical_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -70,19 +73,32 @@ impl FnCall {
     }
 
     pub fn unary_minus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+            let uval = val as u64;
+            if uval > i64::MAX as u64 + 1 {
+                return Err(Error::Overflow);
+            } else if uval == i64::MAX as u64 + 1 {
+                return Ok(Some(i64::MIN));
+            }
+        } else if val == i64::MIN {
+            return Err(Error::Overflow);
+        }
+        Ok(Some(-val))
     }
 
-    pub fn unary_minus_decimal(
-        &self,
+    pub fn unary_minus_decimal<'a, 'b: 'a>(
+        &'b self,
         ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<i64>> {
-        unimplemented!()
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        let dec = try_opt!(self.children[0].eval_decimal(ctx, row)).into_owned();
+        Ok(Some(Cow::Owned(-dec)))
     }
 
-    pub fn unary_minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        unimplemented!()
+    pub fn unary_minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(-val))
     }
 
     pub fn decimal_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -118,10 +134,11 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
+    use std::i64;
     use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Duration;
-    use coprocessor::dag::expr::{Expression, StatementContext};
+    use coprocessor::dag::expr::{Error, Expression, StatementContext};
     use coprocessor::dag::expr::test::{fncall_expr, str2dec};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
 
@@ -222,15 +239,85 @@ mod test {
             let arg1 = datum_expr(lhs);
             let arg2 = datum_expr(rhs);
             {
-                let op =
-                    Expression::build(fncall_expr(op, &[arg1.clone(), arg2.clone()]), 0).unwrap();
+                let op = Expression::build(fncall_expr(op, &[arg1.clone(), arg2.clone()]), 0, &ctx)
+                    .unwrap();
                 let res = op.eval_int(&ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
             {
-                let op = Expression::build(fncall_expr(op, &[arg2, arg1]), 0).unwrap();
+                let op = Expression::build(fncall_expr(op, &[arg2, arg1]), 0, &ctx).unwrap();
                 let res = op.eval_int(&ctx, &[]).unwrap();
                 assert_eq!(res, exp);
+            }
+        }
+    }
+
+    #[test]
+    fn test_unary_minus_op() {
+        let tests = vec![
+            (
+                ScalarFuncSig::UnaryMinusInt,
+                Datum::I64(i64::MAX),
+                Datum::I64(-i64::MAX),
+            ),
+            (
+                ScalarFuncSig::UnaryMinusInt,
+                Datum::I64(-i64::MAX),
+                Datum::I64(i64::MAX),
+            ),
+            (ScalarFuncSig::UnaryMinusInt, Datum::I64(0), Datum::I64(0)),
+            (
+                ScalarFuncSig::UnaryMinusInt,
+                Datum::U64(i64::MAX as u64 + 1),
+                Datum::I64(i64::MIN),
+            ),
+            (ScalarFuncSig::UnaryMinusInt, Datum::Null, Datum::Null),
+            (
+                ScalarFuncSig::UnaryMinusReal,
+                Datum::F64(0.123),
+                Datum::F64(-0.123),
+            ),
+            (
+                ScalarFuncSig::UnaryMinusReal,
+                Datum::F64(-0.123),
+                Datum::F64(0.123),
+            ),
+            (
+                ScalarFuncSig::UnaryMinusReal,
+                Datum::F64(0.0),
+                Datum::F64(0.0),
+            ),
+            (ScalarFuncSig::UnaryMinusReal, Datum::Null, Datum::Null),
+            (ScalarFuncSig::UnaryMinusDecimal, str2dec("0"), str2dec("0")),
+            (
+                ScalarFuncSig::UnaryMinusDecimal,
+                str2dec("0.123"),
+                str2dec("-0.123"),
+            ),
+            (ScalarFuncSig::UnaryMinusDecimal, Datum::Null, Datum::Null),
+        ];
+        let ctx = StatementContext::default();
+        for (operator, arg, exp) in tests {
+            let arg1 = datum_expr(arg);
+            let op = Expression::build(fncall_expr(operator, &[arg1]), 0, &ctx).unwrap();
+            let expected = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
+            match operator {
+                ScalarFuncSig::UnaryMinusInt => {
+                    let lhs = op.eval_int(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::UnaryMinusReal => {
+                    let lhs = op.eval_real(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                ScalarFuncSig::UnaryMinusDecimal => {
+                    let lhs = op.eval_decimal(&ctx, &[]).unwrap();
+                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap();
+                    assert_eq!(lhs, rhs);
+                }
+                _ => unreachable!(),
             }
         }
     }
@@ -276,9 +363,34 @@ mod test {
         let ctx = StatementContext::default();
         for (op, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(fncall_expr(op, &[arg1]), 0).unwrap();
+            let op = Expression::build(fncall_expr(op, &[arg1]), 0, &ctx).unwrap();
             let res = op.eval_int(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
+        }
+    }
+
+    fn check_overflow(e: Error) -> Result<(), ()> {
+        match e {
+            Error::Overflow => Ok(()),
+            _ => Err(()),
+        }
+    }
+
+    #[test]
+    fn test_unary_op_overflow() {
+        let tests = vec![
+            (ScalarFuncSig::UnaryMinusInt, Datum::I64(i64::MIN)),
+            (
+                ScalarFuncSig::UnaryMinusInt,
+                Datum::U64(i64::MAX as u64 + 2),
+            ),
+        ];
+        let ctx = StatementContext::default();
+        for (op, argument) in tests {
+            let arg = datum_expr(argument);
+            let op = Expression::build(fncall_expr(op, &[arg]), 0, &ctx).unwrap();
+            let got = op.eval_int(&ctx, &[]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
         }
     }
 }
