@@ -299,8 +299,8 @@ mod test {
         let ctx = StatementContext::default();
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(fncall_expr(operator, &[arg1]), 0).unwrap();
-            let expected = Expression::build(datum_expr(exp), 0).unwrap();
+            let op = Expression::build(fncall_expr(operator, &[arg1]), 0, &ctx).unwrap();
+            let expected = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
             match operator {
                 ScalarFuncSig::UnaryMinusInt => {
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
@@ -388,7 +388,7 @@ mod test {
         let ctx = StatementContext::default();
         for (op, argument) in tests {
             let arg = datum_expr(argument);
-            let op = Expression::build(fncall_expr(op, &[arg]), 0).unwrap();
+            let op = Expression::build(fncall_expr(op, &[arg]), 0, &ctx).unwrap();
             let got = op.eval_int(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
