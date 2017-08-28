@@ -22,7 +22,7 @@ use byteorder::ReadBytesExt;
 
 use coprocessor::select::xeval::EvalContext;
 use util::codec::bytes::BytesDecoder;
-use super::super::{convert, Error, Result, TEN_POW};
+use coprocessor::codec::{convert, Error, Result, TEN_POW};
 
 // TODO: We should use same Error in mod `coprocessor`.
 use coprocessor::dag::expr::Error as ExprError;
@@ -59,6 +59,13 @@ impl<T> Res<T> {
     pub fn is_overflow(&self) -> bool {
         match *self {
             Res::Overflow(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_truncated(&self) -> bool {
+        match *self {
+            Res::Truncated(_) => true,
             _ => false,
         }
     }
@@ -1469,11 +1476,7 @@ impl Decimal {
     /// `as_i64_with_ctx` returns int part of the decimal.
     pub fn as_i64_with_ctx(&self, ctx: &EvalContext) -> ::std::result::Result<i64, ExprError> {
         let res = self.as_i64();
-        if ctx.ignore_truncate || ctx.truncate_as_warning {
-            if let Res::Truncated(ref i) = res {
-                return Ok(*i);
-            }
-        }
+        try!(convert::handle_truncate(ctx, res.is_truncated()));
         res.into()
     }
 

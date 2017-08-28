@@ -56,12 +56,12 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn ceil_int_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn ceil_int_to_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
     #[inline]
-    pub fn ceil_int_dec<'a, 'b: 'a>(
+    pub fn ceil_int_to_dec<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
@@ -71,7 +71,7 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn ceil_dec_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn ceil_dec_to_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         // FIXME: here we can't do same logic with TiDB.
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.ceil().into();
@@ -79,7 +79,7 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn ceil_dec_dec<'a, 'b: 'a>(
+    pub fn ceil_dec_to_dec<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
