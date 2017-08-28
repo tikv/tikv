@@ -712,6 +712,109 @@ mod test {
     }
 
     #[test]
+    fn test_cast_as_int() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
+        let time_int = 20121212120023i64;
+        let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
+        let cases = vec![
+            (
+                ScalarFuncSig::CastIntAsInt,
+                types::LONG_LONG,
+                Some(types::UNSIGNED_FLAG),
+                vec![Datum::U64(1)],
+                1,
+            ),
+            (
+                ScalarFuncSig::CastIntAsInt,
+                types::LONG_LONG,
+                None,
+                vec![Datum::I64(-1)],
+                -1,
+            ),
+            (
+                ScalarFuncSig::CastStringAsInt,
+                types::STRING,
+                None,
+                vec![Datum::Bytes(b"1".to_vec())],
+                1,
+            ),
+            (
+                ScalarFuncSig::CastStringAsInt,
+                types::STRING,
+                None,
+                vec![Datum::Bytes(b"-123".to_vec())],
+                -123,
+            ),
+            (
+                ScalarFuncSig::CastRealAsInt,
+                types::DOUBLE,
+                None,
+                vec![Datum::F64(1f64)],
+                1,
+            ),
+            (
+                ScalarFuncSig::CastRealAsInt,
+                types::DOUBLE,
+                None,
+                vec![Datum::F64(1234.000)],
+                1234,
+            ),
+            (
+                ScalarFuncSig::CastTimeAsInt,
+                types::DATETIME,
+                None,
+                vec![Datum::Time(t)],
+                time_int,
+            ),
+            (
+                ScalarFuncSig::CastDurationAsInt,
+                types::DURATION,
+                None,
+                vec![Datum::Dur(duration_t)],
+                120023,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsInt,
+                types::JSON,
+                None,
+                vec![Datum::Json(Json::I64(-1))],
+                -1,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsInt,
+                types::JSON,
+                None,
+                vec![Datum::Json(Json::U64(1))],
+                1,
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsInt,
+                types::NEW_DECIMAL,
+                None,
+                vec![Datum::Dec(Decimal::from(1))],
+                1,
+            ),
+        ];
+
+        let null_cols = vec![Datum::Null];
+        for (sig, tp, flag, col, expect) in cases {
+            let col_expr = col_expr(0, tp as i32);
+            let mut exp = fncall_expr(sig, &[col_expr]);
+            if flag.is_some() {
+                exp.mut_field_type().set_flag(flag.unwrap() as u32);
+            }
+            let e = Expression::build(exp, 1, &ctx).unwrap();
+            let res = e.eval_int(&ctx, &col).unwrap();
+            assert_eq!(res.unwrap(), expect);
+            // test None
+            let res = e.eval_int(&ctx, &null_cols).unwrap();
+            assert!(res.is_none());
+        }
+    }
+
+    #[test]
     fn test_cast_as_decimal() {
         let mut ctx = StatementContext::default();
         ctx.ignore_truncate = true;
