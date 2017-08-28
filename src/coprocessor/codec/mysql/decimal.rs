@@ -854,7 +854,7 @@ impl Decimal {
 
     /// ceil the Decimal into a new Decimal.
     pub fn ceil(&self) -> Res<Decimal> {
-        let mut target = if self.frac_cnt > 0 && !self.negative {
+        let mut target = if !self.frac_part_is_zero() && !self.negative {
             let dec1 = Decimal::from(1i64);
             self + &dec1
         } else {
@@ -868,7 +868,7 @@ impl Decimal {
 
     /// floor the Decimal into a new Decimal.
     pub fn floor(&self) -> Res<Decimal> {
-        let mut target = if self.frac_cnt > 0 && self.negative {
+        let mut target = if !self.frac_part_is_zero() && self.negative {
             let dec1 = Decimal::from(1i64);
             self - &dec1
         } else {
@@ -997,6 +997,29 @@ impl Decimal {
         } else {
             (self.precision, self.result_frac_cnt)
         }
+    }
+
+    /// int_frac_end_pos returns end positions of int part and frac part in word_buf.
+    fn int_frac_end_pos(&self) -> (u8, u8) {
+        let int_word_cnt = (word_cnt!(self.int_cnt) * DIGITS_PER_WORD) as u8;
+        let (x, y) = self.digit_bounds();
+        let int_cnt = int_word_cnt.checked_sub(x).unwrap_or(0);
+        let frac_cnt = y.checked_sub(int_word_cnt).unwrap_or(0);
+        let mut int_end = word_cnt!(int_cnt);
+        if int_end == 0 {
+            // int part always count one word.
+            int_end = 1;
+        }
+        let frac_end = int_end + word_cnt!(frac_cnt);
+        (int_end, frac_end)
+    }
+
+    /// frac_part_is_zero return true if all digits in the frac part are zero.
+    fn frac_part_is_zero(&self) -> bool {
+        let (int_end, frac_end) = self.int_frac_end_pos();
+        self.word_buf[int_end as usize..frac_end as usize]
+            .iter()
+            .all(|&w| w == 0)
     }
 
     /// `digit_bounds` returns bounds of decimal digits in the number.
@@ -3064,6 +3087,8 @@ mod test {
             ("-1", "-1"),
             ("1.23", "2"),
             ("-1.23", "-1"),
+            ("1.00000", "1"),
+            ("-1.00000", "-1"),
             (
                 "9999999999999999999999999.000",
                 "10000000000000000000000000",
@@ -3091,6 +3116,8 @@ mod test {
             ("-1", "-1"),
             ("1.23", "1"),
             ("-1.23", "-2"),
+            ("00001.00000", "1"),
+            ("-00001.00000", "-1"),
             ("9999999999999999999999999.001", "9999999999999999999999999"),
         ];
         for case in cases {
