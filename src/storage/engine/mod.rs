@@ -205,6 +205,15 @@ impl CFStatistics {
             (STAT_SEEK_FOR_PREV, self.seek_for_prev),
         ]
     }
+
+    pub fn add_cf_statistics(&mut self, other: &Self) {
+        self.processed = self.processed.saturating_add(other.processed);
+        self.get = self.get.saturating_add(other.get);
+        self.next = self.next.saturating_add(other.next);
+        self.prev = self.prev.saturating_add(other.prev);
+        self.seek = self.seek.saturating_add(other.seek);
+        self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
+    }
 }
 
 #[derive(Default)]
@@ -229,6 +238,12 @@ impl Statistics {
             (CF_LOCK, self.lock.details()),
             (CF_WRITE, self.write.details()),
         ]
+    }
+
+    pub fn add_statistics(&mut self, other: &Self) {
+        self.lock.add_cf_statistics(&other.lock);
+        self.write.add_cf_statistics(&other.write);
+        self.data.add_cf_statistics(&other.data);
     }
 }
 
