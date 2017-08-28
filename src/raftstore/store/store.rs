@@ -193,6 +193,7 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
 }
 
 impl<T, C> Store<T, C> {
+    #[allow(too_many_arguments)]
     pub fn new(
         ch: StoreChannel,
         meta: metapb::Store,
@@ -1895,7 +1896,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let mut leader_count: u64 = 0;
-        for mut peer in self.region_peers.values_mut() {
+        for peer in self.region_peers.values_mut() {
             if peer.is_leader() {
                 leader_count += 1;
                 match read_statistic.get(&peer.region_id) {

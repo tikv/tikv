@@ -319,6 +319,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
+    #[allow(too_many_arguments)]
     fn start_store<T>(
         &mut self,
         mut event_loop: EventLoop<Store<T, C>>,
