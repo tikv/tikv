@@ -76,6 +76,7 @@ pub type ReadStats = Arc<HashMap<u64, (u64, u64)>>;
 
 #[derive(Clone)]
 struct CopContext {
+    task_count: i64,
     raftstore_sender: Option<Sender<ReadStats>>,
     select_stats: Statistics,
     index_stats: Statistics,
@@ -83,24 +84,6 @@ struct CopContext {
     // region_id => read statistics of this region.
     // region_id => (read bytes, read keys)
     read_stats: ReadStats,
-}
-
-impl CopContext {
-    fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
-        self.get_statistics(type_str).add_statistics(stats);
-    }
-
-    fn get_statistics(&mut self, type_str: &str) -> &mut Statistics {
-        match type_str {
-            STR_REQ_TYPE_SELECT => &mut self.select_stats,
-            STR_REQ_TYPE_INDEX => &mut self.index_stats,
-            STR_REQ_TYPE_DAG => &mut self.dag_stats,
-            _ => {
-                warn!("unknown STR_REQ_TYPE: {}", type_str);
-                &mut self.select_stats
-            }
-        }
-    }
 }
 
 unsafe impl Send for CopContext {}
