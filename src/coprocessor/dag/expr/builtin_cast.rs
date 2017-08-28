@@ -711,31 +711,6 @@ mod test {
         expr
     }
 
-    fn expr_for_sig(
-        sig: ScalarFuncSig,
-        children: &[Expr],
-        cols: usize,
-        flen: Option<i32>,
-        decimal: Option<i32>,
-        to_tp: Option<i32>,
-        charset: Option<String>,
-    ) -> Expression {
-        let mut exp = fncall_expr(sig, children);
-        if flen.is_some() {
-            exp.mut_field_type().set_flen(flen.unwrap());
-        }
-        if decimal.is_some() {
-            exp.mut_field_type().set_decimal(decimal.unwrap());
-        }
-        if to_tp.is_some() {
-            exp.mut_field_type().set_tp(to_tp.unwrap());
-        }
-        if charset.is_some() {
-            exp.mut_field_type().set_charset(charset.unwrap());
-        }
-        Expression::build(exp, cols).unwrap()
-    }
-
     #[test]
     fn test_cast_as_decimal() {
         let mut ctx = StatementContext::default();
@@ -859,19 +834,14 @@ mod test {
         ];
 
         let null_cols = vec![Datum::Null];
-        for (sig, tp, col, flen, decimal, exp) in cases {
+        for (sig, tp, col, flen, decimal, expect) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_for_sig(
-                sig,
-                &[col_expr],
-                1,
-                Some(flen as i32),
-                Some(decimal as i32),
-                None,
-                None,
-            );
+            let mut exp = fncall_expr(sig, &[col_expr]);
+            exp.mut_field_type().set_flen(flen as i32);
+            exp.mut_field_type().set_decimal(decimal as i32);
+            let e = Expression::build(exp, 1, &ctx).unwrap();
             let res = e.eval_decimal(&ctx, &col).unwrap();
-            assert_eq!(res.unwrap().into_owned(), exp);
+            assert_eq!(res.unwrap().into_owned(), expect);
             // test None
             let res = e.eval_decimal(&ctx, &null_cols).unwrap();
             assert!(res.is_none());
@@ -1021,15 +991,14 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, charset, to_tp, col, flen, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_for_sig(
-                sig,
-                &[col_expr],
-                1,
-                Some(flen as i32),
-                Some(convert::UNSPECIFIED_LENGTH as i32),
-                to_tp,
-                Some(String::from(charset)),
-            );
+            let mut ex = fncall_expr(sig, &[col_expr]);
+            ex.mut_field_type().set_flen(flen as i32);
+            ex.mut_field_type().set_decimal(convert::UNSPECIFIED_LENGTH);
+            if to_tp.is_some() {
+                ex.mut_field_type().set_tp(to_tp.unwrap());
+            }
+            ex.mut_field_type().set_charset(String::from(charset));
+            let e = Expression::build(ex, 1, &ctx).unwrap();
             let res = e.eval_string(&ctx, &col).unwrap();
             assert_eq!(
                 res.unwrap().into_owned(),
@@ -1202,15 +1171,11 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, to_tp, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_for_sig(
-                sig,
-                &[col_expr],
-                1,
-                None,
-                Some(to_fsp as i32),
-                Some(to_tp as i32),
-                None,
-            );
+            let mut ex = fncall_expr(sig, &[col_expr]);
+            ex.mut_field_type().set_decimal(to_fsp as i32);
+            ex.mut_field_type().set_tp(to_tp as i32);
+            let e = Expression::build(ex, 1, &ctx).unwrap();
+
             let res = e.eval_time(&ctx, col).unwrap();
             let data = res.unwrap().into_owned();
             let mut expt = exp.clone();
@@ -1370,7 +1335,9 @@ mod test {
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_for_sig(sig, &[col_expr], 1, None, Some(to_fsp as i32), None, None);
+            let mut ex = fncall_expr(sig, &[col_expr]);
+            ex.mut_field_type().set_decimal(to_fsp as i32);
+            let e = Expression::build(ex, 1, &ctx).unwrap();
             let res = e.eval_duration(&ctx, col).unwrap();
             let data = res.unwrap().into_owned();
             let mut expt = exp.clone();
@@ -1408,15 +1375,8 @@ mod test {
             if flag.is_some() {
                 col_expr.mut_field_type().set_flag(flag.unwrap() as u32);
             }
-            let e = expr_for_sig(
-                ScalarFuncSig::CastIntAsJson,
-                &[col_expr],
-                1,
-                None,
-                None,
-                None,
-                None,
-            );
+            let ex = fncall_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
+            let e = Expression::build(ex, 1, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1436,15 +1396,8 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, types::DOUBLE as i32);
-            let e = expr_for_sig(
-                ScalarFuncSig::CastRealAsJson,
-                &[col_expr],
-                1,
-                None,
-                None,
-                None,
-                None,
-            );
+            let ex = fncall_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
+            let e = Expression::build(ex, 1, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1467,15 +1420,9 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, types::NEW_DECIMAL as i32);
-            let e = expr_for_sig(
-                ScalarFuncSig::CastDecimalAsJson,
-                &[col_expr],
-                1,
-                None,
-                None,
-                None,
-                None,
-            );
+            let ex = fncall_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
+
+            let e = Expression::build(ex, 1, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1504,15 +1451,9 @@ mod test {
         ];
         for (decimal, cols, exp) in cases {
             let col_expr = col_expr(0, types::STRING as i32);
-            let e = expr_for_sig(
-                ScalarFuncSig::CastStringAsJson,
-                &[col_expr],
-                1,
-                None,
-                Some(decimal as i32),
-                None,
-                None,
-            );
+            let mut ex = fncall_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
+            ex.mut_field_type().set_decimal(decimal);
+            let e = Expression::build(ex, 1, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1561,15 +1502,8 @@ mod test {
         ];
         for (tp, cols, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
-            let e = expr_for_sig(
-                ScalarFuncSig::CastTimeAsJson,
-                &[col_expr],
-                1,
-                None,
-                None,
-                None,
-                None,
-            );
+            let ex = fncall_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
+            let e = Expression::build(ex, 1, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1595,15 +1529,8 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, types::STRING as i32);
-            let e = expr_for_sig(
-                ScalarFuncSig::CastDurationAsJson,
-                &[col_expr],
-                1,
-                None,
-                None,
-                None,
-                None,
-            );
+            let ex = fncall_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
+            let e = Expression::build(ex, 1, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1626,15 +1553,8 @@ mod test {
         ];
         for (cols, exp) in cases {
             let col_expr = col_expr(0, types::STRING as i32);
-            let e = expr_for_sig(
-                ScalarFuncSig::CastJsonAsJson,
-                &[col_expr],
-                1,
-                None,
-                None,
-                None,
-                None,
-            );
+            let ex = fncall_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
+            let e = Expression::build(ex, 1, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
