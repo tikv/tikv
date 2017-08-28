@@ -234,6 +234,7 @@ impl Expression {
                 ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
 
                 ScalarFuncSig::UnaryNot => f.unary_not(ctx, row),
+                ScalarFuncSig::UnaryMinusInt => f.unary_minus_int(ctx, row),
                 ScalarFuncSig::IntIsNull => f.int_is_null(ctx, row),
                 ScalarFuncSig::IntIsFalse => f.int_is_false(ctx, row),
                 ScalarFuncSig::RealIsTrue => f.real_is_true(ctx, row),
@@ -264,6 +265,7 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsReal => f.cast_time_as_real(ctx, row),
                 ScalarFuncSig::CastDurationAsReal => f.cast_duration_as_real(ctx, row),
                 ScalarFuncSig::CastJsonAsReal => f.cast_json_as_real(ctx, row),
+                ScalarFuncSig::UnaryMinusReal => f.unary_minus_real(ctx, row),
 
                 ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
                 ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
@@ -293,6 +295,7 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsDecimal => f.cast_time_as_decimal(ctx, row),
                 ScalarFuncSig::CastDurationAsDecimal => f.cast_duration_as_decimal(ctx, row),
                 ScalarFuncSig::CastJsonAsDecimal => f.cast_json_as_decimal(ctx, row),
+                ScalarFuncSig::UnaryMinusDecimal => f.unary_minus_decimal(ctx, row),
 
                 ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
                 ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),

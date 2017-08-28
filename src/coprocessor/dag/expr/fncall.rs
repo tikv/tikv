@@ -135,6 +135,9 @@ impl FnCall {
             ScalarFuncSig::CastJsonAsDuration |
             ScalarFuncSig::CastJsonAsJson |
             ScalarFuncSig::UnaryNot |
+            ScalarFuncSig::UnaryMinusInt |
+            ScalarFuncSig::UnaryMinusReal |
+            ScalarFuncSig::UnaryMinusDecimal |
             ScalarFuncSig::IntIsFalse |
             ScalarFuncSig::IntIsNull |
             ScalarFuncSig::RealIsTrue |
