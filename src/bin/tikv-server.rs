@@ -204,7 +204,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         trans,
         snap_mgr,
         snap_status_receiver,
-        Some(read_stat_recv)
+        Some(read_stat_recv),
     ).unwrap_or_else(|e| exit_with_err(e));
     initial_metric(&cfg.metric, Some(node.id()));
 

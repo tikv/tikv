@@ -124,7 +124,9 @@ impl Context for CopContext {
         }
         self.task_count = 0;
         if let Some(ref sender) = self.raftstore_sender {
-            if let Err(e) = sender.send(mem::replace(&mut self.read_stats, Arc::new(HashMap::new()))) {
+            if let Err(e) =
+                sender.send(mem::replace(&mut self.read_stats, Arc::new(HashMap::new())))
+            {
                 warn!(
                     "coprocesser failed to send statistics to raftstore: {:?}",
                     e
@@ -152,7 +154,12 @@ impl ContextFactory<CopContext> for CopContextFactory {
 }
 
 impl Host {
-    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config, sender: Option<Sender<ReadStats>>) -> Host {
+    pub fn new(
+        engine: Box<Engine>,
+        scheduler: Scheduler<Task>,
+        cfg: &Config,
+        sender: Option<Sender<ReadStats>>,
+    ) -> Host {
         Host {
             engine: engine,
             sched: scheduler,
@@ -227,8 +234,8 @@ impl Host {
                 ctx.task_count += 1;
                 ctx.add_statistics(type_str, &stats);
                 let m = Arc::make_mut(&mut ctx.read_stats);
-                m.entry(region_id).or_insert((0,0)).0 += stats.total_read_bytes();
-                m.entry(region_id).or_insert((0,0)).1 += stats.total_processed() as u64;
+                m.entry(region_id).or_insert((0, 0)).0 += stats.total_read_bytes();
+                m.entry(region_id).or_insert((0, 0)).1 += stats.total_processed() as u64;
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();

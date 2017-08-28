@@ -350,7 +350,16 @@ where
                 sender: sender,
                 snapshot_status_receiver: snapshot_status_receiver,
             };
-            let mut store = match Store::new(ch, store, cfg, engines, trans, pd_client, snap_mgr, read_stat_recv) {
+            let mut store = match Store::new(
+                ch,
+                store,
+                cfg,
+                engines,
+                trans,
+                pd_client,
+                snap_mgr,
+                read_stat_recv,
+            ) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };
