@@ -1382,8 +1382,7 @@ impl Decimal {
                 mini_shift = r_mini_shift as i8;
             }
             new_point += mini_shift as isize;
-            if shift + mini_shift as isize == 0 &&
-                (new_point - int_cnt) < DIGITS_PER_WORD as isize
+            if shift + mini_shift as isize == 0 && (new_point - int_cnt) < DIGITS_PER_WORD as isize
             {
                 res.int_cnt = int_cnt as u8;
                 res.frac_cnt = frac_cnt as u8;
@@ -3048,6 +3047,57 @@ mod test {
             assert!(!dec.is_zero());
             dec.reset_to_zero();
             assert!(dec.is_zero());
+        }
+    }
+
+    #[test]
+    fn test_ceil() {
+        let cases = vec![
+            ("12345", "12345"),
+            ("0.99999", "1"),
+            ("-0.99999", "0"),
+            ("18446744073709551615", "18446744073709551615"),
+            ("18446744073709551616", "18446744073709551616"),
+            ("-18446744073709551615", "-18446744073709551615"),
+            ("-18446744073709551616", "-18446744073709551616"),
+            ("-1", "-1"),
+            ("1.23", "2"),
+            ("-1.23", "-1"),
+            (
+                "9999999999999999999999999.000",
+                "10000000000000000000000000",
+            ),
+        ];
+        for case in cases {
+            let dec: Decimal = case.0.parse().unwrap();
+            let expected: Decimal = case.1.parse().unwrap();
+            let got = dec.ceil();
+            assert!(got.is_ok());
+            assert_eq!(got.unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn test_floor() {
+        let cases = vec![
+            ("12345", "12345"),
+            ("0.99999", "0"),
+            ("-0.99999", "-1"),
+            ("18446744073709551615", "18446744073709551615"),
+            ("18446744073709551616", "18446744073709551616"),
+            ("-18446744073709551615", "-18446744073709551615"),
+            ("-18446744073709551616", "-18446744073709551616"),
+            ("-1", "-1"),
+            ("1.23", "1"),
+            ("-1.23", "-2"),
+            ("9999999999999999999999999.001", "9999999999999999999999999"),
+        ];
+        for case in cases {
+            let dec: Decimal = case.0.parse().unwrap();
+            let expected: Decimal = case.1.parse().unwrap();
+            let got = dec.floor();
+            assert!(got.is_ok());
+            assert_eq!(got.unwrap(), expected);
         }
     }
 }
