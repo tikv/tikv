@@ -236,8 +236,8 @@ mod test {
         for (operator, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(branch1);
             let arg2 = datum_expr(branch2);
-            let expected = Expression::build(datum_expr(exp), 0).unwrap();
-            let op = Expression::build(fncall_expr(operator, &[arg1, arg2]), 0).unwrap();
+            let expected = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
+            let op = Expression::build(fncall_expr(operator, &[arg1, arg2]), 0, &ctx).unwrap();
             match operator {
                 ScalarFuncSig::IfNullInt => {
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
@@ -389,8 +389,9 @@ mod test {
             let arg1 = datum_expr(cond);
             let arg2 = datum_expr(branch1);
             let arg3 = datum_expr(branch2);
-            let expected = Expression::build(datum_expr(exp), 0).unwrap();
-            let op = Expression::build(fncall_expr(operator, &[arg1, arg2, arg3]), 0).unwrap();
+            let expected = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
+            let op =
+                Expression::build(fncall_expr(operator, &[arg1, arg2, arg3]), 0, &ctx).unwrap();
             match operator {
                 ScalarFuncSig::IfInt => {
                     let lhs = op.eval_int(&ctx, &[]).unwrap();
