@@ -15,7 +15,7 @@ use super::Result;
 use util::escape;
 
 /// `UN_SPECIFIED_FSP` is the unspecified fractional seconds part.
-const UN_SPECIFIED_FSP: i8 = -1;
+pub const UN_SPECIFIED_FSP: i8 = -1;
 /// `MAX_FSP` is the maximum digit of fractional seconds part.
 pub const MAX_FSP: i8 = 6;
 /// `MIN_FSP` is the minimum digit of fractional seconds part.
@@ -60,6 +60,7 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
 
 mod duration;
 pub mod decimal;
+pub mod charset;
 pub mod types;
 mod time;
 pub mod json;

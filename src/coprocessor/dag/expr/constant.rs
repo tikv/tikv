@@ -15,7 +15,7 @@ use std::borrow::Cow;
 
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use super::{Constant, Error, Result};
+use super::{Constant, Result};
 
 impl Datum {
     #[inline]
@@ -24,7 +24,7 @@ impl Datum {
             Datum::Null => Ok(None),
             Datum::I64(i) => Ok(Some(i)),
             Datum::U64(u) => Ok(Some(u as i64)),
-            _ => Err(Error::Other("Can't eval_int from Datum")),
+            _ => Err(box_err!("Can't eval_int from Datum")),
         }
     }
 
@@ -33,7 +33,7 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::F64(f) => Ok(Some(f)),
-            _ => Err(Error::Other("Can't eval_real from Datum")),
+            _ => Err(box_err!("Can't eval_real from Datum")),
         }
     }
 
@@ -42,7 +42,7 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::Dec(ref d) => Ok(Some(Cow::Borrowed(d))),
-            _ => Err(Error::Other("Can't eval_decimal from Datum")),
+            _ => Err(box_err!("Can't eval_decimal from Datum")),
         }
     }
 
@@ -51,7 +51,7 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::Bytes(ref b) => Ok(Some(Cow::Borrowed(b))),
-            _ => Err(Error::Other("Can't eval_string from Datum")),
+            _ => Err(box_err!("Can't eval_string from Datum")),
         }
     }
 
@@ -60,7 +60,7 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::Time(ref t) => Ok(Some(Cow::Borrowed(t))),
-            _ => Err(Error::Other("Can't eval_time from Datum")),
+            _ => Err(box_err!("Can't eval_time from Datum")),
         }
     }
 
@@ -69,7 +69,7 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::Dur(ref d) => Ok(Some(Cow::Borrowed(d))),
-            _ => Err(Error::Other("Can't eval_duration from Datum")),
+            _ => Err(box_err!("Can't eval_duration from Datum")),
         }
     }
 
@@ -78,7 +78,7 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::Json(ref j) => Ok(Some(Cow::Borrowed(j))),
-            _ => Err(Error::Other("Can't eval_json from Datum")),
+            _ => Err(box_err!("Can't eval_json from Datum")),
         }
     }
 }
