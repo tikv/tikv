@@ -22,18 +22,17 @@ use futures::{task, Async, BoxFuture, Future, Poll, Stream};
 use futures::task::Task;
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
-use grpc::{ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+use grpc::{CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
            Result as GrpcResult};
 use tokio_timer::Timer;
-use rand::{self, Rng};
 use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
                     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader};
 use kvproto::pdpb_grpc::PdClient;
 use prometheus::HistogramTimer;
 
 use util::{Either, HandyRwLock};
-use pd::{Error, PdFuture, Result};
-use pd::metrics::PD_SEND_MSG_HISTOGRAM;
+use super::{Error, PdFuture, Result, REQUEST_TIMEOUT};
+use super::metrics::PD_SEND_MSG_HISTOGRAM;
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -199,7 +198,7 @@ pub struct Request<Req, Resp, F> {
     timer: Option<HistogramTimer>,
 }
 
-const MAX_REQUEST_COUNT: usize = 5;
+const MAX_REQUEST_COUNT: usize = 3;
 
 impl<Req, Resp, F> Request<Req, Resp, F>
 where
@@ -378,7 +377,8 @@ fn connect(env: Arc<Environment>, addr: &str) -> Result<(PdClient, GetMembersRes
     let addr = addr.trim_left_matches("http://");
     let channel = ChannelBuilder::new(env).connect(addr);
     let client = PdClient::new(channel);
-    match client.get_members(GetMembersRequest::new()) {
+    let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+    match client.get_members_opt(GetMembersRequest::new(), option) {
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
     }
@@ -388,16 +388,17 @@ pub fn try_connect_leader(
     env: Arc<Environment>,
     previous: &GetMembersResponse,
 ) -> Result<(PdClient, GetMembersResponse)> {
-    // Try to connect other members.
-    // Randomize endpoints.
+    let previous_leader = previous.get_leader();
     let members = previous.get_members();
-    let mut indexes: Vec<usize> = (0..members.len()).collect();
-    rand::thread_rng().shuffle(&mut indexes);
-
     let cluster_id = previous.get_header().get_cluster_id();
     let mut resp = None;
-    'outer: for i in indexes {
-        for ep in members[i].get_client_urls() {
+    // Try to connect to other members, then the previous leader.
+    'outer: for m in members
+        .into_iter()
+        .filter(|m| *m != previous_leader)
+        .chain(&[previous_leader.clone()])
+    {
+        for ep in m.get_client_urls() {
             match connect(env.clone(), ep.as_str()) {
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
