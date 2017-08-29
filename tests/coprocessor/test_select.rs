@@ -24,6 +24,7 @@ use kvproto::kvrpcpb::Context;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::util::codec::number::*;
 use tikv::storage::{Key, Mutation, ALL_CFS};
+use tikv::server::Config;
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::Worker;
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -285,7 +286,7 @@ impl<'a> Insert<'a> {
         self.execute_with_ctx(Context::new())
     }
 
-    fn execute_with_ctx(mut self, ctx: Context) -> i64 {
+    fn execute_with_ctx(self, ctx: Context) -> i64 {
         let handle = self.values
             .get(&self.table.handle_id)
             .cloned()
@@ -466,7 +467,7 @@ impl<'a> Delete<'a> {
         }
     }
 
-    fn execute(mut self, id: i64, row: Vec<Datum>) {
+    fn execute(self, id: i64, row: Vec<Datum>) {
         let mut values = HashMap::new();
         for (&id, v) in self.table.cols.keys().zip(row) {
             values.insert(id, v);
@@ -616,7 +617,9 @@ fn init_data_with_engine_and_commit(
         store.commit_with_ctx(ctx);
     }
     let mut end_point = Worker::new("test select worker");
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8);
+    let mut cfg = Config::default();
+    cfg.end_point_concurrency = 1;
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg);
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)
