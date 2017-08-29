@@ -510,7 +510,7 @@ impl Expression {
         }
     }
 
-    pub fn build(mut expr: Expr, row_len: usize, ctx: &StatementContext) -> Result<Self> {
+    pub fn build(mut expr: Expr, ctx: &StatementContext) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -559,7 +559,7 @@ impl Expression {
                 ));
                 expr.take_children()
                     .into_iter()
-                    .map(|child| Expression::build(child, row_len, ctx))
+                    .map(|child| Expression::build(child, ctx))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
@@ -571,7 +571,6 @@ impl Expression {
             }
             ExprType::ColumnRef => {
                 let offset = try!(expr.get_val().decode_i64().map_err(Error::from)) as usize;
-                try!(Column::check_offset(offset, row_len));
                 let column = Column {
                     offset: offset,
                     tp: tp,
@@ -587,8 +586,8 @@ impl Expression {
 mod test {
     use std::{i64, u64};
     use coprocessor::codec::{convert, Datum};
-    use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time, MAX_FSP};
-    use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
+    use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
+    use coprocessor::select::xeval::evaluator::test::col_expr;
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use super::{Expression, StatementContext};
 
@@ -606,38 +605,6 @@ mod test {
             expr.mut_children().push(child.clone());
         }
         expr
-    }
-
-    #[test]
-    fn test_expression_build() {
-        let colref = col_expr(1);
-        let const_null = datum_expr(Datum::Null);
-        let const_time = datum_expr(Datum::Time(
-            Time::parse_utc_datetime("1970-01-01 12:00:00", MAX_FSP).unwrap(),
-        ));
-
-        let tests = vec![
-            (colref.clone(), 1, false),
-            (colref.clone(), 2, true),
-            (const_null.clone(), 0, true),
-            (const_time.clone(), 0, true),
-            (
-                fncall_expr(ScalarFuncSig::LTInt, &[colref.clone(), const_null.clone()]),
-                2,
-                true,
-            ),
-            (
-                fncall_expr(ScalarFuncSig::LTInt, &[colref.clone()]),
-                0,
-                false,
-            ),
-        ];
-
-        let ctx = StatementContext::default();
-        for tt in tests {
-            let expr = Expression::build(tt.0, tt.1, &ctx);
-            assert_eq!(expr.is_ok(), tt.2);
-        }
     }
 
     #[test]
@@ -683,7 +650,7 @@ mod test {
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
             ex.mut_field_type()
                 .set_flen(convert::UNSPECIFIED_LENGTH as i32);
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval(&ctx, &cols).unwrap();
             if let Datum::F64(_) = exp {
                 assert_eq!(format!("{}", res), format!("{}", exp));
@@ -712,7 +679,7 @@ mod test {
             if flag.is_some() {
                 ex.mut_field_type().set_flag(flag.unwrap() as u32);
             }
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval(&ctx, &cols).unwrap();
             assert_eq!(res, exp);
         }

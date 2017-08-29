@@ -15,17 +15,9 @@ use std::borrow::Cow;
 
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use super::{Column, Error, Result};
+use super::{Column, Result};
 
 impl Column {
-    #[inline]
-    pub fn check_offset(offset: usize, row_len: usize) -> Result<()> {
-        if offset >= row_len {
-            return Err(Error::ColumnOffset(offset));
-        }
-        Ok(())
-    }
-
     pub fn eval(&self, row: &[Datum]) -> Datum {
         row[self.offset].clone()
     }
@@ -114,7 +106,7 @@ mod test {
         let ctx = StatementContext::default();
         for (ii, exp) in expecteds.iter().enumerate().take(row.len()) {
             let c = col_expr(ii as i64);
-            let e = Expression::build(c, row.len(), &ctx).unwrap();
+            let e = Expression::build(c, &ctx).unwrap();
 
             let i = e.eval_int(&ctx, &row).unwrap_or(None);
             let r = e.eval_real(&ctx, &row).unwrap_or(None);
