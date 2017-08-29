@@ -22,7 +22,10 @@ use byteorder::ReadBytesExt;
 
 use coprocessor::select::xeval::EvalContext;
 use util::codec::bytes::BytesDecoder;
-use super::super::{convert, Error, Result, TEN_POW};
+use coprocessor::codec::{convert, Error, Result, TEN_POW};
+
+// TODO: We should use same Error in mod `coprocessor`.
+use coprocessor::dag::expr::Error as ExprError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -56,6 +59,13 @@ impl<T> Res<T> {
     pub fn is_overflow(&self) -> bool {
         match *self {
             Res::Overflow(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_truncated(&self) -> bool {
+        match *self {
+            Res::Truncated(_) => true,
             _ => false,
         }
     }
@@ -835,6 +845,31 @@ pub enum RoundMode {
 }
 
 impl Decimal {
+    /// abs the Decimal into a new Decimal.
+    #[inline]
+    pub fn abs(mut self) -> Res<Decimal> {
+        self.negative = false;
+        Res::Ok(self)
+    }
+
+    /// ceil the Decimal into a new Decimal.
+    pub fn ceil(&self) -> Res<Decimal> {
+        if !self.negative {
+            self.clone().round(0, RoundMode::Ceiling)
+        } else {
+            self.clone().round(0, RoundMode::Truncate)
+        }
+    }
+
+    /// floor the Decimal into a new Decimal.
+    pub fn floor(&self) -> Res<Decimal> {
+        if !self.negative {
+            self.clone().round(0, RoundMode::Truncate)
+        } else {
+            self.clone().round(0, RoundMode::Ceiling)
+        }
+    }
+
     /// create a new decimal for internal usage.
     fn new(int_cnt: u8, frac_cnt: u8, negative: bool) -> Decimal {
         Decimal {
@@ -1428,6 +1463,13 @@ impl Decimal {
         Res::Ok(x)
     }
 
+    /// `as_i64_with_ctx` returns int part of the decimal.
+    pub fn as_i64_with_ctx(&self, ctx: &EvalContext) -> ::std::result::Result<i64, ExprError> {
+        let res = self.as_i64();
+        try!(convert::handle_truncate(ctx, res.is_truncated()));
+        res.into()
+    }
+
     /// `as_u64` returns int part of the decimal
     pub fn as_u64(&self) -> Res<u64> {
         if self.negative {
@@ -1970,7 +2012,7 @@ impl Ord for Decimal {
     }
 }
 
-impl<'a> Add<&'a Decimal> for &'a Decimal {
+impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -1985,7 +2027,7 @@ impl<'a> Add<&'a Decimal> for &'a Decimal {
     }
 }
 
-impl<'a> Sub<&'a Decimal> for &'a Decimal {
+impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn sub(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2000,7 +2042,7 @@ impl<'a> Sub<&'a Decimal> for &'a Decimal {
     }
 }
 
-impl<'a> Mul for &'a Decimal {
+impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn mul(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -3001,6 +3043,59 @@ mod test {
             assert!(!dec.is_zero());
             dec.reset_to_zero();
             assert!(dec.is_zero());
+        }
+    }
+
+    #[test]
+    fn test_ceil() {
+        let cases = vec![
+            ("12345", "12345"),
+            ("0.99999", "1"),
+            ("-0.99999", "0"),
+            ("18446744073709551615", "18446744073709551615"),
+            ("18446744073709551616", "18446744073709551616"),
+            ("-18446744073709551615", "-18446744073709551615"),
+            ("-18446744073709551616", "-18446744073709551616"),
+            ("-1", "-1"),
+            ("1.23", "2"),
+            ("-1.23", "-1"),
+            ("1.00000", "1"),
+            ("-1.00000", "-1"),
+            (
+                "9999999999999999999999999.001",
+                "10000000000000000000000000",
+            ),
+        ];
+        for (input, exp) in cases {
+            let dec: Decimal = input.parse().unwrap();
+            let exp: Decimal = exp.parse().unwrap();
+            let got = dec.ceil().unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_floor() {
+        let cases = vec![
+            ("12345", "12345"),
+            ("0.99999", "0"),
+            ("-0.99999", "-1"),
+            ("18446744073709551615", "18446744073709551615"),
+            ("18446744073709551616", "18446744073709551616"),
+            ("-18446744073709551615", "-18446744073709551615"),
+            ("-18446744073709551616", "-18446744073709551616"),
+            ("-1", "-1"),
+            ("1.23", "1"),
+            ("-1.23", "-2"),
+            ("00001.00000", "1"),
+            ("-00001.00000", "-1"),
+            ("9999999999999999999999999.001", "9999999999999999999999999"),
+        ];
+        for (input, exp) in cases {
+            let dec: Decimal = input.parse().unwrap();
+            let exp: Decimal = exp.parse().unwrap();
+            let got = dec.floor().unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
