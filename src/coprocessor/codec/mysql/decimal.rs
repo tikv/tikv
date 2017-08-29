@@ -3066,11 +3066,11 @@ mod test {
                 "10000000000000000000000000",
             ),
         ];
-        for case in cases {
-            let dec: Decimal = case.0.parse().unwrap();
-            let expected: Decimal = case.1.parse().unwrap();
+        for (input, exp) in cases {
+            let dec: Decimal = input.parse().unwrap();
+            let exp: Decimal = exp.parse().unwrap();
             let got = dec.ceil().unwrap();
-            assert_eq!(got, expected);
+            assert_eq!(got, exp);
         }
     }
 
@@ -3091,11 +3091,11 @@ mod test {
             ("-00001.00000", "-1"),
             ("9999999999999999999999999.001", "9999999999999999999999999"),
         ];
-        for case in cases {
-            let dec: Decimal = case.0.parse().unwrap();
-            let expected: Decimal = case.1.parse().unwrap();
+        for (input, exp) in cases {
+            let dec: Decimal = input.parse().unwrap();
+            let exp: Decimal = exp.parse().unwrap();
             let got = dec.floor().unwrap();
-            assert_eq!(got, expected);
+            assert_eq!(got, exp);
         }
     }
 }
