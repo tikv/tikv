@@ -395,7 +395,7 @@ pub fn try_connect_leader(
     // Try to connect to other members, then the previous leader.
     'outer: for m in members
         .into_iter()
-        .filter(|m| *m == previous_leader)
+        .filter(|m| *m != previous_leader)
         .chain(&[previous_leader.clone()])
     {
         for ep in m.get_client_urls() {
