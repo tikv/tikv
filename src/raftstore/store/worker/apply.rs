@@ -170,6 +170,7 @@ struct ApplyContext<'a> {
     pub cbs: Vec<(Callback, RaftCmdResponse)>,
     pub wb_last_bytes: u64,
     pub wb_last_keys: u64,
+    pub flush_wal: bool,
 }
 
 impl<'a> ApplyContext<'a> {
@@ -180,6 +181,7 @@ impl<'a> ApplyContext<'a> {
             cbs: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
+            flush_wal: false,
         }
     }
 
@@ -263,8 +265,6 @@ fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     false
 }
 
-static mut FLUSH_WAL: bool = false;
-
 #[derive(Debug)]
 pub struct ApplyDelegate {
     // peer_id
@@ -284,6 +284,7 @@ pub struct ApplyDelegate {
     applied_index_term: u64,
     term: u64,
     pending_cmds: PendingCmdQueue,
+    flush_wal: bool,
     metrics: ApplyMetrics,
 }
 
@@ -312,6 +313,7 @@ impl ApplyDelegate {
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             pending_cmds: Default::default(),
+            flush_wal: false,
             metrics: Default::default(),
         }
     }
@@ -362,6 +364,11 @@ impl ApplyDelegate {
 
         self.update_metrics(apply_ctx);
         apply_ctx.mark_last_bytes_and_keys();
+
+        if self.flush_wal {
+            apply_ctx.flush_wal = true;
+            self.flush_wal = false;
+        }
 
         slow_log!(
             t,
@@ -419,13 +426,12 @@ impl ApplyDelegate {
                     .unwrap_or_else(|e| {
                         panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                     });
-                unsafe {
-                    if FLUSH_WAL {
-                        self.engine.flush_wal(false).unwrap_or_else(|e| {
-                            panic!("{} failed to flush wal, error: {:?}", self.tag, e)
-                        });
-                        FLUSH_WAL = false;
-                    }
+                if apply_ctx.flush_wal || self.flush_wal {
+                    self.engine.flush_wal(false).unwrap_or_else(|e| {
+                        panic!("{} failed to flush wal, error: {:?}", self.tag, e)
+                    });
+                    apply_ctx.flush_wal = false;
+                    self.flush_wal = false;
                 }
 
                 // call callback
@@ -822,9 +828,7 @@ impl ApplyDelegate {
         if let Err(e) = write_peer_state(&self.engine, ctx.wb, &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
-        unsafe {
-            FLUSH_WAL = true;
-        }
+        self.flush_wal = true;
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
@@ -917,9 +921,7 @@ impl ApplyDelegate {
                     e
                 )
             });
-        unsafe {
-            FLUSH_WAL = true;
-        }
+        self.flush_wal = true;
 
         let mut resp = AdminResponse::new();
         if right_derive {
@@ -1500,13 +1502,10 @@ impl Runner {
             .write(apply_ctx.wb.take().unwrap())
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
 
-        unsafe {
-            if FLUSH_WAL {
-                self.db
-                    .flush_wal(false)
-                    .unwrap_or_else(|e| panic!("failed to flush wal, error: {:?}", e));
-                FLUSH_WAL = false;
-            }
+        if apply_ctx.flush_wal {
+            self.db
+                .flush_wal(false)
+                .unwrap_or_else(|e| panic!("failed to flush wal, error: {:?}", e));
         }
 
         // Call callbacks
