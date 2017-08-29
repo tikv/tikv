@@ -132,7 +132,7 @@ impl FnCall {
 mod test {
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::{mysql, Datum};
+    use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::codec::mysql::types;
     use coprocessor::dag::expr::test::{check_overflow, fncall_expr, str2dec};
     use coprocessor::dag::expr::{Expression, StatementContext};
@@ -248,6 +248,10 @@ mod test {
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
+            if sig == ScalarFuncSig::CeilIntToDec || sig == ScalarFuncSig::CeilDecToDec {
+                op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
+                op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
+            }
             match sig {
                 ScalarFuncSig::CeilReal => {
                     let got = op.eval_real(&ctx, &[]).unwrap();
@@ -327,6 +331,10 @@ mod test {
             let exp = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+            }
+            if sig == ScalarFuncSig::FloorIntToDec || sig == ScalarFuncSig::FloorDecToDec {
+                op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
+                op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
             match sig {
                 ScalarFuncSig::FloorReal => {
