@@ -13,17 +13,18 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use protobuf::RepeatedField;
 use futures::{future, Future, Sink, Stream};
 use futures::sync::mpsc::{self, UnboundedSender};
-use grpc::{EnvBuilder, WriteFlags};
+use grpc::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 
 use util::{Either, HandyRwLock};
 use pd::PdFuture;
-use super::{Error, PdClient, RegionStat, Result};
+use super::{Error, PdClient, RegionStat, Result, REQUEST_TIMEOUT};
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 
 const CQ_COUNT: usize = 1;
@@ -86,7 +87,10 @@ impl PdClient for RpcClient {
         let resp = try!(sync_request(
             &self.leader_client,
             LEADER_CHANGE_RETRY,
-            |client| client.bootstrap(req.clone())
+            |client| {
+                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+                client.bootstrap_opt(req.clone(), option)
+            }
         ));
         try!(check_resp_header(resp.get_header()));
         Ok(())
@@ -99,7 +103,10 @@ impl PdClient for RpcClient {
         let resp = try!(sync_request(
             &self.leader_client,
             LEADER_CHANGE_RETRY,
-            |client| client.is_bootstrapped(req.clone())
+            |client| {
+                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+                client.is_bootstrapped_opt(req.clone(), option)
+            }
         ));
         try!(check_resp_header(resp.get_header()));
 
@@ -113,7 +120,10 @@ impl PdClient for RpcClient {
         let resp = try!(sync_request(
             &self.leader_client,
             LEADER_CHANGE_RETRY,
-            |client| client.alloc_id(req.clone())
+            |client| {
+                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+                client.alloc_id_opt(req.clone(), option)
+            }
         ));
         try!(check_resp_header(resp.get_header()));
 
@@ -128,7 +138,10 @@ impl PdClient for RpcClient {
         let resp = try!(sync_request(
             &self.leader_client,
             LEADER_CHANGE_RETRY,
-            |client| client.put_store(req.clone())
+            |client| {
+                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+                client.put_store_opt(req.clone(), option)
+            }
         ));
         try!(check_resp_header(resp.get_header()));
 
@@ -143,7 +156,10 @@ impl PdClient for RpcClient {
         let mut resp = try!(sync_request(
             &self.leader_client,
             LEADER_CHANGE_RETRY,
-            |client| client.get_store(req.clone())
+            |client| {
+                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+                client.get_store_opt(req.clone(), option)
+            }
         ));
         try!(check_resp_header(resp.get_header()));
 
@@ -157,7 +173,10 @@ impl PdClient for RpcClient {
         let mut resp = try!(sync_request(
             &self.leader_client,
             LEADER_CHANGE_RETRY,
-            |client| client.get_cluster_config(req.clone())
+            |client| {
+                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+                client.get_cluster_config_opt(req.clone(), option)
+            }
         ));
         try!(check_resp_header(resp.get_header()));
 
@@ -172,7 +191,10 @@ impl PdClient for RpcClient {
         let mut resp = try!(sync_request(
             &self.leader_client,
             LEADER_CHANGE_RETRY,
-            |client| client.get_region(req.clone())
+            |client| {
+                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+                client.get_region_opt(req.clone(), option)
+            }
         ));
         try!(check_resp_header(resp.get_header()));
 
@@ -185,7 +207,8 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::GetRegionByIDRequest| {
-            let handler = client.rl().client.get_region_by_id_async(req);
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client.rl().client.get_region_by_id_async_opt(req, option);
             handler
                 .map_err(Error::Grpc)
                 .and_then(|mut resp| {
@@ -268,7 +291,8 @@ impl PdClient for RpcClient {
         req.set_region(region);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::AskSplitRequest| {
-            let handler = client.rl().client.ask_split_async(req);
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client.rl().client.ask_split_async_opt(req, option);
             handler
                 .map_err(Error::Grpc)
                 .and_then(|resp| {
@@ -289,7 +313,8 @@ impl PdClient for RpcClient {
         req.set_stats(stats);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
-            let handler = client.rl().client.store_heartbeat_async(req);
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client.rl().client.store_heartbeat_async_opt(req, option);
             handler
                 .map_err(Error::Grpc)
                 .and_then(|resp| {
@@ -311,7 +336,8 @@ impl PdClient for RpcClient {
         req.set_right(right);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::ReportSplitRequest| {
-            let handler = client.rl().client.report_split_async(req);
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client.rl().client.report_split_async_opt(req, option);
             handler
                 .map_err(Error::Grpc)
                 .and_then(|resp| {
