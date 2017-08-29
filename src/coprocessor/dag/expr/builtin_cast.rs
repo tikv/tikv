@@ -716,7 +716,8 @@ mod test {
         let mut ctx = StatementContext::default();
         ctx.ignore_truncate = true;
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        let time_int = 20121212120023i64;
+	#[allow(inconsistent_digit_grouping)]
+        let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
             (
@@ -819,7 +820,8 @@ mod test {
         let mut ctx = StatementContext::default();
         ctx.ignore_truncate = true;
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        let int_t = 20121212120023u64;
+	#[allow(inconsistent_digit_grouping)]
+        let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
             (
