@@ -843,9 +843,6 @@ impl ApplyDelegate {
 
         let split_key = split_req.get_split_key();
         let mut region = self.region.clone();
-        if split_key <= region.get_start_key() {
-            return Err(box_err!("invalid split request: {:?}", split_req));
-        }
 
         try!(util::check_key_in_region(split_key, &region));
 
