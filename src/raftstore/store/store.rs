@@ -2276,6 +2276,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
+        if !peer.is_leader() {
+            return;
+        }  
+
         let msg = Msg::new_raft_cmd(
             new_verify_hash_request(region_id, peer.clone(), state),
             Box::new(|_| {}),
