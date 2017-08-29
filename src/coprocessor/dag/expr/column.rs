@@ -26,6 +26,10 @@ impl Column {
         Ok(())
     }
 
+    pub fn eval(&self, row: &[Datum]) -> Datum {
+        row[self.offset].clone()
+    }
+
     #[inline]
     pub fn eval_int(&self, row: &[Datum]) -> Result<Option<i64>> {
         row[self.offset].as_int()

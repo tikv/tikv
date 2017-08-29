@@ -84,6 +84,10 @@ impl Datum {
 }
 
 impl Constant {
+    pub fn eval(&self) -> Datum {
+        self.val.clone()
+    }
+
     #[inline]
     pub fn eval_int(&self) -> Result<Option<i64>> {
         self.val.as_int()
