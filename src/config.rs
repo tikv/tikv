@@ -55,7 +55,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 
 macro_rules! cf_config {
     ($name:ident, $test_name:ident) => {
-        #[derive(Clone, Serialize, Deserialize, PartialEq)]
+        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
@@ -81,35 +81,17 @@ macro_rules! cf_config {
             pub compaction_pri: CompactionPriority,
         }
 
-        impl ::std::fmt::Debug for $name {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-                f.debug_struct(stringify!($name))
-                    .finish()
-            }
-        }
-
         #[cfg(test)]
         mod $test_name {
             use util::config::compression_type_level_serde;
             use super::*;
 
-            use toml::{self, ser};
-
             extern crate serde_test;
             use self::serde_test::{Token, assert_de_tokens};
 
-            #[test]
-            fn test_toml_roundtrippping() {
+            pub fn de_tokens() -> Vec<Token> {
                 let value: $name = Default::default();
-                let dump = ser::to_string_pretty(&value).unwrap();
-                let load = toml::from_str(&dump).unwrap();
-                assert_eq!(value, load);
-            }
-
-            #[test]
-            fn test_de_tokens() {
-                let value: $name = Default::default();
-                assert_de_tokens(&value, &[
+                vec![
                     Token::Struct { name: stringify!($name), len:18 },
                         Token::Str("block-size"),
                         Token::U64(value.block_size.0),
@@ -134,13 +116,34 @@ macro_rules! cf_config {
 
                         Token::Str("compression-per-level"),
                         Token::Seq { len: Some(7) },
-                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[0])),
-                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[1])),
-                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[2])),
-                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[3])),
-                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[4])),
-                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[5])),
-                            Token::Str(compression_type_level_serde::db_compression_type_to_str(&value.compression_per_level[6])),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[0]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[1]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[2]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[3]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[4]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[5]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[6]
+                                )),
                         Token::SeqEnd,
 
                         Token::Str("write-buffer-size"),
@@ -173,7 +176,13 @@ macro_rules! cf_config {
                         Token::Str("compaction-pri"),
                         Token::I64(value.compaction_pri as i64),
                     Token::StructEnd,
-                ]);
+                ]
+            }
+
+            #[test]
+            fn test_de_tokens() {
+                let value: $name = Default::default();
+                assert_de_tokens(&value, &de_tokens());
             }
         }
     };
@@ -383,7 +392,7 @@ impl RaftCfConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
@@ -559,7 +568,7 @@ impl RaftDefaultCfConfig {
 // When construct Options, options.env is set to same singleton Env::Default() object.
 // If we set same env parameter in different instance, we may overwrite other instance's config.
 // So we only set max_background_jobs in default rocksdb.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
@@ -660,7 +669,7 @@ impl RaftDbConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct PdConfig {
@@ -679,7 +688,7 @@ impl PdConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MetricConfig {
@@ -710,7 +719,7 @@ pub enum LogLevel {
     Off,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
@@ -794,9 +803,153 @@ mod tests {
     use toml::{self, ser};
 
     extern crate serde_test;
-    use self::serde_test::{Token, assert_de_tokens};
+    use self::serde_test::{assert_de_tokens, Token};
 
     #[test]
-    fn test_serde() {
+    fn test_toml_serde_roundtrippping() {
+        {
+            let value = DbConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+        {
+            let value = DefaultCfConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+        {
+            let value = LockCfConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+        {
+            let value = MetricConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+        {
+            let value = PdConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+        {
+            let value = RaftCfConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+        {
+            let value = RaftDbConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+        {
+            let value = RaftDefaultCfConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+        {
+            let value = TiKvConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+        {
+            let value = WriteCfConfig::default();
+            let dump = ser::to_string_pretty(&value).unwrap();
+            let load = toml::from_str(&dump).unwrap();
+            assert_eq!(value, load);
+        }
+    }
+
+    #[test]
+    fn test_de_db_config() {
+        let db_cfg = DbConfig::default();
+        let mut tokens = vec![
+            Token::Struct {
+                name: "DbConfig",
+                len: 25,
+            },
+            Token::Str("wal-recovery-mode"),
+            Token::I64(db_cfg.wal_recovery_mode as i64),
+
+            Token::Str("wal-dir"),
+            Token::Str(""),
+
+            Token::Str("wal-ttl-seconds"),
+            Token::U64(db_cfg.wal_ttl_seconds),
+
+            Token::Str("wal-size-limit"),
+            Token::U64(db_cfg.wal_size_limit.0),
+
+            Token::Str("max-total-wal-size"),
+            Token::U64(db_cfg.max_total_wal_size.0),
+
+            Token::Str("max-background-jobs"),
+            Token::I32(db_cfg.max_background_jobs),
+
+            Token::Str("max-manifest-file-size"),
+            Token::U64(db_cfg.max_manifest_file_size.0),
+
+            Token::Str("create-if-missing"),
+            Token::Bool(db_cfg.create_if_missing),
+
+            Token::Str("max-open-files"),
+            Token::I32(db_cfg.max_open_files),
+
+            Token::Str("enable-statistics"),
+            Token::Bool(db_cfg.enable_statistics),
+
+            Token::Str("stats-dump-period"),
+            Token::Str("10m"),
+
+            Token::Str("compaction-readahead-size"),
+            Token::U64(db_cfg.compaction_readahead_size.0),
+
+            Token::Str("info-log-max-size"),
+            Token::U64(db_cfg.info_log_max_size.0),
+
+            Token::Str("info-log-roll-time"),
+            Token::Str("0s"),
+
+            Token::Str("info-log-dir"),
+            Token::Str(""),
+
+            Token::Str("rate-bytes-per-sec"),
+            Token::U64(db_cfg.rate_bytes_per_sec.0),
+
+            Token::Str("max-sub-compactions"),
+            Token::U32(db_cfg.max_sub_compactions),
+
+            Token::Str("writable-file-max-buffer-size"),
+            Token::U64(db_cfg.writable_file_max_buffer_size.0),
+
+            Token::Str("use-direct-io-for-flush-and-compaction"),
+            Token::Bool(db_cfg.use_direct_io_for_flush_and_compaction),
+
+            Token::Str("enable-pipelined-write"),
+            Token::Bool(db_cfg.enable_pipelined_write),
+
+            Token::Str("backup-dir"),
+            Token::Str(""),
+        ];
+        tokens.push(Token::Str("defaultcf"));
+        tokens.extend(default_cf_config_test::de_tokens());
+        tokens.push(Token::Str("writecf"));
+        tokens.extend(write_cf_config_test::de_tokens());
+        tokens.push(Token::Str("lockcf"));
+        tokens.extend(lock_cf_config_test::de_tokens());
+        tokens.push(Token::Str("raftcf"));
+        tokens.extend(raft_cf_config_test::de_tokens());
+        tokens.push(Token::StructEnd);
+
+        assert_de_tokens(&db_cfg, &tokens);
     }
 }
