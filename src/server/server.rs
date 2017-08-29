@@ -123,7 +123,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let end_point = EndPointHost::new(
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
-            cfg.end_point_concurrency,
+            cfg,
         );
         box_try!(
             self.end_point_worker

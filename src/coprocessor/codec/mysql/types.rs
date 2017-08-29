@@ -14,7 +14,7 @@
 /// Field can't be NULL
 const NOT_NULL_FLAG: u64 = 1;
 /// The field is unsigned.
-const UNSIGNED_FLAG: u64 = 32;
+pub const UNSIGNED_FLAG: u64 = 32;
 
 /// `has_unsigned_flag` checks if `UNSIGNED_FLAG` is set.
 #[inline]

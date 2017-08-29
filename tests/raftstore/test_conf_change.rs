@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::thread;
 
 use tikv::raftstore::store::*;
+use tikv::storage::CF_RAFT;
 use kvproto::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
@@ -418,7 +419,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for _ in 0..250 {
         let region: RegionLocalState = engine1
-            .get_msg(&keys::region_state_key(r1))
+            .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
             .unwrap()
             .unwrap();
         if region.get_state() == PeerState::Tombstone {
@@ -427,7 +428,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         sleep_ms(20);
     }
     let region: RegionLocalState = engine1
-        .get_msg(&keys::region_state_key(r1))
+        .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
         .unwrap()
         .unwrap();
     assert_eq!(region.get_state(), PeerState::Tombstone);

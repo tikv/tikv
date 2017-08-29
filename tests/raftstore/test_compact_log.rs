@@ -12,11 +12,9 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
-use tikv::util::rocksdb::get_cf_handle;
 use tikv::util::config::*;
 use rocksdb::DB;
 use protobuf;
@@ -38,9 +36,9 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let mut before_states = HashMap::new();
 
-    for (&id, engine) in &cluster.engines {
+    for (&id, engines) in &cluster.engines {
         let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(&engines.kv_engine, CF_RAFT, &keys::apply_state_key(1));
         before_states.insert(id, state.take_truncated_state());
     }
 
@@ -59,16 +57,16 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn check_compacted(
-    engines: &HashMap<u64, Arc<DB>>,
+    all_engines: &HashMap<u64, Engines>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
 ) -> bool {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
     let mut compacted_idx = HashMap::new();
 
-    for (&id, engine) in engines {
+    for (&id, engines) in all_engines {
         let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(&engines.kv_engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -87,14 +85,13 @@ fn check_compacted(
     // wait for actual deletion.
     sleep_ms(100);
 
-    for (id, engine) in engines {
-        let handle = get_cf_handle(engine, CF_RAFT).unwrap();
+    for (id, engines) in all_engines {
         for i in 0..compacted_idx[id] {
             let key = keys::raft_log_key(1, i);
-            if engine.get_cf(handle, &key).unwrap().is_none() {
+            if engines.raft_engine.get(&key).unwrap().is_none() {
                 break;
             }
-            assert!(engine.get_cf(handle, &key).unwrap().is_none());
+            assert!(engines.raft_engine.get(&key).unwrap().is_none());
         }
     }
     true
@@ -110,10 +107,10 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let mut before_states = HashMap::new();
 
-    for (&id, engine) in &cluster.engines {
-        must_get_equal(engine, b"k1", b"v1");
+    for (&id, engines) in &cluster.engines {
+        must_get_equal(&engines.kv_engine, b"k1", b"v1");
         let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(&engines.kv_engine, CF_RAFT, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -131,9 +128,9 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     sleep_ms(500);
 
     // limit has not reached, should not gc.
-    for (&id, engine) in &cluster.engines {
+    for (&id, engines) in &cluster.engines {
         let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(&engines.kv_engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -166,10 +163,10 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let mut before_states = HashMap::new();
 
-    for (&id, engine) in &cluster.engines {
-        must_get_equal(engine, b"k1", b"v1");
+    for (&id, engines) in &cluster.engines {
+        must_get_equal(&engines.kv_engine, b"k1", b"v1");
         let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(&engines.kv_engine, CF_RAFT, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -223,13 +220,13 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let mut before_states = HashMap::new();
 
-    for (&id, engine) in &cluster.engines {
+    for (&id, engines) in &cluster.engines {
         if id == 1 {
             continue;
         }
-        must_get_equal(engine, b"k1", b"v1");
+        must_get_equal(&engines.kv_engine, b"k1", b"v1");
         let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(&engines.kv_engine, CF_RAFT, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -249,12 +246,12 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     sleep_ms(500);
 
     // limit has not reached, should not gc.
-    for (&id, engine) in &cluster.engines {
+    for (&id, engines) in &cluster.engines {
         if id == 1 {
             continue;
         }
         let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(&engines.kv_engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -275,22 +272,21 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Size exceed max limit, every peer must have compacted logs,
     // so the truncate log state index/term must > than before.
-    for (&id, engine) in &cluster.engines {
+    for (&id, engines) in &cluster.engines {
         if id == 1 {
             continue;
         }
         let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(&engines.kv_engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
         let idx = after_state.get_index();
         assert!(idx > before_state.get_index());
 
-        let handle = get_cf_handle(engine, CF_RAFT).unwrap();
         for i in 0..idx {
             let key = keys::raft_log_key(1, i);
-            assert!(engine.get_cf(handle, &key).unwrap().is_none());
+            assert!(engines.raft_engine.get(&key).unwrap().is_none());
         }
     }
 }

@@ -21,7 +21,7 @@ use std::io::Write;
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
 
-const NANOS_PER_SEC: i64 = 1_000_000_000;
+pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 pub const NANO_WIDTH: u32 = 9;
 const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
@@ -49,10 +49,10 @@ fn tm_to_secs(t: Tm) -> u64 {
 #[derive(Debug, Clone)]
 pub struct Duration {
     pub dur: StdDuration,
-    neg: bool,
     // Fsp is short for Fractional Seconds Precision.
     // See http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    fsp: u8,
+    pub fsp: u8,
+    neg: bool,
 }
 
 impl Duration {
