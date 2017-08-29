@@ -19,13 +19,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use std::str;
 
-use rocksdb::DB;
+use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use threadpool::ThreadPool;
 
 use util::worker::Runnable;
-use util::escape;
+use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING,
                                      JOB_STATUS_FAILED, JOB_STATUS_FINISHED, JOB_STATUS_PENDING,
@@ -159,7 +159,7 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         try!(check_abort(&abort));
-        box_try!(util::delete_all_in_range(&self.db, &start_key, &end_key));
+        box_try!(util::delete_all_in_range(&self.kv_db, &start_key, &end_key));
         try!(check_abort(&abort));
 
         let state_key = keys::apply_state_key(region_id);
@@ -251,7 +251,7 @@ impl SnapContext {
             escape(&start_key),
             escape(&end_key)
         );
-        if let Err(e) = util::delete_all_in_range(&self.db, &start_key, &end_key) {
+        if let Err(e) = util::delete_all_in_range(&self.kv_db, &start_key, &end_key) {
             error!(
                 "failed to delete data in [{}, {}): {:?}",
                 escape(&start_key),
