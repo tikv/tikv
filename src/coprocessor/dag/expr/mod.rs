@@ -448,14 +448,7 @@ impl Expression {
                 }
 
                 match self.eval_real(ctx, row) {
-                    Ok(d) => {
-                        let v = if let Some(v) = d {
-                            Datum::F64(v)
-                        } else {
-                            Datum::Null
-                        };
-                        return Ok(v);
-                    }
+                    Ok(d) => return Ok(d.into()),
                     Err(Error::UnKnownSignature(_)) => {}
                     Err(e) => return Err(e),
                 }
