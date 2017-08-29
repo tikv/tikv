@@ -52,7 +52,6 @@ impl FnCall {
 
     #[inline]
     pub fn ceil_dec_to_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        // FIXME: here we can't do same logic with TiDB.
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.ceil().into();
         d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
@@ -77,7 +76,6 @@ impl FnCall {
 
     #[inline]
     pub fn floor_dec_to_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        // FIXME: here we can't do same logic with TiDB.
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.floor().into();
         d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)

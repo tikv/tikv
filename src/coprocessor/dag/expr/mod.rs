@@ -158,6 +158,7 @@ impl Expression {
         }
     }
 
+    #[allow(match_same_arms)]
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
