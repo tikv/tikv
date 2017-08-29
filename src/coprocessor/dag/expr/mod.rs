@@ -503,6 +503,15 @@ impl Expression {
         }
     }
 
+    pub fn batch_build(exprs: Vec<Expr>, ctx: &StatementContext) -> Result<Vec<Self>> {
+        let mut data = Vec::with_capacity(exprs.len());
+        for expr in exprs {
+            let ex = try!(Expression::build(expr, ctx));
+            data.push(ex);
+        }
+        Ok(data)
+    }
+
     pub fn build(mut expr: Expr, ctx: &StatementContext) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {

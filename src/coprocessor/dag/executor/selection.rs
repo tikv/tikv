@@ -15,16 +15,16 @@ use std::rc::Rc;
 
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
-use tipb::expression::Expr;
 
 use coprocessor::metrics::*;
-use coprocessor::select::xeval::{EvalContext, Evaluator};
+use coprocessor::select::xeval::EvalContext;
+use coprocessor::dag::expr::Expression;
 use coprocessor::Result;
 
-use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
+use super::{Executor, ExprColumnRefVisitor, Row, inflate_with_col_for_dag2};
 
 pub struct SelectionExecutor<'a> {
-    conditions: Vec<Expr>,
+    conditions: Vec<Expression>,
     cols: Rc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: Rc<EvalContext>,
@@ -43,7 +43,7 @@ impl<'a> SelectionExecutor<'a> {
         try!(visitor.batch_visit(&conditions));
         COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
         Ok(SelectionExecutor {
-            conditions: conditions,
+            conditions: box_try!(Expression::batch_build(conditions, ctx.as_ref())),
             cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
             ctx: ctx,
@@ -56,17 +56,15 @@ impl<'a> SelectionExecutor<'a> {
 impl<'a> Executor for SelectionExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = try!(self.src.next()) {
-            let mut evaluator = Evaluator::default();
-            try!(inflate_with_col_for_dag(
-                &mut evaluator,
+            let cols = try!(inflate_with_col_for_dag2(
                 &self.ctx,
                 &row.data,
                 self.cols.clone(),
                 &self.related_cols_offset,
                 row.handle
             ));
-            for expr in &self.conditions {
-                let val = box_try!(evaluator.eval(&self.ctx, expr));
+            for filter in &self.conditions {
+                let val = box_try!(filter.eval(&self.ctx, &cols));
                 if !box_try!(val.into_bool(&self.ctx)).unwrap_or(false) {
                     continue 'next;
                 }
@@ -84,7 +82,7 @@ mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
-    use tipb::expression::{Expr, ExprType};
+    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::Datum;
@@ -98,7 +96,8 @@ mod tests {
 
     fn new_const_expr() -> Expr {
         let mut expr = Expr::new();
-        expr.set_tp(ExprType::NullEQ);
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(ScalarFuncSig::NullEQInt);
         expr.mut_children().push({
             let mut lhs = Expr::new();
             lhs.set_tp(ExprType::Null);
@@ -114,7 +113,8 @@ mod tests {
 
     fn new_col_gt_u64_expr(offset: i64, val: u64) -> Expr {
         let mut expr = Expr::new();
-        expr.set_tp(ExprType::GT);
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(ScalarFuncSig::GTInt);
         expr.mut_children().push({
             let mut lhs = Expr::new();
             lhs.set_tp(ExprType::ColumnRef);

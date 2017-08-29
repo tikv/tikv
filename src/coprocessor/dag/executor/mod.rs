@@ -41,7 +41,7 @@ pub use self::limit::LimitExecutor;
 pub use self::aggregation::AggregationExecutor;
 
 pub struct ExprColumnRefVisitor {
-    cols_offset: HashSet<usize>,
+    pub cols_offset: HashSet<usize>,
     cols_len: usize,
 }
 
@@ -135,4 +135,38 @@ pub fn inflate_with_col_for_dag(
         }
     }
     Ok(())
+}
+
+
+pub fn inflate_with_col_for_dag2(
+    ctx: &EvalContext,
+    values: &RowColsDict,
+    columns: Rc<Vec<ColumnInfo>>,
+    offsets: &[usize],
+    h: i64,
+) -> Result<Vec<Datum>> {
+    let mut res = Vec::with_capacity(columns.len());
+    res.resize(columns.len(), Datum::Null);
+    for offset in offsets {
+        let col = columns.get(*offset).unwrap();
+        if col.get_pk_handle() {
+            let v = get_pk(col, h);
+            res[*offset] = v;
+        } else {
+            let col_id = col.get_column_id();
+            let value = match values.get(col_id) {
+                None if col.has_default_val() => {
+                    // TODO: optimize it to decode default value only once.
+                    box_try!(col.get_default_val().decode_col_value(ctx, col))
+                }
+                None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                    return Err(box_err!("column {} of {} is missing", col_id, h));
+                }
+                None => Datum::Null,
+                Some(mut bs) => box_try!(bs.decode_col_value(ctx, col)),
+            };
+            res[*offset] = value;
+        }
+    }
+    Ok(res)
 }
