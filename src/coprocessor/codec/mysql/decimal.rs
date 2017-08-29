@@ -854,30 +854,20 @@ impl Decimal {
 
     /// ceil the Decimal into a new Decimal.
     pub fn ceil(&self) -> Res<Decimal> {
-        let mut target = if !self.frac_part_is_zero() && !self.negative {
-            let dec1 = Decimal::from(1i64);
-            self + &dec1
+        if !self.negative {
+            self.clone().round(0, RoundMode::Ceiling)
         } else {
-            Res::Ok(self.clone())
-        };
-        if let Res::Ok(t) = target {
-            target = t.round(0, RoundMode::Truncate);
+            self.clone().round(0, RoundMode::Truncate)
         }
-        target
     }
 
     /// floor the Decimal into a new Decimal.
     pub fn floor(&self) -> Res<Decimal> {
-        let mut target = if !self.frac_part_is_zero() && self.negative {
-            let dec1 = Decimal::from(1i64);
-            self - &dec1
+        if !self.negative {
+            self.clone().round(0, RoundMode::Truncate)
         } else {
-            Res::Ok(self.clone())
-        };
-        if let Res::Ok(t) = target {
-            target = t.round(0, RoundMode::Truncate);
+            self.clone().round(0, RoundMode::Ceiling)
         }
-        target
     }
 
     /// create a new decimal for internal usage.
@@ -997,29 +987,6 @@ impl Decimal {
         } else {
             (self.precision, self.result_frac_cnt)
         }
-    }
-
-    /// int_frac_end_pos returns end positions of int part and frac part in word_buf.
-    fn int_frac_end_pos(&self) -> (u8, u8) {
-        let int_word_cnt = (word_cnt!(self.int_cnt) * DIGITS_PER_WORD) as u8;
-        let (x, y) = self.digit_bounds();
-        let int_cnt = int_word_cnt.checked_sub(x).unwrap_or(0);
-        let frac_cnt = y.checked_sub(int_word_cnt).unwrap_or(0);
-        let mut int_end = word_cnt!(int_cnt);
-        if int_end == 0 {
-            // int part always count one word.
-            int_end = 1;
-        }
-        let frac_end = int_end + word_cnt!(frac_cnt);
-        (int_end, frac_end)
-    }
-
-    /// frac_part_is_zero return true if all digits in the frac part are zero.
-    fn frac_part_is_zero(&self) -> bool {
-        let (int_end, frac_end) = self.int_frac_end_pos();
-        self.word_buf[int_end as usize..frac_end as usize]
-            .iter()
-            .all(|&w| w == 0)
     }
 
     /// `digit_bounds` returns bounds of decimal digits in the number.
@@ -3095,16 +3062,15 @@ mod test {
             ("1.00000", "1"),
             ("-1.00000", "-1"),
             (
-                "9999999999999999999999999.000",
+                "9999999999999999999999999.001",
                 "10000000000000000000000000",
             ),
         ];
         for case in cases {
             let dec: Decimal = case.0.parse().unwrap();
             let expected: Decimal = case.1.parse().unwrap();
-            let got = dec.ceil();
-            assert!(got.is_ok());
-            assert_eq!(got.unwrap(), expected);
+            let got = dec.ceil().unwrap();
+            assert_eq!(got, expected);
         }
     }
 
@@ -3128,9 +3094,8 @@ mod test {
         for case in cases {
             let dec: Decimal = case.0.parse().unwrap();
             let expected: Decimal = case.1.parse().unwrap();
-            let got = dec.floor();
-            assert!(got.is_ok());
-            assert_eq!(got.unwrap(), expected);
+            let got = dec.floor().unwrap();
+            assert_eq!(got, expected);
         }
     }
 }
