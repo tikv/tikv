@@ -31,23 +31,24 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     );
     cluster.run();
 
-    // transfer leader to (2, 2)
+    // transfer leader to (2, 2) first to make address resolve happen early.
     cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     let mut region = cluster.get_region(b"k3");
 
     // ensure follower has latest entries before transfer leader.
     cluster.must_put(b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
     // check if transfer leader is fast enough.
     let leader = cluster.leader_of_region(1).unwrap();
-    let admin_req = new_transfer_leader_cmd(new_peer(3, 3));
+    let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
     let mut req = new_admin_request(1, region.get_region_epoch(), admin_req);
     req.mut_header().set_peer(leader);
     cluster.call_command(req, Duration::from_secs(3)).unwrap();
     thread::sleep(reserved_time);
-    assert_eq!(cluster.query_leader(3, 1), Some(new_peer(3, 3)));
+    assert_eq!(cluster.query_leader(2, 1), Some(new_peer(2, 2)));
 
     let mut req = new_request(
         region.get_id(),
@@ -55,23 +56,23 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
         vec![new_put_cmd(b"k3", b"v3")],
         false,
     );
-    req.mut_header().set_peer(new_peer(3, 3));
-    // transfer leader to (4, 4)
-    cluster.must_transfer_leader(1, new_peer(4, 4));
-    // send request to old leader (3, 3) directly and verify it fails
+    req.mut_header().set_peer(new_peer(2, 2));
+    // transfer leader to (1, 1)
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    // send request to old leader (2, 2) directly and verify it fails
     let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
     assert!(resp.get_header().get_error().has_not_leader());
 }
 
 #[test]
 fn test_server_basic_transfer_leader() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_server_cluster(0, 3);
     test_basic_transfer_leader(&mut cluster);
 }
 
 #[test]
 fn test_node_basic_transfer_leader() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 3);
     test_basic_transfer_leader(&mut cluster);
 }
 
