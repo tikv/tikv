@@ -300,25 +300,13 @@ mod test {
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
             let op = Expression::build(fncall_expr(operator, &[arg1]), 0, &ctx).unwrap();
-            let expected = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
-            match operator {
-                ScalarFuncSig::UnaryMinusInt => {
-                    let lhs = op.eval_int(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::UnaryMinusReal => {
-                    let lhs = op.eval_real(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::UnaryMinusDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
+            let res: Datum = match operator {
+                ScalarFuncSig::UnaryMinusInt => op.eval_int(&ctx, &[]).unwrap().into(),
+                ScalarFuncSig::UnaryMinusReal => op.eval_real(&ctx, &[]).unwrap().into(),
+                ScalarFuncSig::UnaryMinusDecimal => op.eval_decimal(&ctx, &[]).unwrap().into(),
                 _ => unreachable!(),
-            }
+            };
+            assert_eq!(res, exp);
         }
     }
 
