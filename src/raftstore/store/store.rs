@@ -261,6 +261,7 @@ impl<T, C> Store<T, C> {
         let t = Instant::now();
         let mut kv_wb = WriteBatch::new();
         let mut raft_wb = WriteBatch::new();
+        let mut applying_regions = vec![];
         try!(kv_engine.scan_cf(
             CF_RAFT,
             start_key,
@@ -292,25 +293,17 @@ impl<T, C> Store<T, C> {
                     try!(peer_storage::recover_from_applying_state(
                         &self.kv_engine,
                         &self.raft_engine,
+                        &raft_wb,
                         region_id
                     ));
-                }
-
-                let mut peer = try!(Peer::create(self, region));
-
-                if local_state.get_state() == PeerState::Applying {
                     applying_count += 1;
-                    info!(
-                        "region {:?} is applying in store {}",
-                        local_state.get_region(),
-                        self.store_id()
-                    );
-                    peer.mut_store().schedule_applying_snapshot();
+                    applying_regions.push(region.clone());
+                    return Ok(true);
                 }
 
+                let peer = try!(Peer::create(self, region));
                 self.region_ranges.insert(enc_end_key(region), region_id);
-                // No need to check duplicated here, because we use region id as the key
-                // in DB.
+                // No need to check duplicated here, because we use region id as the key in DB.
                 self.region_peers.insert(region_id, peer);
                 Ok(true)
             }
@@ -320,10 +313,23 @@ impl<T, C> Store<T, C> {
             self.kv_engine.write(kv_wb).unwrap();
             self.kv_engine.flush_wal(true).unwrap();
         }
-
         if !raft_wb.is_empty() {
             self.raft_engine.write(raft_wb).unwrap();
             self.raft_engine.flush_wal(true).unwrap();
+        }
+
+        // schedule applying snapshot after raft writebatch were written.
+        for region in applying_regions {
+            info!(
+                "region {:?} is applying in store {}",
+                region,
+                self.store_id()
+            );
+            let mut peer = try!(Peer::create(self, &region));
+            peer.mut_store().schedule_applying_snapshot();
+            self.region_ranges
+                .insert(enc_end_key(&region), region.get_id());
+            self.region_peers.insert(region.get_id(), peer);
         }
 
         info!(
