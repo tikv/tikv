@@ -20,6 +20,7 @@ use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc}
 
 use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
 use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
 use super::super::{Result, TEN_POW};
 
 
@@ -123,12 +124,32 @@ impl Time {
         })
     }
 
+    pub fn get_tp(&self) -> u8 {
+        self.tp
+    }
+
+    pub fn set_tp(&mut self, tp: u8) -> Result<()> {
+        if self.tp != tp && tp == types::DATE {
+            // Truncate hh:mm::ss part if the type is Date
+            self.time = self.time.date().and_hms(0, 0, 0);
+        }
+        if self.tp != tp && tp == types::TIMESTAMP {
+            return Err(box_err!("can not convert datetime/date to timestamp"));
+        }
+        self.tp = tp;
+        Ok(())
+    }
+
     pub fn is_zero(&self) -> bool {
         self.time.timestamp() == ZERO_TIMESTAMP
     }
 
     pub fn get_fsp(&self) -> u8 {
         self.fsp
+    }
+
+    pub fn set_fsp(&mut self, fsp: u8) {
+        self.fsp = fsp;
     }
 
     fn to_numeric_str(&self) -> String {
@@ -244,6 +265,7 @@ impl Time {
         if y == 0 && m == 0 && d == 0 && h == 0 && minute == 0 && sec == 0 {
             return Ok(zero_datetime(tz));
         }
+        // it won't happen until 10000
         if y < 0 || y > 9999 {
             return Err(box_err!("unsupport year: {}", y));
         }
@@ -306,6 +328,41 @@ impl Time {
         Time::new(t, tp, fsp as i8)
     }
 
+    pub fn from_duration(tz: &FixedOffset, tp: u8, d: &MyDuration) -> Result<Time> {
+        let dur = Duration::nanoseconds(d.to_nanos());
+        let t = Utc::now()
+            .with_timezone(tz)
+            .date()
+            .and_hms(0, 0, 0)
+            .checked_add_signed(dur);
+        if t.is_none() {
+            return Err(box_err!("parse from duration {} overflows", d));
+        }
+
+        let t = t.unwrap();
+        if t.year() < 1000 || t.year() > 9999 {
+            return Err(box_err!(
+                "datetime :{:?} out of range ('1000-01-01' to '9999-12-31')",
+                t
+            ));
+        }
+        if tp == types::DATE {
+            let t = t.date().and_hms(0, 0, 0);
+            Time::new(t, tp, d.fsp as i8)
+        } else {
+            Time::new(t, tp, d.fsp as i8)
+        }
+    }
+
+    pub fn to_duration(&self) -> Result<MyDuration> {
+        if self.is_zero() {
+            return Ok(MyDuration::zero());
+        }
+        let nanos = self.time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC +
+            self.time.nanosecond() as i64;
+        MyDuration::from_nanos(nanos, self.fsp as i8)
+    }
+
     /// Serialize time to a u64.
     ///
     /// If `tp` is TIMESTAMP, it will be converted to a UTC time first.
@@ -322,6 +379,31 @@ impl Time {
         let hms = ((t.hour() as u64) << 12) | ((t.minute() as u64) << 6) | t.second() as u64;
         let micro = t.nanosecond() as u64 / 1000;
         (((ymd << 17) | hms) << 24) | micro
+    }
+
+    pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
+        if self.tp == types::DATE || self.is_zero() {
+            // date type has no fsp
+            return Ok(());
+        }
+        let fsp = try!(check_fsp(fsp));
+        if fsp == self.fsp {
+            return Ok(());
+        }
+        // TODO:support case month or day is 0(2012-00-00 12:12:12)
+        let nanos = self.time.nanosecond();
+        let base = 10u32.pow(NANO_WIDTH - fsp as u32);
+        let expect_nanos = ((nanos as f64 / base as f64).round() as u32) * base;
+        let diff = nanos as i64 - expect_nanos as i64;
+        let new_time = self.time.checked_add_signed(Duration::nanoseconds(diff));
+
+        if new_time.is_none() {
+            Err(box_err!("round_frac {} overflows", self.time))
+        } else {
+            self.time = new_time.unwrap();
+            self.fsp = fsp;
+            Ok(())
+        }
     }
 }
 
@@ -385,7 +467,7 @@ mod test {
 
     use chrono::{Duration, FixedOffset};
 
-    use coprocessor::codec::mysql::{types, MAX_FSP, UN_SPECIFIED_FSP};
+    use coprocessor::codec::mysql::{types, Duration as MyDuration, MAX_FSP, UN_SPECIFIED_FSP};
 
     const MIN_OFFSET: i32 = -60 * 24 + 1;
     const MAX_OFFSET: i32 = 60 * 24;
@@ -626,6 +708,158 @@ mod test {
         for (s, exp) in cases {
             let res = Time::parse_datetime_format(s);
             assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_round_frac() {
+        let ok_tables = vec![
+            (
+                "2012-12-31 11:30:45",
+                UN_SPECIFIED_FSP,
+                "2012-12-31 11:30:45",
+            ),
+            (
+                "0000-00-00 00:00:00",
+                UN_SPECIFIED_FSP,
+                "0000-00-00 00:00:00",
+            ),
+            (
+                "0001-01-01 00:00:00",
+                UN_SPECIFIED_FSP,
+                "0001-01-01 00:00:00",
+            ),
+            ("00-12-31 11:30:45", UN_SPECIFIED_FSP, "2000-12-31 11:30:45"),
+            ("12-12-31 11:30:45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-12-31", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("20121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            (
+                "2012^12^31 11+30+45",
+                UN_SPECIFIED_FSP,
+                "2012-12-31 11:30:45",
+            ),
+            (
+                "2012^12^31T11+30+45",
+                UN_SPECIFIED_FSP,
+                "2012-12-31 11:30:45",
+            ),
+            ("2012-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("12-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("20121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-02-29", UN_SPECIFIED_FSP, "2012-02-29 00:00:00"),
+            ("121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
+            ("20121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
+            ("121231113045.9999999", 6, "2012-12-31 11:30:46.000000"),
+            ("121231113045.999999", 6, "2012-12-31 11:30:45.999999"),
+            ("121231113045.999999", 5, "2012-12-31 11:30:46.00000"),
+            ("2012-12-31 11:30:45.123456", 4, "2012-12-31 11:30:45.1235"),
+            (
+                "2012-12-31 11:30:45.123456",
+                6,
+                "2012-12-31 11:30:45.123456",
+            ),
+            ("2012-12-31 11:30:45.123456", 0, "2012-12-31 11:30:45"),
+            ("2012-12-31 11:30:45.123456", 1, "2012-12-31 11:30:45.1"),
+            ("2012-12-31 11:30:45.999999", 4, "2012-12-31 11:30:46.0000"),
+            ("2012-12-31 11:30:45.999999", 0, "2012-12-31 11:30:46"),
+            ("2012-12-31 23:59:59.999999", 0, "2013-01-01 00:00:00"),
+            ("2012-12-31 23:59:59.999999", 3, "2013-01-01 00:00:00.000"),
+            // TODO: TIDB can handle this case, but we can't.
+            //("2012-00-00 11:30:45.999999", 3, "2012-00-00 11:30:46.000"),
+            // TODO: MySQL can handle this case, but we can't.
+            // ("2012-01-00 23:59:59.999999", 3, "2012-01-01 00:00:00.000"),
+        ];
+
+        for (input, fsp, exp) in ok_tables {
+            let mut utc_t = Time::parse_utc_datetime(input, UN_SPECIFIED_FSP).unwrap();
+            utc_t.round_frac(fsp).unwrap();
+            let expect = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
+            assert_eq!(
+                utc_t,
+                expect,
+                "input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
+                input,
+                exp,
+                utc_t,
+                expect
+            );
+
+            for mut offset in MIN_OFFSET..MAX_OFFSET {
+                offset *= 60;
+                let tz = FixedOffset::east(offset);
+                let mut t = Time::parse_datetime(input, UN_SPECIFIED_FSP, &tz).unwrap();
+                t.round_frac(fsp).unwrap();
+                let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, &tz).unwrap();
+                assert_eq!(
+                    t,
+                    expect,
+                    "tz:{:?},input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
+                    offset,
+                    input,
+                    exp,
+                    t,
+                    expect
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_tp() {
+        let cases = vec![
+            ("2011-11-11 10:10:10.123456", "2011-11-11"),
+            ("  2011-11-11 23:59:59", "2011-11-11"),
+        ];
+
+        for (s, exp) in cases {
+            let mut res = Time::parse_utc_datetime(s, UN_SPECIFIED_FSP).unwrap();
+            res.set_tp(types::DATE).unwrap();
+            res.set_tp(types::DATETIME).unwrap();
+            let ep = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
+            assert_eq!(res, ep);
+            let res = res.set_tp(types::TIMESTAMP);
+            assert!(res.is_err());
+        }
+    }
+
+    #[test]
+    fn test_from_duration() {
+        let cases = vec![("11:30:45.123456"), ("-35:30:46")];
+        let tz = FixedOffset::east(0);
+        for s in cases {
+            let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
+            let get = Time::from_duration(&tz, types::DATETIME, &d).unwrap();
+            let get_today = get.time
+                .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
+                .unwrap();
+            let now = Utc::now();
+            assert_eq!(get_today.year(), now.year());
+            assert_eq!(get_today.month(), now.month());
+            assert_eq!(get_today.day(), now.day());
+            assert_eq!(get_today.hour(), 0);
+            assert_eq!(get_today.minute(), 0);
+            assert_eq!(get_today.second(), 0);
+        }
+    }
+
+    #[test]
+    fn test_convert_to_duration() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "11:30:45.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "11:30:45.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "11:30:45"),
+            ("2012-12-31 11:30:45.999999", 0, "11:30:46"),
+            ("2017-01-05 08:40:59.575601", 0, "08:41:00"),
+            ("2017-01-05 23:59:59.575601", 0, "00:00:00"),
+            ("0000-00-00 00:00:00", 6, "00:00:00"),
+        ];
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let du = t.to_duration().unwrap();
+            let get = du.to_string();
+            assert_eq!(get, expect);
         }
     }
 }

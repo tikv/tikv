@@ -92,7 +92,8 @@ impl Display for Task {
 
 #[derive(Clone)]
 struct SnapContext {
-    db: Arc<DB>,
+    kv_db: Arc<DB>,
+    raft_db: Arc<DB>,
     batch_size: usize,
     mgr: SnapManager,
 }
@@ -100,9 +101,15 @@ struct SnapContext {
 impl SnapContext {
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
-        let raw_snap = Snapshot::new(self.db.clone());
+        let raft_db = self.raft_db.clone();
+        let raw_snap = Snapshot::new(self.kv_db.clone());
 
-        let snap = box_try!(store::do_snapshot(self.mgr.clone(), &raw_snap, region_id));
+        let snap = box_try!(store::do_snapshot(
+            self.mgr.clone(),
+            &raft_db,
+            &raw_snap,
+            region_id
+        ));
         if let Err(e) = notifier.try_send(snap) {
             info!(
                 "[region {}] failed to notify snap result, maybe leadership has changed, \
@@ -119,7 +126,7 @@ impl SnapContext {
             .with_label_values(&["generate", "all"])
             .inc();
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
-        let timer = gen_histogram.start_timer();
+        let timer = gen_histogram.start_coarse_timer();
 
         if let Err(e) = self.generate_snap(region_id, notifier) {
             error!("[region {}] failed to generate snap: {:?}!!!", region_id, e);
@@ -136,15 +143,16 @@ impl SnapContext {
         info!("[region {}] begin apply snap data", region_id);
         try!(check_abort(&abort));
         let region_key = keys::region_state_key(region_id);
-        let mut region_state: RegionLocalState = match box_try!(self.db.get_msg(&region_key)) {
-            Some(state) => state,
-            None => {
-                return Err(box_err!(
-                    "failed to get region_state from {}",
-                    escape(&region_key)
-                ))
-            }
-        };
+        let mut region_state: RegionLocalState =
+            match box_try!(self.kv_db.get_msg_cf(CF_RAFT, &region_key)) {
+                Some(state) => state,
+                None => {
+                    return Err(box_err!(
+                        "failed to get region_state from {}",
+                        escape(&region_key)
+                    ))
+                }
+            };
 
         // clear up origin data.
         let region = region_state.get_region().clone();
@@ -155,15 +163,16 @@ impl SnapContext {
         try!(check_abort(&abort));
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState = match box_try!(self.db.get_msg_cf(CF_RAFT, &state_key)) {
-            Some(state) => state,
-            None => {
-                return Err(box_err!(
-                    "failed to get raftstate from {}",
-                    escape(&state_key)
-                ))
-            }
-        };
+        let apply_state: RaftApplyState =
+            match box_try!(self.kv_db.get_msg_cf(CF_RAFT, &state_key)) {
+                Some(state) => state,
+                None => {
+                    return Err(box_err!(
+                        "failed to get raftstate from {}",
+                        escape(&state_key)
+                    ))
+                }
+            };
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
@@ -178,14 +187,24 @@ impl SnapContext {
         try!(check_abort(&abort));
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.db.clone(),
+            db: self.kv_db.clone(),
             region: region.clone(),
             abort: abort.clone(),
             write_batch_size: self.batch_size,
         };
         try!(s.apply(options));
+
+        let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
-        box_try!(self.db.put_msg(&region_key, &region_state));
+        let handle = box_try!(rocksdb::get_cf_handle(&self.kv_db, CF_RAFT));
+        box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
+        box_try!(wb.delete_cf(
+            handle,
+            &keys::snapshot_raft_state_key(region_id)
+        ));
+        self.kv_db.write(wb).unwrap_or_else(|e| {
+            panic!("{} failed to save apply_snap result: {:?}", region_id, e);
+        });
         info!(
             "[region {}] apply new data takes {:?}",
             region_id,
@@ -198,7 +217,7 @@ impl SnapContext {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
-        let timer = apply_histogram.start_timer();
+        let timer = apply_histogram.start_coarse_timer();
 
         match self.apply_snap(region_id, status.clone()) {
             Ok(()) => {
@@ -249,11 +268,12 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
+    pub fn new(kv_db: Arc<DB>, raft_db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
         Runner {
             pool: ThreadPool::new_with_name(thd_name!("snap generator"), GENERATE_POOL_SIZE),
             ctx: SnapContext {
-                db: db,
+                kv_db: kv_db,
+                raft_db: raft_db,
                 mgr: mgr,
                 batch_size: batch_size,
             },

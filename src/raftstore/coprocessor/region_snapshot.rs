@@ -298,6 +298,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
+    use std::path::Path;
 
     use tempdir::TempDir;
     use rocksdb::{Writable, DB};
@@ -307,25 +308,38 @@ mod tests {
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::{CacheQueryStats, PeerStorage};
-    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS};
+    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
     use util::{escape, rocksdb, worker};
 
     use super::*;
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_temp_engine(path: &TempDir) -> Arc<DB> {
-        Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
+    fn new_temp_engine(path: &TempDir) -> (Arc<DB>, Arc<DB>) {
+        let raft_path = path.path().join(Path::new("raft"));
+        (
+            Arc::new(
+                rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
+            ),
+            Arc::new(
+                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
+            ),
         )
     }
 
-    fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
+    fn new_peer_storage(engine: Arc<DB>, raft_engine: Arc<DB>, r: &Region) -> PeerStorage {
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
-        PeerStorage::new(engine, r, worker::dummy_scheduler(), "".to_owned(), metrics).unwrap()
+        PeerStorage::new(
+            engine,
+            raft_engine,
+            r,
+            worker::dummy_scheduler(),
+            "".to_owned(),
+            metrics,
+        ).unwrap()
     }
 
-    fn load_default_dataset(engine: Arc<DB>) -> (PeerStorage, DataSet) {
+    fn load_default_dataset(engine: Arc<DB>, raft_engine: Arc<DB>) -> (PeerStorage, DataSet) {
         let mut r = Region::new();
         r.mut_peers().push(Peer::new());
         r.set_id(10);
@@ -342,19 +356,19 @@ mod tests {
         for &(ref k, ref v) in &base_data {
             engine.put(&data_key(k), v).expect("");
         }
-        let store = new_peer_storage(engine.clone(), &r);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &r);
         (store, base_data)
     }
 
     #[test]
     fn test_peekable() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = new_temp_engine(&path);
+        let (engine, raft_engine) = new_temp_engine(&path);
         let mut r = Region::new();
         r.set_id(10);
         r.set_start_key(b"key0".to_vec());
         r.set_end_key(b"key4".to_vec());
-        let store = new_peer_storage(engine.clone(), &r);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &r);
 
         let (key1, value1) = (b"key1", 2u64);
         engine.put_u64(&data_key(key1), value1).expect("");
@@ -382,8 +396,8 @@ mod tests {
     #[test]
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = new_temp_engine(&path);
-        let (store, base_data) = load_default_dataset(engine.clone());
+        let (engine, raft_engine) = new_temp_engine(&path);
+        let (store, base_data) = load_default_dataset(engine.clone(), raft_engine.clone());
 
         let snap = RegionSnapshot::new(&store);
         let mut data = vec![];
@@ -454,7 +468,7 @@ mod tests {
         // test last region
         let mut region = Region::new();
         region.mut_peers().push(Peer::new());
-        let store = new_peer_storage(engine.clone(), &region);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         data.clear();
         snap.scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
@@ -479,7 +493,7 @@ mod tests {
         assert_eq!(res, base_data);
 
         // test iterator with upper bound
-        let store = new_peer_storage(engine.clone(), &region);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter(IterOption::new(Some(b"a5".to_vec()), true));
         assert!(iter.seek_to_first());
@@ -496,8 +510,8 @@ mod tests {
     #[test]
     fn test_reverse_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = new_temp_engine(&path);
-        let (store, test_data) = load_default_dataset(engine.clone());
+        let (engine, raft_engine) = new_temp_engine(&path);
+        let (store, test_data) = load_default_dataset(engine.clone(), raft_engine.clone());
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
@@ -546,7 +560,7 @@ mod tests {
         // test last region
         let mut region = Region::new();
         region.mut_peers().push(Peer::new());
-        let store = new_peer_storage(engine.clone(), &region);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(!iter.reverse_seek(

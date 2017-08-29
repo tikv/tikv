@@ -14,11 +14,12 @@
 /// Field can't be NULL
 const NOT_NULL_FLAG: u64 = 1;
 /// The field is unsigned.
-const UNSIGNED_FLAG: u64 = 32;
+pub const UNSIGNED_FLAG: u64 = 32;
 
 /// `has_unsigned_flag` checks if `UNSIGNED_FLAG` is set.
 #[inline]
-pub fn has_unsigned_flag(flag: u64) -> bool {
+pub fn has_unsigned_flag<T: Into<u64>>(flag: T) -> bool {
+    let flag: u64 = flag.into();
     flag & UNSIGNED_FLAG > 0
 }
 
@@ -46,6 +47,8 @@ pub const YEAR: u8 = 13;
 pub const NEWDATE: u8 = 14;
 pub const VARCHAR: u8 = 15;
 pub const BIT: u8 = 16;
+
+pub const JSON: u8 = 0xf5;
 pub const NEW_DECIMAL: u8 = 246;
 pub const ENUM: u8 = 247;
 pub const SET: u8 = 248;

@@ -81,7 +81,7 @@ git = "https://github.com/pingcap/kvproto.git"
 git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus.git"
+version = "0.3"
 default-features = false
 features = ["nightly", "push", "process"]
 

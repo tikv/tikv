@@ -19,7 +19,6 @@ use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
 
-use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
@@ -35,7 +34,6 @@ use tikv::util::HandyRwLock;
 use tikv::util::transport::SendCh;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
-use tikv::storage::ALL_CFS;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 
@@ -161,7 +159,7 @@ impl NodeCluster {
 }
 
 impl Simulator for NodeCluster {
-    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engine: Arc<DB>) -> u64 {
+    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engines: Engines) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
@@ -175,30 +173,29 @@ impl Simulator for NodeCluster {
             self.pd_client.clone(),
         );
 
-        let (snap_mgr, tmp) =
-            if node_id == 0 || !self.trans.rl().snap_paths.contains_key(&node_id) {
-                let tmp = TempDir::new("test_cluster").unwrap();
-                let snap_mgr = SnapManager::new(
-                    tmp.path().to_str().unwrap(),
-                    Some(node.get_sendch()),
-                    cfg.raft_store.use_sst_file_snapshot,
-                );
-                (snap_mgr, Some(tmp))
-            } else {
-                let trans = self.trans.rl();
-                let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
-                (snap_mgr.clone(), None)
-            };
+        let (snap_mgr, tmp) = if node_id == 0 ||
+            !self.trans.rl().snap_paths.contains_key(&node_id)
+        {
+            let tmp = TempDir::new("test_cluster").unwrap();
+            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), Some(node.get_sendch()));
+            (snap_mgr, Some(tmp))
+        } else {
+            let trans = self.trans.rl();
+            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            (snap_mgr.clone(), None)
+        };
 
         node.start(
             event_loop,
-            engine.clone(),
+            engines.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
         ).unwrap();
         assert!(
-            engine
+            engines
+                .kv_engine
+                .clone()
                 .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
                 .unwrap()
                 .is_none()
@@ -309,5 +306,5 @@ impl Simulator for NodeCluster {
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    Cluster::new(id, count, ALL_CFS, sim, pd_client)
+    Cluster::new(id, count, &[], sim, pd_client)
 }

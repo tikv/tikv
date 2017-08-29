@@ -25,11 +25,10 @@ use rocksdb::{DBStatisticsTickerType as TickerType, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
-use fs2;
 use time::{self, Timespec};
 
-use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage, RaftSnapshotData,
-                             RaftTruncatedState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
+                             RegionLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::escape;
@@ -63,7 +62,6 @@ use super::msg::{BatchCallback, Callback};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
-use super::engine_metrics::*;
 use super::local_metrics::RaftMetrics;
 use prometheus::local::LocalHistogram;
 
@@ -71,6 +69,21 @@ type Key = Vec<u8>;
 
 const MIO_TICK_RATIO: u64 = 10;
 const PENDING_VOTES_CAP: usize = 20;
+
+#[derive(Clone)]
+pub struct Engines {
+    pub kv_engine: Arc<DB>,
+    pub raft_engine: Arc<DB>,
+}
+
+impl Engines {
+    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
+        Engines {
+            kv_engine: kv_engine,
+            raft_engine: raft_engine,
+        }
+    }
+}
 
 // A helper structure to bundle all channels for messages to `Store`.
 pub struct StoreChannel {
@@ -98,9 +111,15 @@ impl Default for StoreStat {
     }
 }
 
+pub struct StoreInfo {
+    pub engine: Arc<DB>,
+    pub capacity: u64,
+}
+
 pub struct Store<T, C: 'static> {
     cfg: Rc<Config>,
-    engine: Arc<DB>,
+    kv_engine: Arc<DB>,
+    raft_engine: Arc<DB>,
     store: metapb::Store,
     sendch: SendCh<Msg>,
 
@@ -120,7 +139,6 @@ pub struct Store<T, C: 'static> {
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
-
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
@@ -163,7 +181,7 @@ impl<T, C> Store<T, C> {
         ch: StoreChannel,
         meta: metapb::Store,
         cfg: Config,
-        engine: Arc<DB>,
+        engines: Engines,
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
@@ -183,7 +201,8 @@ impl<T, C> Store<T, C> {
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
-            engine: engine,
+            kv_engine: engines.kv_engine,
+            raft_engine: engines.raft_engine,
             sendch: sendch,
             sent_snapshot_count: 0,
             snapshot_status_receiver: ch.snapshot_status_receiver,
@@ -222,54 +241,75 @@ impl<T, C> Store<T, C> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
-        let engine = self.engine.clone();
+        let kv_engine = self.kv_engine.clone();
         let mut total_count = 0;
         let mut tomebstone_count = 0;
         let mut applying_count = 0;
 
         let t = Instant::now();
-        let mut wb = WriteBatch::new();
-        try!(engine.scan(start_key, end_key, false, &mut |key, value| {
-            let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
-            if suffix != keys::REGION_STATE_SUFFIX {
-                return Ok(true);
+        let mut kv_wb = WriteBatch::new();
+        let mut raft_wb = WriteBatch::new();
+        try!(kv_engine.scan_cf(
+            CF_RAFT,
+            start_key,
+            end_key,
+            false,
+            &mut |key, value| {
+                let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
+                if suffix != keys::REGION_STATE_SUFFIX {
+                    return Ok(true);
+                }
+
+                total_count += 1;
+
+                let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
+                let region = local_state.get_region();
+                if local_state.get_state() == PeerState::Tombstone {
+                    tomebstone_count += 1;
+                    debug!(
+                        "region {:?} is tombstone in store {}",
+                        region,
+                        self.store_id()
+                    );
+                    self.clear_stale_meta(&mut kv_wb, &mut raft_wb, region);
+                    return Ok(true);
+                }
+                if local_state.get_state() == PeerState::Applying {
+                    // in case of restart happen when we just write region state to Applying,
+                    // but not write raft_local_state to raft rocksdb in time.
+                    try!(peer_storage::recover_from_applying_state(
+                        &self.kv_engine,
+                        &self.raft_engine,
+                        region_id
+                    ));
+                }
+
+                let mut peer = try!(Peer::create(self, region));
+
+                if local_state.get_state() == PeerState::Applying {
+                    applying_count += 1;
+                    info!(
+                        "region {:?} is applying in store {}",
+                        local_state.get_region(),
+                        self.store_id()
+                    );
+                    peer.mut_store().schedule_applying_snapshot();
+                }
+
+                self.region_ranges.insert(enc_end_key(region), region_id);
+                // No need to check duplicated here, because we use region id as the key
+                // in DB.
+                self.region_peers.insert(region_id, peer);
+                Ok(true)
             }
+        ));
 
-            total_count += 1;
+        if !kv_wb.is_empty() {
+            self.kv_engine.write(kv_wb).unwrap();
+        }
 
-            let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
-            let region = local_state.get_region();
-            if local_state.get_state() == PeerState::Tombstone {
-                tomebstone_count += 1;
-                debug!(
-                    "region {:?} is tombstone in store {}",
-                    region,
-                    self.store_id()
-                );
-                self.clear_stale_meta(&mut wb, region);
-                return Ok(true);
-            }
-            let mut peer = try!(Peer::create(self, region));
-
-            if local_state.get_state() == PeerState::Applying {
-                applying_count += 1;
-                info!(
-                    "region {:?} is applying in store {}",
-                    local_state.get_region(),
-                    self.store_id()
-                );
-                peer.mut_store().schedule_applying_snapshot();
-            }
-
-            self.region_ranges.insert(enc_end_key(region), region_id);
-            // No need to check duplicated here, because we use region id as the key
-            // in DB.
-            self.region_peers.insert(region_id, peer);
-            Ok(true)
-        }));
-
-        if !wb.is_empty() {
-            self.engine.write(wb).unwrap();
+        if !raft_wb.is_empty() {
+            self.raft_engine.write(raft_wb).unwrap();
         }
 
         info!(
@@ -287,17 +327,29 @@ impl<T, C> Store<T, C> {
         Ok(())
     }
 
-    fn clear_stale_meta(&mut self, wb: &mut WriteBatch, region: &metapb::Region) {
+    fn clear_stale_meta(
+        &mut self,
+        kv_wb: &mut WriteBatch,
+        raft_wb: &mut WriteBatch,
+        region: &metapb::Region,
+    ) {
         let raft_key = keys::raft_state_key(region.get_id());
-        let raft_state: RaftLocalState =
-            match self.engine.get_msg_cf(CF_RAFT, &raft_key).unwrap() {
-                // it has been cleaned up.
-                None => return,
-                Some(value) => value,
-            };
+        let raft_state = match self.raft_engine.get_msg(&raft_key).unwrap() {
+            // it has been cleaned up.
+            None => return,
+            Some(value) => value,
+        };
 
-        peer_storage::clear_meta(&self.engine, wb, region.get_id(), &raft_state).unwrap();
-        peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
+        peer_storage::clear_meta(
+            &self.kv_engine,
+            &self.raft_engine,
+            kv_wb,
+            raft_wb,
+            region.get_id(),
+            &raft_state,
+        ).unwrap();
+        peer_storage::write_peer_state(&self.kv_engine, kv_wb, region, PeerState::Tombstone)
+            .unwrap();
     }
 
     /// `clear_stale_data` clean up all possible garbage data.
@@ -308,7 +360,7 @@ impl<T, C> Store<T, C> {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
             try!(util::delete_all_in_range(
-                &self.engine,
+                &self.kv_engine,
                 &last_start_key,
                 &start_key
             ));
@@ -316,7 +368,7 @@ impl<T, C> Store<T, C> {
         }
 
         try!(util::delete_all_in_range(
-            &self.engine,
+            &self.kv_engine,
             &last_start_key,
             keys::DATA_MAX_KEY
         ));
@@ -346,8 +398,12 @@ impl<T, C> Store<T, C> {
         self.apply_worker.scheduler()
     }
 
-    pub fn engine(&self) -> Arc<DB> {
-        self.engine.clone()
+    pub fn kv_engine(&self) -> Arc<DB> {
+        self.kv_engine.clone()
+    }
+
+    pub fn raft_engine(&self) -> Arc<DB> {
+        self.raft_engine.clone()
     }
 
     pub fn store_id(&self) -> u64 {
@@ -396,7 +452,7 @@ impl<T, C> Store<T, C> {
 
     fn report_snapshot_status(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         self.sent_snapshot_count -= 1;
-        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+        if let Some(peer) = self.region_peers.get_mut(&region_id) {
             let to_peer = match peer.get_peer_from_cache(to_peer_id) {
                 Some(peer) => peer,
                 None => {
@@ -437,7 +493,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_report_region_flow_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
-            self.engine.clone(),
+            self.kv_engine.clone(),
             self.sendch.clone(),
             self.cfg.region_max_size.0,
             self.cfg.region_split_size.0,
@@ -445,7 +501,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(
-            self.engine.clone(),
+            self.kv_engine.clone(),
+            self.raft_engine.clone(),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
         );
@@ -454,10 +511,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let compact_runner = CompactRunner::new(self.engine.clone());
+        let compact_runner = CompactRunner::new(self.kv_engine.clone());
         box_try!(self.compact_worker.start(compact_runner));
 
-        let pd_runner = PdRunner::new(self.store_id(), self.pd_client.clone(), self.sendch.clone());
+        let pd_runner = PdRunner::new(
+            self.store_id(),
+            self.pd_client.clone(),
+            self.sendch.clone(),
+            self.kv_engine.clone(),
+        );
         box_try!(self.pd_worker.start(pd_runner));
 
         let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
@@ -517,7 +579,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let timer = self.raft_metrics.process_tick.start_timer();
+        let timer = self.raft_metrics.process_tick.start_coarse_timer();
         for peer in &mut self.region_peers.values_mut() {
             if peer.pending_remove {
                 continue;
@@ -803,7 +865,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // no exist, check with tombstone key.
         let state_key = keys::region_state_key(region_id);
-        if let Some(local_state) = try!(self.engine.get_msg::<RegionLocalState>(&state_key)) {
+        if let Some(local_state) = try!(
+            self.kv_engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)
+        ) {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
                 if util::is_first_vote_msg(msg) {
@@ -979,7 +1044,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
         let mut region_proposals = Vec::with_capacity(pending_count);
-        let (wb, append_res) = {
+        let (kv_wb, raft_wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
@@ -989,7 +1054,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
-            (ctx.wb, ctx.ready_res)
+            (ctx.kv_wb, ctx.raft_wb, ctx.ready_res)
         };
 
         if !region_proposals.is_empty() {
@@ -1000,12 +1065,29 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
 
-        if !wb.is_empty() {
+        // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
+        // otherwise, if program restart happen between two write, raft log will be removed,
+        // but region state may not changed in disk.
+        if !kv_wb.is_empty() {
+            // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log);
-            self.engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
-                panic!("{} failed to save append result: {:?}", self.tag, e);
-            });
+            self.kv_engine
+                .write_opt(kv_wb, &write_opts)
+                .unwrap_or_else(|e| {
+                    panic!("{} failed to save append state result: {:?}", self.tag, e);
+                });
+        }
+
+        if !raft_wb.is_empty() {
+            // RaftLocalState, Raft Log Entry
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(self.cfg.sync_log);
+            self.raft_engine
+                .write_opt(raft_wb, &write_opts)
+                .unwrap_or_else(|e| {
+                    panic!("{} failed to save raft append result: {:?}", self.tag, e);
+                });
         }
 
         let mut ready_results = Vec::with_capacity(append_res.len());
@@ -1172,13 +1254,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         first_index: u64,
         state: RaftTruncatedState,
     ) {
-        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
         let total_cnt = peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
         let remain_cnt = peer.last_applying_idx - state.get_index() - 1;
         peer.raft_log_size_hint = peer.raft_log_size_hint * remain_cnt / total_cnt;
         let task = RaftlogGcTask {
-            engine: peer.get_store().get_engine().clone(),
+            raft_engine: peer.get_store().get_raft_engine().clone(),
             region_id: peer.get_store().get_region_id(),
             start_idx: peer.last_compacted_idx,
             end_idx: state.get_index() + 1,
@@ -1416,7 +1498,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut resp = RaftCmdResponse::new();
         let region_id = msg.get_header().get_region_id();
-        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
         bind_term(&mut resp, term);
         if peer.propose(cb, msg, resp, &mut self.raft_metrics.propose) {
@@ -1449,7 +1531,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             let region_id = msg.get_header().get_region_id();
-            let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+            let peer = self.region_peers.get_mut(&region_id).unwrap();
             ret.push(peer.propose_snapshot(msg, &mut self.raft_metrics.propose));
         }
         on_finished.call_box((ret,));
@@ -1813,60 +1895,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
-        let disk_stats = match fs2::statvfs(self.engine.path()) {
-            Err(e) => {
-                error!(
-                    "{} get disk stat for rocksdb {} failed: {}",
-                    self.tag,
-                    self.engine.path(),
-                    e
-                );
-                return;
-            }
-            Ok(stats) => stats,
-        };
 
-        let disk_cap = disk_stats.total_space();
-        let capacity = if self.cfg.capacity.0 == 0 || disk_cap < self.cfg.capacity.0 {
-            disk_cap
-        } else {
-            self.cfg.capacity.0
-        };
-        stats.set_capacity(capacity);
-
-        let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
-        used_size += self.snap_mgr.get_total_snap_size();
-
+        let used_size = self.snap_mgr.get_total_snap_size();
         stats.set_used_size(used_size);
-
-        let mut available = if capacity > used_size {
-            capacity - used_size
-        } else {
-            warn!("{} no available space", self.tag);
-            0
-        };
-
-        // We only care rocksdb SST file size, so we should
-        // check disk available here.
-        if available > disk_stats.free_space() {
-            available = disk_stats.free_space();
-        }
-
         stats.set_store_id(self.store_id());
-        stats.set_available(available);
         stats.set_region_count(self.region_peers.len() as u32);
 
         let snap_stats = self.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
-
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["capacity"])
-            .set(capacity as f64);
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["available"])
-            .set(available as f64);
-
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["sending"])
             .set(snap_stats.sending_count as f64);
@@ -1889,13 +1926,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_start_time(self.start_time.sec as u32);
 
         // report store write flow to pd
-        let engine_total_bytes_written = self.engine
+        let engine_total_bytes_written = self.kv_engine
             .get_statistics_ticker_count(TickerType::BytesWritten);
         let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
         self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
         stats.set_bytes_written(delta);
 
-        let engine_total_keys_written = self.engine
+        let engine_total_keys_written = self.kv_engine
             .get_statistics_ticker_count(TickerType::NumberKeysWritten);
         let delta = engine_total_keys_written - self.store_stat.engine_total_keys_written;
         self.store_stat.engine_total_keys_written = engine_total_keys_written;
@@ -1904,38 +1941,30 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
 
-        if let Err(e) = self.pd_worker
-            .schedule(PdTask::StoreHeartbeat { stats: stats })
-        {
+        let store_info = StoreInfo {
+            engine: self.kv_engine.clone(),
+            capacity: self.cfg.capacity.0,
+        };
+
+        let task = PdTask::StoreHeartbeat {
+            stats: stats,
+            store_info: store_info,
+        };
+        if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
     }
 
     fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         self.store_heartbeat_pd();
-        self.flush_engine_statistics();
         self.register_pd_store_heartbeat_tick(event_loop);
     }
 
-    fn flush_engine_statistics(&mut self) {
-        for t in ENGINE_TICKER_TYPES {
-            let v = self.engine.get_statistics_ticker_count(*t);
-            flush_engine_ticker_metrics(*t, v);
-        }
-
-        for t in ENGINE_HIST_TYPES {
-            if let Some(v) = self.engine.get_statistics_histogram(*t) {
-                flush_engine_histogram_metrics(*t, v);
-            }
-        }
-    }
-
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        let mut snap_keys = try!(self.snap_mgr.list_idle_snap());
+        let snap_keys = try!(self.snap_mgr.list_idle_snap());
         if snap_keys.is_empty() {
             return Ok(());
         }
-        snap_keys.sort();
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
         let mut is_applying_snap = false;
         for (key, is_sending) in snap_keys {
@@ -2053,7 +2082,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
-        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+        if let Some(peer) = self.region_peers.get_mut(&region_id) {
             peer.raft_group.report_unreachable(to_peer_id);
         }
     }

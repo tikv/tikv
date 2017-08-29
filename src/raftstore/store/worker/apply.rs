@@ -36,7 +36,8 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
-use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_state, write_peer_state};
+use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
+                                     write_peer_state};
 use raftstore::store::peer::{check_epoch, parse_data_at, Peer};
 use raftstore::store::metrics::*;
 
@@ -273,6 +274,10 @@ pub struct ApplyDelegate {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
+    // we write apply_state to kv rocksdb, in one writebatch together with kv data.
+    // because if we write it to raft rocksdb, apply_state and kv data (Put, Delete) are in
+    // separate WAL file. when power failure, for current raft log, apply_index may synced
+    // to file, but kv data may not synced to file, so we will lose data.
     apply_state: RaftApplyState,
     applied_index_term: u64,
     term: u64,
@@ -291,7 +296,7 @@ impl ApplyDelegate {
 
     fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.engine(), reg)
+        ApplyDelegate::from_registration(peer.kv_engine(), reg)
     }
 
     fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
@@ -804,7 +809,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(ctx.wb, &region, state) {
+        if let Err(e) = write_peer_state(&self.engine, ctx.wb, &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -884,10 +889,12 @@ impl ApplyDelegate {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        write_peer_state(ctx.wb, &region, PeerState::Normal)
-            .and_then(|_| write_peer_state(ctx.wb, &new_region, PeerState::Normal))
+        write_peer_state(&self.engine, ctx.wb, &region, PeerState::Normal)
             .and_then(|_| {
-                write_initial_state(self.engine.as_ref(), ctx.wb, new_region.get_id())
+                write_peer_state(&self.engine, ctx.wb, &new_region, PeerState::Normal)
+            })
+            .and_then(|_| {
+                write_initial_apply_state(&self.engine, ctx.wb, new_region.get_id())
             })
             .unwrap_or_else(|e| {
                 panic!(
@@ -1426,7 +1433,7 @@ impl Runner {
             delegates.insert(region_id, ApplyDelegate::from_peer(p));
         }
         Runner {
-            db: store.engine(),
+            db: store.kv_engine(),
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
@@ -1434,7 +1441,7 @@ impl Runner {
     }
 
     fn handle_applies(&mut self, applys: Vec<Apply>) {
-        let _timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
+        let _timer = STORE_APPLY_LOG_HISTOGRAM.start_coarse_timer();
 
         let mut applys_res = Vec::with_capacity(applys.len());
         let mut apply_ctx = ApplyContext::new(self.host.as_ref());

@@ -21,9 +21,9 @@ use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
-    for engine in cluster.engines.values() {
-        let lock_handle = engine.cf_handle(CF_LOCK).unwrap();
-        engine.flush_cf(lock_handle, true).unwrap();
+    for engines in cluster.engines.values() {
+        let lock_handle = engines.kv_engine.cf_handle(CF_LOCK).unwrap();
+        engines.kv_engine.flush_cf(lock_handle, true).unwrap();
     }
 }
 
@@ -31,9 +31,10 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
     flush(cluster);
     // Wait for compaction.
     sleep_ms(interval * 2);
-    for engine in cluster.engines.values() {
-        let compact_write_bytes =
-            engine.get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
+    for engines in cluster.engines.values() {
+        let compact_write_bytes = engines
+            .kv_engine
+            .get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
         if written {
             assert!(compact_write_bytes > 0);
         } else {

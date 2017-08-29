@@ -32,12 +32,16 @@ messages-per-tick = 4096
 # size of thread pool for endpoint task, should less than total cpu cores.
 # end-point-concurrency = 8
 
+# max count of tasks being handled, new tasks will be rejected.
+# end-point-max-tasks = 2000
+
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 labels = {}
 
 [storage]
 # set the path to rocksdb directory.
 data-dir = "/tmp/tikv/store"
+
 # notify capacity of scheduler's channel
 # scheduler-notify-capacity = 10240
 
@@ -66,6 +70,9 @@ job = "tikv"
 [raftstore]
 # true (default value) for high reliability, this can prevent data loss when power failure.
 sync-log = true
+
+# set the path to raftdb directory, default value is data-dir/raft
+# raftdb-path = ""
 
 # set store capacity, if no set, use disk capacity.
 # capacity = 0
@@ -125,13 +132,6 @@ max-peer-down-duration = "5m"
 # consistency-check-interval = 0
 
 [rocksdb]
-# RocksDB info log directory, if set, RocksDB will save the log in `info-log-dir/LOG`.
-# info-log-dir = ""
-# Maximal size of the info log, if new info log will be created if size is large than it.
-# info-log-max-size = 0
-# Time for the info log file to roll (in seconds).
-# info-log-roll-time = "0s"
-
 # Maximum number of concurrent background jobs (compactions and flushes)
 # max-background-jobs = 8
 
@@ -318,9 +318,38 @@ stats-dump-period = "10m"
 # cache-index-and-filter-blocks = true
 # compaction-pri = 3
 
-# options for Column Family raft.
-# Column Family raft is used to store raft log and raft states.
-[rocksdb.raftcf]
+[rocksdb.lockcf]
+# compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
+# block-size = "16KB"
+# write-buffer-size = "128MB"
+# max-write-buffer-number = 5
+# min-write-buffer-number-to-merge = 1
+# max-bytes-for-level-base = "128MB"
+# target-file-size-base = "32MB"
+# block-cache-size = "256MB"
+# level0-file-num-compaction-trigger = 1
+# level0-slowdown-writes-trigger = 20
+# level0-stop-writes-trigger = 36
+# cache-index-and-filter-blocks = true
+# compaction-pri = 0
+
+[raftdb]
+# max-sub-compactions = 1
+# max-open-files = 40960
+max-manifest-file-size = "20MB"
+create-if-missing = true
+# writable-file-max-buffer-size = "1MB"
+
+# enable-statistics = true
+stats-dump-period = "10m"
+
+# compaction-readahead-size = 0
+# writable-file-max-buffer-size = "1MB"
+# use-direct-io-for-flush-and-compaction = false
+# enable-pipelined-write = true
+# allow-concurrent-memtable-write = false
+
+[raftdb.defaultcf]
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
 # block-size = "64KB"
 # write-buffer-size = "128MB"
@@ -332,21 +361,6 @@ stats-dump-period = "10m"
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"
 # level0-file-num-compaction-trigger = 4
-# level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
-# cache-index-and-filter-blocks = true
-# compaction-pri = 0
-
-[rocksdb.lockcf]
-# compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
-# block-size = "16KB"
-# write-buffer-size = "128MB"
-# max-write-buffer-number = 5
-# min-write-buffer-number-to-merge = 1
-# max-bytes-for-level-base = "128MB"
-# target-file-size-base = "32MB"
-# block-cache-size = "256MB"
-# level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true

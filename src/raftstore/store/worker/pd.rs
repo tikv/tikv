@@ -28,9 +28,13 @@ use util::escape;
 use util::transport::SendCh;
 use pd::{PdClient, RegionStat};
 use raftstore::store::Msg;
-use raftstore::store::util::is_epoch_stale;
-
+use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
+use raftstore::store::metrics::*;
+use rocksdb::DB;
+use fs2;
 use super::metrics::*;
+use raftstore::store::store::StoreInfo;
+use util::rocksdb::*;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
@@ -48,9 +52,11 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
-        approximate_size: u64,
     },
-    StoreHeartbeat { stats: pdpb::StoreStats },
+    StoreHeartbeat {
+        stats: pdpb::StoreStats,
+        store_info: StoreInfo,
+    },
     ReportSplit {
         left: metapb::Region,
         right: metapb::Region,
@@ -84,7 +90,9 @@ impl Display for Task {
                 region,
                 peer.get_id()
             ),
-            Task::StoreHeartbeat { ref stats } => write!(f, "store heartbeat stats: {:?}", stats),
+            Task::StoreHeartbeat { ref stats, .. } => {
+                write!(f, "store heartbeat stats: {:?}", stats)
+            }
             Task::ReportSplit {
                 ref left,
                 ref right,
@@ -101,15 +109,17 @@ pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
+    db: Arc<DB>,
     is_hb_receiver_scheduled: bool,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>) -> Runner<T> {
+    pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
         Runner {
             store_id: store_id,
             pd_client: pd_client,
             ch: ch,
+            db: db,
             is_hb_receiver_scheduled: false,
         }
     }
@@ -181,7 +191,58 @@ impl<T: PdClient> Runner<T> {
         handle.spawn(f);
     }
 
-    fn handle_store_heartbeat(&self, handle: &Handle, stats: pdpb::StoreStats) {
+    fn handle_store_heartbeat(
+        &self,
+        handle: &Handle,
+        mut stats: pdpb::StoreStats,
+        store_info: StoreInfo,
+    ) {
+        let disk_stats = match fs2::statvfs(store_info.engine.path()) {
+            Err(e) => {
+                error!(
+                    "get disk stat for rocksdb {} failed: {}",
+                    store_info.engine.path(),
+                    e
+                );
+                return;
+            }
+            Ok(stats) => stats,
+        };
+
+        let disk_cap = disk_stats.total_space();
+        let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
+            disk_cap
+        } else {
+            store_info.capacity
+        };
+        stats.set_capacity(capacity);
+
+        let used_size = stats.get_used_size() + get_engine_used_size(store_info.engine.clone());
+        stats.set_used_size(used_size);
+
+
+        let mut available = if capacity > used_size {
+            capacity - used_size
+        } else {
+            warn!("no available space");
+            0
+        };
+
+        // We only care rocksdb SST file size, so we should
+        // check disk available here.
+        if available > disk_stats.free_space() {
+            available = disk_stats.free_space();
+        }
+
+        stats.set_available(available);
+
+        STORE_SIZE_GAUGE_VEC
+            .with_label_values(&["capacity"])
+            .set(capacity as f64);
+        STORE_SIZE_GAUGE_VEC
+            .with_label_values(&["available"])
+            .set(available as f64);
+
         let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
             error!("store heartbeat failed {:?}", e);
         });
@@ -351,20 +412,24 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
-                approximate_size,
-            } => self.handle_heartbeat(
-                handle,
-                region,
-                peer,
-                RegionStat::new(
-                    down_peers,
-                    pending_peers,
-                    written_bytes,
-                    written_keys,
-                    approximate_size,
-                ),
-            ),
-            Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(handle, stats),
+            } => {
+                let approximate_size = get_region_approximate_size(&self.db, &region).unwrap_or(0);
+                self.handle_heartbeat(
+                    handle,
+                    region,
+                    peer,
+                    RegionStat::new(
+                        down_peers,
+                        pending_peers,
+                        written_bytes,
+                        written_keys,
+                        approximate_size,
+                    ),
+                )
+            }
+            Task::StoreHeartbeat { stats, store_info } => {
+                self.handle_store_heartbeat(handle, stats, store_info)
+            }
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
         };

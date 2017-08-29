@@ -14,8 +14,6 @@
 use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
-use util::rocksdb;
-use storage::CF_RAFT;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use std::sync::Arc;
@@ -24,7 +22,7 @@ use std::error;
 use std::sync::mpsc::Sender;
 
 pub struct Task {
-    pub engine: Arc<DB>,
+    pub raft_engine: Arc<DB>,
     pub region_id: u64,
     pub start_idx: u64,
     pub end_idx: u64,
@@ -70,7 +68,7 @@ impl Runner {
     /// Do the gc job and return the count of log collected.
     fn gc_raft_log(
         &mut self,
-        engine: Arc<DB>,
+        raft_engine: Arc<DB>,
         region_id: u64,
         start_idx: u64,
         end_idx: u64,
@@ -79,7 +77,7 @@ impl Runner {
         if first_idx == 0 {
             let start_key = keys::raft_log_key(region_id, 0);
             first_idx = end_idx;
-            if let Some((k, _)) = box_try!(engine.seek_cf(CF_RAFT, &start_key)) {
+            if let Some((k, _)) = box_try!(raft_engine.seek(&start_key)) {
                 first_idx = box_try!(keys::raft_log_index(&k));
             }
         }
@@ -87,14 +85,13 @@ impl Runner {
             info!("[region {}] no need to gc", region_id);
             return Ok(0);
         }
-        let wb = WriteBatch::new();
-        let handle = box_try!(rocksdb::get_cf_handle(&engine, CF_RAFT));
+        let raft_wb = WriteBatch::new();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
-            box_try!(wb.delete_cf(handle, &key));
+            box_try!(raft_wb.delete(&key));
         }
         // TODO: disable WAL here.
-        engine.write(wb).unwrap();
+        raft_engine.write(raft_wb).unwrap();
         Ok(end_idx - first_idx)
     }
 
@@ -119,7 +116,12 @@ impl Runnable<Task> for Runner {
             task.region_id,
             task.end_idx
         );
-        match self.gc_raft_log(task.engine, task.region_id, task.start_idx, task.end_idx) {
+        match self.gc_raft_log(
+            task.raft_engine,
+            task.region_id,
+            task.start_idx,
+            task.end_idx,
+        ) {
             Err(e) => {
                 error!("[region {}] failed to gc: {:?}", task.region_id, e);
                 self.report_collected(0);
@@ -138,32 +140,31 @@ mod test {
     use std::time::Duration;
     use util::rocksdb::new_engine;
     use tempdir::TempDir;
-    use storage::{CF_DEFAULT, CF_RAFT};
+    use storage::CF_DEFAULT;
     use super::*;
 
     #[test]
     fn test_gc_raft_log() {
         let path = TempDir::new("gc-raft-log-test").unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap();
-        let db = Arc::new(db);
+        let raft_db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let raft_db = Arc::new(raft_db);
 
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner::new(Some(tx));
 
         // generate raft logs
-        let raft_handle = rocksdb::get_cf_handle(&db, CF_RAFT).unwrap();
         let region_id = 1;
-        let wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
         for i in 0..100 {
             let k = keys::raft_log_key(region_id, i);
-            wb.put_cf(raft_handle, &k, b"entry").unwrap();
+            raft_wb.put(&k, b"entry").unwrap();
         }
-        db.write(wb).unwrap();
+        raft_db.write(raft_wb).unwrap();
 
         let tbls = vec![
             (
                 Task {
-                    engine: db.clone(),
+                    raft_engine: raft_db.clone(),
                     region_id: region_id,
                     start_idx: 0,
                     end_idx: 10,
@@ -174,7 +175,7 @@ mod test {
             ),
             (
                 Task {
-                    engine: db.clone(),
+                    raft_engine: raft_db.clone(),
                     region_id: region_id,
                     start_idx: 0,
                     end_idx: 50,
@@ -185,7 +186,7 @@ mod test {
             ),
             (
                 Task {
-                    engine: db.clone(),
+                    raft_engine: raft_db.clone(),
                     region_id: region_id,
                     start_idx: 50,
                     end_idx: 50,
@@ -196,7 +197,7 @@ mod test {
             ),
             (
                 Task {
-                    engine: db.clone(),
+                    raft_engine: raft_db.clone(),
                     region_id: region_id,
                     start_idx: 50,
                     end_idx: 60,
@@ -211,24 +212,22 @@ mod test {
             runner.run(task);
             let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert_eq!(res.collected, expected_collectd);
-            raft_log_must_not_exist(&db, 1, not_exist_range.0, not_exist_range.1);
-            raft_log_must_exist(&db, 1, exist_range.0, exist_range.1);
+            raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);
+            raft_log_must_exist(&raft_db, 1, exist_range.0, exist_range.1);
         }
     }
 
-    fn raft_log_must_not_exist(engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
-        let raft_handle = rocksdb::get_cf_handle(engine, CF_RAFT).unwrap();
+    fn raft_log_must_not_exist(raft_engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
-            assert!(engine.get_cf(raft_handle, &k).unwrap().is_none());
+            assert!(raft_engine.get(&k).unwrap().is_none());
         }
     }
 
-    fn raft_log_must_exist(engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
-        let raft_handle = rocksdb::get_cf_handle(engine, CF_RAFT).unwrap();
+    fn raft_log_must_exist(raft_engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
-            assert!(engine.get_cf(raft_handle, &k).unwrap().is_some());
+            assert!(raft_engine.get(&k).unwrap().is_some());
         }
     }
 }
