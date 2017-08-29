@@ -45,28 +45,9 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn abs_uint(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        self.children[0].eval_int(ctx, row)
-    }
-
-    #[inline]
     pub fn ceil_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.ceil()))
-    }
-
-    #[inline]
-    pub fn ceil_int_to_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        self.children[0].eval_int(ctx, row)
-    }
-
-    #[inline]
-    pub fn ceil_int_to_dec<'a, 'b: 'a>(
-        &'b self,
-        ctx: &StatementContext,
-        row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Decimal>>> {
-        self.cast_int_as_decimal(ctx, row)
     }
 
     #[inline]
@@ -92,20 +73,6 @@ impl FnCall {
     pub fn floor_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.floor()))
-    }
-
-    #[inline]
-    pub fn floor_int_to_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        self.children[0].eval_int(ctx, row)
-    }
-
-    #[inline]
-    pub fn floor_int_to_dec<'a, 'b: 'a>(
-        &'b self,
-        ctx: &StatementContext,
-        row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Decimal>>> {
-        self.cast_int_as_decimal(ctx, row)
     }
 
     #[inline]
