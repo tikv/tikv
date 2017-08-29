@@ -41,7 +41,7 @@ impl Split {
 impl PdMocker for Split {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut holder = self.inner.lock().unwrap();
-        let mut inner = holder.as_mut().unwrap();
+        let inner = holder.as_mut().unwrap();
         inner.idx += 1;
         info!(
             "[Split] get_member: {:?}",
