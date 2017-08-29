@@ -454,46 +454,31 @@ impl Expression {
                 }
 
                 match self.eval_decimal(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Dec(v.into_owned()));
-                        return Ok(v);
-                    }
+                    Ok(d) => return Ok(d.into()),
                     Err(Error::UnKnownSignature(_)) => {}
                     Err(e) => return Err(e),
                 }
 
                 match self.eval_time(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Time(v.into_owned()));
-                        return Ok(v);
-                    }
+                    Ok(d) => return Ok(d.into()),
                     Err(Error::UnKnownSignature(_)) => {}
                     Err(e) => return Err(e),
                 }
 
                 match self.eval_duration(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Dur(v.into_owned()));
-                        return Ok(v);
-                    }
+                    Ok(d) => return Ok(d.into()),
                     Err(Error::UnKnownSignature(_)) => {}
                     Err(e) => return Err(e),
                 }
 
                 match self.eval_string(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Bytes(v.into_owned()));
-                        return Ok(v);
-                    }
+                    Ok(d) => return Ok(d.into()),
                     Err(Error::UnKnownSignature(_)) => {}
                     Err(e) => return Err(e),
                 }
 
                 match self.eval_json(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Json(v.into_owned()));
-                        return Ok(v);
-                    }
+                    Ok(d) => return Ok(d.into()),
                     Err(Error::UnKnownSignature(_)) => {}
                     Err(e) => return Err(e),
                 }
