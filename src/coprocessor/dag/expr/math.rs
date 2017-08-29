@@ -31,7 +31,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let result: Result<Decimal> = d.as_ref().clone().abs().into();
+        let result: Result<Decimal> = d.into_owned().abs().into();
         result.map(|t| Some(Cow::Owned(t)))
     }
 
@@ -66,8 +66,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let n = try_opt!(self.children[0].eval_int(ctx, row));
-        Ok(Some(Cow::Owned(Decimal::from(n))))
+        self.cast_int_as_decimal(ctx, row)
     }
 
     #[inline]
@@ -96,22 +95,21 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn floor_int_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn floor_int_to_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
     #[inline]
-    pub fn floor_int_dec<'a, 'b: 'a>(
+    pub fn floor_int_to_dec<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let n = try_opt!(self.children[0].eval_int(ctx, row));
-        Ok(Some(Cow::Owned(Decimal::from(n))))
+        self.cast_int_as_decimal(ctx, row)
     }
 
     #[inline]
-    pub fn floor_dec_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn floor_dec_to_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         // FIXME: here we can't do same logic with TiDB.
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.floor().into();
@@ -119,7 +117,7 @@ impl FnCall {
     }
 
     #[inline]
-    pub fn floor_dec_dec<'a, 'b: 'a>(
+    pub fn floor_dec_to_dec<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
@@ -160,28 +158,17 @@ mod test {
             (ScalarFuncSig::AbsDecimal, str2dec("-1.1"), str2dec("1.1")),
         ];
         let ctx = StatementContext::default();
-        for tt in tests {
-            let arg = datum_expr(tt.1);
-            let op = Expression::build(fncall_expr(tt.0, &[arg]), 0, &ctx).unwrap();
-            let expected = Expression::build(datum_expr(tt.2), 0, &ctx).unwrap();
-            match tt.0 {
-                ScalarFuncSig::AbsInt | ScalarFuncSig::AbsUInt => {
-                    let got = op.eval_int(&ctx, &[]).unwrap();
-                    let exp = expected.eval_int(&ctx, &[]).unwrap();
-                    assert_eq!(got, exp);
-                }
-                ScalarFuncSig::AbsReal => {
-                    let got = op.eval_real(&ctx, &[]).unwrap();
-                    let exp = expected.eval_real(&ctx, &[]).unwrap();
-                    assert_eq!(got, exp);
-                }
-                ScalarFuncSig::AbsDecimal => {
-                    let got = op.eval_decimal(&ctx, &[]).unwrap();
-                    let exp = expected.eval_decimal(&ctx, &[]).unwrap();
-                    assert_eq!(got, exp);
-                }
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let op = Expression::build(fncall_expr(sig, &[arg]), 0, &ctx).unwrap();
+            let got: Datum = match sig {
+                ScalarFuncSig::AbsInt => op.eval_int(&ctx, &[]).unwrap().into(),
+                ScalarFuncSig::AbsUInt => op.eval_int(&ctx, &[]).unwrap().map(|i| i as u64).into(),
+                ScalarFuncSig::AbsReal => op.eval_real(&ctx, &[]).unwrap().into(),
+                ScalarFuncSig::AbsDecimal => op.eval_decimal(&ctx, &[]).unwrap().into(),
                 _ => unreachable!(),
-            }
+            };
+            assert_eq!(got, exp);
         }
     }
 
@@ -254,27 +241,27 @@ mod test {
         ];
         let mut ctx = StatementContext::default();
         ctx.ignore_truncate = true; // for ceil decimal to int.
-        for tt in tests {
-            let arg = datum_expr(tt.1);
-            let mut op = Expression::build(fncall_expr(tt.0, &[arg.clone()]), 0, &ctx).unwrap();
-            let expected = Expression::build(datum_expr(tt.2), 0, &ctx).unwrap();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let mut op = Expression::build(fncall_expr(sig, &[arg.clone()]), 0, &ctx).unwrap();
+            let exp = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
-            match tt.0 {
+            match sig {
                 ScalarFuncSig::CeilReal => {
                     let got = op.eval_real(&ctx, &[]).unwrap();
-                    let exp = expected.eval_real(&ctx, &[]).unwrap();
+                    let exp = exp.eval_real(&ctx, &[]).unwrap();
                     assert_eq!(got, exp);
                 }
                 ScalarFuncSig::CeilIntToInt | ScalarFuncSig::CeilDecToInt => {
                     let got = op.eval_int(&ctx, &[]).unwrap();
-                    let exp = expected.eval_int(&ctx, &[]).unwrap();
+                    let exp = exp.eval_int(&ctx, &[]).unwrap();
                     assert_eq!(got, exp);
                 }
                 ScalarFuncSig::CeilIntToDec | ScalarFuncSig::CeilDecToDec => {
                     let got = op.eval_decimal(&ctx, &[]).unwrap();
-                    let exp = expected.eval_decimal(&ctx, &[]).unwrap();
+                    let exp = exp.eval_decimal(&ctx, &[]).unwrap();
                     assert_eq!(got, exp);
                 }
                 _ => unreachable!(),
@@ -334,27 +321,27 @@ mod test {
         ];
         let mut ctx = StatementContext::default();
         ctx.ignore_truncate = true; // for ceil decimal to int.
-        for tt in tests {
-            let arg = datum_expr(tt.1);
-            let mut op = Expression::build(fncall_expr(tt.0, &[arg.clone()]), 0, &ctx).unwrap();
-            let expected = Expression::build(datum_expr(tt.2), 0, &ctx).unwrap();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let mut op = Expression::build(fncall_expr(sig, &[arg.clone()]), 0, &ctx).unwrap();
+            let exp = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
-            match tt.0 {
+            match sig {
                 ScalarFuncSig::FloorReal => {
                     let got = op.eval_real(&ctx, &[]).unwrap();
-                    let exp = expected.eval_real(&ctx, &[]).unwrap();
+                    let exp = exp.eval_real(&ctx, &[]).unwrap();
                     assert_eq!(got, exp);
                 }
                 ScalarFuncSig::FloorIntToInt | ScalarFuncSig::FloorDecToInt => {
                     let got = op.eval_int(&ctx, &[]).unwrap();
-                    let exp = expected.eval_int(&ctx, &[]).unwrap();
+                    let exp = exp.eval_int(&ctx, &[]).unwrap();
                     assert_eq!(got, exp);
                 }
                 ScalarFuncSig::FloorIntToDec | ScalarFuncSig::FloorDecToDec => {
                     let got = op.eval_decimal(&ctx, &[]).unwrap();
-                    let exp = expected.eval_decimal(&ctx, &[]).unwrap();
+                    let exp = exp.eval_decimal(&ctx, &[]).unwrap();
                     assert_eq!(got, exp);
                 }
                 _ => unreachable!(),

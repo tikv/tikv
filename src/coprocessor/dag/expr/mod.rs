@@ -251,8 +251,8 @@ impl Expression {
                 ScalarFuncSig::AbsUInt => f.abs_uint(ctx, row),
                 ScalarFuncSig::CeilIntToInt => f.ceil_int_to_int(ctx, row),
                 ScalarFuncSig::CeilDecToInt => f.ceil_dec_to_int(ctx, row),
-                ScalarFuncSig::FloorIntToInt => f.floor_int_int(ctx, row),
-                ScalarFuncSig::FloorDecToInt => f.floor_dec_int(ctx, row),
+                ScalarFuncSig::FloorIntToInt => f.floor_int_to_int(ctx, row),
+                ScalarFuncSig::FloorDecToInt => f.floor_dec_to_int(ctx, row),
 
                 ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
                 ScalarFuncSig::IfInt => f.if_int(ctx, row),
@@ -317,8 +317,8 @@ impl Expression {
                 ScalarFuncSig::AbsDecimal => f.abs_decimal(ctx, row),
                 ScalarFuncSig::CeilDecToDec => f.ceil_dec_to_dec(ctx, row),
                 ScalarFuncSig::CeilIntToDec => f.ceil_int_to_dec(ctx, row),
-                ScalarFuncSig::FloorDecToDec => f.floor_dec_dec(ctx, row),
-                ScalarFuncSig::FloorIntToDec => f.floor_int_dec(ctx, row),
+                ScalarFuncSig::FloorDecToDec => f.floor_dec_to_dec(ctx, row),
+                ScalarFuncSig::FloorIntToDec => f.floor_int_to_dec(ctx, row),
 
                 ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
                 ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
