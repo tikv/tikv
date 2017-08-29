@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{self, str, i64};
+use std::{self, str, i64, u64};
 use std::borrow::Cow;
 
 use coprocessor::select::xeval::EvalContext;
@@ -20,12 +20,9 @@ use super::Result;
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
 pub const UNSPECIFIED_LENGTH: i32 = -1;
 
-pub fn truncate_str(mut s: String, flen: isize) -> String {
+pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
     if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
         s.truncate(flen as usize);
-        s
-    } else {
-        s
     }
 }
 
@@ -61,14 +58,6 @@ macro_rules! overflow {
     ($val:ident, $bound:ident) => ({
         Err(box_err!("constant {} overflows {}", $val, $bound))
     });
-}
-
-// `convert_int_to_uint` converts an int value to an uint value.
-pub fn convert_int_to_uint(val: i64, upper_bound: u64, tp: u8) -> Result<u64> {
-    if val as u64 > upper_bound {
-        return overflow!(val, tp);
-    }
-    Ok(val as u64)
 }
 
 // `convert_uint_to_int` converts an uint value to an int value.
@@ -195,8 +184,13 @@ pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
 }
 
 #[inline]
+pub fn handle_truncate_as_error(ctx: &EvalContext) -> bool {
+    !(ctx.ignore_truncate || ctx.truncate_as_warning)
+}
+
+#[inline]
 pub fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
-    if is_truncated && !(ctx.ignore_truncate || ctx.truncate_as_warning) {
+    if is_truncated && handle_truncate_as_error(ctx) {
         Err(box_err!("[1265] Data Truncated"))
     } else {
         Ok(())
@@ -506,14 +500,6 @@ mod test {
     }
 
     #[test]
-    fn test_convert_int_to_uint() {
-        assert!(convert_int_to_uint(i64::MIN, 0, types::LONG_LONG).is_err());
-        let v = convert_int_to_uint(i64::MAX, u64::MAX, types::LONG_LONG).unwrap();
-        assert_eq!(v, i64::MAX as u64);
-        // TODO port tests from tidb(tidb haven't implemented now)
-    }
-
-    #[test]
     fn test_convert_uint_into_int() {
         assert!(convert_uint_to_int(u64::MAX, i64::MAX, types::LONG_LONG).is_err());
         let v = convert_uint_to_int(u64::MIN, i64::MAX, types::LONG_LONG).unwrap();
@@ -540,13 +526,16 @@ mod test {
     }
 
     #[test]
-    fn test_truncate_str() {
-        let s = String::from("123456789");
-        let s1 = truncate_str(s.clone(), UNSPECIFIED_LENGTH as isize);
+    fn test_truncate_binary() {
+        let s = b"123456789".to_vec();
+        let mut s1 = s.clone();
+        truncate_binary(&mut s1, UNSPECIFIED_LENGTH as isize);
         assert_eq!(s1, s);
-        let s2 = truncate_str(s.clone(), isize::MAX);
+        let mut s2 = s.clone();
+        truncate_binary(&mut s2, isize::MAX);
         assert_eq!(s2, s);
-        let s3 = truncate_str(s, 0);
+        let mut s3 = s;
+        truncate_binary(&mut s3, 0);
         assert!(s3.is_empty());
         // TODO port tests from tidb(tidb haven't implemented now)
     }
