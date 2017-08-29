@@ -952,4 +952,25 @@ mod tests {
 
         assert_de_tokens(&db_cfg, &tokens);
     }
+
+    #[test]
+    fn test_de_metric_config() {
+        let m_cfg = MetricConfig::default();
+        assert_de_tokens(
+            &m_cfg,
+            &[
+                Token::Struct {
+                    name: "MetricConfig",
+                    len: 3,
+                },
+                Token::Str("interval"),
+                Token::Str("15s"),
+                Token::Str("address"),
+                Token::Str(""),
+                Token::Str("job"),
+                Token::Str("tikv"),
+                Token::StructEnd,
+            ],
+        );
+    }
 }
