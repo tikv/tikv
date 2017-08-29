@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 // FIXME(shirly): remove following later
-#![allow(match_same_arms)]
 #![allow(dead_code, unused_variables)]
 
 mod column;
@@ -159,6 +158,7 @@ impl Expression {
         }
     }
 
+    #[allow(match_same_arms)]
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
@@ -293,6 +293,7 @@ impl Expression {
         }
     }
 
+    #[allow(match_same_arms)]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
