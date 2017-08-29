@@ -16,21 +16,41 @@ use super::{FnCall, Result, StatementContext};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Time};
 
+fn if_null<F, T>(f: F) -> Result<Option<T>>
+where
+    F: Fn(usize) -> Result<Option<T>>,
+{
+    let arg0 = try!(f(0));
+    if !arg0.is_none() {
+        return Ok(arg0);
+    }
+    f(1)
+}
+
+fn if_condition<F, T>(
+    expr: &FnCall,
+    ctx: &StatementContext,
+    row: &[Datum],
+    f: F,
+) -> Result<Option<T>>
+where
+    F: Fn(usize) -> Result<Option<T>>,
+{
+    let arg0 = try!(expr.children[0].eval_int(ctx, row));
+    if arg0.map_or(false, |arg| arg != 0) {
+        f(1)
+    } else {
+        f(2)
+    }
+}
+
 impl FnCall {
     pub fn if_null_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
-        if !arg0.is_none() {
-            return Ok(arg0);
-        }
-        self.children[1].eval_int(ctx, row)
+        if_null(|i| self.children[i].eval_int(ctx, row))
     }
 
     pub fn if_null_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let arg0 = try!(self.children[0].eval_real(ctx, row));
-        if !arg0.is_none() {
-            return Ok(arg0);
-        }
-        self.children[1].eval_real(ctx, row)
+        if_null(|i| self.children[i].eval_real(ctx, row))
     }
 
     pub fn if_null_decimal<'a, 'b: 'a>(
@@ -38,11 +58,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let arg0 = try!(self.children[0].eval_decimal(ctx, row));
-        if !arg0.is_none() {
-            return Ok(arg0);
-        }
-        self.children[1].eval_decimal(ctx, row)
+        if_null(|i| self.children[i].eval_decimal(ctx, row))
     }
 
     pub fn if_null_string<'a, 'b: 'a>(
@@ -50,11 +66,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        let arg0 = try!(self.children[0].eval_string(ctx, row));
-        if !arg0.is_none() {
-            return Ok(arg0);
-        }
-        self.children[1].eval_string(ctx, row)
+        if_null(|i| self.children[i].eval_string(ctx, row))
     }
 
     pub fn if_null_time<'a, 'b: 'a>(
@@ -62,11 +74,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let arg0 = try!(self.children[0].eval_time(ctx, row));
-        if !arg0.is_none() {
-            return Ok(arg0);
-        }
-        self.children[1].eval_time(ctx, row)
+        if_null(|i| self.children[i].eval_time(ctx, row))
     }
 
     pub fn if_null_duration<'a, 'b: 'a>(
@@ -74,27 +82,15 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let arg0 = try!(self.children[0].eval_duration(ctx, row));
-        if !arg0.is_none() {
-            return Ok(arg0);
-        }
-        self.children[1].eval_duration(ctx, row)
+        if_null(|i| self.children[i].eval_duration(ctx, row))
     }
 
     pub fn if_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
-        match arg0 {
-            None | Some(0) => self.children[2].eval_int(ctx, row),
-            _ => self.children[1].eval_int(ctx, row),
-        }
+        if_condition(self, ctx, row, |i| self.children[i].eval_int(ctx, row))
     }
 
     pub fn if_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
-        match arg0 {
-            None | Some(0) => self.children[2].eval_real(ctx, row),
-            _ => self.children[1].eval_real(ctx, row),
-        }
+        if_condition(self, ctx, row, |i| self.children[i].eval_real(ctx, row))
     }
 
     pub fn if_decimal<'a, 'b: 'a>(
@@ -102,11 +98,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
-        match arg0 {
-            None | Some(0) => self.children[2].eval_decimal(ctx, row),
-            _ => self.children[1].eval_decimal(ctx, row),
-        }
+        if_condition(self, ctx, row, |i| self.children[i].eval_decimal(ctx, row))
     }
 
     pub fn if_string<'a, 'b: 'a>(
@@ -114,11 +106,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
-        match arg0 {
-            None | Some(0) => self.children[2].eval_string(ctx, row),
-            _ => self.children[1].eval_string(ctx, row),
-        }
+        if_condition(self, ctx, row, |i| self.children[i].eval_string(ctx, row))
     }
 
     pub fn if_time<'a, 'b: 'a>(
@@ -126,11 +114,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
-        match arg0 {
-            None | Some(0) => self.children[2].eval_time(ctx, row),
-            _ => self.children[1].eval_time(ctx, row),
-        }
+        if_condition(self, ctx, row, |i| self.children[i].eval_time(ctx, row))
     }
 
     pub fn if_duration<'a, 'b: 'a>(
@@ -138,11 +122,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
-        match arg0 {
-            None | Some(0) => self.children[2].eval_duration(ctx, row),
-            _ => self.children[1].eval_duration(ctx, row),
-        }
+        if_condition(self, ctx, row, |i| self.children[i].eval_duration(ctx, row))
     }
 }
 
@@ -236,41 +216,17 @@ mod test {
         for (operator, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(branch1);
             let arg2 = datum_expr(branch2);
-            let expected = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
             let op = Expression::build(fncall_expr(operator, &[arg1, arg2]), 0, &ctx).unwrap();
-            match operator {
-                ScalarFuncSig::IfNullInt => {
-                    let lhs = op.eval_int(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfNullReal => {
-                    let lhs = op.eval_real(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfNullString => {
-                    let lhs = op.eval_string(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_string(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfNullDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfNullTime => {
-                    let lhs = op.eval_time(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_time(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfNullDuration => {
-                    let lhs = op.eval_duration(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_duration(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
+            let res: Datum = match operator {
+                ScalarFuncSig::IfNullInt => op.eval_int(&ctx, &[]).unwrap().into(),
+                ScalarFuncSig::IfNullReal => op.eval_real(&ctx, &[]).unwrap().into(),
+                ScalarFuncSig::IfNullString => op.eval_string(&ctx, &[]).unwrap().into(),
+                ScalarFuncSig::IfNullDecimal => op.eval_decimal(&ctx, &[]).unwrap().into(),
+                ScalarFuncSig::IfNullTime => op.eval_time(&ctx, &[]).unwrap().into(),
+                ScalarFuncSig::IfNullDuration => op.eval_duration(&ctx, &[]).unwrap().into(),
                 _ => unreachable!(),
-            }
+            };
+            assert_eq!(res, exp);
         }
     }
 
