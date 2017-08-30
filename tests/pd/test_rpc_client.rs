@@ -136,7 +136,12 @@ fn test_validate_endpoints() {
     let se = Arc::new(Service::new());
     let sp = Arc::new(Split::new());
     let server = MockServer::run(eps_count, se, Some(sp));
-    let env = Arc::new(EnvBuilder::new().cq_count(1).name_prefix("test_pd").build());
+    let env = Arc::new(
+        EnvBuilder::new()
+            .cq_count(1)
+            .name_prefix(thd_name!("test_pd"))
+            .build(),
+    );
     let eps: Vec<String> = server
         .bind_addrs()
         .into_iter()

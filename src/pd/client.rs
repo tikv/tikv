@@ -40,7 +40,7 @@ impl RpcClient {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(CQ_COUNT)
-                .name_prefix(CLIENT_PREFIX)
+                .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
         let (client, members) = try!(validate_endpoints(env.clone(), endpoints));
