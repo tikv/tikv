@@ -12,6 +12,7 @@
 // limitations under the License.
 
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::{str, i64};
 use std::io::Write;
@@ -699,9 +700,21 @@ impl<T: Into<Datum>> From<Option<T>> for Datum {
     }
 }
 
+impl<'a, T: Clone + Into<Datum>> From<Option<Cow<'a, T>>> for Datum {
+    fn from(opt: Option<Cow<'a, T>>) -> Datum {
+        opt.map(Cow::into_owned).into()
+    }
+}
+
+impl From<Vec<u8>> for Datum {
+    fn from(data: Vec<u8>) -> Datum {
+        Datum::Bytes(data)
+    }
+}
+
 impl<'a> From<&'a [u8]> for Datum {
     fn from(data: &'a [u8]) -> Datum {
-        Datum::Bytes(data.to_vec())
+        data.to_vec().into()
     }
 }
 
