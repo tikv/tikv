@@ -290,6 +290,19 @@ impl SliceTransform for NoopSliceTransform {
     }
 }
 
+pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
+    if start_key >= end_key {
+        return Ok(());
+    }
+
+    for cf in db.cf_names() {
+        let handle = try!(get_cf_handle(db, cf));
+        try!(db.delete_file_in_range_cf(handle, start_key, end_key));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
