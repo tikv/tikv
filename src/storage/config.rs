@@ -61,3 +61,50 @@ impl Config {
         Ok(())
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+
+    extern crate serde_test;
+    use self::serde_test::{assert_de_tokens, Token};
+
+    pub fn default_de_tokens() -> Vec<Token> {
+        let config = Config::default();
+        vec![
+            Token::Struct {
+                name: "Config",
+                len: 7,
+            },
+
+            Token::Str("data_dir"),
+            Token::Str(DEFAULT_DATA_DIR),
+
+            Token::Str("gc_ratio_threshold"),
+            Token::F64(config.gc_ratio_threshold),
+
+            Token::Str("scheduler_notify_capacity"),
+            Token::U64(config.scheduler_notify_capacity as u64),
+
+            Token::Str("scheduler_messages_per_tick"),
+            Token::U64(config.scheduler_messages_per_tick as u64),
+
+            Token::Str("scheduler_concurrency"),
+            Token::U64(config.scheduler_concurrency as u64),
+
+            Token::Str("scheduler_worker_pool_size"),
+            Token::U64(config.scheduler_worker_pool_size as u64),
+
+            Token::Str("scheduler_too_busy_threshold"),
+            Token::U64(config.scheduler_too_busy_threshold as u64),
+
+            Token::StructEnd,
+        ]
+    }
+
+    #[test]
+    fn test_de_config() {
+        let config = Config::default();
+        assert_de_tokens(&config, &default_de_tokens());
+    }
+}

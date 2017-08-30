@@ -207,10 +207,135 @@ impl Config {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     use util::config::*;
+
+    extern crate serde_test;
+    use self::serde_test::{assert_de_tokens, Token};
+
+    pub fn default_de_tokens() -> Vec<Token> {
+        let config = Config::default();
+        vec![
+            Token::Struct {
+                name: "Config",
+                len: 35,
+            },
+            Token::Str("sync-log"),
+            Token::Bool(config.sync_log),
+
+            Token::Str("raftdb-path"),
+            Token::Str(""),
+
+            Token::Str("capacity"),
+            Token::U64(config.capacity.0),
+
+            Token::Str("raft-base-tick-interval"),
+            Token::Str("1s"),
+
+            Token::Str("raft-heartbeat-ticks"),
+            Token::U64(config.raft_heartbeat_ticks as u64),
+
+            Token::Str("raft-election-timeout-ticks"),
+            Token::U64(config.raft_election_timeout_ticks as u64),
+
+            Token::Str("raft-max-size-per-msg"),
+            Token::U64(config.raft_max_size_per_msg.0),
+
+            Token::Str("raft-max-inflight-msgs"),
+            Token::U64(config.raft_max_inflight_msgs as u64),
+
+            Token::Str("raft-entry-max-size"),
+            Token::U64(config.raft_entry_max_size.0),
+
+            Token::Str("raft-log-gc-tick-interval"),
+            Token::Str("10s"),
+
+            Token::Str("raft-log-gc-threshold"),
+            Token::U64(config.raft_log_gc_threshold),
+
+            Token::Str("raft-log-gc-count-limit"),
+            Token::U64(config.raft_log_gc_count_limit),
+
+            Token::Str("raft-log-gc-size-limit"),
+            Token::U64(config.raft_log_gc_size_limit.0),
+
+            Token::Str("split-region-check-tick-interval"),
+            Token::Str("10s"),
+
+            Token::Str("region-max-size"),
+            Token::U64(config.region_max_size.0),
+
+            Token::Str("region-split-size"),
+            Token::U64(config.region_split_size.0),
+
+            Token::Str("region-split-check-diff"),
+            Token::U64(config.region_split_check_diff.0),
+
+            Token::Str("region-compact-check-interval"),
+            Token::Str("0s"),
+
+            Token::Str("region-compact-delete-keys-count"),
+            Token::U64(config.region_compact_delete_keys_count),
+
+            Token::Str("pd-heartbeat-tick-interval"),
+            Token::Str("1m"),
+
+            Token::Str("pd-store-heartbeat-tick-interval"),
+            Token::Str("10s"),
+
+            Token::Str("notify-capacity"),
+            Token::U64(config.notify_capacity as u64),
+
+            Token::Str("snap-mgr-gc-tick-interval"),
+            Token::Str("1m"),
+
+            Token::Str("snap-gc-timeout"),
+            Token::Str("4h"),
+
+            Token::Str("messages-per-tick"),
+            Token::U64(config.messages_per_tick as u64),
+
+            Token::Str("max-peer-down-duration"),
+            Token::Str("5m"),
+
+            Token::Str("max-leader-missing-duration"),
+            Token::Str("2h"),
+
+            Token::Str("snap-apply-batch-size"),
+            Token::U64(config.snap_apply_batch_size.0),
+
+            Token::Str("lock-cf-compact-interval"),
+            Token::Str("10m"),
+
+            Token::Str("lock-cf-compact-bytes-threshold"),
+            Token::U64(config.lock_cf_compact_bytes_threshold.0),
+
+            Token::Str("consistency-check-interval"),
+            Token::Str("0s"),
+
+            Token::Str("report-region-flow-interval"),
+            Token::Str("1m"),
+
+            Token::Str("raft-store-max-leader-lease"),
+            Token::Str("9s"),
+
+            Token::Str("right-derive-when-split"),
+            Token::Bool(config.right_derive_when_split),
+
+            Token::Str("allow-remove-leader"),
+            Token::Bool(config.allow_remove_leader),
+
+            Token::StructEnd,
+        ]
+    }
+
+    #[test]
+    fn test_de_config() {
+        let config = Config::default();
+        assert_de_tokens(&config, &default_de_tokens());
+    }
 
     #[test]
     fn test_config_validate() {

@@ -147,8 +147,60 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
+
+    extern crate serde_test;
+    use self::serde_test::{assert_de_tokens, Token};
+
+    pub fn default_de_tokens() -> Vec<Token> {
+        let config = Config::default();
+        vec![
+            Token::Struct {
+                name: "Config",
+                len: 10,
+            },
+
+            Token::Str("addr"),
+            Token::Str(DEFAULT_LISTENING_ADDR),
+
+            Token::Str("labels"),
+            Token::Map { len: Some(0) },
+            Token::MapEnd,
+
+            Token::Str("advertise-addr"),
+            Token::Str(DEFAULT_ADVERTISE_LISTENING_ADDR),
+
+            Token::Str("notify-capacity"),
+            Token::U64(config.notify_capacity as u64),
+
+            Token::Str("messages-per-tick"),
+            Token::U64(config.messages_per_tick as u64),
+
+            Token::Str("grpc-concurrency"),
+            Token::U64(config.grpc_concurrency as u64),
+
+            Token::Str("grpc-concurrent-stream"),
+            Token::U64(config.grpc_concurrent_stream as u64),
+
+            Token::Str("grpc-raft-conn-num"),
+            Token::U64(config.grpc_raft_conn_num as u64),
+
+            Token::Str("grpc-stream-initial-window-size"),
+            Token::U64(config.grpc_stream_initial_window_size.0),
+
+            Token::Str("end-point-concurrency"),
+            Token::U64(config.end_point_concurrency as u64),
+
+            Token::StructEnd,
+        ]
+    }
+
+    #[test]
+    fn test_de_config() {
+        let config = Config::default();
+        assert_de_tokens(&config, &default_de_tokens());
+    }
 
     #[test]
     fn test_config_validate() {
