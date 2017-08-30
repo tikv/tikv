@@ -93,5 +93,5 @@ pub fn init_log() {
         .unwrap_or_else(|_| "debug".to_owned()));
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
-    let _ = logger::init_log(CaseTraceLogger { f: writer }, level);
+    let _ = logger::init_log_for_tikv_only(CaseTraceLogger { f: writer }, level);
 }
