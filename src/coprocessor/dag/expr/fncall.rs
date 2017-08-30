@@ -146,7 +146,21 @@ impl FnCall {
             ScalarFuncSig::DecimalIsNull |
             ScalarFuncSig::StringIsNull |
             ScalarFuncSig::TimeIsNull |
-            ScalarFuncSig::DurationIsNull => (1, 1),
+            ScalarFuncSig::DurationIsNull |
+            ScalarFuncSig::AbsInt |
+            ScalarFuncSig::AbsUInt |
+            ScalarFuncSig::AbsReal |
+            ScalarFuncSig::AbsDecimal |
+            ScalarFuncSig::CeilReal |
+            ScalarFuncSig::CeilIntToInt |
+            ScalarFuncSig::CeilIntToDec |
+            ScalarFuncSig::CeilDecToDec |
+            ScalarFuncSig::CeilDecToInt |
+            ScalarFuncSig::FloorReal |
+            ScalarFuncSig::FloorIntToInt |
+            ScalarFuncSig::FloorIntToDec |
+            ScalarFuncSig::FloorDecToDec |
+            ScalarFuncSig::FloorDecToInt => (1, 1),
 
             ScalarFuncSig::IfInt |
             ScalarFuncSig::IfReal |
@@ -154,8 +168,6 @@ impl FnCall {
             ScalarFuncSig::IfDecimal |
             ScalarFuncSig::IfTime |
             ScalarFuncSig::IfDuration => (3, 3),
-
-            _ => unimplemented!(),
         };
         if args < min_args || args > max_args {
             return Err(box_err!("unexpected arguments"));
