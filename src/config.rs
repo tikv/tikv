@@ -216,7 +216,7 @@ macro_rules! build_cf_opt {
     }};
 }
 
-cf_config!(DefaultCfConfig, default_cf_config_test);
+cf_config!(DefaultCfConfig, test_default_cf_config);
 
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
@@ -260,7 +260,7 @@ impl DefaultCfConfig {
     }
 }
 
-cf_config!(WriteCfConfig, write_cf_config_test);
+cf_config!(WriteCfConfig, test_write_cf_config);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
@@ -314,7 +314,7 @@ impl WriteCfConfig {
     }
 }
 
-cf_config!(LockCfConfig, lock_cf_config_test);
+cf_config!(LockCfConfig, test_lock_cf_config);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
@@ -353,7 +353,7 @@ impl LockCfConfig {
     }
 }
 
-cf_config!(RaftCfConfig, raft_cf_config_test);
+cf_config!(RaftCfConfig, test_raft_cf_config);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
@@ -518,7 +518,7 @@ impl DbConfig {
     }
 }
 
-cf_config!(RaftDefaultCfConfig, raft_default_cf_config_test);
+cf_config!(RaftDefaultCfConfig, test_raft_default_cf_config);
 
 impl Default for RaftDefaultCfConfig {
     fn default() -> RaftDefaultCfConfig {
@@ -800,6 +800,8 @@ impl TiKvConfig {
 mod tests {
     use super::*;
 
+    use {raftstore, server, storage};
+
     use toml::{self, ser};
 
     extern crate serde_test;
@@ -940,13 +942,13 @@ mod tests {
             Token::Str(""),
         ];
         tokens.push(Token::Str("defaultcf"));
-        tokens.extend(default_cf_config_test::default_de_tokens());
+        tokens.extend(test_default_cf_config::default_de_tokens());
         tokens.push(Token::Str("writecf"));
-        tokens.extend(write_cf_config_test::default_de_tokens());
+        tokens.extend(test_write_cf_config::default_de_tokens());
         tokens.push(Token::Str("lockcf"));
-        tokens.extend(lock_cf_config_test::default_de_tokens());
+        tokens.extend(test_lock_cf_config::default_de_tokens());
         tokens.push(Token::Str("raftcf"));
-        tokens.extend(raft_cf_config_test::default_de_tokens());
+        tokens.extend(test_raft_cf_config::default_de_tokens());
         tokens.push(Token::StructEnd);
 
         tokens
@@ -1065,7 +1067,7 @@ mod tests {
             Token::Bool(db_cfg.allow_concurrent_memtable_write),
         ];
         tokens.push(Token::Str("defaultcf"));
-        tokens.extend(raft_default_cf_config_test::default_de_tokens());
+        tokens.extend(test_raft_default_cf_config::default_de_tokens());
         tokens.push(Token::StructEnd);
 
         tokens
@@ -1075,5 +1077,48 @@ mod tests {
     fn test_de_raft_db_config() {
         let db_cfg = RaftDbConfig::default();
         assert_de_tokens(&db_cfg, &raft_db_config_default_de_tokens());
+    }
+
+    #[test]
+    fn test_de_tikv_config() {
+        let kv_cfg = TiKvConfig::default();
+        let mut tokens = vec![
+            Token::Struct {
+                name: "TiKvConfig",
+                len: 9,
+            },
+
+            Token::Str("log-level"),
+            Token::UnitVariant {
+                name: "LogLevel",
+                variant: "info",
+            },
+
+            Token::Str("log-file"),
+            Token::Str(""),
+        ];
+        tokens.push(Token::Str("server"));
+        tokens.extend(server::config::tests::default_de_tokens());
+
+        tokens.push(Token::Str("metric"));
+        tokens.extend(metric_config_default_de_tokens());
+
+        tokens.push(Token::Str("raft-store"));
+        tokens.extend(raftstore::store::config::tests::default_de_tokens());
+
+        tokens.push(Token::Str("pd"));
+        tokens.extend(pd_config_default_de_tokens());
+
+        tokens.push(Token::Str("rocksdb"));
+        tokens.extend(db_config_default_de_tokens());
+        tokens.push(Token::Str("raftdb"));
+        tokens.extend(raft_db_config_default_de_tokens());
+
+        tokens.push(Token::Str("storage"));
+        tokens.extend(storage::config::tests::default_de_tokens());
+
+        tokens.push(Token::StructEnd);
+
+        assert_de_tokens(&kv_cfg, &tokens);
     }
 }
