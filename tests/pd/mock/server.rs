@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use futures::{Future, Sink, Stream};
-use grpc::{DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
+use grpc::{DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
            Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags};
 use tikv::pd::Error as PdError;
 
@@ -49,7 +49,12 @@ impl Server {
             case: case.clone(),
         };
         let service = pdpb_grpc::create_pd(m);
-        let env = Arc::new(Environment::new(1));
+        let env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(1)
+                .name_prefix(thd_name!("mock-server"))
+                .build(),
+        );
         let mut sb = ServerBuilder::new(env).register_service(service);
         for (host, port) in eps {
             sb = sb.bind(host, port);
