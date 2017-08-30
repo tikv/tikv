@@ -291,7 +291,13 @@ impl SliceTransform for NoopSliceTransform {
 }
 
 pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
-    if start_key >= end_key {
+    if start_key > end_key {
+        return Err(
+            "[delete_file_in_range] start_key should't larger than end_key.".to_owned(),
+        );
+    }
+
+    if start_key == end_key {
         return Ok(());
     }
 
