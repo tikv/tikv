@@ -27,7 +27,7 @@ use coprocessor::dag::expr::Expression;
 use coprocessor::metrics::*;
 use coprocessor::Result;
 
-use super::{Executor, ExprColumnRefVisitor, Row, inflate_with_col_for_dag2};
+use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
 struct AggrFuncExpr {
     args: Vec<Expression>,
@@ -43,6 +43,7 @@ impl AggrFuncExpr {
         );
         Ok(res)
     }
+
     fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggrFuncExpr> {
         let args = box_try!(Expression::batch_build(
             expr.take_children().into_vec(),
@@ -117,7 +118,7 @@ impl<'a> AggregationExecutor<'a> {
 
     fn aggregate(&mut self) -> Result<()> {
         while let Some(row) = try!(self.src.next()) {
-            let cols = try!(inflate_with_col_for_dag2(
+            let cols = try!(inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
                 self.cols.clone(),

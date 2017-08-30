@@ -21,7 +21,7 @@ use coprocessor::select::xeval::EvalContext;
 use coprocessor::dag::expr::Expression;
 use coprocessor::Result;
 
-use super::{Executor, ExprColumnRefVisitor, Row, inflate_with_col_for_dag2};
+use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
 pub struct SelectionExecutor<'a> {
     conditions: Vec<Expression>,
@@ -56,7 +56,7 @@ impl<'a> SelectionExecutor<'a> {
 impl<'a> Executor for SelectionExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = try!(self.src.next()) {
-            let cols = try!(inflate_with_col_for_dag2(
+            let cols = try!(inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
                 self.cols.clone(),
