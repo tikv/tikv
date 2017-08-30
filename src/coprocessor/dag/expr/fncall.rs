@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use tipb::expression::ScalarFuncSig;
-use super::{Error, FnCall, Result};
+use super::{FnCall, Result};
 
 impl FnCall {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
@@ -92,7 +92,52 @@ impl FnCall {
             ScalarFuncSig::CastIntAsTime |
             ScalarFuncSig::CastIntAsDuration |
             ScalarFuncSig::CastIntAsJson |
+            ScalarFuncSig::CastRealAsInt |
+            ScalarFuncSig::CastRealAsReal |
+            ScalarFuncSig::CastRealAsString |
+            ScalarFuncSig::CastRealAsDecimal |
+            ScalarFuncSig::CastRealAsTime |
+            ScalarFuncSig::CastRealAsDuration |
+            ScalarFuncSig::CastRealAsJson |
+            ScalarFuncSig::CastDecimalAsInt |
+            ScalarFuncSig::CastDecimalAsReal |
+            ScalarFuncSig::CastDecimalAsString |
+            ScalarFuncSig::CastDecimalAsDecimal |
+            ScalarFuncSig::CastDecimalAsTime |
+            ScalarFuncSig::CastDecimalAsDuration |
+            ScalarFuncSig::CastDecimalAsJson |
+            ScalarFuncSig::CastStringAsInt |
+            ScalarFuncSig::CastStringAsReal |
+            ScalarFuncSig::CastStringAsString |
+            ScalarFuncSig::CastStringAsDecimal |
+            ScalarFuncSig::CastStringAsTime |
+            ScalarFuncSig::CastStringAsDuration |
+            ScalarFuncSig::CastStringAsJson |
+            ScalarFuncSig::CastTimeAsInt |
+            ScalarFuncSig::CastTimeAsReal |
+            ScalarFuncSig::CastTimeAsString |
+            ScalarFuncSig::CastTimeAsDecimal |
+            ScalarFuncSig::CastTimeAsTime |
+            ScalarFuncSig::CastTimeAsDuration |
+            ScalarFuncSig::CastTimeAsJson |
+            ScalarFuncSig::CastDurationAsInt |
+            ScalarFuncSig::CastDurationAsReal |
+            ScalarFuncSig::CastDurationAsString |
+            ScalarFuncSig::CastDurationAsDecimal |
+            ScalarFuncSig::CastDurationAsTime |
+            ScalarFuncSig::CastDurationAsDuration |
+            ScalarFuncSig::CastDurationAsJson |
+            ScalarFuncSig::CastJsonAsInt |
+            ScalarFuncSig::CastJsonAsReal |
+            ScalarFuncSig::CastJsonAsString |
+            ScalarFuncSig::CastJsonAsDecimal |
+            ScalarFuncSig::CastJsonAsTime |
+            ScalarFuncSig::CastJsonAsDuration |
+            ScalarFuncSig::CastJsonAsJson |
             ScalarFuncSig::UnaryNot |
+            ScalarFuncSig::UnaryMinusInt |
+            ScalarFuncSig::UnaryMinusReal |
+            ScalarFuncSig::UnaryMinusDecimal |
             ScalarFuncSig::IntIsFalse |
             ScalarFuncSig::IntIsNull |
             ScalarFuncSig::RealIsTrue |
@@ -101,7 +146,21 @@ impl FnCall {
             ScalarFuncSig::DecimalIsNull |
             ScalarFuncSig::StringIsNull |
             ScalarFuncSig::TimeIsNull |
-            ScalarFuncSig::DurationIsNull => (1, 1),
+            ScalarFuncSig::DurationIsNull |
+            ScalarFuncSig::AbsInt |
+            ScalarFuncSig::AbsUInt |
+            ScalarFuncSig::AbsReal |
+            ScalarFuncSig::AbsDecimal |
+            ScalarFuncSig::CeilReal |
+            ScalarFuncSig::CeilIntToInt |
+            ScalarFuncSig::CeilIntToDec |
+            ScalarFuncSig::CeilDecToDec |
+            ScalarFuncSig::CeilDecToInt |
+            ScalarFuncSig::FloorReal |
+            ScalarFuncSig::FloorIntToInt |
+            ScalarFuncSig::FloorIntToDec |
+            ScalarFuncSig::FloorDecToDec |
+            ScalarFuncSig::FloorDecToInt => (1, 1),
 
             ScalarFuncSig::IfInt |
             ScalarFuncSig::IfReal |
@@ -109,11 +168,9 @@ impl FnCall {
             ScalarFuncSig::IfDecimal |
             ScalarFuncSig::IfTime |
             ScalarFuncSig::IfDuration => (3, 3),
-
-            _ => unimplemented!(),
         };
         if args < min_args || args > max_args {
-            return Err(Error::Other("unexpected arguments"));
+            return Err(box_err!("unexpected arguments"));
         }
         Ok(())
     }

@@ -33,6 +33,12 @@ const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 
+// Assume a request can be finished in 1ms, a request at position x will wait about
+// 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
+// backoff. So when it needs to wait for more than 2 seconds, return error won't causse
+// larger latency.
+pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -53,6 +59,7 @@ pub struct Config {
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub end_point_concurrency: usize,
+    pub end_point_max_tasks: usize,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -78,6 +85,7 @@ impl Default for Config {
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             end_point_concurrency: concurrency,
+            end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
         }
     }
 }
@@ -99,11 +107,11 @@ impl Config {
         }
 
         if self.end_point_concurrency == 0 {
-            return Err(box_err!(
-                "server.server.end-point-concurrency: {} is invalid, \
-                 shouldn't be 0",
-                self.end_point_concurrency
-            ));
+            return Err(box_err!("server.end-point-concurrency should not be 0."));
+        }
+
+        if self.end_point_max_tasks == 0 {
+            return Err(box_err!("server.end-point-max-tasks should not be 0."));
         }
 
         for (k, v) in &self.labels {
@@ -164,10 +172,6 @@ pub mod tests {
             Token::Str("addr"),
             Token::Str(DEFAULT_LISTENING_ADDR),
 
-            Token::Str("labels"),
-            Token::Map { len: Some(0) },
-            Token::MapEnd,
-
             Token::Str("advertise-addr"),
             Token::Str(DEFAULT_ADVERTISE_LISTENING_ADDR),
 
@@ -192,6 +196,13 @@ pub mod tests {
             Token::Str("end-point-concurrency"),
             Token::U64(config.end_point_concurrency as u64),
 
+            Token::Str("end-point-max-tasks"),
+            Token::U64(config.end_point_max_tasks as u64),
+
+            Token::Str("labels"),
+            Token::Map { len: Some(0) },
+            Token::MapEnd,
+
             Token::StructEnd,
         ]
     }
@@ -211,6 +222,10 @@ pub mod tests {
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_concurrency = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.end_point_max_tasks = 0;
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();
