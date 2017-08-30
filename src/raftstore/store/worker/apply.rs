@@ -1001,6 +1001,7 @@ impl ApplyDelegate {
             compact_index,
             compact_term
         ));
+        self.flush_wal = true;
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["compact", "success"])
