@@ -15,22 +15,52 @@ use std::rc::Rc;
 
 use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
-use tipb::expression::Expr;
+use tipb::expression::{Expr, ExprType};
 use util::collections::{HashMap, HashMapEntry as Entry};
 
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
 use coprocessor::select::aggregate::{self, AggrFunc};
-use coprocessor::select::xeval::{EvalContext, Evaluator};
+use coprocessor::select::xeval::EvalContext;
+use coprocessor::dag::expr::Expression;
 use coprocessor::metrics::*;
 use coprocessor::Result;
 
-use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
+use super::{Executor, ExprColumnRefVisitor, Row, inflate_with_col_for_dag2};
+
+struct AggrFuncExpr {
+    args: Vec<Expression>,
+    tp: ExprType,
+}
+
+impl AggrFuncExpr {
+    fn batch_build(ctx: &EvalContext, expr: Vec<Expr>) -> Result<Vec<AggrFuncExpr>> {
+        let res: Vec<AggrFuncExpr> = try!(
+            expr.into_iter()
+                .map(|v| AggrFuncExpr::build(ctx, v))
+                .collect()
+        );
+        Ok(res)
+    }
+    fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggrFuncExpr> {
+        let args = box_try!(Expression::batch_build(
+            expr.take_children().into_vec(),
+            ctx
+        ));
+        let tp = expr.get_tp();
+        Ok(AggrFuncExpr { args: args, tp: tp })
+    }
+
+    fn eval_args(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
+        let res: Vec<Datum> = box_try!(self.args.iter().map(|v| v.eval(ctx, row)).collect());
+        Ok(res)
+    }
+}
 
 pub struct AggregationExecutor<'a> {
-    group_by: Vec<Expr>,
-    aggr_func: Vec<Expr>,
+    group_by: Vec<Expression>,
+    aggr_func: Vec<AggrFuncExpr>,
     group_keys: Vec<Rc<Vec<u8>>>,
     group_key_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
     cursor: usize,
@@ -58,8 +88,8 @@ impl<'a> AggregationExecutor<'a> {
             .with_label_values(&["aggregation"])
             .inc();
         Ok(AggregationExecutor {
-            group_by: group_by,
-            aggr_func: aggr_func,
+            group_by: box_try!(Expression::batch_build(group_by, ctx.as_ref())),
+            aggr_func: try!(AggrFuncExpr::batch_build(ctx.as_ref(), aggr_func)),
             group_keys: vec![],
             group_key_aggrs: map![],
             cursor: 0,
@@ -71,14 +101,14 @@ impl<'a> AggregationExecutor<'a> {
         })
     }
 
-    fn get_group_key(&mut self, eval: &mut Evaluator) -> Result<Vec<u8>> {
+    fn get_group_key(&mut self, row: &[Datum]) -> Result<Vec<u8>> {
         if self.group_by.is_empty() {
             let single_group = Datum::Bytes(SINGLE_GROUP.to_vec());
             return Ok(box_try!(datum::encode_value(&[single_group])));
         }
         let mut vals = Vec::with_capacity(self.group_by.len());
         for expr in &self.group_by {
-            let v = box_try!(eval.eval(&self.ctx, expr));
+            let v = box_try!(expr.eval(&self.ctx, row));
             vals.push(v);
         }
         let res = box_try!(datum::encode_value(&vals));
@@ -87,22 +117,20 @@ impl<'a> AggregationExecutor<'a> {
 
     fn aggregate(&mut self) -> Result<()> {
         while let Some(row) = try!(self.src.next()) {
-            let mut eval = Evaluator::default();
-            try!(inflate_with_col_for_dag(
-                &mut eval,
+            let cols = try!(inflate_with_col_for_dag2(
                 &self.ctx,
                 &row.data,
                 self.cols.clone(),
                 &self.related_cols_offset,
                 row.handle
             ));
-            let group_key = Rc::new(try!(self.get_group_key(&mut eval)));
+            let group_key = Rc::new(try!(self.get_group_key(&cols)));
             match self.group_key_aggrs.entry(group_key.clone()) {
                 Entry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
                     for expr in &self.aggr_func {
-                        let mut aggr = try!(aggregate::build_aggr_func(expr));
-                        let vals = box_try!(eval.batch_eval(&self.ctx, expr.get_children()));
+                        let mut aggr = try!(aggregate::build_aggr_func(expr.tp));
+                        let vals = try!(expr.eval_args(&self.ctx, &cols));
                         try!(aggr.update(&self.ctx, vals));
                         aggrs.push(aggr);
                     }
@@ -112,7 +140,7 @@ impl<'a> AggregationExecutor<'a> {
                 Entry::Occupied(e) => {
                     let aggrs = e.into_mut();
                     for (expr, aggr) in self.aggr_func.iter().zip(aggrs) {
-                        let vals = box_try!(eval.batch_eval(&self.ctx, expr.get_children()));
+                        let vals = try!(expr.eval_args(&self.ctx, &cols));
                         box_try!(aggr.update(&self.ctx, vals));
                     }
                 }

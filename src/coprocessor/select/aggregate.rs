@@ -12,15 +12,15 @@
 // limitations under the License.
 
 use std::cmp::Ordering;
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::ExprType;
 
 use coprocessor::codec::Datum;
 use coprocessor::Result;
 
 use super::xeval::{evaluator, EvalContext};
 
-pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
-    match expr.get_tp() {
+pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
+    match tp {
         ExprType::Count => Ok(box Count { c: 0 }),
         ExprType::First => Ok(box First { e: None }),
         ExprType::Sum => Ok(box Sum { res: None }),
