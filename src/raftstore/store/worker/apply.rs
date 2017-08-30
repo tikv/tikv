@@ -284,6 +284,7 @@ pub struct ApplyDelegate {
     applied_index_term: u64,
     term: u64,
     pending_cmds: PendingCmdQueue,
+    sync_log: bool,
     flush_wal: bool,
     metrics: ApplyMetrics,
 }
@@ -297,12 +298,12 @@ impl ApplyDelegate {
         self.id
     }
 
-    fn from_peer(peer: &Peer) -> ApplyDelegate {
+    fn from_peer(peer: &Peer, sync_log: bool) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), reg)
+        ApplyDelegate::from_registration(peer.kv_engine(), reg, sync_log)
     }
 
-    fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
+    fn from_registration(db: Arc<DB>, reg: Registration, sync_log: bool) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -313,6 +314,7 @@ impl ApplyDelegate {
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             pending_cmds: Default::default(),
+            sync_log: sync_log,
             flush_wal: false,
             metrics: Default::default(),
         }
@@ -427,7 +429,7 @@ impl ApplyDelegate {
                         panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                     });
                 if apply_ctx.flush_wal || self.flush_wal {
-                    self.engine.flush_wal(false).unwrap_or_else(|e| {
+                    self.engine.flush_wal(self.sync_log).unwrap_or_else(|e| {
                         panic!("{} failed to flush wal, error: {:?}", self.tag, e)
                     });
                     apply_ctx.flush_wal = false;
@@ -1443,19 +1445,21 @@ pub struct Runner {
     host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
+    sync_log: bool,
 }
 
 impl Runner {
-    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>) -> Runner {
+    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>, sync_log: bool) -> Runner {
         let mut delegates = HashMap::with_capacity(store.get_peers().len());
         for (&region_id, p) in store.get_peers() {
-            delegates.insert(region_id, ApplyDelegate::from_peer(p));
+            delegates.insert(region_id, ApplyDelegate::from_peer(p, sync_log));
         }
         Runner {
             db: store.kv_engine(),
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
+            sync_log: sync_log,
         }
     }
 
@@ -1503,9 +1507,13 @@ impl Runner {
             .write(apply_ctx.wb.take().unwrap())
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
 
+        // raftsotre.sync-log = true means we need prevent data loss when power failure.
+        // take raft log gc for example, we write kv WAL first, then write raft WAL,
+        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
+        // so we use sync-log flag here.
         if apply_ctx.flush_wal {
             self.db
-                .flush_wal(false)
+                .flush_wal(self.sync_log)
                 .unwrap_or_else(|e| panic!("failed to flush wal, error: {:?}", e));
         }
 
@@ -1557,7 +1565,7 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
+        let delegate = ApplyDelegate::from_registration(self.db.clone(), s, self.sync_log);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag,
@@ -1630,6 +1638,7 @@ mod tests {
             host: host,
             delegates: HashMap::new(),
             notifier: tx,
+            sync_log: false,
         }
     }
 
@@ -1903,7 +1912,7 @@ mod tests {
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
+        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg, false);
         let (tx, rx) = mpsc::channel();
 
         let put_entry = EntryBuilder::new(1, 1)

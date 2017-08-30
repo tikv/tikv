@@ -551,7 +551,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
 
         let (tx, rx) = mpsc::channel();
-        let apply_runner = ApplyRunner::new(self, tx);
+        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log);
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
