@@ -264,7 +264,6 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
-    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
     cluster.run();
     let cf = "lock";
@@ -438,21 +437,20 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
-    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
-    let r1 = cluster.run_conf_change();
-    pd_client.must_add_peer(r1, new_peer(2, 2));
-    pd_client.must_add_peer(r1, new_peer(3, 3));
+    cluster.run();
+
+    pd_client.must_remove_peer(1, new_peer(4, 4));
 
     let (tx, rx) = mpsc::channel();
     cluster
         .sim
         .wl()
         .add_recv_filter(4, box SnapshotAppendFilter::new(tx));
-    pd_client.add_peer(r1, new_peer(4, 4));
+    pd_client.add_peer(1, new_peer(4, 5));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
