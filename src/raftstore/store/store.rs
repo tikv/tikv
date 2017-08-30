@@ -31,7 +31,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTrunc
                              RegionLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::escape;
+use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
@@ -174,6 +174,19 @@ where
     config.messages_per_tick(cfg.messages_per_tick);
     let event_loop = try!(EventLoop::configured(config));
     Ok(event_loop)
+}
+
+pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    if start_key >= end_key {
+        return Ok(());
+    }
+
+    for cf in db.cf_names() {
+        let handle = try!(rocksdb::get_cf_handle(db, cf));
+        try!(db.delete_file_in_range_cf(handle, start_key, end_key));
+    }
+
+    Ok(())
 }
 
 impl<T, C> Store<T, C> {
@@ -359,7 +372,7 @@ impl<T, C> Store<T, C> {
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            try!(util::delete_all_in_range(
+            try!(delete_file_in_range(
                 &self.kv_engine,
                 &last_start_key,
                 &start_key
@@ -367,7 +380,7 @@ impl<T, C> Store<T, C> {
             last_start_key = keys::enc_end_key(region);
         }
 
-        try!(util::delete_all_in_range(
+        try!(delete_file_in_range(
             &self.kv_engine,
             &last_start_key,
             keys::DATA_MAX_KEY
