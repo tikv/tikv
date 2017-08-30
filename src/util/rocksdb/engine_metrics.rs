@@ -297,6 +297,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
                 .with_label_values(&["read_amp_total_read_bytes"])
                 .set(value as f64);
         }
+        _ => {}
     }
 }
 
@@ -353,6 +354,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData) {
                 .with_label_values(&["seek_standard_deviation"])
                 .set(value.standard_deviation);
         }
+        _ => {}
     }
 }
 
