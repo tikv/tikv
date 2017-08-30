@@ -449,7 +449,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=javaforfun/manual_wal_flush#3f793e3c29bf7d620c421f379f4f237bf860b604"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=javaforfun/manual_wal_flush#1804aeb0c9174bdae81503666cfc351873b8f8de"
 dependencies = [
  "gcc 0.3.53 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -760,7 +760,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=javaforfun/manual_wal_flush#3f793e3c29bf7d620c421f379f4f237bf860b604"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=javaforfun/manual_wal_flush#1804aeb0c9174bdae81503666cfc351873b8f8de"
 dependencies = [
  "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
