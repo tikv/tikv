@@ -21,6 +21,7 @@ mod builtin_control;
 mod builtin_op;
 mod compare;
 mod arithmetic;
+mod math;
 use self::compare::CmpOp;
 
 use std::{error, io};
@@ -157,6 +158,7 @@ impl Expression {
         }
     }
 
+    #[allow(match_same_arms)]
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
@@ -229,6 +231,7 @@ impl Expression {
                 ScalarFuncSig::PlusInt => f.plus_int(ctx, row),
                 ScalarFuncSig::MinusInt => f.minus_int(ctx, row),
                 ScalarFuncSig::MultiplyInt => f.multiply_int(ctx, row),
+
                 ScalarFuncSig::LogicalAnd => f.logical_and(ctx, row),
                 ScalarFuncSig::LogicalOr => f.logical_or(ctx, row),
                 ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
@@ -244,6 +247,13 @@ impl Expression {
                 ScalarFuncSig::StringIsNull => f.string_is_null(ctx, row),
                 ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
                 ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
+
+                ScalarFuncSig::AbsInt => f.abs_int(ctx, row),
+                ScalarFuncSig::AbsUInt => f.children[0].eval_int(ctx, row),
+                ScalarFuncSig::CeilIntToInt => f.children[0].eval_int(ctx, row),
+                ScalarFuncSig::CeilDecToInt => f.ceil_dec_to_int(ctx, row),
+                ScalarFuncSig::FloorIntToInt => f.children[0].eval_int(ctx, row),
+                ScalarFuncSig::FloorDecToInt => f.floor_dec_to_int(ctx, row),
 
                 ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
                 ScalarFuncSig::IfInt => f.if_int(ctx, row),
@@ -271,6 +281,10 @@ impl Expression {
                 ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
                 ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
 
+                ScalarFuncSig::AbsReal => f.abs_real(ctx, row),
+                ScalarFuncSig::CeilReal => f.ceil_real(ctx, row),
+                ScalarFuncSig::FloorReal => f.floor_real(ctx, row),
+
                 ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
                 ScalarFuncSig::IfReal => f.if_real(ctx, row),
 
@@ -279,6 +293,7 @@ impl Expression {
         }
     }
 
+    #[allow(match_same_arms)]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
@@ -300,6 +315,12 @@ impl Expression {
                 ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
                 ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
                 ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
+
+                ScalarFuncSig::AbsDecimal => f.abs_decimal(ctx, row),
+                ScalarFuncSig::CeilDecToDec => f.ceil_dec_to_dec(ctx, row),
+                ScalarFuncSig::CeilIntToDec => f.cast_int_as_decimal(ctx, row),
+                ScalarFuncSig::FloorDecToDec => f.floor_dec_to_dec(ctx, row),
+                ScalarFuncSig::FloorIntToDec => f.cast_int_as_decimal(ctx, row),
 
                 ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
                 ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
@@ -502,11 +523,19 @@ mod test {
     use coprocessor::codec::mysql::{Time, MAX_FSP};
     use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-    use super::{Expression, StatementContext};
+    use super::{Error, Expression, StatementContext};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
         Datum::Dec(s.parse().unwrap())
+    }
+
+    #[inline]
+    pub fn check_overflow(e: Error) -> Result<(), ()> {
+        match e {
+            Error::Overflow => Ok(()),
+            _ => Err(()),
+        }
     }
 
     pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
