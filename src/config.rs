@@ -89,7 +89,7 @@ macro_rules! cf_config {
             extern crate serde_test;
             use self::serde_test::{Token, assert_de_tokens};
 
-            pub fn de_tokens() -> Vec<Token> {
+            pub fn default_de_tokens() -> Vec<Token> {
                 let value: $name = Default::default();
                 vec![
                     Token::Struct { name: stringify!($name), len:18 },
@@ -182,7 +182,7 @@ macro_rules! cf_config {
             #[test]
             fn test_de_tokens() {
                 let value: $name = Default::default();
-                assert_de_tokens(&value, &de_tokens());
+                assert_de_tokens(&value, &default_de_tokens());
             }
         }
     };
@@ -869,8 +869,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_de_db_config() {
+    fn db_config_default_de_tokens() -> Vec<Token> {
         let db_cfg = DbConfig::default();
         let mut tokens = vec![
             Token::Struct {
@@ -941,36 +940,140 @@ mod tests {
             Token::Str(""),
         ];
         tokens.push(Token::Str("defaultcf"));
-        tokens.extend(default_cf_config_test::de_tokens());
+        tokens.extend(default_cf_config_test::default_de_tokens());
         tokens.push(Token::Str("writecf"));
-        tokens.extend(write_cf_config_test::de_tokens());
+        tokens.extend(write_cf_config_test::default_de_tokens());
         tokens.push(Token::Str("lockcf"));
-        tokens.extend(lock_cf_config_test::de_tokens());
+        tokens.extend(lock_cf_config_test::default_de_tokens());
         tokens.push(Token::Str("raftcf"));
-        tokens.extend(raft_cf_config_test::de_tokens());
+        tokens.extend(raft_cf_config_test::default_de_tokens());
         tokens.push(Token::StructEnd);
 
-        assert_de_tokens(&db_cfg, &tokens);
+        tokens
+    }
+
+    #[test]
+    fn test_de_db_config() {
+        let db_cfg = DbConfig::default();
+        assert_de_tokens(&db_cfg, &db_config_default_de_tokens());
+    }
+
+    fn metric_config_default_de_tokens() -> Vec<Token> {
+        vec![
+            Token::Struct {
+                name: "MetricConfig",
+                len: 3,
+            },
+            Token::Str("interval"),
+            Token::Str("15s"),
+            Token::Str("address"),
+            Token::Str(""),
+            Token::Str("job"),
+            Token::Str("tikv"),
+            Token::StructEnd,
+        ]
     }
 
     #[test]
     fn test_de_metric_config() {
         let m_cfg = MetricConfig::default();
-        assert_de_tokens(
-            &m_cfg,
-            &[
-                Token::Struct {
-                    name: "MetricConfig",
-                    len: 3,
-                },
-                Token::Str("interval"),
-                Token::Str("15s"),
-                Token::Str("address"),
-                Token::Str(""),
-                Token::Str("job"),
-                Token::Str("tikv"),
-                Token::StructEnd,
-            ],
-        );
+        assert_de_tokens(&m_cfg, &metric_config_default_de_tokens());
+    }
+
+    fn pd_config_default_de_tokens() -> Vec<Token> {
+        vec![
+            Token::Struct {
+                name: "PdConfig",
+                len: 1,
+            },
+            Token::Str("endpoints"),
+            Token::Seq { len: Some(0) },
+            Token::SeqEnd,
+            Token::StructEnd,
+        ]
+    }
+
+    #[test]
+    fn test_de_pd_config() {
+        let pd_cfg = PdConfig::default();
+        assert_de_tokens(&pd_cfg, &pd_config_default_de_tokens());
+    }
+
+    fn raft_db_config_default_de_tokens() -> Vec<Token> {
+        let db_cfg = RaftDbConfig::default();
+        let mut tokens = vec![
+            Token::Struct {
+                name: "RaftDbConfig",
+                len: 20,
+            },
+
+            Token::Str("wal-recovery-mode"),
+            Token::I64(db_cfg.wal_recovery_mode as i64),
+
+            Token::Str("wal-dir"),
+            Token::Str(""),
+
+            Token::Str("wal-ttl-seconds"),
+            Token::U64(db_cfg.wal_ttl_seconds),
+
+            Token::Str("wal-size-limit"),
+            Token::U64(db_cfg.wal_size_limit.0),
+
+            Token::Str("max-total-wal-size"),
+            Token::U64(db_cfg.max_total_wal_size.0),
+
+            Token::Str("max-manifest-file-size"),
+            Token::U64(db_cfg.max_manifest_file_size.0),
+
+            Token::Str("create-if-missing"),
+            Token::Bool(db_cfg.create_if_missing),
+
+            Token::Str("max-open-files"),
+            Token::I32(db_cfg.max_open_files),
+
+            Token::Str("enable-statistics"),
+            Token::Bool(db_cfg.enable_statistics),
+
+            Token::Str("stats-dump-period"),
+            Token::Str("10m"),
+
+            Token::Str("compaction-readahead-size"),
+            Token::U64(db_cfg.compaction_readahead_size.0),
+
+            Token::Str("info-log-max-size"),
+            Token::U64(db_cfg.info_log_max_size.0),
+
+            Token::Str("info-log-roll-time"),
+            Token::Str("0s"),
+
+            Token::Str("info-log-dir"),
+            Token::Str(""),
+
+            Token::Str("max-sub-compactions"),
+            Token::U32(db_cfg.max_sub_compactions),
+
+            Token::Str("writable-file-max-buffer-size"),
+            Token::U64(db_cfg.writable_file_max_buffer_size.0),
+
+            Token::Str("use-direct-io-for-flush-and-compaction"),
+            Token::Bool(db_cfg.use_direct_io_for_flush_and_compaction),
+
+            Token::Str("enable-pipelined-write"),
+            Token::Bool(db_cfg.enable_pipelined_write),
+
+            Token::Str("allow-concurrent-memtable-write"),
+            Token::Bool(db_cfg.allow_concurrent_memtable_write),
+        ];
+        tokens.push(Token::Str("defaultcf"));
+        tokens.extend(raft_default_cf_config_test::default_de_tokens());
+        tokens.push(Token::StructEnd);
+
+        tokens
+    }
+
+    #[test]
+    fn test_de_raft_db_config() {
+        let db_cfg = RaftDbConfig::default();
+        assert_de_tokens(&db_cfg, &raft_db_config_default_de_tokens());
     }
 }
