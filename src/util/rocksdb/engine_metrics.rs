@@ -63,6 +63,10 @@ pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[
     TickerType::BloomFilterPrefixUseful,
     TickerType::WalFileSynced,
     TickerType::WalFileBytes,
+    TickerType::WriteDoneBySelf,
+    TickerType::WriteDoneByOther,
+    TickerType::WriteTimeout,
+    TickerType::WriteWithWAL,
     TickerType::CompactReadBytes,
     TickerType::CompactWriteBytes,
     TickerType::FlushWriteBytes,
@@ -176,19 +180,19 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .unwrap();
         }
         TickerType::GetHitL0 => {
-            STORE_ENGINE_READ_SURVED_VEC
+            STORE_ENGINE_GET_SERVED_VEC
                 .with_label_values(&[name, "get_hit_l0"])
                 .inc_by(value as f64)
                 .unwrap();
         }
         TickerType::GetHitL1 => {
-            STORE_ENGINE_READ_SURVED_VEC
+            STORE_ENGINE_GET_SERVED_VEC
                 .with_label_values(&[name, "get_hit_l1"])
                 .inc_by(value as f64)
                 .unwrap();
         }
         TickerType::GetHitL2AndUp => {
-            STORE_ENGINE_READ_SURVED_VEC
+            STORE_ENGINE_GET_SERVED_VEC
                 .with_label_values(&[name, "get_hit_l2_and_up"])
                 .inc_by(value as f64)
                 .unwrap();
@@ -334,6 +338,30 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
         TickerType::WalFileBytes => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "wal_file_bytes"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::WriteDoneBySelf => {
+            STORE_ENGINE_WRITE_SERVED_VEC
+                .with_label_values(&[name, "write_done_by_self"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::WriteDoneByOther => {
+            STORE_ENGINE_WRITE_SERVED_VEC
+                .with_label_values(&[name, "write_done_by_other"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::WriteTimeout => {
+            STORE_ENGINE_WRITE_SERVED_VEC
+                .with_label_values(&[name, "write_timeout"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::WriteWithWAL => {
+            STORE_ENGINE_WRITE_SERVED_VEC
+                .with_label_values(&[name, "write_with_wal"])
                 .inc_by(value as f64)
                 .unwrap();
         }
@@ -868,10 +896,17 @@ lazy_static!{
             &["db", "type"]
         ).unwrap();
 
-    pub static ref STORE_ENGINE_READ_SURVED_VEC: CounterVec =
+    pub static ref STORE_ENGINE_GET_SERVED_VEC: CounterVec =
         register_counter_vec!(
             "tikv_engine_get_served",
-            "Get queries served by",
+            "Get queries served by engine",
+            &["db", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_WRITE_SERVED_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_engine_write_served",
+            "Write queries served by engine",
             &["db", "type"]
         ).unwrap();
 
