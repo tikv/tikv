@@ -490,7 +490,6 @@ pub struct RaftDbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
     pub allow_concurrent_memtable_write: bool,
-    pub manual_wal_flush: bool,
     pub defaultcf: RaftDefaultCfConfig,
 }
 
@@ -516,7 +515,6 @@ impl Default for RaftDbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             allow_concurrent_memtable_write: false,
-            manual_wal_flush: true,
             defaultcf: RaftDefaultCfConfig::default(),
         }
     }
@@ -560,7 +558,6 @@ impl RaftDbConfig {
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
-        opts.manual_wal_flush(self.manual_wal_flush);
         opts.add_event_listener(EventListener::new("raft"));
         opts
     }

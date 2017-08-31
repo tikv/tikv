@@ -22,6 +22,7 @@ use std::thread;
 use std::u64;
 
 use rocksdb::{DBStatisticsTickerType as TickerType, WriteBatch, DB};
+use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use time::{self, Timespec};
@@ -301,8 +302,9 @@ impl<T, C> Store<T, C> {
             self.kv_engine.flush_wal(true).unwrap();
         }
         if !raft_wb.is_empty() {
-            self.raft_engine.write(raft_wb).unwrap();
-            self.raft_engine.flush_wal(true).unwrap();
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            self.raft_engine.write_opt(raft_wb, &write_opts).unwrap();
         }
 
         // schedule applying snapshot after raft writebatch were written.
@@ -1089,13 +1091,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if !raft_wb.is_empty() {
             // RaftLocalState, Raft Log Entry
-            self.raft_engine.write(raft_wb).unwrap_or_else(|e| {
-                panic!("{} failed to save raft append result: {:?}", self.tag, e);
-            });
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(self.cfg.sync_log);
             self.raft_engine
-                .flush_wal(self.cfg.sync_log)
+                .write_opt(raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to flush raft append result: {:?}", self.tag, e);
+                    panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
         }
 
