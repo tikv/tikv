@@ -54,7 +54,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 }
 
 macro_rules! cf_config {
-    ($name:ident, $test_name:ident) => {
+    ($name:ident) => {
         #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
@@ -80,112 +80,7 @@ macro_rules! cf_config {
             #[serde(with = "config::compaction_pri_serde")]
             pub compaction_pri: CompactionPriority,
         }
-
-        #[cfg(test)]
-        mod $test_name {
-            use util::config::compression_type_level_serde;
-            use super::*;
-
-            extern crate serde_test;
-            use self::serde_test::{Token, assert_de_tokens};
-
-            pub fn default_de_tokens() -> Vec<Token> {
-                let value: $name = Default::default();
-                vec![
-                    Token::Struct { name: stringify!($name), len:18 },
-                        Token::Str("block-size"),
-                        Token::U64(value.block_size.0),
-
-                        Token::Str("block-cache-size"),
-                        Token::U64(value.block_cache_size.0),
-
-                        Token::Str("cache-index-and-filter-blocks"),
-                        Token::Bool(value.cache_index_and_filter_blocks),
-
-                        Token::Str("use-bloom-filter"),
-                        Token::Bool(value.use_bloom_filter),
-
-                        Token::Str("whole-key-filtering"),
-                        Token::Bool(value.whole_key_filtering),
-
-                        Token::Str("bloom-filter-bits-per-key"),
-                        Token::I32(value.bloom_filter_bits_per_key),
-
-                        Token::Str("block-based-bloom-filter"),
-                        Token::Bool(value.block_based_bloom_filter),
-
-                        Token::Str("compression-per-level"),
-                        Token::Seq { len: Some(7) },
-                            Token::Str(
-                                compression_type_level_serde::db_compression_type_to_str(
-                                    &value.compression_per_level[0]
-                                )),
-                            Token::Str(
-                                compression_type_level_serde::db_compression_type_to_str(
-                                    &value.compression_per_level[1]
-                                )),
-                            Token::Str(
-                                compression_type_level_serde::db_compression_type_to_str(
-                                    &value.compression_per_level[2]
-                                )),
-                            Token::Str(
-                                compression_type_level_serde::db_compression_type_to_str(
-                                    &value.compression_per_level[3]
-                                )),
-                            Token::Str(
-                                compression_type_level_serde::db_compression_type_to_str(
-                                    &value.compression_per_level[4]
-                                )),
-                            Token::Str(
-                                compression_type_level_serde::db_compression_type_to_str(
-                                    &value.compression_per_level[5]
-                                )),
-                            Token::Str(
-                                compression_type_level_serde::db_compression_type_to_str(
-                                    &value.compression_per_level[6]
-                                )),
-                        Token::SeqEnd,
-
-                        Token::Str("write-buffer-size"),
-                        Token::U64(value.write_buffer_size.0),
-
-                        Token::Str("max-write-buffer-number"),
-                        Token::I32(value.max_write_buffer_number),
-
-                        Token::Str("min-write-buffer-number-to-merge"),
-                        Token::I32(value.min_write_buffer_number_to_merge),
-
-                        Token::Str("max-bytes-for-level-base"),
-                        Token::U64(value.max_bytes_for_level_base.0),
-
-                        Token::Str("target-file-size-base"),
-                        Token::U64(value.target_file_size_base.0),
-
-                        Token::Str("level0-file-num-compaction-trigger"),
-                        Token::I32(value.level0_file_num_compaction_trigger),
-
-                        Token::Str("level0-slowdown-writes-trigger"),
-                        Token::I32(value.level0_slowdown_writes_trigger),
-
-                        Token::Str("level0-stop-writes-trigger"),
-                        Token::I32(value.level0_stop_writes_trigger),
-
-                        Token::Str("max-compaction-bytes"),
-                        Token::U64(value.max_compaction_bytes.0),
-
-                        Token::Str("compaction-pri"),
-                        Token::I64(value.compaction_pri as i64),
-                    Token::StructEnd,
-                ]
-            }
-
-            #[test]
-            fn test_de_tokens() {
-                let value: $name = Default::default();
-                assert_de_tokens(&value, &default_de_tokens());
-            }
-        }
-    };
+    }
 }
 
 macro_rules! build_cf_opt {
@@ -216,7 +111,7 @@ macro_rules! build_cf_opt {
     }};
 }
 
-cf_config!(DefaultCfConfig, test_default_cf_config);
+cf_config!(DefaultCfConfig);
 
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
@@ -260,7 +155,7 @@ impl DefaultCfConfig {
     }
 }
 
-cf_config!(WriteCfConfig, test_write_cf_config);
+cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
@@ -314,7 +209,7 @@ impl WriteCfConfig {
     }
 }
 
-cf_config!(LockCfConfig, test_lock_cf_config);
+cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
@@ -353,7 +248,7 @@ impl LockCfConfig {
     }
 }
 
-cf_config!(RaftCfConfig, test_raft_cf_config);
+cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
@@ -518,7 +413,7 @@ impl DbConfig {
     }
 }
 
-cf_config!(RaftDefaultCfConfig, test_raft_default_cf_config);
+cf_config!(RaftDefaultCfConfig);
 
 impl Default for RaftDefaultCfConfig {
     fn default() -> RaftDefaultCfConfig {
@@ -801,6 +696,7 @@ mod tests {
     use super::*;
 
     use {raftstore, server, storage};
+    use util::config::compression_type_level_serde;
 
     use toml::{self, ser};
 
@@ -870,6 +766,112 @@ mod tests {
             assert_eq!(value, load);
         }
     }
+
+    macro_rules! cf_config_test {
+        ($name:ty, $default_de_tokens:ident, $test_name:ident) => {
+            fn $default_de_tokens() -> Vec<Token> {
+                let value: $name = Default::default();
+                vec![
+                    Token::Struct { name: stringify!($name), len:18 },
+                        Token::Str("block-size"),
+                        Token::U64(value.block_size.0),
+
+                        Token::Str("block-cache-size"),
+                        Token::U64(value.block_cache_size.0),
+
+                        Token::Str("cache-index-and-filter-blocks"),
+                        Token::Bool(value.cache_index_and_filter_blocks),
+
+                        Token::Str("use-bloom-filter"),
+                        Token::Bool(value.use_bloom_filter),
+
+                        Token::Str("whole-key-filtering"),
+                        Token::Bool(value.whole_key_filtering),
+
+                        Token::Str("bloom-filter-bits-per-key"),
+                        Token::I32(value.bloom_filter_bits_per_key),
+
+                        Token::Str("block-based-bloom-filter"),
+                        Token::Bool(value.block_based_bloom_filter),
+
+                        Token::Str("compression-per-level"),
+                        Token::Seq { len: Some(7) },
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[0]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[1]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[2]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[3]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[4]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[5]
+                                )),
+                            Token::Str(
+                                compression_type_level_serde::db_compression_type_to_str(
+                                    &value.compression_per_level[6]
+                                )),
+                        Token::SeqEnd,
+
+                        Token::Str("write-buffer-size"),
+                        Token::U64(value.write_buffer_size.0),
+
+                        Token::Str("max-write-buffer-number"),
+                        Token::I32(value.max_write_buffer_number),
+
+                        Token::Str("min-write-buffer-number-to-merge"),
+                        Token::I32(value.min_write_buffer_number_to_merge),
+
+                        Token::Str("max-bytes-for-level-base"),
+                        Token::U64(value.max_bytes_for_level_base.0),
+
+                        Token::Str("target-file-size-base"),
+                        Token::U64(value.target_file_size_base.0),
+
+                        Token::Str("level0-file-num-compaction-trigger"),
+                        Token::I32(value.level0_file_num_compaction_trigger),
+
+                        Token::Str("level0-slowdown-writes-trigger"),
+                        Token::I32(value.level0_slowdown_writes_trigger),
+
+                        Token::Str("level0-stop-writes-trigger"),
+                        Token::I32(value.level0_stop_writes_trigger),
+
+                        Token::Str("max-compaction-bytes"),
+                        Token::U64(value.max_compaction_bytes.0),
+
+                        Token::Str("compaction-pri"),
+                        Token::I64(value.compaction_pri as i64),
+                    Token::StructEnd,
+                ]
+            }
+
+            #[test]
+            fn $test_name() {
+                let value: $name = Default::default();
+                assert_de_tokens(&value, &$default_de_tokens());
+            }
+        }
+    }
+
+    cf_config_test!(DefaultCfConfig, default_cf_config_default_de_tokens, test_de_default_cf_config);
+    cf_config_test!(WriteCfConfig, write_cf_config_default_de_tokens, test_de_write_cf_config);
+    cf_config_test!(LockCfConfig, lock_cf_config_default_de_tokens, test_de_lock_cf_config);
+    cf_config_test!(RaftCfConfig, raft_cf_config_default_de_tokens, test_de_raft_cf_config);
+    cf_config_test!(RaftDefaultCfConfig, raft_default_cf_config_default_de_tokens, test_de_raft_default_cf_config);
 
     fn db_config_default_de_tokens() -> Vec<Token> {
         let db_cfg = DbConfig::default();
@@ -942,13 +944,13 @@ mod tests {
             Token::Str(""),
         ];
         tokens.push(Token::Str("defaultcf"));
-        tokens.extend(test_default_cf_config::default_de_tokens());
+        tokens.extend(default_cf_config_default_de_tokens());
         tokens.push(Token::Str("writecf"));
-        tokens.extend(test_write_cf_config::default_de_tokens());
+        tokens.extend(write_cf_config_default_de_tokens());
         tokens.push(Token::Str("lockcf"));
-        tokens.extend(test_lock_cf_config::default_de_tokens());
+        tokens.extend(lock_cf_config_default_de_tokens());
         tokens.push(Token::Str("raftcf"));
-        tokens.extend(test_raft_cf_config::default_de_tokens());
+        tokens.extend(raft_cf_config_default_de_tokens());
         tokens.push(Token::StructEnd);
 
         tokens
@@ -1067,7 +1069,7 @@ mod tests {
             Token::Bool(db_cfg.allow_concurrent_memtable_write),
         ];
         tokens.push(Token::Str("defaultcf"));
-        tokens.extend(test_raft_default_cf_config::default_de_tokens());
+        tokens.extend(raft_default_cf_config_default_de_tokens());
         tokens.push(Token::StructEnd);
 
         tokens
