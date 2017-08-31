@@ -262,6 +262,8 @@ impl Expression {
                 ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
                 ScalarFuncSig::IfInt => f.if_int(ctx, row),
 
+                ScalarFuncSig::CoalesceInt => f.coalesce_int(ctx, row),
+
                 _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
@@ -291,6 +293,8 @@ impl Expression {
 
                 ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
                 ScalarFuncSig::IfReal => f.if_real(ctx, row),
+
+                ScalarFuncSig::CoalesceReal => f.coalesce_real(ctx, row),
 
                 _ => Err(Error::UnknownSignature(f.sig)),
             },
@@ -329,6 +333,8 @@ impl Expression {
                 ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
                 ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
 
+                ScalarFuncSig::CoalesceDecimal => f.coalesce_decimal(ctx, row),
+
                 _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
@@ -353,6 +359,8 @@ impl Expression {
 
                 ScalarFuncSig::IfNullString => f.if_null_string(ctx, row),
                 ScalarFuncSig::IfString => f.if_string(ctx, row),
+
+                ScalarFuncSig::CoalesceString => f.coalesce_string(ctx, row),
                 _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
@@ -377,6 +385,8 @@ impl Expression {
 
                 ScalarFuncSig::IfNullTime => f.if_null_time(ctx, row),
                 ScalarFuncSig::IfTime => f.if_time(ctx, row),
+
+                ScalarFuncSig::CoalesceTime => f.coalesce_time(ctx, row),
                 _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
@@ -401,6 +411,9 @@ impl Expression {
 
                 ScalarFuncSig::IfNullDuration => f.if_null_duration(ctx, row),
                 ScalarFuncSig::IfDuration => f.if_duration(ctx, row),
+
+                ScalarFuncSig::CoalesceDuration => f.coalesce_duration(ctx, row),
+
                 _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
@@ -422,6 +435,9 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsJson => f.cast_time_as_json(ctx, row),
                 ScalarFuncSig::CastDurationAsJson => f.cast_duration_as_json(ctx, row),
                 ScalarFuncSig::CastJsonAsJson => f.cast_json_as_json(ctx, row),
+
+                ScalarFuncSig::CoalesceJson => f.coalesce_json(ctx, row),
+
                 _ => Err(Error::UnknownSignature(f.sig)),
             },
         }

@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::usize;
 use tipb::expression::ScalarFuncSig;
 use super::{FnCall, Result};
 
@@ -168,6 +169,16 @@ impl FnCall {
             ScalarFuncSig::IfDecimal |
             ScalarFuncSig::IfTime |
             ScalarFuncSig::IfDuration => (3, 3),
+
+            ScalarFuncSig::CoalesceDecimal |
+            ScalarFuncSig::CoalesceDuration |
+            ScalarFuncSig::CoalesceInt |
+            ScalarFuncSig::CoalesceJson |
+            ScalarFuncSig::CoalesceReal |
+            ScalarFuncSig::CoalesceString |
+            ScalarFuncSig::CoalesceTime => (1, usize::MAX),
+
+            _ => return Err(box_err!("todo")),
         };
         if args < min_args || args > max_args {
             return Err(box_err!("unexpected arguments"));
