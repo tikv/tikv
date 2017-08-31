@@ -216,16 +216,8 @@ mod test {
         for (operator, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(branch1);
             let arg2 = datum_expr(branch2);
-            let op = Expression::build(fncall_expr(operator, &[arg1, arg2]), 0, &ctx).unwrap();
-            let res: Datum = match operator {
-                ScalarFuncSig::IfNullInt => op.eval_int(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullReal => op.eval_real(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullString => op.eval_string(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullDecimal => op.eval_decimal(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullTime => op.eval_time(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullDuration => op.eval_duration(&ctx, &[]).unwrap().into(),
-                _ => unreachable!(),
-            };
+            let op = Expression::build(fncall_expr(operator, &[arg1, arg2]), &ctx).unwrap();
+            let res = op.eval(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -345,42 +337,11 @@ mod test {
             let arg1 = datum_expr(cond);
             let arg2 = datum_expr(branch1);
             let arg3 = datum_expr(branch2);
-            let expected = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
-            let op =
-                Expression::build(fncall_expr(operator, &[arg1, arg2, arg3]), 0, &ctx).unwrap();
-            match operator {
-                ScalarFuncSig::IfInt => {
-                    let lhs = op.eval_int(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfReal => {
-                    let lhs = op.eval_real(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfString => {
-                    let lhs = op.eval_string(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_string(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfTime => {
-                    let lhs = op.eval_time(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_time(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfDuration => {
-                    let lhs = op.eval_duration(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_duration(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                _ => unreachable!(),
-            }
+            let expected = Expression::build(datum_expr(exp), &ctx).unwrap();
+            let op = Expression::build(fncall_expr(operator, &[arg1, arg2, arg3]), &ctx).unwrap();
+            let lhs = op.eval(&ctx, &[]).unwrap();
+            let rhs = expected.eval(&ctx, &[]).unwrap();
+            assert_eq!(lhs, rhs);
         }
     }
 }

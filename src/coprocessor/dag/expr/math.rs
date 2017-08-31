@@ -125,14 +125,12 @@ mod test {
         let ctx = StatementContext::default();
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let op = Expression::build(fncall_expr(sig, &[arg]), 0, &ctx).unwrap();
-            let got: Datum = match sig {
-                ScalarFuncSig::AbsInt => op.eval_int(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::AbsUInt => op.eval_int(&ctx, &[]).unwrap().map(|i| i as u64).into(),
-                ScalarFuncSig::AbsReal => op.eval_real(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::AbsDecimal => op.eval_decimal(&ctx, &[]).unwrap().into(),
-                _ => unreachable!(),
-            };
+            let mut f = fncall_expr(sig, &[arg]);
+            if sig == ScalarFuncSig::AbsUInt {
+                f.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
+            }
+            let op = Expression::build(f, &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -143,14 +141,9 @@ mod test {
         let ctx = StatementContext::default();
         for tt in tests {
             let arg = datum_expr(tt.1);
-            let op = Expression::build(fncall_expr(tt.0, &[arg]), 0, &ctx).unwrap();
-            match tt.0 {
-                ScalarFuncSig::AbsInt | ScalarFuncSig::AbsUInt => {
-                    let got = op.eval_int(&ctx, &[]).unwrap_err();
-                    assert!(check_overflow(got).is_ok());
-                }
-                _ => unreachable!(),
-            }
+            let op = Expression::build(fncall_expr(tt.0, &[arg]), &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
         }
     }
 
@@ -208,8 +201,7 @@ mod test {
         ctx.ignore_truncate = true; // for ceil decimal to int.
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut op = Expression::build(fncall_expr(sig, &[arg.clone()]), 0, &ctx).unwrap();
-            let exp = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
+            let mut op = Expression::build(fncall_expr(sig, &[arg.clone()]), &ctx).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
@@ -217,24 +209,8 @@ mod test {
                 op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
                 op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
-            match sig {
-                ScalarFuncSig::CeilReal => {
-                    let got = op.eval_real(&ctx, &[]).unwrap();
-                    let exp = exp.eval_real(&ctx, &[]).unwrap();
-                    assert_eq!(got, exp);
-                }
-                ScalarFuncSig::CeilIntToInt | ScalarFuncSig::CeilDecToInt => {
-                    let got = op.eval_int(&ctx, &[]).unwrap();
-                    let exp = exp.eval_int(&ctx, &[]).unwrap();
-                    assert_eq!(got, exp);
-                }
-                ScalarFuncSig::CeilIntToDec | ScalarFuncSig::CeilDecToDec => {
-                    let got = op.eval_decimal(&ctx, &[]).unwrap();
-                    let exp = exp.eval_decimal(&ctx, &[]).unwrap();
-                    assert_eq!(got, exp);
-                }
-                _ => unreachable!(),
-            }
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 
@@ -292,8 +268,7 @@ mod test {
         ctx.ignore_truncate = true; // for ceil decimal to int.
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut op = Expression::build(fncall_expr(sig, &[arg.clone()]), 0, &ctx).unwrap();
-            let exp = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
+            let mut op = Expression::build(fncall_expr(sig, &[arg.clone()]), &ctx).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
@@ -301,24 +276,8 @@ mod test {
                 op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
                 op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
-            match sig {
-                ScalarFuncSig::FloorReal => {
-                    let got = op.eval_real(&ctx, &[]).unwrap();
-                    let exp = exp.eval_real(&ctx, &[]).unwrap();
-                    assert_eq!(got, exp);
-                }
-                ScalarFuncSig::FloorIntToInt | ScalarFuncSig::FloorDecToInt => {
-                    let got = op.eval_int(&ctx, &[]).unwrap();
-                    let exp = exp.eval_int(&ctx, &[]).unwrap();
-                    assert_eq!(got, exp);
-                }
-                ScalarFuncSig::FloorIntToDec | ScalarFuncSig::FloorDecToDec => {
-                    let got = op.eval_decimal(&ctx, &[]).unwrap();
-                    let exp = exp.eval_decimal(&ctx, &[]).unwrap();
-                    assert_eq!(got, exp);
-                }
-                _ => unreachable!(),
-            }
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }

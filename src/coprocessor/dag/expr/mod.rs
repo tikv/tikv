@@ -31,7 +31,7 @@ use std::str::Utf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
+use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
@@ -63,6 +63,10 @@ quick_error! {
         ColumnOffset(offset: usize) {
             description("column offset not found")
             display("illegal column offset: {}", offset)
+        }
+        UnknownSignature(sig: ScalarFuncSig) {
+            description("Unknown signature")
+            display("Unknown signature: {:?}", sig)
         }
         Truncated {
             description("Truncated")
@@ -258,7 +262,7 @@ impl Expression {
                 ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
                 ScalarFuncSig::IfInt => f.if_int(ctx, row),
 
-                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -288,7 +292,7 @@ impl Expression {
                 ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
                 ScalarFuncSig::IfReal => f.if_real(ctx, row),
 
-                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -325,7 +329,7 @@ impl Expression {
                 ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
                 ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
 
-                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -349,7 +353,7 @@ impl Expression {
 
                 ScalarFuncSig::IfNullString => f.if_null_string(ctx, row),
                 ScalarFuncSig::IfString => f.if_string(ctx, row),
-                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -373,7 +377,7 @@ impl Expression {
 
                 ScalarFuncSig::IfNullTime => f.if_null_time(ctx, row),
                 ScalarFuncSig::IfTime => f.if_time(ctx, row),
-                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -397,7 +401,7 @@ impl Expression {
 
                 ScalarFuncSig::IfNullDuration => f.if_null_duration(ctx, row),
                 ScalarFuncSig::IfDuration => f.if_duration(ctx, row),
-                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -418,7 +422,7 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsJson => f.cast_time_as_json(ctx, row),
                 ScalarFuncSig::CastDurationAsJson => f.cast_duration_as_json(ctx, row),
                 ScalarFuncSig::CastJsonAsJson => f.cast_json_as_json(ctx, row),
-                _ => Err(box_err!("Unknown signature: {:?}", f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -443,8 +447,42 @@ impl Expression {
     }
 }
 
+fn filter<T: Into<Datum>>(x: Result<T>) -> Option<Result<Datum>> {
+    match x {
+        Err(Error::UnknownSignature(_)) => None,
+        e => Some(e.map(|x| x.into())),
+    }
+}
+
 impl Expression {
-    fn build(mut expr: Expr, row_len: usize, ctx: &StatementContext) -> Result<Self> {
+    pub fn eval(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Datum> {
+        match *self {
+            Expression::Constant(ref constant) => Ok(constant.eval()),
+            Expression::ColumnRef(ref column) => Ok(column.eval(row)),
+            Expression::ScalarFn(ref f) => {
+                let eval_int = self.eval_int(ctx, row).map(|v| {
+                    v.map_or(Datum::Null, |v| {
+                        if mysql::has_unsigned_flag(self.get_tp().get_flag() as u64) {
+                            Datum::U64(v as u64)
+                        } else {
+                            Datum::I64(v)
+                        }
+                    })
+                });
+
+                let res = filter(eval_int)
+                    .or_else(|| filter(self.eval_real(ctx, row)))
+                    .or_else(|| filter(self.eval_decimal(ctx, row)))
+                    .or_else(|| filter(self.eval_time(ctx, row)))
+                    .or_else(|| filter(self.eval_duration(ctx, row)))
+                    .or_else(|| filter(self.eval_string(ctx, row)))
+                    .or_else(|| filter(self.eval_json(ctx, row)));
+                res.unwrap_or_else(|| Err(Error::UnknownSignature(f.sig)))
+            }
+        }
+    }
+
+    pub fn build(mut expr: Expr, ctx: &StatementContext) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -469,9 +507,9 @@ impl Expression {
             ExprType::MysqlTime => expr.get_val()
                 .decode_u64()
                 .and_then(|i| {
-                    let fsp = expr.get_field_type().get_decimal() as i8;
-                    let tp = expr.get_field_type().get_tp() as u8;
-                    Time::from_packed_u64(i, tp, fsp, &ctx.tz)
+                    let fsp = tp.get_decimal() as i8;
+                    let t = tp.get_tp() as u8;
+                    Time::from_packed_u64(i, t, fsp, &ctx.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
@@ -493,7 +531,7 @@ impl Expression {
                 ));
                 expr.take_children()
                     .into_iter()
-                    .map(|child| Expression::build(child, row_len, ctx))
+                    .map(|child| Expression::build(child, ctx))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
@@ -505,7 +543,6 @@ impl Expression {
             }
             ExprType::ColumnRef => {
                 let offset = try!(expr.get_val().decode_i64().map_err(Error::from)) as usize;
-                try!(Column::check_offset(offset, row_len));
                 let column = Column {
                     offset: offset,
                     tp: tp,
@@ -519,9 +556,10 @@ impl Expression {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::{Time, MAX_FSP};
-    use coprocessor::select::xeval::evaluator::test::{col_expr, datum_expr};
+    use std::{i64, u64};
+    use coprocessor::codec::{convert, Datum};
+    use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
+    use coprocessor::select::xeval::evaluator::test::col_expr;
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
     use super::{Error, Expression, StatementContext};
 
@@ -550,34 +588,75 @@ mod test {
     }
 
     #[test]
-    fn test_expression_build() {
-        let colref = col_expr(1);
-        let const_null = datum_expr(Datum::Null);
-        let const_time = datum_expr(Datum::Time(
-            Time::parse_utc_datetime("1970-01-01 12:00:00", MAX_FSP).unwrap(),
-        ));
-
-        let tests = vec![
-            (colref.clone(), 1, false),
-            (colref.clone(), 2, true),
-            (const_null.clone(), 0, true),
-            (const_time.clone(), 0, true),
+    fn test_expression_eval() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let cases = vec![
             (
-                fncall_expr(ScalarFuncSig::LTInt, &[colref.clone(), const_null.clone()]),
-                2,
-                true,
+                ScalarFuncSig::CastStringAsReal,
+                vec![Datum::Bytes(b"123".to_vec())],
+                Datum::F64(123f64),
             ),
             (
-                fncall_expr(ScalarFuncSig::LTInt, &[colref.clone()]),
-                0,
-                false,
+                ScalarFuncSig::CastStringAsDecimal,
+                vec![Datum::Bytes(b"123".to_vec())],
+                Datum::Dec(Decimal::from(123)),
+            ),
+            (
+                ScalarFuncSig::CastStringAsDuration,
+                vec![Datum::Bytes(b"12:02:03".to_vec())],
+                Datum::Dur(Duration::parse(b"12:02:03", 0).unwrap()),
+            ),
+            (
+                ScalarFuncSig::CastStringAsTime,
+                vec![Datum::Bytes(b"2012-12-12 14:00:05".to_vec())],
+                Datum::Time(Time::parse_utc_datetime("2012-12-12 14:00:05", 0).unwrap()),
+            ),
+            (
+                ScalarFuncSig::CastStringAsString,
+                vec![Datum::Bytes(b"134".to_vec())],
+                Datum::Bytes(b"134".to_vec()),
+            ),
+            (
+                ScalarFuncSig::CastIntAsJson,
+                vec![Datum::I64(12)],
+                Datum::Json(Json::I64(12)),
             ),
         ];
-
-        let ctx = StatementContext::default();
-        for tt in tests {
-            let expr = Expression::build(tt.0, tt.1, &ctx);
-            assert_eq!(expr.is_ok(), tt.2);
+        for (sig, cols, exp) in cases {
+            let col_expr = col_expr(0);
+            let mut ex = fncall_expr(sig, &[col_expr]);
+            ex.mut_field_type()
+                .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
+            ex.mut_field_type()
+                .set_flen(convert::UNSPECIFIED_LENGTH as i32);
+            let e = Expression::build(ex, &ctx).unwrap();
+            let res = e.eval(&ctx, &cols).unwrap();
+            if let Datum::F64(_) = exp {
+                assert_eq!(format!("{}", res), format!("{}", exp));
+            } else {
+                assert_eq!(res, exp);
+            }
+        }
+        // cases for integer
+        let cases = vec![
+            (
+                Some(types::UNSIGNED_FLAG),
+                vec![Datum::U64(u64::MAX)],
+                Datum::U64(u64::MAX),
+            ),
+            (None, vec![Datum::I64(i64::MIN)], Datum::I64(i64::MIN)),
+            (None, vec![Datum::Null], Datum::Null),
+        ];
+        for (flag, cols, exp) in cases {
+            let col_expr = col_expr(0);
+            let mut ex = fncall_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
+            if flag.is_some() {
+                ex.mut_field_type().set_flag(flag.unwrap() as u32);
+            }
+            let e = Expression::build(ex, &ctx).unwrap();
+            let res = e.eval(&ctx, &cols).unwrap();
+            assert_eq!(res, exp);
         }
     }
 }
