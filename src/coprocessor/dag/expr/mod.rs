@@ -507,9 +507,9 @@ impl Expression {
             ExprType::MysqlTime => expr.get_val()
                 .decode_u64()
                 .and_then(|i| {
-                    let fsp = expr.get_field_type().get_decimal() as i8;
-                    let tp = expr.get_field_type().get_tp() as u8;
-                    Time::from_packed_u64(i, tp, fsp, &ctx.tz)
+                    let fsp = tp.get_decimal() as i8;
+                    let t = tp.get_tp() as u8;
+                    Time::from_packed_u64(i, t, fsp, &ctx.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),

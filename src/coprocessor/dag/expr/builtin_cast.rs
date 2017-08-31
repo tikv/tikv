@@ -806,7 +806,7 @@ mod test {
             if flag.is_some() {
                 exp.mut_field_type().set_flag(flag.unwrap() as u32);
             }
-            let e = Expression::build(exp, 1, &ctx).unwrap();
+            let e = Expression::build(exp, &ctx).unwrap();
             let res = e.eval_int(&ctx, &col).unwrap();
             assert_eq!(res.unwrap(), expect);
             // test None
@@ -944,7 +944,7 @@ mod test {
             let mut exp = fncall_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
-            let e = Expression::build(exp, 1, &ctx).unwrap();
+            let e = Expression::build(exp, &ctx).unwrap();
             let res = e.eval_real(&ctx, &col).unwrap();
             assert_eq!(format!("{}", res.unwrap()), format!("{}", expect));
             // test None
