@@ -89,17 +89,24 @@ macro_rules! fatal {
 fn init_log(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         logger::init_log(StderrLogger, config.log_level)
-            .unwrap_or_else(|e| fatal!("failed to initial log: {:?}", e));
+            .unwrap_or_else(|e| {
+                eprintln!("failed to initial log: {:?}", e);
+                process::exit(1)
+            });
     } else {
         let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
-            fatal!(
-                "failed to initial log with file {}: {:?}",
+            eprintln!(
+                "failed to initial log with file {:?}: {:?}",
                 config.log_file,
                 e
-            )
+            );
+            process::exit(1)
         });
         logger::init_log(w, config.log_level)
-            .unwrap_or_else(|e| fatal!("failed to initial log: {:?}", e));
+            .unwrap_or_else(|e| {
+                eprintln!("failed to initial log: {:?}", e);
+                process::exit(1)
+            });
     }
 }
 
@@ -436,7 +443,7 @@ fn main() {
                     Ok(c)
                 })
                 .unwrap_or_else(|e| {
-                    eprintln!("invalid configuration file {}: {}", path, e);
+                    eprintln!("invalid configuration file {:?}: {}", path, e);
                     process::exit(-1);
                 })
         },
