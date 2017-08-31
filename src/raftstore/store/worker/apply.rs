@@ -284,7 +284,6 @@ pub struct ApplyDelegate {
     applied_index_term: u64,
     term: u64,
     pending_cmds: PendingCmdQueue,
-    sync_log: bool,
     flush_wal: bool,
     metrics: ApplyMetrics,
 }
@@ -298,12 +297,12 @@ impl ApplyDelegate {
         self.id
     }
 
-    fn from_peer(peer: &Peer, sync_log: bool) -> ApplyDelegate {
+    fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), reg, sync_log)
+        ApplyDelegate::from_registration(peer.kv_engine(), reg)
     }
 
-    fn from_registration(db: Arc<DB>, reg: Registration, sync_log: bool) -> ApplyDelegate {
+    fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -314,7 +313,6 @@ impl ApplyDelegate {
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             pending_cmds: Default::default(),
-            sync_log: sync_log,
             flush_wal: false,
             metrics: Default::default(),
         }
@@ -428,13 +426,6 @@ impl ApplyDelegate {
                     .unwrap_or_else(|e| {
                         panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                     });
-                if apply_ctx.flush_wal || self.flush_wal {
-                    self.engine.flush_wal(self.sync_log).unwrap_or_else(|e| {
-                        panic!("{} failed to flush wal, error: {:?}", self.tag, e)
-                    });
-                    apply_ctx.flush_wal = false;
-                    self.flush_wal = false;
-                }
 
                 // call callback
                 for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -706,6 +697,7 @@ impl ApplyDelegate {
             ctx.term,
             ctx.index
         );
+        self.flush_wal = true;
 
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
@@ -830,7 +822,6 @@ impl ApplyDelegate {
         if let Err(e) = write_peer_state(&self.engine, ctx.wb, &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
-        self.flush_wal = true;
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
@@ -923,7 +914,6 @@ impl ApplyDelegate {
                     e
                 )
             });
-        self.flush_wal = true;
 
         let mut resp = AdminResponse::new();
         if right_derive {
@@ -1003,7 +993,6 @@ impl ApplyDelegate {
             compact_index,
             compact_term
         ));
-        self.flush_wal = true;
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["compact", "success"])
@@ -1452,7 +1441,7 @@ impl Runner {
     pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>, sync_log: bool) -> Runner {
         let mut delegates = HashMap::with_capacity(store.get_peers().len());
         for (&region_id, p) in store.get_peers() {
-            delegates.insert(region_id, ApplyDelegate::from_peer(p, sync_log));
+            delegates.insert(region_id, ApplyDelegate::from_peer(p));
         }
         Runner {
             db: store.kv_engine(),
@@ -1565,7 +1554,7 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(self.db.clone(), s, self.sync_log);
+        let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag,
@@ -1912,7 +1901,7 @@ mod tests {
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg, false);
+        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
         let (tx, rx) = mpsc::channel();
 
         let put_entry = EntryBuilder::new(1, 1)
