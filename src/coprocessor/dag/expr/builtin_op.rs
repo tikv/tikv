@@ -300,12 +300,7 @@ mod test {
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
             let op = Expression::build(fncall_expr(operator, &[arg1]), &ctx).unwrap();
-            let res: Datum = match operator {
-                ScalarFuncSig::UnaryMinusInt => op.eval_int(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::UnaryMinusReal => op.eval_real(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::UnaryMinusDecimal => op.eval_decimal(&ctx, &[]).unwrap().into(),
-                _ => unreachable!(),
-            };
+            let res = op.eval(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -377,7 +372,7 @@ mod test {
         for (op, argument) in tests {
             let arg = datum_expr(argument);
             let op = Expression::build(fncall_expr(op, &[arg]), &ctx).unwrap();
-            let got = op.eval_int(&ctx, &[]).unwrap_err();
+            let got = op.eval(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }

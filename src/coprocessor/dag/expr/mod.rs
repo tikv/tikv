@@ -21,6 +21,7 @@ mod builtin_control;
 mod builtin_op;
 mod compare;
 mod arithmetic;
+mod math;
 use self::compare::CmpOp;
 
 use std::{error, io};
@@ -63,7 +64,7 @@ quick_error! {
             description("column offset not found")
             display("illegal column offset: {}", offset)
         }
-        UnKnownSignature(sig: ScalarFuncSig) {
+        UnknownSignature(sig: ScalarFuncSig) {
             description("Unknown signature")
             display("Unknown signature: {:?}", sig)
         }
@@ -161,6 +162,7 @@ impl Expression {
         }
     }
 
+    #[allow(match_same_arms)]
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
@@ -233,6 +235,7 @@ impl Expression {
                 ScalarFuncSig::PlusInt => f.plus_int(ctx, row),
                 ScalarFuncSig::MinusInt => f.minus_int(ctx, row),
                 ScalarFuncSig::MultiplyInt => f.multiply_int(ctx, row),
+
                 ScalarFuncSig::LogicalAnd => f.logical_and(ctx, row),
                 ScalarFuncSig::LogicalOr => f.logical_or(ctx, row),
                 ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
@@ -249,10 +252,17 @@ impl Expression {
                 ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
                 ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
 
+                ScalarFuncSig::AbsInt => f.abs_int(ctx, row),
+                ScalarFuncSig::AbsUInt => f.children[0].eval_int(ctx, row),
+                ScalarFuncSig::CeilIntToInt => f.children[0].eval_int(ctx, row),
+                ScalarFuncSig::CeilDecToInt => f.ceil_dec_to_int(ctx, row),
+                ScalarFuncSig::FloorIntToInt => f.children[0].eval_int(ctx, row),
+                ScalarFuncSig::FloorDecToInt => f.floor_dec_to_int(ctx, row),
+
                 ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
                 ScalarFuncSig::IfInt => f.if_int(ctx, row),
 
-                _ => Err(Error::UnKnownSignature(f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -275,14 +285,19 @@ impl Expression {
                 ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
                 ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
 
+                ScalarFuncSig::AbsReal => f.abs_real(ctx, row),
+                ScalarFuncSig::CeilReal => f.ceil_real(ctx, row),
+                ScalarFuncSig::FloorReal => f.floor_real(ctx, row),
+
                 ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
                 ScalarFuncSig::IfReal => f.if_real(ctx, row),
 
-                _ => Err(Error::UnKnownSignature(f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
 
+    #[allow(match_same_arms)]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
@@ -305,10 +320,16 @@ impl Expression {
                 ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
                 ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
 
+                ScalarFuncSig::AbsDecimal => f.abs_decimal(ctx, row),
+                ScalarFuncSig::CeilDecToDec => f.ceil_dec_to_dec(ctx, row),
+                ScalarFuncSig::CeilIntToDec => f.cast_int_as_decimal(ctx, row),
+                ScalarFuncSig::FloorDecToDec => f.floor_dec_to_dec(ctx, row),
+                ScalarFuncSig::FloorIntToDec => f.cast_int_as_decimal(ctx, row),
+
                 ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
                 ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
 
-                _ => Err(Error::UnKnownSignature(f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -332,7 +353,7 @@ impl Expression {
 
                 ScalarFuncSig::IfNullString => f.if_null_string(ctx, row),
                 ScalarFuncSig::IfString => f.if_string(ctx, row),
-                _ => Err(Error::UnKnownSignature(f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -356,7 +377,7 @@ impl Expression {
 
                 ScalarFuncSig::IfNullTime => f.if_null_time(ctx, row),
                 ScalarFuncSig::IfTime => f.if_time(ctx, row),
-                _ => Err(Error::UnKnownSignature(f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -380,7 +401,7 @@ impl Expression {
 
                 ScalarFuncSig::IfNullDuration => f.if_null_duration(ctx, row),
                 ScalarFuncSig::IfDuration => f.if_duration(ctx, row),
-                _ => Err(Error::UnKnownSignature(f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -401,7 +422,7 @@ impl Expression {
                 ScalarFuncSig::CastTimeAsJson => f.cast_time_as_json(ctx, row),
                 ScalarFuncSig::CastDurationAsJson => f.cast_duration_as_json(ctx, row),
                 ScalarFuncSig::CastJsonAsJson => f.cast_json_as_json(ctx, row),
-                _ => Err(Error::UnKnownSignature(f.sig)),
+                _ => Err(Error::UnknownSignature(f.sig)),
             },
         }
     }
@@ -426,79 +447,37 @@ impl Expression {
     }
 }
 
+fn filter<T: Into<Datum>>(x: Result<T>) -> Option<Result<Datum>> {
+    match x {
+        Err(Error::UnknownSignature(_)) => None,
+        e => Some(e.map(|x| x.into())),
+    }
+}
+
 impl Expression {
     pub fn eval(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Datum> {
         match *self {
             Expression::Constant(ref constant) => Ok(constant.eval()),
             Expression::ColumnRef(ref column) => Ok(column.eval(row)),
             Expression::ScalarFn(ref f) => {
-                match self.eval_int(ctx, row) {
-                    Ok(v) => {
-                        let v = v.map_or(Datum::Null, |v| {
-                            if mysql::has_unsigned_flag(self.get_tp().get_flag() as u64) {
-                                Datum::U64(v as u64)
-                            } else {
-                                Datum::I64(v)
-                            }
-                        });
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
+                let eval_int = self.eval_int(ctx, row).map(|v| {
+                    v.map_or(Datum::Null, |v| {
+                        if mysql::has_unsigned_flag(self.get_tp().get_flag() as u64) {
+                            Datum::U64(v as u64)
+                        } else {
+                            Datum::I64(v)
+                        }
+                    })
+                });
 
-                match self.eval_real(ctx, row) {
-                    Ok(d) => return Ok(d.into()),
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_decimal(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Dec(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_time(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Time(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_duration(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Dur(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_string(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Bytes(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_json(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Json(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                Err(Error::UnKnownSignature(f.sig))
+                let res = filter(eval_int)
+                    .or_else(|| filter(self.eval_real(ctx, row)))
+                    .or_else(|| filter(self.eval_decimal(ctx, row)))
+                    .or_else(|| filter(self.eval_time(ctx, row)))
+                    .or_else(|| filter(self.eval_duration(ctx, row)))
+                    .or_else(|| filter(self.eval_string(ctx, row)))
+                    .or_else(|| filter(self.eval_json(ctx, row)));
+                res.unwrap_or_else(|| Err(Error::UnknownSignature(f.sig)))
             }
         }
     }
@@ -537,9 +516,9 @@ impl Expression {
             ExprType::MysqlTime => expr.get_val()
                 .decode_u64()
                 .and_then(|i| {
-                    let fsp = expr.get_field_type().get_decimal() as i8;
-                    let tp = expr.get_field_type().get_tp() as u8;
-                    Time::from_packed_u64(i, tp, fsp, &ctx.tz)
+                    let fsp = tp.get_decimal() as i8;
+                    let t = tp.get_tp() as u8;
+                    Time::from_packed_u64(i, t, fsp, &ctx.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
@@ -591,11 +570,19 @@ mod test {
     use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
     use coprocessor::select::xeval::evaluator::test::col_expr;
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-    use super::{Expression, StatementContext};
+    use super::{Error, Expression, StatementContext};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
         Datum::Dec(s.parse().unwrap())
+    }
+
+    #[inline]
+    pub fn check_overflow(e: Error) -> Result<(), ()> {
+        match e {
+            Error::Overflow => Ok(()),
+            _ => Err(()),
+        }
     }
 
     pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
@@ -660,12 +647,7 @@ mod test {
                 assert_eq!(res, exp);
             }
         }
-    }
-
-    #[test]
-    fn test_expression_eval_as_int() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        // cases for integer
         let cases = vec![
             (
                 Some(types::UNSIGNED_FLAG),

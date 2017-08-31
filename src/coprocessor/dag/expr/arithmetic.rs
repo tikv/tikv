@@ -152,16 +152,9 @@ mod test {
     use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::{mysql, Datum};
     use coprocessor::codec::mysql::types;
-    use coprocessor::dag::expr::{Error, Expression, StatementContext};
-    use coprocessor::dag::expr::test::{fncall_expr, str2dec};
+    use coprocessor::dag::expr::{Expression, StatementContext};
+    use coprocessor::dag::expr::test::{check_overflow, fncall_expr, str2dec};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
-
-    fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow => Ok(()),
-            _ => Err(()),
-        }
-    }
 
     #[test]
     fn test_arithmetic_int() {
@@ -230,11 +223,8 @@ mod test {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
 
-            let expected = Expression::build(datum_expr(tt.3), &ctx).unwrap();
-
-            let got = op.eval_int(&ctx, &[]).unwrap();
-            let exp = expected.eval_int(&ctx, &[]).unwrap();
-            assert_eq!(got, exp);
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, tt.3);
         }
     }
 
@@ -266,11 +256,8 @@ mod test {
             let rhs = datum_expr(tt.2);
 
             let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
-            let expected = Expression::build(datum_expr(tt.3), &ctx).unwrap();
-
-            let got = op.eval_real(&ctx, &[]).unwrap();
-            let exp = expected.eval_real(&ctx, &[]).unwrap();
-            assert_eq!(got, exp);
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, tt.3);
         }
     }
 
@@ -302,11 +289,8 @@ mod test {
             let rhs = datum_expr(tt.2);
 
             let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
-            let expected = Expression::build(datum_expr(tt.3), &ctx).unwrap();
-
-            let got = op.eval_decimal(&ctx, &[]).unwrap();
-            let exp = expected.eval_decimal(&ctx, &[]).unwrap();
-            assert_eq!(got, exp);
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, tt.3);
         }
     }
 
@@ -368,7 +352,7 @@ mod test {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
 
-            let got = op.eval_int(&ctx, &[]).unwrap_err();
+            let got = op.eval(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
@@ -398,7 +382,7 @@ mod test {
             let rhs = datum_expr(tt.2);
 
             let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
-            let got = op.eval_real(&ctx, &[]).unwrap_err();
+            let got = op.eval(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
