@@ -34,6 +34,7 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
 use coprocessor::codec::mysql::types;
+use coprocessor::codec::datum::DatumDecoder;
 use coprocessor::codec::Datum;
 use util;
 use util::codec::number::NumberDecoder;
@@ -110,6 +111,7 @@ impl<T> Into<Result<T>> for Res<T> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
+    ValueList(Vec<Datum>),
     Constant(Constant),
     ColumnRef(Column),
     ScalarFn(FnCall),
@@ -146,6 +148,7 @@ impl Expression {
     #[inline]
     fn get_tp(&self) -> &FieldType {
         match *self {
+            Expression::ValueList(_) => unreachable!(),
             Expression::Constant(ref c) => &c.tp,
             Expression::ColumnRef(ref c) => &c.tp,
             Expression::ScalarFn(ref c) => &c.tp,
@@ -156,6 +159,7 @@ impl Expression {
     #[inline]
     fn mut_tp(&mut self) -> &mut FieldType {
         match *self {
+            Expression::ValueList(_) => unreachable!(),
             Expression::Constant(ref mut c) => &mut c.tp,
             Expression::ColumnRef(ref mut c) => &mut c.tp,
             Expression::ScalarFn(ref mut c) => &mut c.tp,
@@ -165,6 +169,10 @@ impl Expression {
     #[allow(match_same_arms)]
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
+            Expression::ValueList(_) => Err(Error::Type {
+                expected: "int",
+                has: "ValueList",
+            }),
             Expression::Constant(ref constant) => constant.eval_int(),
             Expression::ColumnRef(ref column) => column.eval_int(row),
             Expression::ScalarFn(ref f) => match f.sig {
@@ -269,6 +277,10 @@ impl Expression {
 
     fn eval_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
         match *self {
+            Expression::ValueList(_) => Err(Error::Type {
+                expected: "real",
+                has: "ValueList",
+            }),
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
             Expression::ScalarFn(ref f) => match f.sig {
@@ -304,6 +316,10 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         match *self {
+            Expression::ValueList(_) => Err(Error::Type {
+                expected: "decimal",
+                has: "ValueList",
+            }),
             Expression::Constant(ref constant) => constant.eval_decimal(),
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
             Expression::ScalarFn(ref f) => match f.sig {
@@ -340,6 +356,10 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
         match *self {
+            Expression::ValueList(_) => Err(Error::Type {
+                expected: "string",
+                has: "ValueList",
+            }),
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),
             Expression::ScalarFn(ref f) => match f.sig {
@@ -364,6 +384,10 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         match *self {
+            Expression::ValueList(_) => Err(Error::Type {
+                expected: "time",
+                has: "ValueList",
+            }),
             Expression::Constant(ref constant) => constant.eval_time(),
             Expression::ColumnRef(ref column) => column.eval_time(row),
             Expression::ScalarFn(ref f) => match f.sig {
@@ -388,6 +412,10 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         match *self {
+            Expression::ValueList(_) => Err(Error::Type {
+                expected: "duration",
+                has: "ValueList",
+            }),
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
             Expression::ScalarFn(ref f) => match f.sig {
@@ -412,6 +440,10 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         match *self {
+            Expression::ValueList(_) => Err(Error::Type {
+                expected: "json",
+                has: "ValueList",
+            }),
             Expression::Constant(ref constant) => constant.eval_json(),
             Expression::ColumnRef(ref column) => column.eval_json(row),
             Expression::ScalarFn(ref f) => match f.sig {
@@ -457,6 +489,7 @@ fn filter<T: Into<Datum>>(x: Result<T>) -> Option<Result<Datum>> {
 impl Expression {
     pub fn eval(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Datum> {
         match *self {
+            Expression::ValueList(ref column) => unreachable!(),
             Expression::Constant(ref constant) => Ok(constant.eval()),
             Expression::ColumnRef(ref column) => Ok(column.eval(row)),
             Expression::ScalarFn(ref f) => {
@@ -541,14 +574,19 @@ impl Expression {
                         })
                     })
             }
-            ExprType::ColumnRef => {
-                let offset = try!(expr.get_val().decode_i64().map_err(Error::from)) as usize;
-                let column = Column {
-                    offset: offset,
-                    tp: tp,
-                };
-                Ok(Expression::ColumnRef(column))
-            }
+            ExprType::ColumnRef => expr.get_val()
+                .decode_i64()
+                .map(|offset| {
+                    Expression::ColumnRef(Column {
+                        offset: offset as usize,
+                        tp: tp,
+                    })
+                })
+                .map_err(Error::from),
+            ExprType::ValueList => expr.get_val()
+                .decode()
+                .map(Expression::ValueList)
+                .map_err(Error::from),
             unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
         }
     }
