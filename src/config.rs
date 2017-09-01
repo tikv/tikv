@@ -698,7 +698,7 @@ mod tests {
     use {raftstore, server, storage};
     use util::config::compression_type_level_serde;
 
-    use toml::{self, ser};
+    use toml;
 
     extern crate serde_test;
     use self::serde_test::{assert_de_tokens, Token};
@@ -707,61 +707,61 @@ mod tests {
     fn test_toml_serde_roundtrippping() {
         {
             let value = DbConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
         {
             let value = DefaultCfConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
         {
             let value = LockCfConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
         {
             let value = MetricConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
         {
             let value = PdConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
         {
             let value = RaftCfConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
         {
             let value = RaftDbConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
         {
             let value = RaftDefaultCfConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
         {
             let value = TiKvConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
         {
             let value = WriteCfConfig::default();
-            let dump = ser::to_string_pretty(&value).unwrap();
+            let dump = toml::to_string_pretty(&value).unwrap();
             let load = toml::from_str(&dump).unwrap();
             assert_eq!(value, load);
         }
