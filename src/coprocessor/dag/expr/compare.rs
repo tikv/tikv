@@ -13,7 +13,11 @@
 
 use std::i64;
 use std::cmp::Ordering;
+use std::borrow::Cow;
+
 use coprocessor::codec::{datum, mysql, Datum};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::dag::expr::Expression;
 use super::{Error, FnCall, Result, StatementContext};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -104,6 +108,55 @@ impl FnCall {
         let e = |i: usize| self.children[i].eval_json(ctx, row);
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
+
+    /// See http://dev.mysql.com/doc/refman/5.7/en/comparison-operators.html#function_coalesce
+    pub fn coalesce_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_coalesce(self, |v| v.eval_int(ctx, row))
+    }
+
+    pub fn coalesce_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+        do_coalesce(self, |v| v.eval_real(ctx, row))
+    }
+
+    pub fn coalesce_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        do_coalesce(self, |v| v.eval_decimal(ctx, row))
+    }
+
+    pub fn coalesce_time<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        do_coalesce(self, |v| v.eval_time(ctx, row))
+    }
+
+    pub fn coalesce_duration<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Duration>>> {
+        do_coalesce(self, |v| v.eval_duration(ctx, row))
+    }
+
+    pub fn coalesce_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+        do_coalesce(self, |v| v.eval_string(ctx, row))
+    }
+
+    pub fn coalesce_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        do_coalesce(self, |v| v.eval_json(ctx, row))
+    }
 }
 
 fn do_compare<T, E, F>(e: E, op: CmpOp, get_order: F) -> Result<Option<i64>>
@@ -164,9 +217,28 @@ fn cmp_i64_with_unsigned_flag(
     }
 }
 
+fn do_coalesce<'a, F, T>(expr: &'a FnCall, f: F) -> Result<Option<T>>
+where
+    F: Fn(&'a Expression) -> Result<Option<T>>,
+{
+    for exp in &expr.children {
+        let v = try!(f(exp));
+        if v.is_some() {
+            return Ok(v);
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod test {
     use std::{i64, u64};
+    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
+    use protobuf::RepeatedField;
+    use coprocessor::select::xeval::evaluator::test::col_expr;
+    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::{Expression, StatementContext};
     use super::*;
 
     #[test]
@@ -192,6 +264,82 @@ mod test {
         for (a, b, c, d, e) in cases {
             let o = cmp_i64_with_unsigned_flag(a, b, c, d);
             assert_eq!(o, e);
+        }
+    }
+
+    #[test]
+    fn test_coalesce() {
+        let dec = "1.1".parse::<Decimal>().unwrap();
+        let s = "你好".as_bytes().to_owned();
+        let dur = Duration::parse(b"01:00:00", 0).unwrap();
+        let json = Json::I64(12);
+        let t = Time::parse_utc_datetime("2012-12-12 12:00:39", 0).unwrap();
+        let cases = vec![
+            (ScalarFuncSig::CoalesceInt, vec![Datum::Null], Datum::Null),
+            (
+                ScalarFuncSig::CoalesceInt,
+                vec![Datum::Null, Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::CoalesceInt,
+                vec![Datum::Null, Datum::Null, Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::CoalesceInt,
+                vec![Datum::Null, Datum::I64(0), Datum::Null],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::CoalesceReal,
+                vec![Datum::Null, Datum::F64(3.2), Datum::Null],
+                Datum::F64(3.2),
+            ),
+            (
+                ScalarFuncSig::CoalesceInt,
+                vec![Datum::I64(32), Datum::F64(1.0)],
+                Datum::I64(32),
+            ),
+            (
+                ScalarFuncSig::CoalesceDecimal,
+                vec![Datum::Null, Datum::Dec(dec.clone())],
+                Datum::Dec(dec),
+            ),
+            (
+                ScalarFuncSig::CoalesceDuration,
+                vec![Datum::Null, Datum::Dur(dur.clone())],
+                Datum::Dur(dur),
+            ),
+            (
+                ScalarFuncSig::CoalesceJson,
+                vec![Datum::Json(json.clone())],
+                Datum::Json(json),
+            ),
+            (
+                ScalarFuncSig::CoalesceString,
+                vec![Datum::Bytes(s.clone())],
+                Datum::Bytes(s),
+            ),
+            (
+                ScalarFuncSig::CoalesceTime,
+                vec![Datum::Time(t.clone())],
+                Datum::Time(t),
+            ),
+        ];
+
+        let ctx = StatementContext::default();
+
+        for (sig, row, exp) in cases {
+            let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
+            let mut expr = Expr::new();
+            expr.set_tp(ExprType::ScalarFunc);
+            expr.set_sig(sig);
+
+            expr.set_children(RepeatedField::from_vec(children));
+            let e = Expression::build(expr, &ctx).unwrap();
+            let res = e.eval(&ctx, &row).unwrap();
+            assert_eq!(res, exp);
         }
     }
 }
