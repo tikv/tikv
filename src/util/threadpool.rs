@@ -362,7 +362,7 @@ mod test {
             fn on_task_finished(&mut self) {}
             fn on_tick(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
-                self.tx.send(()).unwrap();
+                let _ = self.tx.send(());
             }
         }
 
@@ -397,8 +397,8 @@ mod test {
         for _ in 0..10 {
             rx.recv_timeout(Duration::from_millis(20)).unwrap();
         }
-        // Check out counter ASAP, since on_tick may be called even if there is no task.
-        assert_eq!(ctx.counter.load(Ordering::SeqCst), 10);
+        // Check out the counter ASAP, since on_tick may be called even if there is no task.
+        assert!(ctx.counter.load(Ordering::SeqCst) >= 10);
         task_pool.stop().unwrap();
     }
 }
