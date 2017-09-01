@@ -259,6 +259,48 @@ fn test_grpc_service() {
         let resolve_lock_resp = client.kv_resolve_lock(resolve_lock_req).unwrap();
         assert!(!resolve_lock_resp.has_region_error());
         assert!(!resolve_lock_resp.has_error());
+
+        // Get `k` at the latest ts.
+        ts += 1;
+        let get_version1 = ts;
+        let mut get_req1 = GetRequest::new();
+        get_req1.set_context(ctx.clone());
+        get_req1.key = k.clone();
+        get_req1.version = get_version1;
+        let get_resp1 = client.kv_get(get_req1).unwrap();
+        assert!(!get_resp1.has_region_error());
+        assert!(!get_resp1.has_error());
+        assert_eq!(get_resp1.value, new_v);
+
+        // GC `k` at the latest ts.
+        ts += 1;
+        let gc_safe_ponit = ts;
+        let mut gc_req = GCRequest::new();
+        gc_req.set_context(ctx.clone());
+        gc_req.safe_point = gc_safe_ponit;
+        let gc_resp = client.kv_gc(gc_req).unwrap();
+        assert!(!gc_resp.has_region_error());
+        assert!(!gc_resp.has_error());
+
+        // the `k` at the old ts should be none.
+        let get_version2 = get_version;
+        let mut get_req2 = GetRequest::new();
+        get_req2.set_context(ctx.clone());
+        get_req2.key = k.clone();
+        get_req2.version = get_version2;
+        let get_resp2 = client.kv_get(get_req2).unwrap();
+        assert!(!get_resp2.has_region_error());
+        assert!(!get_resp2.has_error());
+        assert_eq!(get_resp2.value, b"".to_vec());
+
+        // Delete range
+        let mut del_req = DeleteRangeRequest::new();
+        del_req.set_context(ctx.clone());
+        del_req.start_key = b"a".to_vec();
+        del_req.end_key = b"z".to_vec();
+        let del_resp = client.kv_delete_range(del_req).unwrap();
+        assert!(!del_resp.has_region_error());
+        assert!(del_resp.error.is_empty());
     }
 }
 
