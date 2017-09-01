@@ -133,7 +133,7 @@ impl RaftClient {
 
     pub fn flush(&mut self) {
         let addrs = &mut self.addrs;
-        self.conns.retain(|&mut (addr, _), conn| {
+        self.conns.retain(|&(addr, _), conn| {
             let store_id = conn.store_id;
             if !conn.alive.load(Ordering::SeqCst) {
                 if let Some(addr_current) = addrs.remove(&store_id) {
