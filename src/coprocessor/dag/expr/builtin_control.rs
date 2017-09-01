@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use super::{FnCall, Result, StatementContext};
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::dag::expr::Expression;
 
 fn if_null<F, T>(f: F) -> Result<Option<T>>
 where
@@ -45,27 +46,27 @@ where
 }
 
 /// See https://dev.mysql.com/doc/refman/5.7/en/case.html
-fn case_when<F, T>(expr: &FnCall, ctx: &StatementContext, row: &[Datum], f: F) -> Result<Option<T>>
+fn case_when<'a, F, T>(
+    expr: &'a FnCall,
+    ctx: &StatementContext,
+    row: &'a [Datum],
+    f: F,
+) -> Result<Option<T>>
 where
-    F: Fn(usize) -> Result<Option<T>>,
+    F: Fn(&'a Expression) -> Result<Option<T>>,
 {
-    let len = expr.children.len();
-    let pairs = len >> 1;
-    for id in 0..pairs {
-        let cond = try!(expr.children[id << 1].eval_int(ctx, row));
-        if cond.is_none() || cond.unwrap() == 0 {
+    for chunk in expr.children.chunks(2) {
+        if chunk.len() == 1 {
+            // else statement
+            return f(&chunk[0]);
+        }
+        let cond = try!(chunk[0].eval_int(ctx, row));
+        if cond.unwrap_or(0) == 0 {
             continue;
         }
-        return f(id * 2 + 1);
+        return f(&chunk[1]);
     }
-    // when clause(condition, result) -> args[i], args[i+1]; (i >= 0 && i+1 < l-1)
-    // else clause -> args[l-1]
-    // If case clause has else clause, l%2 == 1.
-    if len & 1 == 1 {
-        f(len ^ 1)
-    } else {
-        Ok(None)
-    }
+    Ok(None)
 }
 
 impl FnCall {
@@ -150,11 +151,11 @@ impl FnCall {
     }
 
     pub fn case_when_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        case_when(self, ctx, row, |i| self.children[i].eval_int(ctx, row))
+        case_when(self, ctx, row, |v| v.eval_int(ctx, row))
     }
 
     pub fn case_when_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        case_when(self, ctx, row, |i| self.children[i].eval_real(ctx, row))
+        case_when(self, ctx, row, |v| v.eval_real(ctx, row))
     }
 
     pub fn case_when_decimal<'a, 'b: 'a>(
@@ -162,7 +163,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        case_when(self, ctx, row, |i| self.children[i].eval_decimal(ctx, row))
+        case_when(self, ctx, row, |v| v.eval_decimal(ctx, row))
     }
 
     pub fn case_when_string<'a, 'b: 'a>(
@@ -170,7 +171,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        case_when(self, ctx, row, |i| self.children[i].eval_string(ctx, row))
+        case_when(self, ctx, row, |v| v.eval_string(ctx, row))
     }
 
     pub fn case_when_time<'a, 'b: 'a>(
@@ -178,7 +179,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        case_when(self, ctx, row, |i| self.children[i].eval_time(ctx, row))
+        case_when(self, ctx, row, |v| v.eval_time(ctx, row))
     }
 
     pub fn case_when_duration<'a, 'b: 'a>(
@@ -186,7 +187,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        case_when(self, ctx, row, |i| self.children[i].eval_duration(ctx, row))
+        case_when(self, ctx, row, |v| v.eval_duration(ctx, row))
     }
 
     pub fn case_when_json<'a, 'b: 'a>(
@@ -194,7 +195,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        case_when(self, ctx, row, |i| self.children[i].eval_json(ctx, row))
+        case_when(self, ctx, row, |v| v.eval_json(ctx, row))
     }
 }
 
