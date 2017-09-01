@@ -17,6 +17,7 @@ use std::borrow::Cow;
 
 use coprocessor::codec::{datum, mysql, Datum};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::dag::expr::Expression;
 use super::{Error, FnCall, Result, StatementContext};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -110,14 +111,11 @@ impl FnCall {
 
     /// See http://dev.mysql.com/doc/refman/5.7/en/comparison-operators.html#function_coalesce
     pub fn coalesce_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_coalesce(self.children.len(), |i| self.children[i].eval_int(ctx, row))
+        do_coalesce(self, |v| v.eval_int(ctx, row))
     }
 
     pub fn coalesce_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        do_coalesce(
-            self.children.len(),
-            |i| self.children[i].eval_real(ctx, row),
-        )
+        do_coalesce(self, |v| v.eval_real(ctx, row))
     }
 
     pub fn coalesce_decimal<'a, 'b: 'a>(
@@ -125,9 +123,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        do_coalesce(self.children.len(), |i| {
-            self.children[i].eval_decimal(ctx, row)
-        })
+        do_coalesce(self, |v| v.eval_decimal(ctx, row))
     }
 
     pub fn coalesce_time<'a, 'b: 'a>(
@@ -135,10 +131,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        do_coalesce(
-            self.children.len(),
-            |i| self.children[i].eval_time(ctx, row),
-        )
+        do_coalesce(self, |v| v.eval_time(ctx, row))
     }
 
     pub fn coalesce_duration<'a, 'b: 'a>(
@@ -146,9 +139,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        do_coalesce(self.children.len(), |i| {
-            self.children[i].eval_duration(ctx, row)
-        })
+        do_coalesce(self, |v| v.eval_duration(ctx, row))
     }
 
     pub fn coalesce_string<'a, 'b: 'a>(
@@ -156,9 +147,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Vec<u8>>>> {
-        do_coalesce(self.children.len(), |i| {
-            self.children[i].eval_string(ctx, row)
-        })
+        do_coalesce(self, |v| v.eval_string(ctx, row))
     }
 
     pub fn coalesce_json<'a, 'b: 'a>(
@@ -166,10 +155,7 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        do_coalesce(
-            self.children.len(),
-            |i| self.children[i].eval_json(ctx, row),
-        )
+        do_coalesce(self, |v| v.eval_json(ctx, row))
     }
 }
 
@@ -231,12 +217,12 @@ fn cmp_i64_with_unsigned_flag(
     }
 }
 
-fn do_coalesce<F, T>(len: usize, f: F) -> Result<Option<T>>
+fn do_coalesce<'a, F, T>(expr: &'a FnCall, f: F) -> Result<Option<T>>
 where
-    F: Fn(usize) -> Result<Option<T>>,
+    F: Fn(&'a Expression) -> Result<Option<T>>,
 {
-    for id in 0..len {
-        let v = try!(f(id));
+    for exp in &expr.children {
+        let v = try!(f(exp));
         if v.is_some() {
             return Ok(v);
         }
