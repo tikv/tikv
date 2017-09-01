@@ -65,7 +65,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         if_null(|i| self.children[i].eval_string(ctx, row))
     }
 
@@ -105,7 +105,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         if_condition(self, ctx, row, |i| self.children[i].eval_string(ctx, row))
     }
 

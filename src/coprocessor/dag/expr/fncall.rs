@@ -168,6 +168,8 @@ impl FnCall {
             ScalarFuncSig::IfDecimal |
             ScalarFuncSig::IfTime |
             ScalarFuncSig::IfDuration => (3, 3),
+
+            _ => unimplemented!(),
         };
         if args < min_args || args > max_args {
             return Err(box_err!("unexpected arguments"));

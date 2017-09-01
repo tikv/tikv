@@ -22,6 +22,7 @@ mod builtin_op;
 mod compare;
 mod arithmetic;
 mod math;
+mod json;
 use self::compare::CmpOp;
 
 use std::{error, io};
@@ -338,7 +339,7 @@ impl Expression {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),

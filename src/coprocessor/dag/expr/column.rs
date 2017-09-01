@@ -38,7 +38,7 @@ impl Column {
     }
 
     #[inline]
-    pub fn eval_string<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    pub fn eval_string<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, [u8]>>> {
         row[self.offset].as_string()
     }
 
@@ -71,7 +71,7 @@ mod test {
         Option<i64>,
         Option<f64>,
         Option<Decimal>,
-        Option<Vec<u8>>,
+        Option<[u8]>,
         Option<Time>,
         Option<Duration>,
         Option<Json>,
