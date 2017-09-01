@@ -176,6 +176,13 @@ impl FnCall {
             ScalarFuncSig::IfTime |
             ScalarFuncSig::IfDuration => (3, 3),
 
+            ScalarFuncSig::CoalesceDecimal |
+            ScalarFuncSig::CoalesceDuration |
+            ScalarFuncSig::CoalesceInt |
+            ScalarFuncSig::CoalesceJson |
+            ScalarFuncSig::CoalesceReal |
+            ScalarFuncSig::CoalesceString |
+            ScalarFuncSig::CoalesceTime |
             ScalarFuncSig::CaseWhenDecimal |
             ScalarFuncSig::CaseWhenDuration |
             ScalarFuncSig::CaseWhenInt |
@@ -183,8 +190,8 @@ impl FnCall {
             ScalarFuncSig::CaseWhenReal |
             ScalarFuncSig::CaseWhenString |
             ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
-            _ => return Err(Error::UnknownSignature(sig)),
 
+            _ => return Err(Error::UnknownSignature(sig)),
         };
         if args < min_args || args > max_args {
             return Err(box_err!("unexpected arguments"));
@@ -305,7 +312,7 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$j_sig => {
                         self.$j_func(ctx, row, $($j_arg)*).map(Datum::from)
                     })*
-                    _=> Err(Error::UnknownSignature(self.sig)),
+                    _=>Err(Error::UnknownSignature(self.sig)),
                 }
             }
         }
@@ -408,6 +415,7 @@ dispatch_call! {
         IfNullInt => if_null_int,
         IfInt => if_int,
 
+        CoalesceInt => coalesce_int,
         CaseWhenInt => case_when_int,
     }
     REAL_CALLS {
@@ -431,6 +439,7 @@ dispatch_call! {
         IfNullReal => if_null_real,
         IfReal => if_real,
 
+        CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
     }
     DEC_CALLS {
@@ -456,6 +465,7 @@ dispatch_call! {
         IfNullDecimal => if_null_decimal,
         IfDecimal => if_decimal,
 
+        CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
     }
     BYTES_CALLS {
@@ -470,6 +480,7 @@ dispatch_call! {
         IfNullString => if_null_string,
         IfString => if_string,
 
+        CoalesceString => coalesce_string,
         CaseWhenString => case_when_string,
     }
     TIME_CALLS {
@@ -484,6 +495,7 @@ dispatch_call! {
         IfNullTime => if_null_time,
         IfTime => if_time,
 
+        CoalesceTime => coalesce_time,
         CaseWhenTime => case_when_time,
     }
     DUR_CALLS {
@@ -498,6 +510,7 @@ dispatch_call! {
         IfNullDuration => if_null_duration,
         IfDuration => if_duration,
 
+        CoalesceDuration => coalesce_duration,
         CaseWhenDuration => case_when_duration,
     }
     JSON_CALLS {
@@ -509,6 +522,7 @@ dispatch_call! {
         CastDurationAsJson => cast_duration_as_json,
         CastJsonAsJson => cast_json_as_json,
 
+        CoalesceJson => coalesce_json,
         CaseWhenJson => case_when_json,
     }
 }
