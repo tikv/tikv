@@ -182,7 +182,14 @@ impl FnCall {
             ScalarFuncSig::CoalesceJson |
             ScalarFuncSig::CoalesceReal |
             ScalarFuncSig::CoalesceString |
-            ScalarFuncSig::CoalesceTime => (1, usize::MAX),
+            ScalarFuncSig::CoalesceTime |
+            ScalarFuncSig::CaseWhenDecimal |
+            ScalarFuncSig::CaseWhenDuration |
+            ScalarFuncSig::CaseWhenInt |
+            ScalarFuncSig::CaseWhenJson |
+            ScalarFuncSig::CaseWhenReal |
+            ScalarFuncSig::CaseWhenString |
+            ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             _ => return Err(Error::UnknownSignature(sig)),
         };
@@ -409,6 +416,7 @@ dispatch_call! {
         IfInt => if_int,
 
         CoalesceInt => coalesce_int,
+        CaseWhenInt => case_when_int,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -432,6 +440,7 @@ dispatch_call! {
         IfReal => if_real,
 
         CoalesceReal => coalesce_real,
+        CaseWhenReal => case_when_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -457,6 +466,7 @@ dispatch_call! {
         IfDecimal => if_decimal,
 
         CoalesceDecimal => coalesce_decimal,
+        CaseWhenDecimal => case_when_decimal,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,
@@ -471,6 +481,7 @@ dispatch_call! {
         IfString => if_string,
 
         CoalesceString => coalesce_string,
+        CaseWhenString => case_when_string,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -485,6 +496,7 @@ dispatch_call! {
         IfTime => if_time,
 
         CoalesceTime => coalesce_time,
+        CaseWhenTime => case_when_time,
     }
     DUR_CALLS {
         CastIntAsDuration => cast_int_as_duration,
@@ -499,6 +511,7 @@ dispatch_call! {
         IfDuration => if_duration,
 
         CoalesceDuration => coalesce_duration,
+        CaseWhenDuration => case_when_duration,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -510,5 +523,6 @@ dispatch_call! {
         CastJsonAsJson => cast_json_as_json,
 
         CoalesceJson => coalesce_json,
+        CaseWhenJson => case_when_json,
     }
 }
