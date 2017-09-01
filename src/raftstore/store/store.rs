@@ -302,9 +302,8 @@ impl<T, C> Store<T, C> {
             self.kv_engine.flush_wal(true).unwrap();
         }
         if !raft_wb.is_empty() {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            self.raft_engine.write_opt(raft_wb, &write_opts).unwrap();
+            self.raft_engine.write(raft_wb).unwrap();
+            self.raft_engine.sync_wal().unwrap();
         }
 
         // schedule applying snapshot after raft writebatch were written.
