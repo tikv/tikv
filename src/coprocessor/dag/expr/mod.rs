@@ -489,7 +489,10 @@ fn filter<T: Into<Datum>>(x: Result<T>) -> Option<Result<Datum>> {
 impl Expression {
     pub fn eval(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Datum> {
         match *self {
-            Expression::ValueList(ref column) => unreachable!(),
+            Expression::ValueList(ref column) => Err(Error::Type {
+                expected: "Datum",
+                has: "ValueList",
+            }),
             Expression::Constant(ref constant) => Ok(constant.eval()),
             Expression::ColumnRef(ref column) => Ok(column.eval(row)),
             Expression::ScalarFn(ref f) => {
