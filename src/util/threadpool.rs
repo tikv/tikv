@@ -352,7 +352,7 @@ mod test {
     fn test_task_tick() {
         struct TestContext {
             counter: Arc<AtomicIsize>,
-            tx: Sender<isize>,
+            tx: Sender<()>,
         }
 
         unsafe impl Send for TestContext {}
@@ -362,13 +362,13 @@ mod test {
             fn on_task_finished(&mut self) {}
             fn on_tick(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
-                self.tx.send(self.counter.load(Ordering::SeqCst)).unwrap();
+                self.tx.send(()).unwrap();
             }
         }
 
         struct TestContextFactory {
             counter: Arc<AtomicIsize>,
-            tx: Sender<isize>,
+            tx: Sender<()>,
         }
 
         impl ContextFactory<TestContext> for TestContextFactory {
@@ -386,19 +386,19 @@ mod test {
             counter: Arc::new(AtomicIsize::new(0)),
             tx: tx,
         };
-
+        let ctx = f.create();
         let name = thd_name!("test_tasks_tick");
-        let concurrency = 1;
+        let concurrency = 5;
         let mut task_pool = ThreadPool::new(name, concurrency, 1, f);
 
         for _ in 0..10 {
             task_pool.execute(move |_: &mut TestContext| {});
         }
-        let mut fin: isize = -1;
         for _ in 0..10 {
-            fin = rx.recv_timeout(Duration::from_millis(20)).unwrap();
+            rx.recv_timeout(Duration::from_millis(20)).unwrap();
         }
+        // Check out counter ASAP, since on_tick may be called even if there is no task.
+        assert_eq!(ctx.counter.load(Ordering::SeqCst), 10);
         task_pool.stop().unwrap();
-        assert_eq!(fin, 10);
     }
 }
