@@ -223,7 +223,7 @@ macro_rules! dispatch_call {
                 &'b self,
                 ctx: &StatementContext,
                 row: &'a [Datum]
-            ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+            ) -> Result<Option<Cow<'a, [u8]>>> {
                 match self.sig {
                     $(ScalarFuncSig::$b_sig => self.$b_func(ctx, row, $($b_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
@@ -296,6 +296,7 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$j_sig => {
                         self.$j_func(ctx, row, $($j_arg)*).map(Datum::from)
                     })*
+                    _ => unimplemented!(),
                 }
             }
         }
