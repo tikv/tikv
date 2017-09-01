@@ -397,8 +397,8 @@ mod test {
         for _ in 0..10 {
             rx.recv_timeout(Duration::from_millis(20)).unwrap();
         }
-        // Check out the counter ASAP, since on_tick may be called even if there is no task.
-        assert!(ctx.counter.load(Ordering::SeqCst) >= 10);
         task_pool.stop().unwrap();
+        // `on_tick` may be called even if there is no task.
+        assert!(ctx.counter.load(Ordering::SeqCst) >= 10);
     }
 }
