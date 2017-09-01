@@ -288,8 +288,8 @@ mod test {
             ),
             (
                 ScalarFuncSig::CoalesceInt,
-                vec![Datum::Null, Datum::I64(32), Datum::Null],
-                Datum::I64(32),
+                vec![Datum::Null, Datum::I64(0), Datum::Null],
+                Datum::I64(0),
             ),
             (
                 ScalarFuncSig::CoalesceReal,
