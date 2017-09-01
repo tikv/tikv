@@ -432,6 +432,7 @@ mod test {
                 Datum::F64(f64::MIN),
                 Datum::F64(f64::MAX),
             ),
+            (ScalarFuncSig::DivideReal, Datum::F64(1.0), Datum::F64(0.0)),
         ];
         let ctx = StatementContext::default();
         for tt in tests {
