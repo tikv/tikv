@@ -84,14 +84,22 @@ fn test_grpc_service() {
     {
         let mut ts = 0;
 
+        // Prewrite
         ts += 1;
         let prewrite_start_version = ts;
         let mut mutation = Mutation::new();
         mutation.op = Op::Put;
         mutation.key = k.clone();
         mutation.value = v.clone();
-        must_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), prewrite_start_version);
+        must_prewrite(
+            &client,
+            ctx.clone(),
+            vec![mutation],
+            k.clone(),
+            prewrite_start_version,
+        );
 
+        // Commit
         ts += 1;
         let commit_version = ts;
         let mut commit_req = CommitRequest::new();
@@ -103,6 +111,7 @@ fn test_grpc_service() {
         assert!(!commit_resp.has_region_error());
         assert!(!commit_resp.has_error());
 
+        // Get
         ts += 1;
         let get_version = ts;
         let mut get_req = GetRequest::new();
@@ -114,6 +123,7 @@ fn test_grpc_service() {
         assert!(!get_resp.has_error());
         assert_eq!(get_resp.value, v);
 
+        // Scan
         ts += 1;
         let scan_version = ts;
         let mut scan_req = ScanRequest::new();
@@ -130,6 +140,7 @@ fn test_grpc_service() {
             assert_eq!(kv.value, v);
         }
 
+        // Batch get
         ts += 1;
         let batch_get_version = ts;
         let mut batch_get_req = BatchGetRequest::new();
@@ -144,6 +155,7 @@ fn test_grpc_service() {
             assert_eq!(kv.value, v);
         }
 
+        // Prewrite puts some locks.
         ts += 1;
         let prewrite_start_version2 = ts;
         let (k2, v2) = (b"key2".to_vec(), b"value2".to_vec());
@@ -155,8 +167,15 @@ fn test_grpc_service() {
         mut_sec.op = Op::Put;
         mut_sec.key = k.clone();
         mut_sec.value = b"foo".to_vec();
-        must_prewrite(&client, ctx.clone(), vec![mut_pri, mut_sec], k2.clone(), prewrite_start_version2);
+        must_prewrite(
+            &client,
+            ctx.clone(),
+            vec![mut_pri, mut_sec],
+            k2.clone(),
+            prewrite_start_version2,
+        );
 
+        // Scan lock, expects locks
         ts += 1;
         let scan_lock_max_version = ts;
         let mut scan_lock_req = ScanLockRequest::new();
@@ -165,24 +184,32 @@ fn test_grpc_service() {
         let scan_lock_resp = client.kv_scan_lock(scan_lock_req).unwrap();
         assert!(!scan_lock_resp.has_region_error());
         assert_eq!(scan_lock_resp.locks.len(), 2);
-        for (lock, key) in scan_lock_resp.locks.into_iter().zip(vec![k.clone(), k2.clone()]) {
+        for (lock, key) in scan_lock_resp
+            .locks
+            .into_iter()
+            .zip(vec![k.clone(), k2.clone()])
+        {
             assert_eq!(lock.primary_lock, k2);
             assert_eq!(lock.key, key);
             assert_eq!(lock.lock_version, prewrite_start_version2);
         }
 
-        ts += 1;
-        let rollback_start_version = ts;
+        // Rollback
+        let rollback_start_version = prewrite_start_version2;
         let mut rollback_req = BatchRollbackRequest::new();
         rollback_req.set_context(ctx.clone());
         rollback_req.start_version = rollback_start_version;
         rollback_req.set_keys(vec![k2.clone()].into_iter().collect());
-        let rollback_resp = client.kv_batch_rollback(rollback_req).unwrap();
+        let rollback_resp = client.kv_batch_rollback(rollback_req.clone()).unwrap();
         assert!(!rollback_resp.has_region_error());
         assert!(!rollback_resp.has_error());
+        rollback_req.set_keys(vec![k.clone()].into_iter().collect());
+        let rollback_resp2 = client.kv_batch_rollback(rollback_req.clone()).unwrap();
+        assert!(!rollback_resp2.has_region_error());
+        assert!(!rollback_resp2.has_error());
 
-        ts += 1;
-        let cleanup_start_version = ts;
+        // Cleanup
+        let cleanup_start_version = prewrite_start_version2;
         let mut cleanup_req = CleanupRequest::new();
         cleanup_req.set_context(ctx.clone());
         cleanup_req.start_version = cleanup_start_version;
@@ -190,6 +217,48 @@ fn test_grpc_service() {
         let cleanup_resp = client.kv_cleanup(cleanup_req).unwrap();
         assert!(!cleanup_resp.has_region_error());
         assert!(!cleanup_resp.has_error());
+
+        // There should be no locks
+        ts += 1;
+        let scan_lock_max_version2 = ts;
+        let mut scan_lock_req = ScanLockRequest::new();
+        scan_lock_req.set_context(ctx.clone());
+        scan_lock_req.max_version = scan_lock_max_version2;
+        let scan_lock_resp = client.kv_scan_lock(scan_lock_req).unwrap();
+        assert!(!scan_lock_resp.has_region_error());
+        assert_eq!(scan_lock_resp.locks.len(), 0);
+
+        // Prewrite puts some locks.
+        ts += 1;
+        let prewrite_start_version3 = ts;
+        let (k3, v3) = (b"key3".to_vec(), b"value3".to_vec());
+        let new_v = b"new value".to_vec();
+        let mut mut_pri = Mutation::new();
+        mut_pri.op = Op::Put;
+        mut_pri.key = k.clone();
+        mut_pri.value = new_v.clone();
+        let mut mut_sec = Mutation::new();
+        mut_sec.op = Op::Put;
+        mut_sec.key = k3.clone();
+        mut_sec.value = v3.to_vec();
+        must_prewrite(
+            &client,
+            ctx.clone(),
+            vec![mut_pri, mut_sec],
+            k.clone(),
+            prewrite_start_version3,
+        );
+
+        // Resolve lock
+        ts += 1;
+        let resolve_lock_commit_version = ts;
+        let mut resolve_lock_req = ResolveLockRequest::new();
+        resolve_lock_req.set_context(ctx.clone());
+        resolve_lock_req.start_version = prewrite_start_version3;
+        resolve_lock_req.commit_version = resolve_lock_commit_version;
+        let resolve_lock_resp = client.kv_resolve_lock(resolve_lock_req).unwrap();
+        assert!(!resolve_lock_resp.has_region_error());
+        assert!(!resolve_lock_resp.has_error());
     }
 }
 
@@ -201,6 +270,14 @@ fn must_prewrite(client: &TikvClient, ctx: Context, muts: Vec<Mutation>, pk: Vec
     prewrite_req.start_version = ts;
     prewrite_req.lock_ttl = prewrite_req.start_version + 1;
     let prewrite_resp = client.kv_prewrite(prewrite_req).unwrap();
-    assert!(!prewrite_resp.has_region_error());
-    assert!(prewrite_resp.errors.is_empty());
+    assert!(
+        !prewrite_resp.has_region_error(),
+        "{:?}",
+        prewrite_resp.get_region_error()
+    );
+    assert!(
+        prewrite_resp.errors.is_empty(),
+        "{:?}",
+        prewrite_resp.get_errors()
+    );
 }
