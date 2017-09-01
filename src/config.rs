@@ -867,11 +867,31 @@ mod tests {
         }
     }
 
-    cf_config_test!(DefaultCfConfig, default_cf_config_default_de_tokens, test_de_default_cf_config);
-    cf_config_test!(WriteCfConfig, write_cf_config_default_de_tokens, test_de_write_cf_config);
-    cf_config_test!(LockCfConfig, lock_cf_config_default_de_tokens, test_de_lock_cf_config);
-    cf_config_test!(RaftCfConfig, raft_cf_config_default_de_tokens, test_de_raft_cf_config);
-    cf_config_test!(RaftDefaultCfConfig, raft_default_cf_config_default_de_tokens, test_de_raft_default_cf_config);
+    cf_config_test!(
+        DefaultCfConfig,
+        default_cf_config_default_de_tokens,
+        test_de_default_cf_config
+    );
+    cf_config_test!(
+        WriteCfConfig,
+        write_cf_config_default_de_tokens,
+        test_de_write_cf_config
+    );
+    cf_config_test!(
+        LockCfConfig,
+        lock_cf_config_default_de_tokens,
+        test_de_lock_cf_config
+    );
+    cf_config_test!(
+        RaftCfConfig,
+        raft_cf_config_default_de_tokens,
+        test_de_raft_cf_config
+    );
+    cf_config_test!(
+        RaftDefaultCfConfig,
+        raft_default_cf_config_default_de_tokens,
+        test_de_raft_default_cf_config
+    );
 
     fn db_config_default_de_tokens() -> Vec<Token> {
         let db_cfg = DbConfig::default();
