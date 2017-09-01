@@ -209,3 +209,107 @@ impl<'a> JsonFuncArgsParser<'a> {
         JsonFuncArgsParser::parse(args, func)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use tipb::expression::ScalarFuncSig;
+    use coprocessor::codec::{mysql, Datum};
+    use coprocessor::codec::mysql::types;
+    use coprocessor::dag::expr::{Expression, StatementContext};
+    use coprocessor::dag::expr::test::{check_overflow, fncall_expr, str2dec};
+    use coprocessor::select::xeval::evaluator::test::datum_expr;
+
+    #[test]
+    fn test_json_type() {
+        let cases = vec![
+            (Datum::Null, None),
+            (Datum::Json(r#"true"#.parse().uwnrap()), Some("BOOLEAN")),
+            (Datum::Json(r#"null"#.parse().uwnrap()), Some("NULL")),
+            (Datum::Json(r#"-3"#.parse().uwnrap()), Some("INTEGER")),
+            (
+                Datum::Json(r#"3"#.parse().uwnrap()),
+                Some("UNSIGNED INTEGER"),
+            ),
+            (Datum::Json(r#"3.14"#.parse().uwnrap()), Some("DOUBLE")),
+            (
+                Datum::Json(r#"{"name":"shirly"}"#.parse().uwnrap()),
+                Some("OBJECT"),
+            ),
+            (Datum::Json(r#"[1, 2, 3]"#.parse().uwnrap()), Some("ARRAY")),
+        ];
+    }
+
+    #[test]
+    fn test_json_unquote() {
+        let cases = vec![
+            (ScalarFuncSig::JsonUnquoteSig, Datum::Null, None),
+            (Datum::Bytes("a".to_vec()), Some("a")),
+            (Datum::Bytes(r#""3""#.to_vec()), Some(r#""3""#)),
+            (
+                Datum::Bytes(r#"{"a":  "b"}"#.to_vec()),
+                Some(r#"{"a":  "b"}"#),
+            ),
+            (
+                Datum::Bytes(r#"hello,\"quoted string\",world"#.to_vec()),
+                Some(r#"hello,"quoted string",world"#),
+            ),
+        ];
+    }
+
+    #[test]
+    fn test_json_object() {
+        let cases = vec![
+            (vec![], Datum::Json("{}".parse().unwrap())),
+            (
+                vec![Datum::U64(1), Datum::Null],
+                Datum::Json(r#"{"1":null}"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Datum::U64(1),
+                    Datum::Null,
+                    Datum::U64(2),
+                    Datum::Bytes(b"sdf".to_vec()),
+                    Datum::Bytes(b"k1".to_vec()),
+                    Datum::Bytes(b"v1".to_vec()),
+                ],
+                Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap()),
+            ),
+        ];
+    }
+
+    #[test]
+    fn test_json_modify() {
+        let cases = vec![
+            (
+                ScalarFuncSig::JsonSetSig,
+                vec![Datum::Null, Datum::Null, Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::JsonSetSig,
+                vec![Datum::I64(9), Datum::Bytes("$[1]".to_vec()), Datum::I64(3)],
+                Datum::Json(r#"[9,3]"#.parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::JsonInsertSig,
+                vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                Datum::Json(r#"[9,3]"#.parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::JsonReplaceSig,
+                vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                Datum::Json(r#"9"#.parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::JsonSetSig,
+                vec![
+                    Datum::Bytes(br#"{"a":"x"}"#.to_vec()),
+                    Datum::Bytes(b"$.a".to_vec()),
+                    Datum::Null,
+                ],
+                Datum::Json(r#"{"a":null}"#.parse().unwrap()),
+            ),
+        ];
+    }
+}
