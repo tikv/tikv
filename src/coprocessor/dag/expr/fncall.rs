@@ -13,7 +13,7 @@
 
 use std::usize;
 use tipb::expression::ScalarFuncSig;
-use super::{FnCall, Result};
+use super::{Error, FnCall, Result};
 
 impl FnCall {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
@@ -177,7 +177,7 @@ impl FnCall {
             ScalarFuncSig::CaseWhenReal |
             ScalarFuncSig::CaseWhenString |
             ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
-            _ => return Err(box_err!("TODO")),
+            _ => return Err(Error::UnknownSignature(sig)),
 
         };
         if args < min_args || args > max_args {
