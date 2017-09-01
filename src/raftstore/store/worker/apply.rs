@@ -1434,11 +1434,10 @@ pub struct Runner {
     host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
-    sync_log: bool,
 }
 
 impl Runner {
-    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>, sync_log: bool) -> Runner {
+    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>) -> Runner {
         let mut delegates = HashMap::with_capacity(store.get_peers().len());
         for (&region_id, p) in store.get_peers() {
             delegates.insert(region_id, ApplyDelegate::from_peer(p));
@@ -1448,7 +1447,6 @@ impl Runner {
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
-            sync_log: sync_log,
         }
     }
 
@@ -1496,13 +1494,9 @@ impl Runner {
             .write(apply_ctx.wb.take().unwrap())
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
 
-        // raftsotre.sync-log = true means we need prevent data loss when power failure.
-        // take raft log gc for example, we write kv WAL first, then write raft WAL,
-        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
-        // so we use sync-log flag here.
         if apply_ctx.flush_wal {
             self.db
-                .flush_wal(self.sync_log)
+                .flush_wal(false)
                 .unwrap_or_else(|e| panic!("failed to flush wal, error: {:?}", e));
         }
 
@@ -1627,7 +1621,6 @@ mod tests {
             host: host,
             delegates: HashMap::new(),
             notifier: tx,
-            sync_log: false,
         }
     }
 
