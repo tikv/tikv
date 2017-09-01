@@ -170,7 +170,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         case_when(self, ctx, row, |v| v.eval_string(ctx, row))
     }
 
