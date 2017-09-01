@@ -18,6 +18,9 @@ use tikv::util::HandyRwLock;
 
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::kvrpcpb::*;
+use kvproto::raft_serverpb::*;
+use futures::{Future, Sink};
+use kvproto::coprocessor::*;
 
 use super::server::*;
 
@@ -293,6 +296,27 @@ fn test_grpc_service() {
         assert!(!get_resp2.has_error());
         assert_eq!(get_resp2.value, b"".to_vec());
 
+        // Transaction debugger commands
+        // MvccGetByKey
+        let mut mvcc_get_by_key_req = MvccGetByKeyRequest::new();
+        mvcc_get_by_key_req.set_context(ctx.clone());
+        mvcc_get_by_key_req.key = k.clone();
+        let mvcc_get_by_key_resp = client.mvcc_get_by_key(mvcc_get_by_key_req).unwrap();
+        assert!(!mvcc_get_by_key_resp.has_region_error());
+        assert!(mvcc_get_by_key_resp.error.is_empty());
+        assert!(mvcc_get_by_key_resp.has_info());
+        // MvccGetByStartTs
+        let mut mvcc_get_by_start_ts_req = MvccGetByStartTsRequest::new();
+        mvcc_get_by_start_ts_req.set_context(ctx.clone());
+        mvcc_get_by_start_ts_req.start_ts = prewrite_start_version3;
+        let mvcc_get_by_start_ts_resp = client
+            .mvcc_get_by_start_ts(mvcc_get_by_start_ts_req)
+            .unwrap();
+        assert!(!mvcc_get_by_start_ts_resp.has_region_error());
+        assert!(mvcc_get_by_start_ts_resp.error.is_empty());
+        assert!(mvcc_get_by_start_ts_resp.has_info());
+        assert_eq!(mvcc_get_by_start_ts_resp.key, k);
+
         // Delete range
         let mut del_req = DeleteRangeRequest::new();
         del_req.set_context(ctx.clone());
@@ -301,6 +325,24 @@ fn test_grpc_service() {
         let del_resp = client.kv_delete_range(del_req).unwrap();
         assert!(!del_resp.has_region_error());
         assert!(del_resp.error.is_empty());
+    }
+
+    // Raft commands
+    {
+        let (sink, _) = client.raft();
+        sink.send((RaftMessage::new(), Default::default()))
+            .wait()
+            .unwrap();
+
+        let (sink, _) = client.snapshot();
+        sink.send((SnapshotChunk::new(), Default::default()))
+            .wait()
+            .unwrap();
+    }
+
+    // SQL push down commands
+    {
+        client.coprocessor(Request::new()).unwrap();
     }
 }
 
