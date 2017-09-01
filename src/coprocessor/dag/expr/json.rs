@@ -56,11 +56,13 @@ impl FnCall {
         ctx: &StatementContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let parser = JsonFuncArgsParser::new(ctx, row);
-        let keys = try_opt!(parser.get_strings(self.children.iter().step_by(2)));
-        let elems = try_opt!(parser.get_jsons(self.children[1..].iter().step_by(2), true));
         let mut pairs = BTreeMap::new();
-        pairs.extend(keys.into_iter().zip(elems.into_iter()));
+        if self.children.len() > 0 {
+            let parser = JsonFuncArgsParser::new(ctx, row);
+            let keys = try_opt!(parser.get_strings(self.children.iter().step_by(2)));
+            let elems = try_opt!(parser.get_jsons(self.children[1..].iter().step_by(2), true));
+            pairs.extend(keys.into_iter().zip(elems.into_iter()));
+        }
         Ok(Some(Cow::Owned(Json::Object(pairs))))
     }
 
