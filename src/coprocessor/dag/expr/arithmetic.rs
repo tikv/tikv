@@ -144,6 +144,30 @@ impl FnCall {
         };
         res.ok_or(Error::Overflow).map(Some)
     }
+
+    pub fn divide_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+        let res = lhs / rhs;
+        if res.is_infinite() {
+            Err(Error::Overflow)
+        } else {
+            Ok(Some(res))
+        }
+    }
+
+    pub fn divide_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        match lhs.into_owned() / rhs.into_owned() {
+            Some(v) => Ok(Some(Cow::Owned(v.unwrap()))),
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -249,6 +273,18 @@ mod test {
                 Datum::F64(-0.01),
                 Datum::F64(-0.0101001),
             ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(-12.3),
+                Datum::F64(41f64),
+                Datum::F64(-0.3),
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(12.3),
+                Datum::F64(0.3),
+                Datum::F64(41f64),
+            ),
         ];
         let ctx = StatementContext::default();
         for tt in tests {
@@ -257,7 +293,10 @@ mod test {
 
             let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
-            assert_eq!(got, tt.3);
+            match (got, tt.3) {
+                (Datum::F64(got), Datum::F64(expect)) => assert!((got - expect).abs() < 1e-8),
+                _ => unimplemented!(),
+            }
         }
     }
 
@@ -281,6 +320,24 @@ mod test {
                 str2dec("1.1"),
                 str2dec("2.2"),
                 str2dec("2.42"),
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("12.3"),
+                str2dec("-0.3"),
+                str2dec("-41"),
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("12.3"),
+                str2dec("0.3"),
+                str2dec("41"),
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("12.3"),
+                str2dec("0"),
+                Datum::Null,
             ),
         ];
         let ctx = StatementContext::default();
