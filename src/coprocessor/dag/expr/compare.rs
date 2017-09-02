@@ -170,7 +170,7 @@ impl FnCall {
         } else {
             '\\'
         };
-        Ok(Some(like_match(&target, &pattern, escape) as i64))
+        Ok(Some(like_match(target, pattern, escape) as i64))
     }
 }
 
@@ -248,7 +248,7 @@ where
 #[inline]
 fn next_escaped(chars: &mut Chars, escape: char) -> Option<char> {
     chars.next().and_then(|c| if c == escape {
-        chars.next().or(Some(c))
+        chars.next().or_else(|| Some(c))
     } else {
         Some(c)
     })
@@ -276,7 +276,7 @@ fn like_match(target: &str, pattern: &str, escape: char) -> bool {
             return false;
         }
     }
-    return tcs.next().is_none();
+    tcs.next().is_none()
 }
 
 #[cfg(test)]
@@ -412,10 +412,7 @@ mod test {
             (r#"C:\Programs\"#, r#"%%\"#, '%', true),
         ];
         let ctx = StatementContext::default();
-        let mut i = 0;
         for (target, pattern, escape, exp) in cases {
-            println!("{}", i);
-            i += 1;
             let target = datum_expr(Datum::Bytes(target.as_bytes().to_vec()));
             let pattern = datum_expr(Datum::Bytes(pattern.as_bytes().to_vec()));
             let escape = datum_expr(Datum::I64(escape as i64));
