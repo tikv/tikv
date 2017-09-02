@@ -57,7 +57,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let mut pairs = BTreeMap::new();
-        if self.children.len() > 0 {
+        if !self.children.is_empty() {
             let parser = JsonFuncArgsParser::new(ctx, row);
             let keys = try_opt!(parser.get_strings(self.children.iter().step_by(2)));
             let elems = try_opt!(parser.get_jsons(self.children[1..].iter().step_by(2), true));
