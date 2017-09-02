@@ -179,11 +179,11 @@ impl<'a> JsonFuncArgsParser<'a> {
         JsonFuncArgsParser::parse(args, func)
     }
 
-    fn get_jsons<'b: 'a, It>(&'a self, args: It, allow_null: bool) -> Result<Option<Vec<Json>>>
+    fn get_jsons<'b: 'a, It>(&'a self, args: It, nullable: bool) -> Result<Option<Vec<Json>>>
     where
         It: Iterator<Item = &'b Expression>,
     {
-        if !allow_null {
+        if !nullable {
             let func = |e: &'b Expression| {
                 let j = try_opt!(e.eval_json(self.ctx, self.row)).into_owned();
                 Ok(Some(j))
@@ -215,69 +215,139 @@ impl<'a> JsonFuncArgsParser<'a> {
 #[cfg(test)]
 mod test {
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::{mysql, Datum};
-    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::Datum;
+    use coprocessor::codec::mysql::Json;
     use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::dag::expr::test::{check_overflow, fncall_expr, str2dec};
+    use coprocessor::dag::expr::test::fncall_expr;
     use coprocessor::select::xeval::evaluator::test::datum_expr;
 
     #[test]
     fn test_json_type() {
         let cases = vec![
-            (Datum::Null, None),
-            (Datum::Json(r#"true"#.parse().uwnrap()), Some("BOOLEAN")),
-            (Datum::Json(r#"null"#.parse().uwnrap()), Some("NULL")),
-            (Datum::Json(r#"-3"#.parse().uwnrap()), Some("INTEGER")),
-            (
-                Datum::Json(r#"3"#.parse().uwnrap()),
-                Some("UNSIGNED INTEGER"),
-            ),
-            (Datum::Json(r#"3.14"#.parse().uwnrap()), Some("DOUBLE")),
-            (
-                Datum::Json(r#"{"name":"shirly"}"#.parse().uwnrap()),
-                Some("OBJECT"),
-            ),
-            (Datum::Json(r#"[1, 2, 3]"#.parse().uwnrap()), Some("ARRAY")),
+            (None, None),
+            (Some(r#"true"#), Some("BOOLEAN")),
+            (Some(r#"null"#), Some("NULL")),
+            (Some(r#"-3"#), Some("INTEGER")),
+            (Some(r#"3"#), Some("UNSIGNED INTEGER")),
+            (Some(r#"3.14"#), Some("DOUBLE")),
+            (Some(r#"[1, 2, 3]"#), Some("ARRAY")),
+            (Some(r#"{"name": 123}"#), Some("OBJECT")),
         ];
+        let ctx = StatementContext::default();
+        for (input, exp) in cases {
+            let input = match input {
+                None => Datum::Null,
+                Some(s) => Datum::Json(s.parse().unwrap()),
+            };
+            let exp = match exp {
+                None => Datum::Null,
+                Some(s) => Datum::Bytes(s.to_owned().into_bytes()),
+            };
+
+            let arg = datum_expr(input);
+            let op = fncall_expr(ScalarFuncSig::JsonTypeSig, &[arg]);
+            let op = Expression::build(op, &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
     }
 
     #[test]
     fn test_json_unquote() {
         let cases = vec![
-            (ScalarFuncSig::JsonUnquoteSig, Datum::Null, None),
-            (Datum::Bytes("a".to_vec()), Some("a")),
-            (Datum::Bytes(r#""3""#.to_vec()), Some(r#""3""#)),
+            (None, false, None),
+            (Some(r"a"), false, Some("a")),
+            (Some(r#""3""#), false, Some(r#""3""#)),
+            (Some(r#""3""#), true, Some(r#"3"#)),
+            (Some(r#"{"a":  "b"}"#), false, Some(r#"{"a":  "b"}"#)),
+            (Some(r#"{"a":  "b"}"#), true, Some(r#"{"a":"b"}"#)),
             (
-                Datum::Bytes(r#"{"a":  "b"}"#.to_vec()),
-                Some(r#"{"a":  "b"}"#),
-            ),
-            (
-                Datum::Bytes(r#"hello,\"quoted string\",world"#.to_vec()),
+                Some(r#"hello,\"quoted string\",world"#),
+                false,
                 Some(r#"hello,"quoted string",world"#),
             ),
         ];
+        let ctx = StatementContext::default();
+        for (input, parse, exp) in cases {
+            let input = match input {
+                None => Datum::Null,
+                Some(s) => if parse {
+                    Datum::Json(s.parse().unwrap())
+                } else {
+                    Datum::Json(Json::String(s.to_owned()))
+                },
+            };
+            let exp = match exp {
+                None => Datum::Null,
+                Some(s) => Datum::Bytes(s.to_owned().into_bytes()),
+            };
+
+            let arg = datum_expr(input);
+            let op = fncall_expr(ScalarFuncSig::JsonUnquoteSig, &[arg]);
+            let op = Expression::build(op, &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
     }
 
     #[test]
     fn test_json_object() {
         let cases = vec![
-            (vec![], Datum::Json("{}".parse().unwrap())),
+            (vec![], Datum::Json(r#"{}"#.parse().unwrap())),
             (
-                vec![Datum::U64(1), Datum::Null],
+                vec![Datum::Bytes(b"1".to_vec()), Datum::Null],
                 Datum::Json(r#"{"1":null}"#.parse().unwrap()),
             ),
             (
                 vec![
-                    Datum::U64(1),
+                    Datum::Bytes(b"1".to_vec()),
                     Datum::Null,
-                    Datum::U64(2),
-                    Datum::Bytes(b"sdf".to_vec()),
+                    Datum::Bytes(b"2".to_vec()),
+                    Datum::Json(Json::String("sdf".to_owned())),
                     Datum::Bytes(b"k1".to_vec()),
-                    Datum::Bytes(b"v1".to_vec()),
+                    Datum::Json(Json::String("v1".to_owned())),
                 ],
                 Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap()),
             ),
         ];
+        let ctx = StatementContext::default();
+        for (inputs, exp) in cases {
+            let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
+            let op = fncall_expr(ScalarFuncSig::JsonObjectSig, &args);
+            let op = Expression::build(op, &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_json_array() {
+        let cases = vec![
+            (vec![], Datum::Json(r#"[]"#.parse().unwrap())),
+            (
+                vec![Datum::Json("1".parse().unwrap()), Datum::Null],
+                Datum::Json(r#"[1, null]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Datum::Json("1".parse().unwrap()),
+                    Datum::Null,
+                    Datum::Json("2".parse().unwrap()),
+                    Datum::Json(Json::String("sdf".to_owned())),
+                    Datum::Json(Json::String("k1".to_owned())),
+                    Datum::Json(Json::String("v1".to_owned())),
+                ],
+                Datum::Json(r#"[1, null, 2, "sdf", "k1", "v1"]"#.parse().unwrap()),
+            ),
+        ];
+        let ctx = StatementContext::default();
+        for (inputs, exp) in cases {
+            let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
+            let op = fncall_expr(ScalarFuncSig::JsonArraySig, &args);
+            let op = Expression::build(op, &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
     }
 
     #[test]
@@ -290,28 +360,79 @@ mod test {
             ),
             (
                 ScalarFuncSig::JsonSetSig,
-                vec![Datum::I64(9), Datum::Bytes("$[1]".to_vec()), Datum::I64(3)],
+                vec![
+                    Datum::Json(Json::I64(9)),
+                    Datum::Bytes(b"$[1]".to_vec()),
+                    Datum::Json(Json::U64(3)),
+                ],
                 Datum::Json(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonInsertSig,
-                vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                vec![
+                    Datum::Json(Json::I64(9)),
+                    Datum::Bytes(b"$[1]".to_vec()),
+                    Datum::Json(Json::U64(3)),
+                ],
                 Datum::Json(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonReplaceSig,
-                vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                vec![
+                    Datum::Json(Json::I64(9)),
+                    Datum::Bytes(b"$[1]".to_vec()),
+                    Datum::Json(Json::U64(3)),
+                ],
                 Datum::Json(r#"9"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonSetSig,
                 vec![
-                    Datum::Bytes(br#"{"a":"x"}"#.to_vec()),
+                    Datum::Json(r#"{"a":"x"}"#.parse().unwrap()),
                     Datum::Bytes(b"$.a".to_vec()),
                     Datum::Null,
                 ],
                 Datum::Json(r#"{"a":null}"#.parse().unwrap()),
             ),
         ];
+        let ctx = StatementContext::default();
+        for (sig, inputs, exp) in cases {
+            let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
+            let op = fncall_expr(sig, &args);
+            let op = Expression::build(op, &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_json_merge() {
+        let cases = vec![
+            (vec![Datum::Null, Datum::Null], Datum::Null),
+            (
+                vec![
+                    Datum::Json("{}".parse().unwrap()),
+                    Datum::Json("[]".parse().unwrap()),
+                ],
+                Datum::Json("[{}]".parse().unwrap()),
+            ),
+            (
+                vec![
+                    Datum::Json("{}".parse().unwrap()),
+                    Datum::Json("[]".parse().unwrap()),
+                    Datum::Json("3".parse().unwrap()),
+                    Datum::Json(r#""4""#.parse().unwrap()),
+                ],
+                Datum::Json(r#"[{}, 3, "4"]"#.parse().unwrap()),
+            ),
+        ];
+        let ctx = StatementContext::default();
+        for (inputs, exp) in cases {
+            let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
+            let op = fncall_expr(ScalarFuncSig::JsonMergeSig, &args);
+            let op = Expression::build(op, &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
     }
 }

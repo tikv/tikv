@@ -167,7 +167,9 @@ impl FnCall {
             ScalarFuncSig::FloorIntToInt |
             ScalarFuncSig::FloorIntToDec |
             ScalarFuncSig::FloorDecToDec |
-            ScalarFuncSig::FloorDecToInt => (1, 1),
+            ScalarFuncSig::FloorDecToInt |
+            ScalarFuncSig::JsonTypeSig |
+            ScalarFuncSig::JsonUnquoteSig => (1, 1),
 
             ScalarFuncSig::IfInt |
             ScalarFuncSig::IfReal |
@@ -175,6 +177,8 @@ impl FnCall {
             ScalarFuncSig::IfDecimal |
             ScalarFuncSig::IfTime |
             ScalarFuncSig::IfDuration => (3, 3),
+
+            ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
             ScalarFuncSig::CoalesceDecimal |
             ScalarFuncSig::CoalesceDuration |
@@ -190,6 +194,13 @@ impl FnCall {
             ScalarFuncSig::CaseWhenReal |
             ScalarFuncSig::CaseWhenString |
             ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
+
+            ScalarFuncSig::JsonExtractSig |
+            ScalarFuncSig::JsonRemoveSig |
+            ScalarFuncSig::JsonMergeSig => (2, usize::MAX),
+            ScalarFuncSig::JsonSetSig |
+            ScalarFuncSig::JsonInsertSig |
+            ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
 
             _ => return Err(Error::UnknownSignature(sig)),
         };
@@ -482,6 +493,8 @@ dispatch_call! {
 
         CoalesceString => coalesce_string,
         CaseWhenString => case_when_string,
+        JsonTypeSig => json_type,
+        JsonUnquoteSig => json_unquote,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -524,5 +537,14 @@ dispatch_call! {
 
         CoalesceJson => coalesce_json,
         CaseWhenJson => case_when_json,
+
+        JsonExtractSig => json_extract,
+        JsonSetSig => json_set,
+        JsonInsertSig => json_insert,
+        JsonReplaceSig => json_replace,
+        JsonRemoveSig => json_remove,
+        JsonMergeSig => json_merge,
+        JsonArraySig => json_array,
+        JsonObjectSig => json_object,
     }
 }

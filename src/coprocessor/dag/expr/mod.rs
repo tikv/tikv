@@ -33,6 +33,7 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
+use coprocessor::codec::mysql::json::JsonDecoder;
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
 use util;
@@ -316,6 +317,11 @@ impl Expression {
             ExprType::MysqlDecimal => expr.get_val()
                 .decode_decimal()
                 .map(Datum::Dec)
+                .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
+            ExprType::MysqlJson => expr.get_val()
+                .decode_json()
+                .map(Datum::Json)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
             ExprType::ScalarFunc => {

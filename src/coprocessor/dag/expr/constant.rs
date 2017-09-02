@@ -137,7 +137,7 @@ mod test {
         Option<i64>,
         Option<f64>,
         Option<Decimal>,
-        Option<[u8]>,
+        Option<Vec<u8>>,
         Option<Time>,
         Option<Duration>,
         Option<Json>,
