@@ -197,7 +197,9 @@ impl FnCall {
 
             ScalarFuncSig::JsonExtractSig |
             ScalarFuncSig::JsonRemoveSig |
-            ScalarFuncSig::JsonMergeSig => (2, usize::MAX),
+            ScalarFuncSig::JsonMergeSig |
+            ScalarFuncSig::LikeSig => (2, usize::MAX),
+
             ScalarFuncSig::JsonSetSig |
             ScalarFuncSig::JsonInsertSig |
             ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
@@ -428,6 +430,8 @@ dispatch_call! {
 
         CoalesceInt => coalesce_int,
         CaseWhenInt => case_when_int,
+
+        LikeSig => like,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,

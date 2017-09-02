@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::i64;
+use std::{char, str, i64};
 use std::cmp::Ordering;
 use std::borrow::Cow;
 
@@ -157,6 +157,22 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Json>>> {
         do_coalesce(self, |v| v.eval_json(ctx, row))
     }
+
+    pub fn like(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let target = try_opt!(self.children[0].eval_string(ctx, row));
+        let pattern = try_opt!(self.children[1].eval_string(ctx, row));
+        let target = try!(str::from_utf8(&target).map_err(Error::from)).chars();
+        let pattern = try!(str::from_utf8(&pattern).map_err(Error::from)).chars();
+        let escape = if self.children.len() == 3 {
+            let c = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
+            try!(char::from_u32(c).ok_or::<Error>(box_err!("invalid escape char: {}", c)))
+        } else {
+            '\\'
+        };
+
+        Ok(Some(like_match(target, pattern, escape) as i64))
+
+    }
 }
 
 fn do_compare<T, E, F>(e: E, op: CmpOp, get_order: F) -> Result<Option<i64>>
@@ -228,6 +244,46 @@ where
         }
     }
     Ok(None)
+}
+
+
+fn like_match<Itr1, Itr2>(mut target: Itr1, mut pattern: Itr2, escape: char) -> bool
+where
+    Itr1: Iterator<Item = char>,
+    Itr2: Iterator<Item = char>,
+{
+    let mut in_escaped_ctx = false;
+    loop {
+        if let Some(c) = pattern.next() {
+            if c == '_' && !in_escaped_ctx {
+                if target.next().is_some() {
+                    continue;
+                }
+                return false;
+            } else if c == '%' && !in_escaped_ctx {
+                if let Some(t) = pattern.next() {
+                    let target = target.skip_while(|&x| x != t);
+                    return like_match(target, pattern, escape);
+                }
+                return true;
+            } else if c == '\\' && !in_escaped_ctx {
+                in_escaped_ctx = true;
+                continue;
+            } else {
+                if let Some(t) = target.next() {
+                    if t == c {
+                        in_escaped_ctx = false;
+                        continue;
+                    }
+                }
+            }
+        } else {
+            if in_escaped_ctx && target.next() == Some(escape) && target.next().is_none() {
+                return true;
+            }
+            return target.next().is_none();
+        }
+    }
 }
 
 #[cfg(test)]
