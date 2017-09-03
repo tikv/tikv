@@ -445,7 +445,7 @@ mod tests {
 
         let zero = Duration::new(0, 0);
         // Sub Instant.
-        assert!(late_raw - early_raw > zero);
+        assert!(late_raw - early_raw >= zero);
         assert!(late_coarse - early_coarse >= zero);
 
         // Sub Duration.
