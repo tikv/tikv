@@ -303,9 +303,9 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
     }
 
     if let Some(capacity_str) = matches.value_of("capacity") {
-        let capacity = capacity_str
-            .parse()
-            .unwrap_or_else(|e| fatal_stderr!("invalid capacity {}: {}", capacity_str, e));
+        let capacity = capacity_str.parse().unwrap_or_else(|e| {
+            fatal_stderr!("invalid capacity {}: {}", capacity_str, e)
+        });
         config.raft_store.capacity = capacity;
     }
 }
