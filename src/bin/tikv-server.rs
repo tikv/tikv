@@ -86,24 +86,28 @@ macro_rules! fatal {
     })
 }
 
+macro_rules! fatal_stderr {
+    ($lvl:expr, $($arg:tt)+) => ({
+        eprintln!($lvl, $($arg)+);
+        process::exit(1)
+    })
+}
+
 fn init_log(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         logger::init_log(StderrLogger, config.log_level).unwrap_or_else(|e| {
-            eprintln!("failed to initial log: {:?}", e);
-            process::exit(1)
+            fatal_stderr!("failed to initial log: {:?}", e);
         });
     } else {
         let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
-            eprintln!(
+            fatal_stderr!(
                 "failed to initial log with file {:?}: {:?}",
                 config.log_file,
                 e
             );
-            process::exit(1)
         });
         logger::init_log(w, config.log_level).unwrap_or_else(|e| {
-            eprintln!("failed to initial log: {:?}", e);
-            process::exit(1)
+            fatal_stderr!("failed to initial log: {:?}", e);
         });
     }
 }
@@ -286,11 +290,11 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
                 let mut parts = s.split('=');
                 let key = parts.next().unwrap().to_owned();
                 let value = match parts.next() {
-                    None => fatal!("invalid label: {:?}", s),
+                    None => fatal_stderr!("invalid label: {:?}", s),
                     Some(v) => v.to_owned(),
                 };
                 if parts.next().is_some() {
-                    fatal!("invalid label: {:?}", s);
+                    fatal_stderr!("invalid label: {:?}", s);
                 }
                 labels.insert(key, value);
             })
@@ -301,8 +305,8 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
     if let Some(capacity_str) = matches.value_of("capacity") {
         let capacity = capacity_str
             .parse()
-            .unwrap_or_else(|e| fatal!("invalid capacity {}: {:?}", capacity_str, e));
-        config.raft_store.capacity.0 = capacity;
+            .unwrap_or_else(|e| fatal_stderr!("invalid capacity {}: {}", capacity_str, e));
+        config.raft_store.capacity = capacity;
     }
 }
 
@@ -441,8 +445,7 @@ fn main() {
                     Ok(c)
                 })
                 .unwrap_or_else(|e| {
-                    eprintln!("invalid configuration file {:?}: {}", path, e);
-                    process::exit(-1);
+                    fatal_stderr!("invalid configuration file {:?}: {}", path, e);
                 })
         },
     );
@@ -450,8 +453,7 @@ fn main() {
     overwrite_config_with_cmd_args(&mut config, &matches);
 
     if let Err(e) = config.validate() {
-        eprintln!("invalid configuration: {:?}", e);
-        process::exit(-1);
+        fatal_stderr!("invalid configuration: {:?}", e);
     }
 
     init_log(&config);
