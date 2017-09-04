@@ -273,6 +273,12 @@ mod test {
                 Datum::F64(-0.01),
                 Datum::F64(-0.0101001),
             ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(2.0),
+                Datum::F64(0.3),
+                Datum::F64(6.666666666666667),
+            ),
             // TODO: support precision in divide.
             // (
             //     ScalarFuncSig::DivideReal,
