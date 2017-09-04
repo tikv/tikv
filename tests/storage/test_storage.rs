@@ -854,12 +854,7 @@ fn test_conflict_commands_on_fault_engine() {
         )
         .unwrap();
     async_storage
-        .async_cleanup(
-            storage.ctx.clone(),
-            make_key(&k),
-            start_ts,
-            box |_| {},
-        )
+        .async_cleanup(storage.ctx.clone(), make_key(&k), start_ts, box |_| {})
         .unwrap();
     async_storage
         .async_rollback(
