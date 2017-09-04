@@ -290,6 +290,18 @@ mod test {
                 Datum::F64(44.3),
                 Datum::F64(0.000),
                 Datum::Null,
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::Null,
+                Datum::F64(1.0),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(1.0),
+                Datum::Null,
+                Datum::Null,
             ), // TODO: support precision in divide.
                // (
                //     ScalarFuncSig::DivideReal,
@@ -352,6 +364,18 @@ mod test {
                 ScalarFuncSig::DivideDecimal,
                 str2dec("12.3"),
                 str2dec("0"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                Datum::Null,
+                str2dec("123"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("123"),
+                Datum::Null,
                 Datum::Null,
             ),
         ];
