@@ -148,6 +148,9 @@ impl FnCall {
     pub fn divide_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
         let lhs = try_opt!(self.children[0].eval_real(ctx, row));
         let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+        if rhs == 0f64 {
+            return Ok(None);
+        }
         let res = lhs / rhs;
         if res.is_infinite() {
             Err(Error::Overflow)
@@ -282,19 +285,24 @@ mod test {
                 Datum::F64(0.3),
                 Datum::F64(6.666666666666667),
             ),
-            // TODO: support precision in divide.
-            // (
-            //     ScalarFuncSig::DivideReal,
-            //     Datum::F64(-12.3),
-            //     Datum::F64(41f64),
-            //     Datum::F64(-0.3),
-            // ),
-            // (
-            //     ScalarFuncSig::DivideReal,
-            //     Datum::F64(12.3),
-            //     Datum::F64(0.3),
-            //     Datum::F64(41f64)
-            // )
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(44.3),
+                Datum::F64(0.000),
+                Datum::Null,
+            ), // TODO: support precision in divide.
+               // (
+               //     ScalarFuncSig::DivideReal,
+               //     Datum::F64(-12.3),
+               //     Datum::F64(41f64),
+               //     Datum::F64(-0.3),
+               // ),
+               // (
+               //     ScalarFuncSig::DivideReal,
+               //     Datum::F64(12.3),
+               //     Datum::F64(0.3),
+               //     Datum::F64(41f64)
+               // )
         ];
         let ctx = StatementContext::default();
         for tt in tests {
@@ -439,7 +447,11 @@ mod test {
                 Datum::F64(f64::MIN),
                 Datum::F64(f64::MAX),
             ),
-            (ScalarFuncSig::DivideReal, Datum::F64(1.0), Datum::F64(0.0)),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(f64::MAX),
+                Datum::F64(0.00001),
+            ),
         ];
         let ctx = StatementContext::default();
         for tt in tests {
