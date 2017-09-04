@@ -374,19 +374,16 @@ impl Serialize for ReadableSize {
 }
 
 impl FromStr for ReadableSize {
-    type Err = &'static str;
+    type Err = String;
 
-    fn from_str(size_str: &str) -> Result<ReadableSize, &'static str> {
-        let err_msg = "valid size, only KB, MB, GB, TB, PB are supported.";
-        let size_str = size_str.trim();
-        if size_str.len() < 2 {
-            // When it's a string, it should contains a unit and a number.
-            // So its length should be at least 2.
-            return Err(err_msg);
+    fn from_str(s: &str) -> Result<ReadableSize, String> {
+        let size_str = s.trim();
+        if size_str.is_empty() {
+            return Err(format!("{:?} is not a valid size.", s));
         }
 
         if !size_str.is_ascii() {
-            return Err("ascii str");
+            return Err(format!("ASCII string is expected, but got {:?}", s));
         }
 
         let mut chrs = size_str.chars();
@@ -395,7 +392,10 @@ impl FromStr for ReadableSize {
         if unit_char < '0' || unit_char > '9' {
             number_str = chrs.as_str();
             if unit_char == 'B' {
-                let b = chrs.next_back().unwrap();
+                let b = match chrs.next_back() {
+                    Some(b) => b,
+                    None => return Err(format!("numeric value is expected: {:?}", s)),
+                };
                 if b < '0' || b > '9' {
                     number_str = chrs.as_str();
                     unit_char = b;
@@ -412,11 +412,11 @@ impl FromStr for ReadableSize {
             'T' => TB,
             'P' => PB,
             'B' => UNIT,
-            _ => return Err(err_msg),
+            _ => return Err(format!("only B, KB, MB, GB, TB, PB are supported: {:?}", s)),
         };
         match number_str.trim().parse::<f64>() {
             Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
-            Err(_) => Err(err_msg),
+            Err(_) => Err(format!("invalid size string: {:?}", s)),
         }
     }
 }
@@ -457,9 +457,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
             where
                 E: de::Error,
             {
-                size_str
-                    .parse()
-                    .map_err(|e: &str| E::invalid_value(Unexpected::Str(size_str), &e))
+                size_str.parse().map_err(E::custom)
             }
         }
 
@@ -865,6 +863,7 @@ mod test {
             ("0.5M", MB / 2),
             ("0.5K", KB / 2),
             ("23", 23),
+            ("1", 1),
             ("1024B", KB),
         ];
         for (src, exp) in decode_cases {
@@ -873,7 +872,17 @@ mod test {
             assert_eq!(res.s.0, exp);
         }
 
-        let illegal_cases = vec!["0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "gb", "1b"];
+        let illegal_cases = vec![
+            "0.5kb",
+            "0.5kB",
+            "0.5Kb",
+            "0.5k",
+            "0.5g",
+            "b",
+            "gb",
+            "1b",
+            "B",
+        ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
