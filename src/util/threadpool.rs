@@ -31,6 +31,7 @@ pub trait Context: Send {
     fn on_tick(&mut self) {}
 }
 
+#[derive(Default)]
 pub struct DefaultContext;
 
 impl Context for DefaultContext {}
@@ -41,9 +42,9 @@ pub trait ContextFactory<Ctx: Context> {
 
 pub struct DefaultContextFactory;
 
-impl ContextFactory<DefaultContext> for DefaultContextFactory {
-    fn create(&self) -> DefaultContext {
-        DefaultContext
+impl<C: Context + Default> ContextFactory<C> for DefaultContextFactory {
+    fn create(&self) -> C {
+        C::default()
     }
 }
 
@@ -95,6 +96,12 @@ pub struct ThreadPoolBuilder<C, F> {
     tasks_per_tick: usize,
     f: F,
     _ctx: PhantomData<C>,
+}
+
+impl<C: Context + Default + 'static> ThreadPoolBuilder<C, DefaultContextFactory> {
+    pub fn with_default_factory(name: String) -> ThreadPoolBuilder<C, DefaultContextFactory> {
+        ThreadPoolBuilder::new(name, DefaultContextFactory)
+    }
 }
 
 impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
@@ -293,7 +300,7 @@ mod test {
     #[test]
     fn test_get_task_count() {
         let name = thd_name!("test_get_task_count");
-        let mut task_pool = ThreadPoolBuilder::new(name, DefaultContextFactory).build();
+        let mut task_pool = ThreadPoolBuilder::with_default_factory(name).build();
         let (tx, rx) = channel();
         let (ftx, frx) = channel();
         let receiver = Arc::new(Mutex::new(rx));

@@ -26,7 +26,7 @@ use kvproto::kvrpcpb::CommandPri;
 use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
-use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
+use util::threadpool::{Context, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
 use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
 use storage::engine::Error as EngineError;
@@ -69,6 +69,7 @@ pub struct Host {
     max_running_task_count: usize,
 }
 
+#[derive(Default)]
 struct CopContext {
     task_count: u64,
     select_stats: Statistics,
@@ -115,19 +116,6 @@ impl Context for CopContext {
     }
 }
 
-struct CopContextFactory;
-
-impl ContextFactory<CopContext> for CopContextFactory {
-    fn create(&self) -> CopContext {
-        CopContext {
-            task_count: 0,
-            select_stats: Default::default(),
-            index_stats: Default::default(),
-            dag_stats: Default::default(),
-        }
-    }
-}
-
 impl Host {
     pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config) -> Host {
         Host {
@@ -136,17 +124,15 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
-            pool: ThreadPoolBuilder::new(thd_name!("endpoint-normal-pool"), CopContextFactory)
+            pool: ThreadPoolBuilder::with_default_factory(thd_name!("endpoint-normal-pool"))
                 .thread_count(cfg.end_point_concurrency)
                 .build(),
-            low_priority_pool: ThreadPoolBuilder::new(
+            low_priority_pool: ThreadPoolBuilder::with_default_factory(
                 thd_name!("endpoint-low-pool"),
-                CopContextFactory,
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
-            high_priority_pool: ThreadPoolBuilder::new(
+            high_priority_pool: ThreadPoolBuilder::with_default_factory(
                 thd_name!("endpoint-high-pool"),
-                CopContextFactory,
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
         }
