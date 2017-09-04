@@ -46,7 +46,6 @@ extern crate rocksdb;
 extern crate kvproto;
 extern crate time;
 extern crate tipb;
-extern crate threadpool;
 extern crate num;
 extern crate libc;
 extern crate crc;
