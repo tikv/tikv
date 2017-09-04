@@ -54,6 +54,7 @@ fn main() {
         )
         .arg(
             Arg::with_name("raftdb")
+                .short("r")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
