@@ -15,7 +15,7 @@ use std::{f64, i64, u64};
 use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::mysql::{Decimal, Res};
 use super::{Error, FnCall, Result, StatementContext};
 
 impl FnCall {
@@ -164,7 +164,10 @@ impl FnCall {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
         match lhs.into_owned() / rhs.into_owned() {
-            Some(v) => Ok(Some(Cow::Owned(v.unwrap()))),
+            Some(v) => match v {
+                Res::Ok(v) => Ok(Some(Cow::Owned(v))),
+                Res::Truncated(_) | Res::Overflow(_) => Err(Error::Overflow),
+            },
             None => Ok(None),
         }
     }
