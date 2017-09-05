@@ -58,27 +58,23 @@ pub mod compression_type_level_serde {
 
     use rocksdb::DBCompressionType;
 
-    pub fn db_compression_type_to_str(tp: &DBCompressionType) -> &'static str {
-        match *tp {
-            DBCompressionType::No => "no",
-            DBCompressionType::Snappy => "snappy",
-            DBCompressionType::Zlib => "zlib",
-            DBCompressionType::Bz2 => "bzip2",
-            DBCompressionType::Lz4 => "lz4",
-            DBCompressionType::Lz4hc => "lz4hc",
-            DBCompressionType::Zstd => "zstd",
-            DBCompressionType::ZstdNotFinal => "zstd-not-final",
-            DBCompressionType::Disable => "disable",
-        }
-    }
-
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         let mut s = try!(serializer.serialize_seq(Some(ts.len())));
         for t in ts {
-            let name = db_compression_type_to_str(t);
+            let name = match *t {
+                DBCompressionType::No => "no",
+                DBCompressionType::Snappy => "snappy",
+                DBCompressionType::Zlib => "zlib",
+                DBCompressionType::Bz2 => "bzip2",
+                DBCompressionType::Lz4 => "lz4",
+                DBCompressionType::Lz4hc => "lz4hc",
+                DBCompressionType::Zstd => "zstd",
+                DBCompressionType::ZstdNotFinal => "zstd-not-final",
+                DBCompressionType::Disable => "disable",
+            };
             try!(s.serialize_element(name));
         }
         s.end()
