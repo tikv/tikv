@@ -15,7 +15,6 @@ use std::{char, str, i64};
 use std::str::Chars;
 use std::cmp::Ordering;
 use std::borrow::Cow;
-use std::ascii::AsciiExt;
 
 use coprocessor::codec::{datum, mysql, Datum};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
