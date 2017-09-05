@@ -90,7 +90,12 @@ impl FnCall {
             ScalarFuncSig::IfNullDuration |
             ScalarFuncSig::LogicalAnd |
             ScalarFuncSig::LogicalOr |
-            ScalarFuncSig::LogicalXor => (2, 2),
+            ScalarFuncSig::LogicalXor |
+            ScalarFuncSig::DivideDecimal |
+            ScalarFuncSig::DivideReal |
+            ScalarFuncSig::BitAndSig |
+            ScalarFuncSig::BitOrSig |
+            ScalarFuncSig::BitXorSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt |
             ScalarFuncSig::CastIntAsReal |
@@ -167,7 +172,8 @@ impl FnCall {
             ScalarFuncSig::FloorIntToInt |
             ScalarFuncSig::FloorIntToDec |
             ScalarFuncSig::FloorDecToDec |
-            ScalarFuncSig::FloorDecToInt => (1, 1),
+            ScalarFuncSig::FloorDecToInt |
+            ScalarFuncSig::BitNegSig => (1, 1),
 
             ScalarFuncSig::IfInt |
             ScalarFuncSig::IfReal |
@@ -417,6 +423,11 @@ dispatch_call! {
 
         CoalesceInt => coalesce_int,
         CaseWhenInt => case_when_int,
+
+        BitAndSig => bit_and,
+        BitNegSig => bit_neg,
+        BitOrSig => bit_or,
+        BitXorSig => bit_xor,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -441,6 +452,7 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
+        DivideReal => divide_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -467,6 +479,7 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
+        DivideDecimal => divide_decimal,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,
