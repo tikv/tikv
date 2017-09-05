@@ -20,7 +20,7 @@ use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::{self, make_key, Key, Mutation, Storage, ALL_CFS};
-use tikv::storage::engine::{self, Engine, TEMP_DIR};
+use tikv::storage::engine::{self, Engine, EngineRocksdb, TEMP_DIR};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::config::Config;
@@ -810,10 +810,66 @@ fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
     engine.unblock_snapshot();
     rx1.recv().unwrap();
 }
+
 #[test]
 fn test_storage_1gc() {
     let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     test_storage_1gc_with_engine(engine, Context::new());
     let (_cluster, raft_engine, ctx) = new_raft_engine(3, "");
     test_storage_1gc_with_engine(raft_engine, ctx);
+}
+
+#[test]
+fn test_conflict_commands_on_fault_engine() {
+    let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS).unwrap();
+    let box_engine = engine.clone();
+    let config = Default::default();
+    let mut store = SyncStorage::prepare(box_engine, &config);
+    let async_storage = store.get_storage();
+    let storage = AssertionStorage {
+        store: store.clone(),
+        ctx: Context::new(),
+    };
+
+    let (k, v) = (b"k".to_vec(), b"v".to_vec());
+    let start_ts = 10;
+    let commit_ts = 20;
+
+    let (tx, rx) = channel();
+    async_storage.async_prewrite(
+        storage.ctx.clone(),
+        vec![Mutation::Put((make_key(&k), v.clone()))],
+        k.clone(),
+        start_ts,
+        Default::default(),
+        box move |res| { tx.send(res).unwrap(); },
+    ).unwrap();
+    async_storage
+        .async_commit(
+            storage.ctx.clone(),
+            vec![make_key(&k)],
+            start_ts,
+            commit_ts,
+            box |_| {},
+        )
+        .unwrap();
+    async_storage
+        .async_cleanup(storage.ctx.clone(), make_key(&k), start_ts, box |_| {})
+        .unwrap();
+    async_storage
+        .async_rollback(
+            storage.ctx.clone(),
+            vec![make_key(&k)],
+            start_ts,
+            box |_| {},
+        )
+        .unwrap();
+
+    // Stop the engine,
+    engine.stop();
+    // then start the Storage, so that it recives a batch of commands that are conflict.
+    store.start(&config);
+
+    // The first command should return an error and the other will be re-scheduled.
+    rx.recv().unwrap().unwrap_err();
 }
