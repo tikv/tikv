@@ -23,6 +23,7 @@ use std::fmt::Write;
 
 pub const DEFAULT_TASKS_PER_TICK: usize = 10000;
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
+const DEFAULT_THREAD_COUNT: usize = 1;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 
 pub trait Context: Send {
@@ -108,7 +109,7 @@ impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
     pub fn new(name: String, f: F) -> ThreadPoolBuilder<C, F> {
         ThreadPoolBuilder {
             name: name,
-            thread_count: 1,
+            thread_count: DEFAULT_THREAD_COUNT,
             tasks_per_tick: DEFAULT_TASKS_PER_TICK,
             f: f,
             _ctx: PhantomData,
