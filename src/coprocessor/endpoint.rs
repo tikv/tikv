@@ -81,8 +81,6 @@ struct CopContext {
     select_stats: Statistics,
     index_stats: Statistics,
     dag_stats: Statistics,
-    // region_id => read statistics of this region.
-    // region_id => (read bytes, read keys)
     read_stats: ReadStats,
 }
 
@@ -128,7 +126,7 @@ impl Context for CopContext {
         self.task_count = 0;
         if let Some(ref sender) = self.raftstore_sender {
             if let Err(e) =
-                sender.send(mem::replace(&mut self.read_stats, Arc::new(HashMap::new())))
+                sender.send(mem::replace(&mut self.read_stats, Arc::new(HashMap::default())))
             {
                 warn!(
                     "coprocesser failed to send statistics to raftstore: {:?}",
@@ -151,7 +149,7 @@ impl ContextFactory<CopContext> for CopContextFactory {
             select_stats: Default::default(),
             index_stats: Default::default(),
             dag_stats: Default::default(),
-            read_stats: Arc::new(HashMap::new()),
+            read_stats: Arc::new(HashMap::default()),
         }
     }
 }
@@ -236,9 +234,9 @@ impl Host {
                 let stats = end_point.handle_request(req);
                 ctx.task_count += 1;
                 ctx.add_statistics(type_str, &stats);
-                let m = Arc::make_mut(&mut ctx.read_stats);
-                m.entry(region_id).or_insert((0, 0)).0 += stats.total_read_bytes();
-                m.entry(region_id).or_insert((0, 0)).1 += stats.total_processed() as u64;
+                let mut e = Arc::make_mut(&mut ctx.read_stats).entry(region_id).or_insert((0,0));
+                e.0 += stats.total_read_bytes();
+                e.1 += stats.total_processed() as u64;
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
