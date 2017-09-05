@@ -1399,6 +1399,10 @@ impl Scheduler {
             }
 
             if let Some(cmds) = self.grouped_cmds.take() {
+                self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
+                    CMD_BATCH_SIZE,
+                    Default::default(),
+                ));
                 let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
                     BATCH_COMMANDS
                         .with_label_values(&["all"])
@@ -1406,10 +1410,6 @@ impl Scheduler {
                     (hash_ctx.0, cids)
                 });
                 self.batch_get_snapshot(batch.collect());
-                self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
-                    CMD_BATCH_SIZE,
-                    Default::default(),
-                ));
             }
         }
     }
