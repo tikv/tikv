@@ -92,7 +92,10 @@ impl FnCall {
             ScalarFuncSig::LogicalOr |
             ScalarFuncSig::LogicalXor |
             ScalarFuncSig::DivideDecimal |
-            ScalarFuncSig::DivideReal => (2, 2),
+            ScalarFuncSig::DivideReal |
+            ScalarFuncSig::BitAndSig |
+            ScalarFuncSig::BitOrSig |
+            ScalarFuncSig::BitXorSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt |
             ScalarFuncSig::CastIntAsReal |
@@ -171,7 +174,8 @@ impl FnCall {
             ScalarFuncSig::FloorDecToDec |
             ScalarFuncSig::FloorDecToInt |
             ScalarFuncSig::JsonTypeSig |
-            ScalarFuncSig::JsonUnquoteSig => (1, 1),
+            ScalarFuncSig::JsonUnquoteSig |
+            ScalarFuncSig::BitNegSig => (1, 1),
 
             ScalarFuncSig::IfInt |
             ScalarFuncSig::IfReal |
@@ -434,6 +438,11 @@ dispatch_call! {
         CaseWhenInt => case_when_int,
 
         LikeSig => like,
+
+        BitAndSig => bit_and,
+        BitNegSig => bit_neg,
+        BitOrSig => bit_or,
+        BitXorSig => bit_xor,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
