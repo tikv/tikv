@@ -57,9 +57,27 @@ impl FnCall {
         Ok(Some(input.map_or(0, |i| (i != 0f64) as i64)))
     }
 
+    pub fn real_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let v = try!(self.children[0].eval_real(ctx, row));
+        let ret = v.map_or(0, |v| (v == 0f64) as i64);
+        Ok(Some(ret))
+    }
+
     pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_decimal(ctx, row));
         Ok(Some(input.map_or(0, |dec| !dec.is_zero() as i64)))
+    }
+
+    pub fn decimal_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let v = try!(self.children[0].eval_decimal(ctx, row));
+        let ret = v.map_or(0, |v| v.is_zero() as i64);
+        Ok(Some(ret))
+    }
+
+    pub fn int_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let v = try!(self.children[0].eval_int(ctx, row));
+        let ret = v.map_or(0, |v| (v != 0) as i64);
+        Ok(Some(ret))
     }
 
     pub fn int_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -339,13 +357,24 @@ mod test {
             (ScalarFuncSig::RealIsTrue, Datum::F64(0.25), Some(1)),
             (ScalarFuncSig::RealIsTrue, Datum::F64(0.0), Some(0)),
             (ScalarFuncSig::RealIsTrue, Datum::Null, Some(0)),
+            (ScalarFuncSig::RealIsFalse, Datum::F64(0.25), Some(0)),
+            (ScalarFuncSig::RealIsFalse, Datum::F64(0.000), Some(1)),
+            (ScalarFuncSig::RealIsFalse, Datum::F64(-0.00), Some(1)),
+            (ScalarFuncSig::RealIsFalse, Datum::F64(-0.011), Some(0)),
+            (ScalarFuncSig::RealIsFalse, Datum::Null, Some(0)),
             (ScalarFuncSig::RealIsNull, Datum::F64(1.25), Some(0)),
             (ScalarFuncSig::RealIsNull, Datum::Null, Some(1)),
             (ScalarFuncSig::DecimalIsTrue, str2dec("1.1"), Some(1)),
             (ScalarFuncSig::DecimalIsTrue, str2dec("0"), Some(0)),
             (ScalarFuncSig::DecimalIsTrue, Datum::Null, Some(0)),
+            (ScalarFuncSig::DecimalIsFalse, str2dec("1.1"), Some(0)),
+            (ScalarFuncSig::DecimalIsFalse, str2dec("0"), Some(1)),
+            (ScalarFuncSig::DecimalIsFalse, Datum::Null, Some(0)),
             (ScalarFuncSig::DecimalIsNull, str2dec("1.1"), Some(0)),
             (ScalarFuncSig::DecimalIsNull, Datum::Null, Some(1)),
+            (ScalarFuncSig::IntIsTrue, Datum::I64(0), Some(0)),
+            (ScalarFuncSig::IntIsTrue, Datum::I64(12), Some(1)),
+            (ScalarFuncSig::IntIsTrue, Datum::Null, Some(0)),
             (ScalarFuncSig::IntIsFalse, Datum::I64(0), Some(1)),
             (ScalarFuncSig::IntIsFalse, Datum::I64(1), Some(0)),
             (ScalarFuncSig::IntIsFalse, Datum::Null, Some(0)),
