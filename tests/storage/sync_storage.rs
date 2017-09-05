@@ -26,21 +26,35 @@ pub struct SyncStorage {
 
 impl SyncStorage {
     pub fn new(config: &Config) -> SyncStorage {
-        let mut storage = Storage::new(config).unwrap();
-        storage.start(config).unwrap();
+        let storage = Storage::new(config).unwrap();
+        let mut s = SyncStorage {
+            store: storage,
+            cnt: Arc::new(AtomicUsize::new(0)),
+        };
+        s.start(config);
+        s
+    }
+
+    pub fn from_engine(engine: Box<Engine>, config: &Config) -> SyncStorage {
+        let mut s = SyncStorage::prepare(engine, config);
+        s.start(config);
+        s
+    }
+
+    pub fn prepare(engine: Box<Engine>, config: &Config) -> SyncStorage {
+        let storage = Storage::from_engine(engine, config).unwrap();
         SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> SyncStorage {
-        let mut storage = Storage::from_engine(engine, config).unwrap();
-        storage.start(config).unwrap();
-        SyncStorage {
-            store: storage,
-            cnt: Arc::new(AtomicUsize::new(0)),
-        }
+    pub fn start(&mut self, config: &Config) {
+        self.store.start(config).unwrap();
+    }
+
+    pub fn get_storage(&self) -> Storage {
+        self.store.clone()
     }
 
     pub fn get_engine(&self) -> Box<Engine> {
