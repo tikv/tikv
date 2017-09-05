@@ -130,6 +130,29 @@ impl FnCall {
         let arg = try!(self.children[0].eval_duration(ctx, row));
         Ok(Some(arg.is_none() as i64))
     }
+
+    pub fn bit_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        Ok(Some(lhs & rhs))
+    }
+
+    pub fn bit_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        Ok(Some(lhs | rhs))
+    }
+
+    pub fn bit_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        Ok(Some(lhs ^ rhs))
+    }
+
+    pub fn bit_neg(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        Ok(Some(!lhs))
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +397,70 @@ mod test {
             let op = Expression::build(fncall_expr(op, &[arg]), &ctx).unwrap();
             let got = op.eval(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_bit_and() {
+        let cases = vec![
+            (Datum::I64(123), Datum::I64(321), Datum::I64(65)),
+            (Datum::I64(-123), Datum::I64(321), Datum::I64(257)),
+            (Datum::Null, Datum::I64(1), Datum::Null),
+        ];
+        let ctx = StatementContext::default();
+        for (lhs, rhs, exp) in cases {
+            let args = &[datum_expr(lhs), datum_expr(rhs)];
+            let op = Expression::build(fncall_expr(ScalarFuncSig::BitAndSig, args), &ctx).unwrap();
+            let res = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_bit_or() {
+        let cases = vec![
+            (Datum::I64(123), Datum::I64(321), Datum::I64(379)),
+            (Datum::I64(-123), Datum::I64(321), Datum::I64(-59)),
+            (Datum::Null, Datum::I64(1), Datum::Null),
+        ];
+        let ctx = StatementContext::default();
+        for (lhs, rhs, exp) in cases {
+            let args = &[datum_expr(lhs), datum_expr(rhs)];
+            let op = Expression::build(fncall_expr(ScalarFuncSig::BitOrSig, args), &ctx).unwrap();
+            let res = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_bit_xor() {
+        let cases = vec![
+            (Datum::I64(123), Datum::I64(321), Datum::I64(314)),
+            (Datum::I64(-123), Datum::I64(321), Datum::I64(-316)),
+            (Datum::Null, Datum::I64(1), Datum::Null),
+        ];
+        let ctx = StatementContext::default();
+        for (lhs, rhs, exp) in cases {
+            let args = &[datum_expr(lhs), datum_expr(rhs)];
+            let op = Expression::build(fncall_expr(ScalarFuncSig::BitXorSig, args), &ctx).unwrap();
+            let res = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_bit_neg() {
+        let cases = vec![
+            (Datum::I64(123), Datum::I64(-124)),
+            (Datum::I64(-123), Datum::I64(122)),
+            (Datum::Null, Datum::Null),
+        ];
+        let ctx = StatementContext::default();
+        for (arg, exp) in cases {
+            let args = &[datum_expr(arg)];
+            let op = Expression::build(fncall_expr(ScalarFuncSig::BitNegSig, args), &ctx).unwrap();
+            let res = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(res, exp);
         }
     }
 }
