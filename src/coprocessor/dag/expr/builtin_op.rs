@@ -52,9 +52,25 @@ impl FnCall {
         Ok(Some(((arg0 == 0) ^ (arg1 == 0)) as i64))
     }
 
+    pub fn int_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let v = try!(self.children[0].eval_int(ctx, row));
+        let ret = v.map_or(0, |v| (v != 0) as i64);
+        Ok(Some(ret))
+    }
+
     pub fn real_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try!(self.children[0].eval_real(ctx, row));
         Ok(Some(input.map_or(0, |i| (i != 0f64) as i64)))
+    }
+
+    pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let input = try!(self.children[0].eval_decimal(ctx, row));
+        Ok(Some(input.map_or(0, |dec| !dec.is_zero() as i64)))
+    }
+
+    pub fn int_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let input = try!(self.children[0].eval_int(ctx, row));
+        Ok(Some(input.map_or(0, |i| (i == 0) as i64)))
     }
 
     pub fn real_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -63,26 +79,10 @@ impl FnCall {
         Ok(Some(ret))
     }
 
-    pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try!(self.children[0].eval_decimal(ctx, row));
-        Ok(Some(input.map_or(0, |dec| !dec.is_zero() as i64)))
-    }
-
     pub fn decimal_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let v = try!(self.children[0].eval_decimal(ctx, row));
         let ret = v.map_or(0, |v| v.is_zero() as i64);
         Ok(Some(ret))
-    }
-
-    pub fn int_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let v = try!(self.children[0].eval_int(ctx, row));
-        let ret = v.map_or(0, |v| (v != 0) as i64);
-        Ok(Some(ret))
-    }
-
-    pub fn int_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try!(self.children[0].eval_int(ctx, row));
-        Ok(Some(input.map_or(0, |i| (i == 0) as i64)))
     }
 
     pub fn unary_not(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
