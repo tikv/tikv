@@ -110,6 +110,9 @@ impl Context for CopContext {
     fn on_task_started(&mut self) {}
     fn on_task_finished(&mut self) {}
     fn on_tick(&mut self) {
+        if self.task_count == 0 {
+            return;
+        }
         let task_count = self.task_count;
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX, STR_REQ_TYPE_DAG] {
             let this_statistics = self.get_statistics(type_str);

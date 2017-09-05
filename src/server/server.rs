@@ -16,7 +16,7 @@ use std::sync::mpsc::Sender;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
-use grpc::{ChannelBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb_grpc::*;
 use util::worker::Worker;
 use storage::Storage;
@@ -61,7 +61,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         resolver: S,
         snap_mgr: SnapManager,
     ) -> Result<Server<T, S>> {
-        let env = Arc::new(Environment::new(cfg.grpc_concurrency));
+        let env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(cfg.grpc_concurrency)
+                .name_prefix(thd_name!("grpc-server"))
+                .build(),
+        );
         let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.clone())));
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");

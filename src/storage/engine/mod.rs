@@ -17,7 +17,7 @@ use std::cmp::Ordering;
 use std::boxed::FnBox;
 use std::time::Duration;
 
-use self::rocksdb::EngineRocksdb;
+pub use self::rocksdb::EngineRocksdb;
 use rocksdb::TablePropertiesCollection;
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;

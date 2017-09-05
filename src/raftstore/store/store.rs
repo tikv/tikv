@@ -31,7 +31,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTrunc
                              RegionLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::escape;
+use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
@@ -43,7 +43,7 @@ use raftstore::{Error, Result};
 use kvproto::metapb;
 use util::worker::{FutureWorker, Scheduler, Worker};
 use util::transport::SendCh;
-use util::{rocksdb, RingQueue};
+use util::RingQueue;
 use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
@@ -177,19 +177,6 @@ where
     config.messages_per_tick(cfg.messages_per_tick);
     let event_loop = try!(EventLoop::configured(config));
     Ok(event_loop)
-}
-
-pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-    if start_key >= end_key {
-        return Ok(());
-    }
-
-    for cf in db.cf_names() {
-        let handle = try!(rocksdb::get_cf_handle(db, cf));
-        try!(db.delete_file_in_range_cf(handle, start_key, end_key));
-    }
-
-    Ok(())
 }
 
 impl<T, C> Store<T, C> {
@@ -378,8 +365,7 @@ impl<T, C> Store<T, C> {
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            // TODO: use delete_range once #1250 is resolved.
-            try!(delete_file_in_range(
+            try!(rocksdb::delete_file_in_range(
                 &self.kv_engine,
                 &last_start_key,
                 &start_key
@@ -387,8 +373,7 @@ impl<T, C> Store<T, C> {
             last_start_key = keys::enc_end_key(region);
         }
 
-        // TODO: use delete_range once #1250 is resolved.
-        try!(delete_file_in_range(
+        try!(rocksdb::delete_file_in_range(
             &self.kv_engine,
             &last_start_key,
             keys::DATA_MAX_KEY

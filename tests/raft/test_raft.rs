@@ -1887,7 +1887,7 @@ fn test_state_transition() {
         (StateRole::Leader, StateRole::Leader, true, 0, 1),
     ];
     for (i, (from, to, wallow, wterm, wlead)) in tests.drain(..).enumerate() {
-        let mut sm: &mut Raft<MemStorage> = &mut new_test_raft(1, vec![1], 10, 1, new_storage());
+        let sm: &mut Raft<MemStorage> = &mut new_test_raft(1, vec![1], 10, 1, new_storage());
         sm.state = from;
 
         let res = recover_safe!(|| {

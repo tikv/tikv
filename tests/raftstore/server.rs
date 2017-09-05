@@ -17,7 +17,7 @@ use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
 use std::boxed::FnBox;
 
-use grpc::Environment;
+use grpc::EnvBuilder;
 use tempdir::TempDir;
 
 use super::cluster::{Cluster, Simulator};
@@ -64,13 +64,19 @@ pub struct ServerCluster {
 
 impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
+        let env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(1)
+                .name_prefix(thd_name!("server-cluster"))
+                .build(),
+        );
         ServerCluster {
             metas: HashMap::new(),
             addrs: HashMap::new(),
             pd_client: pd_client,
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
-            raft_client: RaftClient::new(Arc::new(Environment::new(1)), Config::default()),
+            raft_client: RaftClient::new(env, Config::default()),
         }
     }
 }

@@ -143,3 +143,5 @@ pub trait PdClient: Send + Sync {
     // Report pd the split region.
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()>;
 }
+
+const REQUEST_TIMEOUT: u64 = 2; // 2s

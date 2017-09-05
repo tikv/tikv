@@ -712,6 +712,248 @@ mod test {
     }
 
     #[test]
+    fn test_cast_as_int() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
+	#[allow(inconsistent_digit_grouping)]
+        let time_int = 2012_12_12_12_00_23i64;
+        let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
+        let cases = vec![
+            (
+                ScalarFuncSig::CastIntAsInt,
+                types::LONG_LONG,
+                Some(types::UNSIGNED_FLAG),
+                vec![Datum::U64(1)],
+                1,
+            ),
+            (
+                ScalarFuncSig::CastIntAsInt,
+                types::LONG_LONG,
+                None,
+                vec![Datum::I64(-1)],
+                -1,
+            ),
+            (
+                ScalarFuncSig::CastStringAsInt,
+                types::STRING,
+                None,
+                vec![Datum::Bytes(b"1".to_vec())],
+                1,
+            ),
+            (
+                ScalarFuncSig::CastStringAsInt,
+                types::STRING,
+                None,
+                vec![Datum::Bytes(b"-123".to_vec())],
+                -123,
+            ),
+            (
+                ScalarFuncSig::CastRealAsInt,
+                types::DOUBLE,
+                None,
+                vec![Datum::F64(1f64)],
+                1,
+            ),
+            (
+                ScalarFuncSig::CastRealAsInt,
+                types::DOUBLE,
+                None,
+                vec![Datum::F64(1234.000)],
+                1234,
+            ),
+            (
+                ScalarFuncSig::CastTimeAsInt,
+                types::DATETIME,
+                None,
+                vec![Datum::Time(t)],
+                time_int,
+            ),
+            (
+                ScalarFuncSig::CastDurationAsInt,
+                types::DURATION,
+                None,
+                vec![Datum::Dur(duration_t)],
+                120023,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsInt,
+                types::JSON,
+                None,
+                vec![Datum::Json(Json::I64(-1))],
+                -1,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsInt,
+                types::JSON,
+                None,
+                vec![Datum::Json(Json::U64(1))],
+                1,
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsInt,
+                types::NEW_DECIMAL,
+                None,
+                vec![Datum::Dec(Decimal::from(1))],
+                1,
+            ),
+        ];
+
+        let null_cols = vec![Datum::Null];
+        for (sig, tp, flag, col, expect) in cases {
+            let col_expr = col_expr(0, tp as i32);
+            let mut exp = fncall_expr(sig, &[col_expr]);
+            if flag.is_some() {
+                exp.mut_field_type().set_flag(flag.unwrap() as u32);
+            }
+            let e = Expression::build(exp, &ctx).unwrap();
+            let res = e.eval_int(&ctx, &col).unwrap();
+            assert_eq!(res.unwrap(), expect);
+            // test None
+            let res = e.eval_int(&ctx, &null_cols).unwrap();
+            assert!(res.is_none());
+        }
+    }
+
+    #[test]
+    fn test_cast_as_real() {
+        let mut ctx = StatementContext::default();
+        ctx.ignore_truncate = true;
+        let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
+	#[allow(inconsistent_digit_grouping)]
+        let int_t = 2012_12_12_12_00_23u64;
+        let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
+        let cases = vec![
+            (
+                ScalarFuncSig::CastIntAsReal,
+                types::LONG_LONG,
+                vec![Datum::I64(1)],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
+                1f64,
+            ),
+            (
+                ScalarFuncSig::CastIntAsReal,
+                types::LONG_LONG,
+                vec![Datum::I64(1234)],
+                7,
+                3,
+                1234.000,
+            ),
+            (
+                ScalarFuncSig::CastStringAsReal,
+                types::STRING,
+                vec![Datum::Bytes(b"1".to_vec())],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
+                1f64,
+            ),
+            (
+                ScalarFuncSig::CastStringAsReal,
+                types::STRING,
+                vec![Datum::Bytes(b"1234".to_vec())],
+                7,
+                3,
+                1234.000,
+            ),
+            (
+                ScalarFuncSig::CastRealAsReal,
+                types::DOUBLE,
+                vec![Datum::F64(1f64)],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
+                1f64,
+            ),
+            (
+                ScalarFuncSig::CastRealAsReal,
+                types::DOUBLE,
+                vec![Datum::F64(1234.123)],
+                8,
+                4,
+                1234.1230,
+            ),
+            (
+                ScalarFuncSig::CastTimeAsReal,
+                types::DATETIME,
+                vec![Datum::Time(t.clone())],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
+                int_t as f64,
+            ),
+            (
+                ScalarFuncSig::CastTimeAsReal,
+                types::DATETIME,
+                vec![Datum::Time(t)],
+                15,
+                1,
+                format!("{}.0", int_t).parse::<f64>().unwrap(),
+            ),
+            (
+                ScalarFuncSig::CastDurationAsReal,
+                types::DURATION,
+                vec![Datum::Dur(duration_t.clone())],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
+                120023f64,
+            ),
+            (
+                ScalarFuncSig::CastDurationAsReal,
+                types::DURATION,
+                vec![Datum::Dur(duration_t)],
+                7,
+                1,
+                120023.0,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsReal,
+                types::JSON,
+                vec![Datum::Json(Json::I64(1))],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
+                1f64,
+            ),
+            (
+                ScalarFuncSig::CastJsonAsReal,
+                types::JSON,
+                vec![Datum::Json(Json::I64(1))],
+                2,
+                1,
+                1.0,
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsReal,
+                types::NEW_DECIMAL,
+                vec![Datum::Dec(Decimal::from(1))],
+                convert::UNSPECIFIED_LENGTH,
+                convert::UNSPECIFIED_LENGTH,
+                1f64,
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsReal,
+                types::NEW_DECIMAL,
+                vec![Datum::Dec(Decimal::from(1))],
+                2,
+                1,
+                1.0,
+            ),
+        ];
+
+        let null_cols = vec![Datum::Null];
+        for (sig, tp, col, flen, decimal, expect) in cases {
+            let col_expr = col_expr(0, tp as i32);
+            let mut exp = fncall_expr(sig, &[col_expr]);
+            exp.mut_field_type().set_flen(flen as i32);
+            exp.mut_field_type().set_decimal(decimal as i32);
+            let e = Expression::build(exp, &ctx).unwrap();
+            let res = e.eval_real(&ctx, &col).unwrap();
+            assert_eq!(format!("{}", res.unwrap()), format!("{}", expect));
+            // test None
+            let res = e.eval_real(&ctx, &null_cols).unwrap();
+            assert!(res.is_none());
+        }
+    }
+
+    #[test]
     fn test_cast_as_decimal() {
         let mut ctx = StatementContext::default();
         ctx.ignore_truncate = true;
@@ -839,7 +1081,7 @@ mod test {
             let mut exp = fncall_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
-            let e = Expression::build(exp, 1, &ctx).unwrap();
+            let e = Expression::build(exp, &ctx).unwrap();
             let res = e.eval_decimal(&ctx, &col).unwrap();
             assert_eq!(res.unwrap().into_owned(), expect);
             // test None
@@ -998,7 +1240,7 @@ mod test {
                 ex.mut_field_type().set_tp(to_tp.unwrap());
             }
             ex.mut_field_type().set_charset(String::from(charset));
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_string(&ctx, &col).unwrap();
             assert_eq!(
                 res.unwrap().into_owned(),
@@ -1174,7 +1416,7 @@ mod test {
             let mut ex = fncall_expr(sig, &[col_expr]);
             ex.mut_field_type().set_decimal(to_fsp as i32);
             ex.mut_field_type().set_tp(to_tp as i32);
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
 
             let res = e.eval_time(&ctx, col).unwrap();
             let data = res.unwrap().into_owned();
@@ -1337,7 +1579,7 @@ mod test {
             let col_expr = col_expr(0, tp as i32);
             let mut ex = fncall_expr(sig, &[col_expr]);
             ex.mut_field_type().set_decimal(to_fsp as i32);
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_duration(&ctx, col).unwrap();
             let data = res.unwrap().into_owned();
             let mut expt = exp.clone();
@@ -1376,7 +1618,7 @@ mod test {
                 col_expr.mut_field_type().set_flag(flag.unwrap() as u32);
             }
             let ex = fncall_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1397,7 +1639,7 @@ mod test {
         for (cols, exp) in cases {
             let col_expr = col_expr(0, types::DOUBLE as i32);
             let ex = fncall_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1422,7 +1664,7 @@ mod test {
             let col_expr = col_expr(0, types::NEW_DECIMAL as i32);
             let ex = fncall_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
 
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1453,7 +1695,7 @@ mod test {
             let col_expr = col_expr(0, types::STRING as i32);
             let mut ex = fncall_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
             ex.mut_field_type().set_decimal(decimal);
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1503,7 +1745,7 @@ mod test {
         for (tp, cols, exp) in cases {
             let col_expr = col_expr(0, tp as i32);
             let ex = fncall_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1530,7 +1772,7 @@ mod test {
         for (cols, exp) in cases {
             let col_expr = col_expr(0, types::STRING as i32);
             let ex = fncall_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1554,7 +1796,7 @@ mod test {
         for (cols, exp) in cases {
             let col_expr = col_expr(0, types::STRING as i32);
             let ex = fncall_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
-            let e = Expression::build(ex, 1, &ctx).unwrap();
+            let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());

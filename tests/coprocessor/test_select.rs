@@ -286,7 +286,7 @@ impl<'a> Insert<'a> {
         self.execute_with_ctx(Context::new())
     }
 
-    fn execute_with_ctx(mut self, ctx: Context) -> i64 {
+    fn execute_with_ctx(self, ctx: Context) -> i64 {
         let handle = self.values
             .get(&self.table.handle_id)
             .cloned()
@@ -467,7 +467,7 @@ impl<'a> Delete<'a> {
         }
     }
 
-    fn execute(mut self, id: i64, row: Vec<Datum>) {
+    fn execute(self, id: i64, row: Vec<Datum>) {
         let mut values = HashMap::new();
         for (&id, v) in self.table.cols.keys().zip(row) {
             values.insert(id, v);
