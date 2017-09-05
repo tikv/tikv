@@ -112,7 +112,7 @@ pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<
 
 pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
     let handle = try!(rocksdb_util::get_cf_handle(db, cf));
-    //    try!(db.delete_file_in_range_cf(handle, start_key, end_key));
+    try!(db.delete_file_in_range_cf(handle, start_key, end_key));
 
     let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
     let mut it = try!(db.new_iterator_cf(cf, iter_opt));
