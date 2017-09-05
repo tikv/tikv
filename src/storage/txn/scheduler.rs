@@ -398,8 +398,12 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             KV_COMMAND_KEYREAD_HISTOGRAM_VEC
                 .with_label_values(&[tag])
                 .observe(1f64);
-            let snap_store =
-                SnapshotStore::new(snapshot.as_ref(), start_ts, ctx.get_isolation_level());
+            let snap_store = SnapshotStore::new(
+                snapshot.as_ref(),
+                start_ts,
+                ctx.get_isolation_level(),
+                ctx.get_no_cache(),
+            );
             let res = snap_store.get(key, &mut statistics);
             match res {
                 Ok(val) => ProcessResult::Value { value: val },
@@ -418,8 +422,12 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             KV_COMMAND_KEYREAD_HISTOGRAM_VEC
                 .with_label_values(&[tag])
                 .observe(keys.len() as f64);
-            let snap_store =
-                SnapshotStore::new(snapshot.as_ref(), start_ts, ctx.get_isolation_level());
+            let snap_store = SnapshotStore::new(
+                snapshot.as_ref(),
+                start_ts,
+                ctx.get_isolation_level(),
+                ctx.get_no_cache(),
+            );
             match snap_store.batch_get(keys, &mut statistics) {
                 Ok(results) => {
                     let mut res = vec![];
@@ -446,8 +454,12 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             ref options,
             ..
         } => {
-            let snap_store =
-                SnapshotStore::new(snapshot.as_ref(), start_ts, ctx.get_isolation_level());
+            let snap_store = SnapshotStore::new(
+                snapshot.as_ref(),
+                start_ts,
+                ctx.get_isolation_level(),
+                ctx.get_no_cache(),
+            );
             let res = snap_store
                 .scanner(ScanMode::Forward, options.key_only, None, &mut statistics)
                 .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
@@ -481,7 +493,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                true,
+                !ctx.get_no_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -501,7 +513,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                true,
+                !ctx.get_no_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -533,7 +545,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                true,
+                !ctx.get_no_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -572,7 +584,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                true,
+                !ctx.get_no_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -618,7 +630,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                true,
+                !ctx.get_no_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -756,6 +768,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
+                ctx.get_no_cache(),
             );
             let mut locks = vec![];
             for m in mutations {
@@ -795,6 +808,7 @@ fn process_write_impl(
                 lock_ts,
                 None,
                 ctx.get_isolation_level(),
+                ctx.get_no_cache(),
             );
             for k in keys {
                 try!(txn.commit(k, commit_ts));
@@ -815,6 +829,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
+                ctx.get_no_cache(),
             );
             try!(txn.rollback(key));
 
@@ -833,6 +848,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
+                ctx.get_no_cache(),
             );
             for k in keys {
                 try!(txn.rollback(k));
@@ -863,6 +879,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
+                ctx.get_no_cache(),
             );
             for k in keys {
                 match commit_ts {
@@ -903,6 +920,7 @@ fn process_write_impl(
                 0,
                 Some(ScanMode::Forward),
                 ctx.get_isolation_level(),
+                ctx.get_no_cache(),
             );
             for k in keys {
                 try!(txn.gc(k, safe_point));

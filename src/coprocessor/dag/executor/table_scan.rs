@@ -182,7 +182,7 @@ mod test {
         wrapper.ranges = vec![r1, r2];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
         let mut table_scanner =
             TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, &mut statistics);
 
@@ -215,7 +215,7 @@ mod test {
         wrapper.ranges = vec![r1, r2, r3, r4];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
         let mut table_scanner =
             TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, &mut statistics);
 
@@ -251,7 +251,7 @@ mod test {
         wrapper.ranges = vec![r1, r2, r3, r4];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
         let mut table_scanner =
             TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, &mut statistics);
 
