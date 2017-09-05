@@ -207,7 +207,7 @@ impl Config {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use super::*;
 
     use util::config::*;

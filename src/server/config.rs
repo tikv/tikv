@@ -155,7 +155,7 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use super::*;
 
     #[test]
