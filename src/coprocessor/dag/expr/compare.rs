@@ -257,7 +257,9 @@ fn like_match(target: &str, pattern: &str, escape: char) -> bool {
         if c == '%' {
             if let Some(p) = next_escaped(&mut pcs, escape) {
                 while let Some(t) = tcs.next() {
-                    if t == p && like_match(tcs.as_str(), pcs.as_str(), escape) {
+                    if t.eq_ignore_ascii_case(&p) &&
+                        like_match(tcs.as_str(), pcs.as_str(), escape)
+                    {
                         return true;
                     }
                 }
@@ -393,6 +395,7 @@ mod test {
     #[test]
     fn test_like() {
         let cases = vec![
+            (r#"hello"#, r#"%HELLO%"#, '\\', true),
             (r#"Hello, World"#, r#"Hello, World"#, '\\', true),
             (r#"Hello, World"#, r#"Hello, %"#, '\\', true),
             (r#"Hello, World"#, r#"%, World"#, '\\', true),
