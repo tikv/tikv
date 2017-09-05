@@ -417,7 +417,6 @@ dispatch_call! {
         TimeIsNull => time_is_null,
         DurationIsNull => duration_is_null,
 
-
         AbsInt => abs_int,
         AbsUInt => abs_uint,
         CeilIntToInt => ceil_int_to_int,
