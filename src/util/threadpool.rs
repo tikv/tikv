@@ -24,6 +24,7 @@ use std::fmt::Write;
 pub const DEFAULT_TASKS_PER_TICK: usize = 10000;
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 const DEFAULT_THREAD_COUNT: usize = 1;
+const NAP_SECS: u64 = 1;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 
 pub trait Context: Send {
@@ -267,7 +268,7 @@ where
     }
 
     fn run(&mut self) {
-        let mut timeout = Some(Duration::from_secs(1));
+        let mut timeout = Some(Duration::from_secs(NAP_SECS));
         while !self.stop_flag.load(AtomicOrdering::SeqCst) {
             if let Some(t) = self.get_task_timeout(timeout) {
                 self.ctx.on_task_started();
@@ -279,7 +280,7 @@ where
                     self.task_counter = 0;
                     self.ctx.on_tick();
                 }
-                timeout = Some(Duration::from_secs(1));
+                timeout = Some(Duration::from_secs(NAP_SECS));
             } else {
                 self.task_counter = 0;
                 self.ctx.on_tick();
