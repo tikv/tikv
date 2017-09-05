@@ -90,7 +90,9 @@ impl FnCall {
             ScalarFuncSig::IfNullDuration |
             ScalarFuncSig::LogicalAnd |
             ScalarFuncSig::LogicalOr |
-            ScalarFuncSig::LogicalXor => (2, 2),
+            ScalarFuncSig::LogicalXor |
+            ScalarFuncSig::DivideDecimal |
+            ScalarFuncSig::DivideReal => (2, 2),
 
             ScalarFuncSig::CastIntAsInt |
             ScalarFuncSig::CastIntAsReal |
@@ -456,6 +458,7 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
+        DivideReal => divide_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -482,6 +485,7 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
+        DivideDecimal => divide_decimal,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,
