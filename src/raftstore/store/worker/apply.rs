@@ -35,7 +35,7 @@ use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::store::msg::Callback;
-use raftstore::store::engine::{Mutable, Peekable, Snapshot};
+use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
                                      write_peer_state};
 use raftstore::store::peer::{check_epoch, parse_data_at, Peer};
@@ -247,6 +247,15 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
     cb(resp);
 }
 
+fn has_exclusive_request(reqs: &[Request]) -> bool {
+    for req in reqs {
+        if req.has_delete_range() {
+            return true;
+        }
+    }
+    false
+}
+
 fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     // When encounter ComputeHash cmd, we must flush the write batch to engine immediately.
     if cmd.has_admin_request() &&
@@ -257,6 +266,10 @@ fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
 
     // When write batch contains more than `recommended` keys, flush the batch to engine.
     if wb_keys >= WRITE_BATCH_MAX_KEYS {
+        return true;
+    }
+
+    if has_exclusive_request(cmd.get_requests()) {
         return true;
     }
 
@@ -1164,19 +1177,24 @@ impl ApplyDelegate {
             });
 
         // Use delete_range to mark all the contents in this range is deleted.
-        ctx.wb
-            .delete_range_cf(handle, &start_key, &end_key)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete range [{}, {}): {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    e
-                )
-            });
-
-        ranges.push(Range::new(cf.to_owned(), start_key, end_key));
+        try!(self.engine.scan_cf(
+            cf,
+            &start_key,
+            &end_key,
+            false,
+            &mut |key, _| {
+                ctx.wb.delete_cf(handle, key).unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete range [{}, {}): {:?}",
+                        self.tag,
+                        escape(&start_key),
+                        escape(&end_key),
+                        e
+                    )
+                });
+                Ok(true)
+            }
+        ));
 
         Ok(resp)
     }

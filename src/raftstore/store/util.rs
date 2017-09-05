@@ -19,7 +19,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use storage::{CF_WRITE, LARGE_CFS};
+use storage::LARGE_CFS;
 use util::properties::SizeProperties;
 use util::rocksdb as rocksdb_util;
 use super::engine::{IterOption, Iterable};
@@ -90,34 +90,58 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
     }
 }
 
-// Use delete range to delete all data in [start_key, end_key) for each column family.
+const MAX_DELETE_KEYS_COUNT: usize = 10000;
+
+/// `delete_all_in_range` fast deletes data of all cfs in range [`start_key`, `end_key`).
+/// It uses rocksdb `delete_file_in_range` first, then scans the left keys and
+/// uses `WriteBatch` to deletes them.
+/// Note: this function is dangerous and not guarantees consistence. If `delete_file_in_range`
+/// finishes successfully but commit following `WriteBatch` failed, some keys are really deleted
+/// and can't be recovered.
 pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
     if start_key >= end_key {
         return Ok(());
     }
 
-    let wb = WriteBatch::new();
     for cf in db.cf_names() {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
-        let mut it = box_try!(db.new_iterator_cf(cf, iter_opt));
-        it.seek(start_key.into());
-        if it.valid() {
-            let handle = box_try!(rocksdb_util::get_cf_handle(db, cf));
-            if cf == CF_WRITE {
-                // We enable memtable prefix bloom for CF_WRITE, for delete_range operation
-                // RocksDB will add start key to bloom, and the start key will go through
-                // function prefix_extractor->Transform, in our case the prefix_extractor is
-                // FixedSuffixSliceTransform, if the length of start key less than 8, we
-                // will encounter index out of range error.
-                box_try!(wb.delete_range_cf(handle, it.key(), end_key));
-            } else {
-                box_try!(wb.delete_range_cf(handle, start_key, end_key));
+        try!(delete_in_range_cf(db, cf, start_key, end_key));
+    }
+
+    Ok(())
+}
+
+pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    let handle = try!(rocksdb_util::get_cf_handle(db, cf));
+    //    try!(db.delete_file_in_range_cf(handle, start_key, end_key));
+
+    let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
+    let mut it = try!(db.new_iterator_cf(cf, iter_opt));
+
+    let mut wb = WriteBatch::new();
+    it.seek(start_key.into());
+    while it.valid() {
+        {
+            let key = it.key();
+            if key >= end_key {
+                break;
             }
+
+            try!(wb.delete_cf(handle, key));
+            if wb.count() == MAX_DELETE_KEYS_COUNT {
+                // Can't use write_without_wal here.
+                // Otherwise it may cause dirty data when applying snapshot.
+                try!(db.write(wb));
+                wb = WriteBatch::new();
+            }
+        };
+
+        if !it.next() {
+            break;
         }
     }
 
     if wb.count() > 0 {
-        box_try!(db.write(wb));
+        try!(db.write(wb));
     }
 
     Ok(())
