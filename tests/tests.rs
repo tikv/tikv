@@ -45,6 +45,7 @@ extern crate grpcio as grpc;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate tokio_core;
+extern crate toml;
 
 mod raft;
 mod raftstore;
@@ -52,6 +53,7 @@ mod coprocessor;
 mod storage;
 mod util;
 mod pd;
+mod config;
 
 use std::env;
 

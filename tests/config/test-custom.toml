@@ -1,5 +1,4 @@
-# Only for tests!
-log-level = "info"
+log-level = "debug"
 log-file = "foo"
 
 [server]
