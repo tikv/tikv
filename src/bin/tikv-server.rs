@@ -90,7 +90,7 @@ fn init_log(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         logger::init_log(StderrLogger, config.log_level).unwrap_or_else(|e| {
             eprintln!("failed to initial log: {:?}", e);
-            process::exit(1)
+            process::exit(-1);
         });
     } else {
         let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
@@ -99,11 +99,11 @@ fn init_log(config: &TiKvConfig) {
                 config.log_file,
                 e
             );
-            process::exit(1)
+            process::exit(-1);
         });
         logger::init_log(w, config.log_level).unwrap_or_else(|e| {
             eprintln!("failed to initial log: {:?}", e);
-            process::exit(1)
+            process::exit(-1);
         });
     }
 }
@@ -286,11 +286,15 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
                 let mut parts = s.split('=');
                 let key = parts.next().unwrap().to_owned();
                 let value = match parts.next() {
-                    None => fatal!("invalid label: {:?}", s),
+                    None => {
+                        eprintln!("invalid label: {:?}", s);
+                        process::exit(-1)
+                    }
                     Some(v) => v.to_owned(),
                 };
                 if parts.next().is_some() {
-                    fatal!("invalid label: {:?}", s);
+                    eprintln!("invalid label: {:?}", s);
+                    process::exit(-1);
                 }
                 labels.insert(key, value);
             })
@@ -299,10 +303,11 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
     }
 
     if let Some(capacity_str) = matches.value_of("capacity") {
-        let capacity = capacity_str
-            .parse()
-            .unwrap_or_else(|e| fatal!("invalid capacity {}: {:?}", capacity_str, e));
-        config.raft_store.capacity.0 = capacity;
+        let capacity = capacity_str.parse().unwrap_or_else(|e| {
+            eprintln!("invalid capacity: {}", e);
+            process::exit(-1)
+        });
+        config.raft_store.capacity = capacity;
     }
 }
 
