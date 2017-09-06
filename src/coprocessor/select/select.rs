@@ -17,7 +17,7 @@ use std::rc::Rc;
 use tipb::select::{Chunk, RowMeta, SelectRequest, SelectResponse};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{ByItem, Expr, ExprType};
-use protobuf::{Message as PbMsg, RepeatedField};
+use protobuf::RepeatedField;
 use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::{KeyRange, Response};
 
@@ -77,12 +77,11 @@ impl<'a> SelectContext<'a> {
         match res {
             Ok(()) => {
                 sel_resp.set_chunks(RepeatedField::from_vec(self.core.chunks));
-                let data = box_try!(sel_resp.write_to_bytes());
-                resp.set_data(data);
+                resp.set_select_resp(sel_resp);
             }
             Err(e) => if let Error::Other(_) = e {
                 sel_resp.set_error(to_pb_error(&e));
-                resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                resp.set_select_resp(sel_resp);
                 resp.set_other_error(format!("{}", e));
                 COPR_REQ_ERROR.with_label_values(&["other"]).inc();
             } else {

@@ -19,7 +19,7 @@ use tipb::schema::ColumnInfo;
 use tipb::select::{DAGRequest, RowMeta, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use kvproto::kvrpcpb::IsolationLevel;
-use protobuf::{Message as PbMsg, RepeatedField};
+use protobuf::RepeatedField;
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
@@ -92,15 +92,14 @@ impl<'s> DAGContext<'s> {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-                    let data = box_try!(sel_resp.write_to_bytes());
-                    resp.set_data(data);
+                    resp.set_select_resp(sel_resp);
                     return Ok(resp);
                 }
                 Err(e) => if let Error::Other(_) = e {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_error(to_pb_error(&e));
-                    resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                    resp.set_select_resp(sel_resp);
                     resp.set_other_error(format!("{}", e));
                     return Ok(resp);
                 } else {

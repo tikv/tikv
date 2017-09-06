@@ -1564,11 +1564,8 @@ fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
 }
 
 fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
-    let resp = handle_request(end_point, req);
-    assert!(!resp.get_data().is_empty(), "{:?}", resp);
-    let mut sel_resp = SelectResponse::new();
-    sel_resp.merge_from_bytes(resp.get_data()).unwrap();
-    sel_resp
+    let mut resp = handle_request(end_point, req);
+    resp.take_select_resp()
 }
 
 #[test]
