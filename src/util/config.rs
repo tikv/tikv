@@ -133,57 +133,6 @@ pub mod compression_type_level_serde {
 
         deserializer.deserialize_seq(SeqVisitor)
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        use toml;
-
-        extern crate serde_test;
-        use self::serde_test::{assert_de_tokens, assert_ser_tokens, Token};
-
-        #[test]
-        fn test_serde() {
-            #[derive(Serialize, Deserialize, PartialEq, Debug)]
-            struct TypeHolder {
-                #[serde(with = "super")]
-                tps: [DBCompressionType; 7],
-            }
-
-            let holder = TypeHolder {
-                tps: [
-                    DBCompressionType::No,
-                    DBCompressionType::Snappy,
-                    DBCompressionType::Zlib,
-                    DBCompressionType::Bz2,
-                    DBCompressionType::Lz4,
-                    DBCompressionType::Lz4hc,
-                    DBCompressionType::Zstd,
-                ],
-            };
-            let tokens = [
-                    Token::Struct { name: "TypeHolder", len: 1 },
-                        Token::Str("tps"),
-                        Token::Seq { len: Some(7) },
-                            Token::Str("no"),
-                            Token::Str("snappy"),
-                            Token::Str("zlib"),
-                            Token::Str("bzip2"),
-                            Token::Str("lz4"),
-                            Token::Str("lz4hc"),
-                            Token::Str("zstd"),
-                        Token::SeqEnd,
-                    Token::StructEnd,
-            ];
-            let dump = toml::to_string(&holder).unwrap();
-            let load: TypeHolder = toml::from_str(&dump).unwrap();
-            assert_eq!(holder, load);
-
-            assert_de_tokens(&holder, &tokens);
-            assert_ser_tokens(&holder, &tokens);
-        }
-    }
 }
 
 pub mod order_map_serde {
@@ -250,42 +199,6 @@ pub mod order_map_serde {
             phantom: PhantomData,
         })
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        use toml;
-
-        extern crate serde_test;
-        use self::serde_test::{assert_de_tokens, assert_ser_tokens, Token};
-
-        #[test]
-        fn test_serde() {
-            #[derive(Serialize, Deserialize, PartialEq, Debug)]
-            struct MapHolder {
-                #[serde(with = "super")]
-                m: HashMap<String, String>,
-            }
-
-            let m: HashMap<String, String> = map!{ "a".to_owned() => "b".to_owned() };
-            let holder = MapHolder { m };
-            let dump = toml::to_string(&holder).unwrap();
-            let load: MapHolder = toml::from_str(&dump).unwrap();
-            assert_eq!(holder, load);
-            let tokens = [
-                Token::Struct { name: "MapHolder", len: 1 },
-                    Token::Str("m"),
-                    Token::Map { len: Some(1) },
-                        Token::Str("a"),
-                        Token::Str("b"),
-                    Token::MapEnd,
-                Token::StructEnd,
-            ];
-            assert_de_tokens(&holder, &tokens);
-            assert_ser_tokens(&holder, &tokens);
-        }
-    }
 }
 
 macro_rules! numeric_enum_mod {
@@ -333,12 +246,9 @@ macro_rules! numeric_enum_mod {
                 use toml;
                 use rocksdb::$enum;
 
-                extern crate serde_test;
-                use self::serde_test::{assert_de_tokens, assert_ser_tokens, Token};
-
                 #[test]
                 fn test_serde() {
-                    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+                    #[derive(Serialize, Deserialize, PartialEq)]
                     struct EnumHolder {
                         #[serde(with = "super")]
                         e: $enum,
@@ -353,15 +263,7 @@ macro_rules! numeric_enum_mod {
                         let exp = format!("e = {}\n", v);
                         assert_eq!(res, exp);
                         let h: EnumHolder = toml::from_str(&exp).unwrap();
-                        assert_eq!(h, holder);
-                        let tokens = [
-                            Token::Struct { name: "EnumHolder", len: 1 },
-                                Token::Str("e"),
-                                Token::I64(v),
-                            Token::StructEnd,
-                        ];
-                        assert_de_tokens(&EnumHolder{ e }, &tokens);
-                        assert_ser_tokens(&EnumHolder{ e }, &tokens);
+                        assert!(h == holder);
                     }
                 }
             }
