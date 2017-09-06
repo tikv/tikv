@@ -150,11 +150,14 @@ impl FnCall {
             ScalarFuncSig::UnaryMinusInt |
             ScalarFuncSig::UnaryMinusReal |
             ScalarFuncSig::UnaryMinusDecimal |
+            ScalarFuncSig::IntIsTrue |
             ScalarFuncSig::IntIsFalse |
             ScalarFuncSig::IntIsNull |
             ScalarFuncSig::RealIsTrue |
+            ScalarFuncSig::RealIsFalse |
             ScalarFuncSig::RealIsNull |
             ScalarFuncSig::DecimalIsTrue |
+            ScalarFuncSig::DecimalIsFalse |
             ScalarFuncSig::DecimalIsNull |
             ScalarFuncSig::StringIsNull |
             ScalarFuncSig::TimeIsNull |
@@ -403,10 +406,13 @@ dispatch_call! {
         UnaryMinusInt => unary_minus_int,
         IntIsNull => int_is_null,
         IntIsFalse => int_is_false,
+        IntIsTrue => int_is_true,
         RealIsTrue => real_is_true,
+        RealIsFalse => real_is_false,
         RealIsNull => real_is_null,
         DecimalIsNull => decimal_is_null,
         DecimalIsTrue => decimal_is_true,
+        DecimalIsFalse => decimal_is_false,
         StringIsNull => string_is_null,
         TimeIsNull => time_is_null,
         DurationIsNull => duration_is_null,
