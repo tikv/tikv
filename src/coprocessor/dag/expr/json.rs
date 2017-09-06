@@ -219,7 +219,7 @@ mod test {
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Json;
     use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::dag::expr::test::fncall_expr;
+    use coprocessor::dag::expr::test::{fncall_expr, make_null_datums};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
 
     #[test]
@@ -434,6 +434,22 @@ mod test {
             let op = Expression::build(op, &ctx).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_json_invalid_arguments() {
+        let cases = vec![
+            (ScalarFuncSig::JsonObjectSig, make_null_datums(3)),
+            (ScalarFuncSig::JsonSetSig, make_null_datums(4)),
+            (ScalarFuncSig::JsonInsertSig, make_null_datums(6)),
+            (ScalarFuncSig::JsonReplaceSig, make_null_datums(8)),
+        ];
+        let ctx = StatementContext::default();
+        for (sig, args) in cases {
+            let args: Vec<_> = args.into_iter().map(datum_expr).collect();
+            let op = Expression::build(fncall_expr(sig, &args), &ctx);
+            assert!(op.is_err());
         }
     }
 }

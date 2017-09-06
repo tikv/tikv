@@ -213,10 +213,9 @@ impl FnCall {
 
             _ => return Err(Error::UnknownSignature(sig)),
         };
-        if args >= min_args && args <= max_args {
-            return Ok(());
+        if args < min_args || args > max_args {
+            return Err(box_err!("unexpected arguments"));
         }
-
         let other_checks = match sig {
             ScalarFuncSig::JsonObjectSig => args & 1 == 0,
             ScalarFuncSig::JsonSetSig |
@@ -224,10 +223,10 @@ impl FnCall {
             ScalarFuncSig::JsonReplaceSig => args & 1 == 1,
             _ => true,
         };
-        if other_checks {
-            return Ok(());
+        if !other_checks {
+            return Err(box_err!("unexpected arguments"));
         }
-        Err(box_err!("unexpected arguments"))
+        Ok(())
     }
 }
 
