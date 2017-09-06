@@ -44,7 +44,7 @@ impl<'a> MvccTxn<'a> {
         start_ts: u64,
         mode: Option<ScanMode>,
         isolation_level: IsolationLevel,
-        no_cache: bool,
+        not_fill_cache: bool,
     ) -> MvccTxn<'a> {
         MvccTxn {
             // Todo: use session variable to indicate fill cache or not
@@ -52,7 +52,7 @@ impl<'a> MvccTxn<'a> {
                 snapshot,
                 statistics,
                 mode,
-                !no_cache, // fill_cache
+                !not_fill_cache, // fill_cache
                 None,
                 isolation_level,
             ),

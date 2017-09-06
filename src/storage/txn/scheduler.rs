@@ -402,7 +402,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 start_ts,
                 ctx.get_isolation_level(),
-                ctx.get_no_cache(),
+                ctx.get_not_fill_cache(),
             );
             let res = snap_store.get(key, &mut statistics);
             match res {
@@ -426,7 +426,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 start_ts,
                 ctx.get_isolation_level(),
-                ctx.get_no_cache(),
+                ctx.get_not_fill_cache(),
             );
             match snap_store.batch_get(keys, &mut statistics) {
                 Ok(results) => {
@@ -458,7 +458,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 start_ts,
                 ctx.get_isolation_level(),
-                ctx.get_no_cache(),
+                ctx.get_not_fill_cache(),
             );
             let res = snap_store
                 .scanner(ScanMode::Forward, options.key_only, None, &mut statistics)
@@ -493,7 +493,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                !ctx.get_no_cache(),
+                !ctx.get_not_fill_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -513,7 +513,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                !ctx.get_no_cache(),
+                !ctx.get_not_fill_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -545,7 +545,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                !ctx.get_no_cache(),
+                !ctx.get_not_fill_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -584,7 +584,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                !ctx.get_no_cache(),
+                !ctx.get_not_fill_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -630,7 +630,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 snapshot.as_ref(),
                 &mut statistics,
                 Some(ScanMode::Forward),
-                !ctx.get_no_cache(),
+                !ctx.get_not_fill_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
@@ -768,7 +768,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
-                ctx.get_no_cache(),
+                ctx.get_not_fill_cache(),
             );
             let mut locks = vec![];
             for m in mutations {
@@ -808,7 +808,7 @@ fn process_write_impl(
                 lock_ts,
                 None,
                 ctx.get_isolation_level(),
-                ctx.get_no_cache(),
+                ctx.get_not_fill_cache(),
             );
             for k in keys {
                 try!(txn.commit(k, commit_ts));
@@ -829,7 +829,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
-                ctx.get_no_cache(),
+                ctx.get_not_fill_cache(),
             );
             try!(txn.rollback(key));
 
@@ -848,7 +848,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
-                ctx.get_no_cache(),
+                ctx.get_not_fill_cache(),
             );
             for k in keys {
                 try!(txn.rollback(k));
@@ -879,7 +879,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
-                ctx.get_no_cache(),
+                ctx.get_not_fill_cache(),
             );
             for k in keys {
                 match commit_ts {
@@ -920,7 +920,7 @@ fn process_write_impl(
                 0,
                 Some(ScanMode::Forward),
                 ctx.get_isolation_level(),
-                ctx.get_no_cache(),
+                ctx.get_not_fill_cache(),
             );
             for k in keys {
                 try!(txn.gc(k, safe_point));

@@ -28,13 +28,13 @@ impl<'a> SnapshotStore<'a> {
         snapshot: &'a Snapshot,
         start_ts: u64,
         isolation_level: IsolationLevel,
-        no_cache: bool,
+        not_fill_cache: bool,
     ) -> SnapshotStore {
         SnapshotStore {
             snapshot: snapshot,
             start_ts: start_ts,
             isolation_level: isolation_level,
-            fill_cache: !no_cache,
+            fill_cache: !not_fill_cache,
         }
     }
 

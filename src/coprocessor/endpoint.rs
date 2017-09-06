@@ -558,7 +558,7 @@ impl TiDbEndPoint {
             self.snap.as_ref(),
             sel.get_start_ts(),
             t.req.get_context().get_isolation_level(),
-            t.req.get_context().get_no_cache(),
+            t.req.get_context().get_not_fill_cache(),
         );
         let ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let range = t.req.get_ranges().to_vec();
@@ -579,7 +579,7 @@ impl TiDbEndPoint {
             self.snap.as_ref(),
             eval_ctx.clone(),
             t.req.get_context().get_isolation_level(),
-            t.req.get_context().get_no_cache(),
+            t.req.get_context().get_not_fill_cache(),
         );
         ctx.handle_request(&mut t.statistics)
     }
