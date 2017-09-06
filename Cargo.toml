@@ -93,7 +93,6 @@ optional = true
 
 [dev-dependencies]
 futures-cpupool = "0.1"
-serde_test = "1.0"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

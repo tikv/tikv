@@ -786,9 +786,6 @@ mod test {
 
     use util::collections::HashMap;
 
-    extern crate serde_test;
-    use self::serde_test::{assert_de_tokens, assert_ser_tokens, Token};
-
     #[test]
     fn test_readable_size() {
         let s = ReadableSize::kb(2);
@@ -822,7 +819,6 @@ mod test {
             (11 * PB, "11PB"),
         ];
         for (size, exp) in legal_cases {
-            assert_ser_tokens(&ReadableSize(size), &[Token::Str(exp)]);
             let c = SizeHolder {
                 s: ReadableSize(size),
             };
@@ -854,7 +850,6 @@ mod test {
             ("0.5K", KB / 2),
         ];
         for (src, exp) in decode_cases {
-            assert_de_tokens(&ReadableSize(exp), &[Token::Str(src)]);
             let src = format!("s = {:?}", src);
             let res: SizeHolder = toml::from_str(&src).unwrap();
             assert_eq!(res.s.0, exp);
@@ -930,9 +925,9 @@ mod test {
             (3600 + 2, 5, "1h2s5ms"),
         ];
         for (secs, ms, exp) in legal_cases {
-            let dur = ReadableDuration(Duration::new(secs, ms * 1_000_000));
-            assert_ser_tokens(&dur, &[Token::Str(exp)]);
-            let d = DurHolder { d: dur };
+            let d = DurHolder {
+                d: ReadableDuration(Duration::new(secs, ms * 1_000_000)),
+            };
             let res_str = toml::to_string(&d).unwrap();
             let exp_str = format!("d = {:?}\n", exp);
             assert_eq!(res_str, exp_str);
@@ -942,11 +937,9 @@ mod test {
 
         let decode_cases = vec![(" 0.5 h2m ", 3600 / 2 + 2 * 60, 0)];
         for (src, secs, ms) in decode_cases {
-            let dur = ReadableDuration(Duration::new(secs, ms * 1_000_000));
-            assert_de_tokens(&dur, &[Token::Str(src)]);
             let src = format!("d = {:?}", src);
             let res: DurHolder = toml::from_str(&src).unwrap();
-            assert_eq!(res.d.0, dur.0);
+            assert_eq!(res.d.0, Duration::new(secs, ms * 1_000_000));
         }
 
         let illegal_cases = vec!["1H", "1M", "1S", "1MS", "1h1h", "h"];
