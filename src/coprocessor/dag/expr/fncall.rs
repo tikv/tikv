@@ -150,11 +150,14 @@ impl FnCall {
             ScalarFuncSig::UnaryMinusInt |
             ScalarFuncSig::UnaryMinusReal |
             ScalarFuncSig::UnaryMinusDecimal |
+            ScalarFuncSig::IntIsTrue |
             ScalarFuncSig::IntIsFalse |
             ScalarFuncSig::IntIsNull |
             ScalarFuncSig::RealIsTrue |
+            ScalarFuncSig::RealIsFalse |
             ScalarFuncSig::RealIsNull |
             ScalarFuncSig::DecimalIsTrue |
+            ScalarFuncSig::DecimalIsFalse |
             ScalarFuncSig::DecimalIsNull |
             ScalarFuncSig::StringIsNull |
             ScalarFuncSig::TimeIsNull |
@@ -213,6 +216,16 @@ impl FnCall {
             _ => return Err(Error::UnknownSignature(sig)),
         };
         if args < min_args || args > max_args {
+            return Err(box_err!("unexpected arguments"));
+        }
+        let other_checks = match sig {
+            ScalarFuncSig::JsonObjectSig => args & 1 == 0,
+            ScalarFuncSig::JsonSetSig |
+            ScalarFuncSig::JsonInsertSig |
+            ScalarFuncSig::JsonReplaceSig => args & 1 == 1,
+            _ => true,
+        };
+        if !other_checks {
             return Err(box_err!("unexpected arguments"));
         }
         Ok(())
@@ -416,10 +429,13 @@ dispatch_call! {
         UnaryMinusInt => unary_minus_int,
         IntIsNull => int_is_null,
         IntIsFalse => int_is_false,
+        IntIsTrue => int_is_true,
         RealIsTrue => real_is_true,
+        RealIsFalse => real_is_false,
         RealIsNull => real_is_null,
         DecimalIsNull => decimal_is_null,
         DecimalIsTrue => decimal_is_true,
+        DecimalIsFalse => decimal_is_false,
         StringIsNull => string_is_null,
         TimeIsNull => time_is_null,
         DurationIsNull => duration_is_null,

@@ -47,7 +47,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let parser = JsonFuncArgsParser::new(ctx, row);
-        let elems = try_opt!(parser.get_jsons(self.children.iter(), true));
+        let elems = try_opt!(parser.get_jsons(self.children.iter()));
         Ok(Some(Cow::Owned(Json::Array(elems))))
     }
 
@@ -60,10 +60,7 @@ impl FnCall {
         if !self.children.is_empty() {
             let parser = JsonFuncArgsParser::new(ctx, row);
             let keys = try_opt!(parser.get_strings(self.children.iter().step_by(2)));
-            let elems = try_opt!(parser.get_jsons(self.children[1..].iter().step_by(2), true));
-            if keys.len() != elems.len() {
-                return Err(box_err!("Incorrect parameter count for 'json_object'"));
-            }
+            let elems = try_opt!(parser.get_jsons(self.children[1..].iter().step_by(2)));
             pairs.extend(keys.into_iter().zip(elems.into_iter()));
         }
         Ok(Some(Cow::Owned(Json::Object(pairs))))
@@ -128,7 +125,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Json>>> {
         let parser = JsonFuncArgsParser::new(ctx, row);
         let head = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
-        let suffixes = try_opt!(parser.get_jsons(self.children[1..].iter(), false));
+        let suffixes = try_opt!(parser.get_jsons_not_none(self.children[1..].iter()));
         Ok(Some(Cow::Owned(head.merge(suffixes))))
     }
 
@@ -141,7 +138,7 @@ impl FnCall {
         let mut j = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
         let parser = JsonFuncArgsParser::new(ctx, row);
         let path_exprs = try_opt!(parser.get_path_exprs(self.children[1..].iter().step_by(2)));
-        let values = try_opt!(parser.get_jsons(self.children[2..].iter().step_by(2), true));
+        let values = try_opt!(parser.get_jsons(self.children[2..].iter().step_by(2)));
         j.modify(&path_exprs, values, mt)
             .map(|_| Some(Cow::Owned(j)))
             .map_err(Error::from)
@@ -165,7 +162,7 @@ impl<'a> JsonFuncArgsParser<'a> {
         It: Iterator<Item = &'b Expression>,
         F: Fn(&'b Expression) -> Result<Option<T>>,
     {
-        args.map(f).collect::<Result<Option<Vec<_>>>>()
+        args.map(f).collect()
     }
 
     fn get_path_exprs<'b: 'a, It>(&'a self, args: It) -> Result<Option<Vec<PathExpression>>>
@@ -179,25 +176,28 @@ impl<'a> JsonFuncArgsParser<'a> {
         JsonFuncArgsParser::parse(args, func)
     }
 
-    fn get_jsons<'b: 'a, It>(&'a self, args: It, nullable: bool) -> Result<Option<Vec<Json>>>
+    fn get_jsons<'b: 'a, It>(&'a self, args: It) -> Result<Option<Vec<Json>>>
     where
         It: Iterator<Item = &'b Expression>,
     {
-        if !nullable {
-            let func = |e: &'b Expression| {
-                let j = try_opt!(e.eval_json(self.ctx, self.row)).into_owned();
-                Ok(Some(j))
-            };
-            JsonFuncArgsParser::parse(args, func)
-        } else {
-            let func = |e: &'b Expression| {
-                let j = try!(e.eval_json(self.ctx, self.row))
-                    .map(Cow::into_owned)
-                    .unwrap_or(Json::None);
-                Ok(Some(j))
-            };
-            JsonFuncArgsParser::parse(args, func)
-        }
+        let func = |e: &'b Expression| {
+            let j = try!(e.eval_json(self.ctx, self.row))
+                .map(Cow::into_owned)
+                .unwrap_or(Json::None);
+            Ok(Some(j))
+        };
+        JsonFuncArgsParser::parse(args, func)
+    }
+
+    fn get_jsons_not_none<'b: 'a, It>(&'a self, args: It) -> Result<Option<Vec<Json>>>
+    where
+        It: Iterator<Item = &'b Expression>,
+    {
+        let func = |e: &'b Expression| {
+            let j = try_opt!(e.eval_json(self.ctx, self.row)).into_owned();
+            Ok(Some(j))
+        };
+        JsonFuncArgsParser::parse(args, func)
     }
 
     fn get_strings<'b: 'a, It>(&'a self, args: It) -> Result<Option<Vec<String>>>
@@ -218,7 +218,7 @@ mod test {
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Json;
     use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::dag::expr::test::fncall_expr;
+    use coprocessor::dag::expr::test::{fncall_expr, make_null_datums};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
 
     #[test]
@@ -433,6 +433,22 @@ mod test {
             let op = Expression::build(op, &ctx).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_json_invalid_arguments() {
+        let cases = vec![
+            (ScalarFuncSig::JsonObjectSig, make_null_datums(3)),
+            (ScalarFuncSig::JsonSetSig, make_null_datums(4)),
+            (ScalarFuncSig::JsonInsertSig, make_null_datums(6)),
+            (ScalarFuncSig::JsonReplaceSig, make_null_datums(8)),
+        ];
+        let ctx = StatementContext::default();
+        for (sig, args) in cases {
+            let args: Vec<_> = args.into_iter().map(datum_expr).collect();
+            let op = Expression::build(fncall_expr(sig, &args), &ctx);
+            assert!(op.is_err());
         }
     }
 }

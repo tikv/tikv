@@ -391,6 +391,11 @@ mod test {
     }
 
     #[inline]
+    pub fn make_null_datums(size: usize) -> Vec<Datum> {
+        (0..size).map(|_| Datum::Null).collect()
+    }
+
+    #[inline]
     pub fn check_overflow(e: Error) -> Result<(), ()> {
         match e {
             Error::Overflow => Ok(()),
