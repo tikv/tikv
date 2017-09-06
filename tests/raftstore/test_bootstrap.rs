@@ -99,6 +99,7 @@ fn test_node_bootstrap_with_prepared_data() {
         simulate_trans,
         snap_mgr,
         snapshot_status_receiver,
+        None,
     ).unwrap();
     assert!(
         engine

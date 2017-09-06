@@ -206,6 +206,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
             raft_db_cf_opts,
         ).unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
     );
+
+    let (read_stat_sender, read_stat_recv) = mpsc::channel();
+
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
     let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
@@ -215,6 +218,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         trans,
         snap_mgr,
         snap_status_receiver,
+        Some(read_stat_recv),
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
@@ -236,7 +240,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     // Run server.
     server
-        .start(&cfg.server)
+        .start(&cfg.server, Some(read_stat_sender))
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
     signal_handler::handle_signal(engines, &cfg.rocksdb.backup_dir);
 

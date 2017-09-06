@@ -20,6 +20,7 @@ use std::process;
 use mio::EventLoop;
 use rocksdb::DB;
 
+use coprocessor::endpoint::ReadStats;
 use pd::{Error as PdError, PdClient, INVALID_ID};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
@@ -124,6 +125,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         snap_status_receiver: Receiver<SnapshotStatusMsg>,
+        read_stat_recv: Option<Receiver<ReadStats>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -160,7 +162,8 @@ where
             engines,
             trans,
             snap_mgr,
-            snap_status_receiver
+            snap_status_receiver,
+            read_stat_recv,
         ));
         Ok(())
     }
@@ -316,6 +319,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
+    #[allow(too_many_arguments)]
     fn start_store<T>(
         &mut self,
         mut event_loop: EventLoop<Store<T, C>>,
@@ -324,6 +328,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
+        read_stat_recv: Option<Receiver<ReadStats>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -346,7 +351,16 @@ where
                 sender: sender,
                 snapshot_status_receiver: snapshot_status_receiver,
             };
-            let mut store = match Store::new(ch, store, cfg, engines, trans, pd_client, snap_mgr) {
+            let mut store = match Store::new(
+                ch,
+                store,
+                cfg,
+                engines,
+                trans,
+                pd_client,
+                snap_mgr,
+                read_stat_recv,
+            ) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };

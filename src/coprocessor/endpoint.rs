@@ -15,6 +15,9 @@ use std::usize;
 use std::time::{Duration, Instant};
 use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
+use std::mem;
 
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
 use tipb::schema::ColumnInfo;
@@ -69,12 +72,19 @@ pub struct Host {
     max_running_task_count: usize,
 }
 
+pub type ReadStats = Arc<HashMap<u64, (u64, u64)>>;
+
+#[derive(Clone)]
 struct CopContext {
-    task_count: u64,
+    task_count: i64,
+    raftstore_sender: Option<Sender<ReadStats>>,
     select_stats: Statistics,
     index_stats: Statistics,
     dag_stats: Statistics,
+    read_stats: ReadStats,
 }
+
+unsafe impl Send for CopContext {}
 
 impl CopContext {
     fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
@@ -93,8 +103,6 @@ impl CopContext {
         }
     }
 }
-
-unsafe impl Send for CopContext {}
 
 impl Context for CopContext {
     fn on_task_started(&mut self) {}
@@ -116,24 +124,43 @@ impl Context for CopContext {
             *this_statistics = Default::default();
         }
         self.task_count = 0;
+        if let Some(ref sender) = self.raftstore_sender {
+            if let Err(e) =
+                sender.send(mem::replace(&mut self.read_stats, Arc::new(HashMap::default())))
+            {
+                warn!(
+                    "coprocesser failed to send statistics to raftstore: {:?}",
+                    e
+                );
+            }
+        }
     }
 }
 
-struct CopContextFactory;
+struct CopContextFactory {
+    raftstore_sender: Option<Sender<ReadStats>>,
+}
 
 impl ContextFactory<CopContext> for CopContextFactory {
     fn create(&self) -> CopContext {
         CopContext {
             task_count: 0,
+            raftstore_sender: self.raftstore_sender.clone(),
             select_stats: Default::default(),
             index_stats: Default::default(),
             dag_stats: Default::default(),
+            read_stats: Arc::new(HashMap::default()),
         }
     }
 }
 
 impl Host {
-    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config) -> Host {
+    pub fn new(
+        engine: Box<Engine>,
+        scheduler: Scheduler<Task>,
+        cfg: &Config,
+        sender: Option<Sender<ReadStats>>,
+    ) -> Host {
         Host {
             engine: engine,
             sched: scheduler,
@@ -144,19 +171,25 @@ impl Host {
                 thd_name!("endpoint-normal-pool"),
                 cfg.end_point_concurrency,
                 DEFAULT_TASKS_PER_TICK,
-                CopContextFactory {},
+                CopContextFactory {
+                    raftstore_sender: sender.clone(),
+                },
             ),
             low_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-low-pool"),
                 cfg.end_point_concurrency,
                 DEFAULT_TASKS_PER_TICK,
-                CopContextFactory {},
+                CopContextFactory {
+                    raftstore_sender: sender.clone(),
+                },
             ),
             high_priority_pool: ThreadPool::new(
                 thd_name!("endpoint-high-pool"),
                 cfg.end_point_concurrency,
                 DEFAULT_TASKS_PER_TICK,
-                CopContextFactory {},
+                CopContextFactory {
+                    raftstore_sender: sender.clone(),
+                },
             ),
         }
     }
@@ -197,9 +230,13 @@ impl Host {
                 CommandPri::Normal => &mut self.pool,
             };
             pool.execute(move |ctx: &mut CopContext| {
+                let region_id = req.req.get_context().get_region_id();
                 let stats = end_point.handle_request(req);
                 ctx.task_count += 1;
                 ctx.add_statistics(type_str, &stats);
+                let mut e = Arc::make_mut(&mut ctx.read_stats).entry(region_id).or_insert((0,0));
+                e.0 += stats.total_read_bytes();
+                e.1 += stats.total_processed() as u64;
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
@@ -694,7 +731,7 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let end_point = Host::new(engine, worker.scheduler(), &cfg);
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, None);
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
@@ -711,7 +748,7 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg);
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, None);
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();

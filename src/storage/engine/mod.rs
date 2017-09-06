@@ -176,17 +176,20 @@ pub enum ScanMode {
 }
 
 /// Statistics collects the ops taken when fetching data.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CFStatistics {
     // How many keys that's effective to user. This counter should be increased
     // by the caller.
     pub processed: usize,
+    pub read_bytes: u64,
     pub get: usize,
     pub next: usize,
     pub prev: usize,
     pub seek: usize,
     pub seek_for_prev: usize,
 }
+
+unsafe impl Send for CFStatistics {}
 
 impl CFStatistics {
     #[inline]
@@ -208,6 +211,7 @@ impl CFStatistics {
 
     pub fn add_cf_statistics(&mut self, other: &Self) {
         self.processed = self.processed.saturating_add(other.processed);
+        self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
         self.get = self.get.saturating_add(other.get);
         self.next = self.next.saturating_add(other.next);
         self.prev = self.prev.saturating_add(other.prev);
@@ -216,12 +220,14 @@ impl CFStatistics {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Statistics {
     pub lock: CFStatistics,
     pub write: CFStatistics,
     pub data: CFStatistics,
 }
+
+unsafe impl Send for Statistics {}
 
 impl Statistics {
     pub fn total_op_count(&self) -> usize {
@@ -230,6 +236,10 @@ impl Statistics {
 
     pub fn total_processed(&self) -> usize {
         self.lock.processed + self.write.processed + self.data.processed
+    }
+
+    pub fn total_read_bytes(&self) -> u64 {
+        self.write.read_bytes + self.data.read_bytes
     }
 
     pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {

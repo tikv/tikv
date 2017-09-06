@@ -192,6 +192,8 @@ pub struct PeerStat {
     pub written_keys: u64,
     pub last_written_bytes: u64,
     pub last_written_keys: u64,
+    pub read_bytes: u64,
+    pub read_keys: u64,
 }
 
 pub struct Peer {
@@ -200,7 +202,7 @@ pub struct Peer {
     cfg: Rc<Config>,
     peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
-    region_id: u64,
+    pub region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
     proposals: ProposalQueue,
     apply_proposals: Vec<Proposal>,
@@ -1564,6 +1566,8 @@ impl Peer {
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.last_written_bytes,
             written_keys: self.peer_stat.last_written_keys,
+            read_bytes: self.peer_stat.read_bytes,
+            read_keys: self.peer_stat.read_keys,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

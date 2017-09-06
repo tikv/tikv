@@ -619,7 +619,7 @@ fn init_data_with_engine_and_commit(
     let mut end_point = Worker::new("test select worker");
     let mut cfg = Config::default();
     cfg.end_point_concurrency = 1;
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg);
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg, None);
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)

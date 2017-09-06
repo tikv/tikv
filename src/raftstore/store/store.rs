@@ -37,6 +37,7 @@ use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
                           StatusCmdType, StatusResponse};
 use protobuf::Message;
+use coprocessor::endpoint::ReadStats;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Error, Result};
 use kvproto::metapb;
@@ -160,6 +161,8 @@ pub struct Store<T, C: 'static> {
     pending_votes: RingQueue<RaftMessage>,
 
     store_stat: StoreStat,
+
+    read_stat_recv: Option<StdReceiver<ReadStats>>,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -177,6 +180,7 @@ where
 }
 
 impl<T, C> Store<T, C> {
+    #[allow(too_many_arguments)]
     pub fn new(
         ch: StoreChannel,
         meta: metapb::Store,
@@ -185,6 +189,7 @@ impl<T, C> Store<T, C> {
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
+        recv: Option<StdReceiver<ReadStats>>,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
@@ -229,6 +234,7 @@ impl<T, C> Store<T, C> {
             start_time: time::get_time(),
             is_busy: false,
             store_stat: StoreStat::default(),
+            read_stat_recv: recv,
         };
         try!(s.init());
         Ok(s)
@@ -1860,14 +1866,34 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let mut read_statistic: HashMap<u64, (u64, u64)> = HashMap::default();
+        if let Some(ref recv) = self.read_stat_recv {
+            while let Ok(m) = recv.try_recv() {
+                for (&key, val) in m.iter() {
+                    read_statistic.entry(key).or_insert((0, 0)).0 += val.0;
+                    read_statistic.entry(key).or_insert((0, 0)).1 += val.1;
+                }
+            }
+        }
+
         for peer in self.region_peers.values_mut() {
             peer.check_peers();
         }
 
-        let mut leader_count = 0;
-        for peer in self.region_peers.values() {
+        let mut leader_count: u64 = 0;
+        for peer in self.region_peers.values_mut() {
             if peer.is_leader() {
                 leader_count += 1;
+                match read_statistic.get(&peer.region_id) {
+                    Some(&(bytes, keys)) => {
+                        peer.peer_stat.read_bytes = bytes;
+                        peer.peer_stat.read_keys = keys;
+                    }
+                    None => {
+                        peer.peer_stat.read_bytes = 0;
+                        peer.peer_stat.read_keys = 0;
+                    }
+                }
                 peer.heartbeat_pd(&self.pd_worker);
             }
         }
