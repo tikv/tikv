@@ -112,28 +112,6 @@ pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<
 
 pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
     let handle = try!(rocksdb_util::get_cf_handle(db, cf));
-
-    // Using DeleteFilesInRange to drop as many sst files as possible.
-    let iter_opt = IterOption::new(None, false);
-    let mut it = try!(db.new_iterator_cf(cf, iter_opt));
-    it.seek_for_prev(end_key.into());
-    if it.valid() {
-        // DeleteFilesInRange treat the range as closed interval, but we don't want to
-        // delete the end_key.
-        if it.key() == end_key {
-            it.prev();
-        }
-
-        if it.valid() && it.key() > start_key {
-            try!(db.delete_file_in_range_cf(handle, start_key, it.key()));
-        } else {
-            return Ok(());
-        }
-    } else {
-        return Ok(());
-    }
-
-    // Delete all remaining keys.
     let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
     let mut it = try!(db.new_iterator_cf(cf, iter_opt));
     let mut wb = WriteBatch::new();
