@@ -277,7 +277,7 @@ stats-dump-period = "10m"
 # max-bytes-for-level-base = "512MB"
 
 # Target file size for compaction.
-# target-file-size-base = "32MB"
+# target-file-size-base = "8MB"
 
 # Max bytes for compaction.max_compaction_bytes
 # max-compaction-bytes = "2GB"
@@ -307,7 +307,7 @@ stats-dump-period = "10m"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "512MB"
-# target-file-size-base = "32MB"
+# target-file-size-base = "8MB"
 
 # in normal cases should tune to 10%-30% system's total memory.
 # block-cache-size = "256MB"
@@ -325,7 +325,7 @@ stats-dump-period = "10m"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "128MB"
-# target-file-size-base = "32MB"
+# target-file-size-base = "8MB"
 # block-cache-size = "256MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
@@ -356,7 +356,7 @@ stats-dump-period = "10m"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "512MB"
-# target-file-size-base = "32MB"
+# target-file-size-base = "8MB"
 
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"

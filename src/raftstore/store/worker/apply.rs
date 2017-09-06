@@ -1176,7 +1176,7 @@ impl ApplyDelegate {
                 )
             });
 
-        // Use delete_range to mark all the contents in this range is deleted.
+        // Delete all remaining keys.
         try!(self.engine.scan_cf(
             cf,
             &start_key,
@@ -1195,6 +1195,8 @@ impl ApplyDelegate {
                 Ok(true)
             }
         ));
+
+        ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
     }
