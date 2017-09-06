@@ -22,6 +22,7 @@ mod builtin_op;
 mod compare;
 mod arithmetic;
 mod math;
+mod json;
 
 use std::{error, io};
 use std::borrow::Cow;
@@ -32,6 +33,7 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
+use coprocessor::codec::mysql::json::JsonDecoder;
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
 use util;
@@ -195,7 +197,7 @@ impl Expression {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),
@@ -317,6 +319,11 @@ impl Expression {
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
+            ExprType::MysqlJson => expr.get_val()
+                .decode_json()
+                .map(Datum::Json)
+                .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
             ExprType::ScalarFunc => {
                 try!(FnCall::check_args(
                     expr.get_sig(),
@@ -359,6 +366,11 @@ mod test {
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
         Datum::Dec(s.parse().unwrap())
+    }
+
+    #[inline]
+    pub fn make_null_datums(size: usize) -> Vec<Datum> {
+        (0..size).map(|_| Datum::Null).collect()
     }
 
     #[inline]
