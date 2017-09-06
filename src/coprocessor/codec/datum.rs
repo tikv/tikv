@@ -700,9 +700,9 @@ impl<T: Into<Datum>> From<Option<T>> for Datum {
     }
 }
 
-impl<'a, T: Clone + Into<Datum>> From<Option<Cow<'a, T>>> for Datum {
-    fn from(opt: Option<Cow<'a, T>>) -> Datum {
-        opt.map(Cow::into_owned).into()
+impl<'a, T: Clone + Into<Datum>> From<Cow<'a, T>> for Datum {
+    fn from(c: Cow<'a, T>) -> Datum {
+        c.into_owned().into()
     }
 }
 
@@ -715,6 +715,12 @@ impl From<Vec<u8>> for Datum {
 impl<'a> From<&'a [u8]> for Datum {
     fn from(data: &'a [u8]) -> Datum {
         data.to_vec().into()
+    }
+}
+
+impl<'a> From<Cow<'a, [u8]>> for Datum {
+    fn from(data: Cow<[u8]>) -> Datum {
+        data.into_owned().into()
     }
 }
 
