@@ -10,6 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use coprocessor::codec::Datum;
@@ -60,6 +61,9 @@ impl FnCall {
             let parser = JsonFuncArgsParser::new(ctx, row);
             let keys = try_opt!(parser.get_strings(self.children.iter().step_by(2)));
             let elems = try_opt!(parser.get_jsons(self.children[1..].iter().step_by(2), true));
+            if keys.len() != elems.len() {
+                return Err(box_err!("Incorrect parameter count for 'json_object'"));
+            }
             pairs.extend(keys.into_iter().zip(elems.into_iter()));
         }
         Ok(Some(Cow::Owned(Json::Object(pairs))))
