@@ -96,7 +96,7 @@ pub struct ThreadPoolBuilder<C, F> {
     name: String,
     thread_count: usize,
     tasks_per_tick: usize,
-    f: F,
+    factory: F,
     _ctx: PhantomData<C>,
 }
 
@@ -107,12 +107,12 @@ impl<C: Context + Default + 'static> ThreadPoolBuilder<C, DefaultContextFactory>
 }
 
 impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
-    pub fn new(name: String, f: F) -> ThreadPoolBuilder<C, F> {
+    pub fn new(name: String, factory: F) -> ThreadPoolBuilder<C, F> {
         ThreadPoolBuilder {
             name: name,
             thread_count: DEFAULT_THREAD_COUNT,
             tasks_per_tick: DEFAULT_TASKS_PER_TICK,
-            f: f,
+            factory: factory,
             _ctx: PhantomData,
         }
     }
@@ -128,7 +128,12 @@ impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
     }
 
     pub fn build(self) -> ThreadPool<C> {
-        ThreadPool::new(self.name, self.thread_count, self.tasks_per_tick, self.f)
+        ThreadPool::new(
+            self.name,
+            self.thread_count,
+            self.tasks_per_tick,
+            self.factory,
+        )
     }
 }
 
