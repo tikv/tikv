@@ -62,9 +62,6 @@ impl FnCall {
             let parser = JsonFuncArgsParser::new(ctx, row);
             let keys = try_opt!(parser.get_strings(self.children.iter().step_by(2)));
             let elems = try_opt!(parser.get_jsons(self.children[1..].iter().step_by(2), true));
-            if keys.len() != elems.len() {
-                return Err(box_err!("Incorrect parameter count for 'json_object'"));
-            }
             pairs.extend(keys.into_iter().zip(elems.into_iter()));
         }
         Ok(Some(Cow::Owned(Json::Object(pairs))))
