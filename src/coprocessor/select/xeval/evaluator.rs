@@ -677,6 +677,7 @@ pub mod test {
     use util::codec::number::{self, NumberEncoder};
     use coprocessor::codec::{datum, mysql, Datum};
     use coprocessor::codec::mysql::{types, Decimal, DecimalEncoder, Duration, MAX_FSP};
+    use coprocessor::codec::mysql::json::JsonEncoder;
     use tipb::expression::FieldType;
 
     use std::i32;
@@ -733,6 +734,12 @@ pub mod test {
                 let u = t.to_packed_u64();
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
                 buf.encode_u64(u).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Json(j) => {
+                expr.set_tp(ExprType::MysqlJson);
+                let mut buf = Vec::new();
+                buf.encode_json(&j).unwrap();
                 expr.set_val(buf);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
