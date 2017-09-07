@@ -308,7 +308,10 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
 
         // Keys in CF_LOCK not have ts tail, at the same time DeleteFilesInRange treat
         // input range as closed interval, but we don't want to delete the end_key, so
-        // we treat CF_LOCK especially.
+        // we treat CF_LOCK especially. For the others column families: 1) the data set
+        // in these column families usually very large, so we don't want to trigger seek
+        // for these column families; 2) keys in these column families have ts tail, so
+        // end_key never exists in these column families.
         if cf == CF_LOCK {
             let mut iter_opt = ReadOptions::new();
             iter_opt.fill_cache(false);
