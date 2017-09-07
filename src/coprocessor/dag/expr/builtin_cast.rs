@@ -267,7 +267,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
             let uval = val as u64;
@@ -283,7 +283,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -294,7 +294,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -305,7 +305,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         self.produce_str_with_specified_tp(ctx, val).map(Some)
     }
@@ -314,7 +314,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let s = format!("{}", val);
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -326,7 +326,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let s = format!("{}", val);
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -337,7 +337,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.to_string();
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -602,8 +602,8 @@ impl FnCall {
     fn produce_str_with_specified_tp<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
-        s: Cow<'a, Vec<u8>>,
-    ) -> Result<Cow<'a, Vec<u8>>> {
+        s: Cow<'a, [u8]>,
+    ) -> Result<Cow<'a, [u8]>> {
         let flen = self.tp.get_flen();
         let chs = self.tp.get_charset();
         if flen < 0 {
