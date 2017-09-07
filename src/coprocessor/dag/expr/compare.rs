@@ -263,7 +263,7 @@ fn like_match(target: &str, pattern: &str, escape: char) -> bool {
             return true;
         } else {
             if let Some(t) = tcs.next() {
-                if t == c || c == '_' {
+                if t == c || (c == '_' && !escaped) {
                     continue;
                 }
             }
@@ -410,7 +410,7 @@ mod test {
             (r#"hello"#, r#"\%"#, '\\', false),
             (r#"%"#, r#"\%"#, '\\', true),
             (r#"3hello"#, r#"%%hello"#, '%', true),
-            (r#"3hello"#, r#"__hello"#, '_', true),
+            (r#"3hello"#, r#"__hello"#, '_', false),
         ];
         let ctx = StatementContext::default();
         for (target, pattern, escape, exp) in cases {
