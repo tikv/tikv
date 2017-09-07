@@ -250,6 +250,7 @@ fn next_escaped(chars: &mut Chars, escape: char) -> Option<char> {
     })
 }
 
+/// Document is [here](https://dev.mysql.com/doc/refman/5.7/en/string-comparison-functions.html)
 fn like_match(target: &str, pattern: &str, escape: char) -> bool {
     let (mut tcs, mut pcs) = (target.chars(), pattern.chars());
     while let Some(c) = next_escaped(&mut pcs, escape) {
@@ -407,6 +408,8 @@ mod test {
             (r#"C:\Programs\"#, r#"%Prog%"#, '\\', true),
             (r#"C:\Programs\"#, r#"%Pr_g%"#, '\\', true),
             (r#"C:\Programs\"#, r#"%%\"#, '%', true),
+            (r#"C:\Programs%"#, r#"%%%"#, '%', true),
+            (r#"C:\Programs%"#, r#"%%%%"#, '%', true),
         ];
         let ctx = StatementContext::default();
         for (target, pattern, escape, exp) in cases {
