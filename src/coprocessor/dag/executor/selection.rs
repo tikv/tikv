@@ -186,7 +186,7 @@ mod tests {
         let key_ranges = vec![get_range(tid, 0, i64::MAX)];
 
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut statistics = Statistics::default();
 
@@ -244,7 +244,7 @@ mod tests {
         let key_ranges = vec![get_range(tid, 0, i64::MAX)];
 
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut statistics = Statistics::default();
 
         let inner_table_scan =

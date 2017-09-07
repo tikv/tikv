@@ -244,7 +244,7 @@ pub mod test {
                     START_TS,
                     None,
                     IsolationLevel::SI,
-                    false,
+                    true,
                 );
                 let mut pk = vec![];
                 for &(ref key, ref value) in kv_data {
@@ -268,7 +268,7 @@ pub mod test {
                     START_TS,
                     None,
                     IsolationLevel::SI,
-                    false,
+                    true,
                 );
                 for &(ref key, _) in kv_data {
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
@@ -323,7 +323,7 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner = Scanner::new(store, false, false, &mut statistics);
         let data = scanner.get_row(&key).unwrap().unwrap();
@@ -342,7 +342,7 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut scanner = Scanner::new(store, false, false, &mut statistics);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         for &(ref k, ref v) in &test_data {
@@ -363,7 +363,7 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&data.kv_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut scanner = Scanner::new(store, true, false, &mut statistics);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         data.kv_data.reverse();
@@ -389,7 +389,7 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut scanner = Scanner::new(store, false, true, &mut statistics);
 
         let range = get_range(table_id, i64::MIN, i64::MAX);
@@ -406,7 +406,7 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut scanner = Scanner::new(store, true, false, &mut statistics);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         // 1. seek_key is some

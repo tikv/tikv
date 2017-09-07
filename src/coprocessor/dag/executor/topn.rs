@@ -385,7 +385,7 @@ pub mod test {
         let key_ranges = vec![range1, range2];
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
+        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut statistics = Statistics::default();
         let ts_ect = TableScanExecutor::new(table_scan, key_ranges, snap, &mut statistics);
 

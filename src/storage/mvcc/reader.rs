@@ -599,7 +599,7 @@ mod tests {
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let mut stat = Statistics::default();
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI, false);
+            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI, true);
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.modifies());
         }
@@ -608,7 +608,7 @@ mod tests {
             let k = make_key(pk);
             let mut stat = Statistics::default();
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI, false);
+            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI, true);
             txn.commit(&k, commit_ts).unwrap();
             self.write(txn.modifies());
         }
@@ -617,14 +617,8 @@ mod tests {
             let k = make_key(pk);
             let mut stat = Statistics::default();
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(
-                &snap,
-                &mut stat,
-                safe_point,
-                None,
-                IsolationLevel::SI,
-                false,
-            );
+            let mut txn =
+                MvccTxn::new(&snap, &mut stat, safe_point, None, IsolationLevel::SI, true);
             txn.gc(&k, safe_point).unwrap();
             self.write(txn.modifies());
         }
@@ -708,7 +702,7 @@ mod tests {
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
         let mut stat = Statistics::default();
-        let reader = MvccReader::new(&snap, &mut stat, None, true, None, IsolationLevel::SI);
+        let reader = MvccReader::new(&snap, &mut stat, None, false, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }

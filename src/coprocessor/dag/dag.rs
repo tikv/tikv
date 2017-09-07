@@ -40,7 +40,7 @@ pub struct DAGContext<'s> {
     snap: &'s Snapshot,
     eval_ctx: Rc<EvalContext>,
     isolation_level: IsolationLevel,
-    not_fill_cache: bool,
+    fill_cache: bool,
 }
 
 impl<'s> DAGContext<'s> {
@@ -51,7 +51,7 @@ impl<'s> DAGContext<'s> {
         snap: &'s Snapshot,
         eval_ctx: Rc<EvalContext>,
         isolation_level: IsolationLevel,
-        not_fill_cache: bool,
+        fill_cache: bool,
     ) -> DAGContext<'s> {
         DAGContext {
             req: req,
@@ -62,7 +62,7 @@ impl<'s> DAGContext<'s> {
             has_aggr: false,
             eval_ctx: eval_ctx,
             isolation_level: isolation_level,
-            not_fill_cache: not_fill_cache,
+            fill_cache: fill_cache,
         }
     }
 
@@ -157,7 +157,7 @@ impl<'s> DAGContext<'s> {
             self.snap,
             self.req.get_start_ts(),
             self.isolation_level,
-            self.not_fill_cache,
+            self.fill_cache,
         );
 
         match first.get_tp() {

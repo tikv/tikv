@@ -28,13 +28,13 @@ impl<'a> SnapshotStore<'a> {
         snapshot: &'a Snapshot,
         start_ts: u64,
         isolation_level: IsolationLevel,
-        not_fill_cache: bool,
+        fill_cache: bool,
     ) -> SnapshotStore {
         SnapshotStore {
             snapshot: snapshot,
             start_ts: start_ts,
             isolation_level: isolation_level,
-            fill_cache: !not_fill_cache,
+            fill_cache: fill_cache,
         }
     }
 
@@ -216,7 +216,7 @@ mod test {
                     START_TS,
                     None,
                     IsolationLevel::SI,
-                    false,
+                    true,
                 );
                 for key in &self.keys {
                     let key = key.as_bytes();
@@ -237,7 +237,7 @@ mod test {
                     START_TS,
                     None,
                     IsolationLevel::SI,
-                    false,
+                    true,
                 );
                 for key in &self.keys {
                     let key = key.as_bytes();
@@ -259,7 +259,7 @@ mod test {
                 self.snapshot.as_ref(),
                 COMMIT_TS + 1,
                 IsolationLevel::SI,
-                false,
+                true,
             )
         }
     }
