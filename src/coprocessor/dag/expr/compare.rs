@@ -255,17 +255,11 @@ fn like_match(target: &str, pattern: &str, escape: char) -> bool {
     let (mut tcs, mut pcs) = (target.chars(), pattern.chars());
     while let Some((c, escaped)) = next_escaped(&mut pcs, escape) {
         if c == '%' && (!escaped || escape == '%') {
-            if !pcs.as_str().is_empty() {
-                loop {
-                    if like_match(tcs.as_str(), pcs.as_str(), escape) {
-                        return true;
-                    }
-                    if tcs.next().is_none() {
-                        return false;
-                    }
+            while !like_match(tcs.as_str(), pcs.as_str(), escape) {
+                if tcs.next().is_none() {
+                    return false;
                 }
             }
-            return true;
         } else {
             if let Some(t) = tcs.next() {
                 if t == c || c == '_' {
