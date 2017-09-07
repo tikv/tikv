@@ -110,6 +110,14 @@ impl FnCall {
         if_null(|i| self.children[i].eval_duration(ctx, row))
     }
 
+    pub fn if_null_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        if_null(|i| self.children[i].eval_json(ctx, row))
+    }
+
     pub fn if_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         if_condition(self, ctx, row, |i| self.children[i].eval_int(ctx, row))
     }
@@ -148,6 +156,14 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         if_condition(self, ctx, row, |i| self.children[i].eval_duration(ctx, row))
+    }
+
+    pub fn if_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        if_condition(self, ctx, row, |i| self.children[i].eval_json(ctx, row))
     }
 
     pub fn case_when_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -287,7 +303,18 @@ mod test {
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
             ),
-            // TODO: add Time related tests after Time is implementted in Expression::build
+            (
+                ScalarFuncSig::IfNullTime,
+                Datum::Null,
+                Datum::Time(Time::parse_utc_datetime("1970-01-01 12:00:00", 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime("1970-01-01 12:00:00", 6).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfNullJson,
+                Datum::Null,
+                Datum::Json(Json::String("hello".to_owned())),
+                Datum::Json(Json::String("hello".to_owned())),
+            ),
         ];
         let ctx = StatementContext::default();
         for (operator, branch1, branch2, exp) in tests {
@@ -407,7 +434,20 @@ mod test {
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
             ),
-            // TODO: add Time related tests after Time is implementted in Expression::build
+            (
+                ScalarFuncSig::IfTime,
+                Datum::I64(0),
+                Datum::Time(Time::parse_utc_datetime("1970-01-01 12:00:00", 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime("1971-01-01 12:00:00", 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime("1971-01-01 12:00:00", 6).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfJson,
+                Datum::I64(0),
+                Datum::Json(Json::I64(300)),
+                Datum::Json(Json::String("hello".to_owned())),
+                Datum::Json(Json::String("hello".to_owned())),
+            ),
         ];
         let ctx = StatementContext::default();
         for (operator, cond, branch1, branch2, exp) in tests {

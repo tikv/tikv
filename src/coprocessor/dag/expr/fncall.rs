@@ -88,6 +88,7 @@ impl FnCall {
             ScalarFuncSig::IfNullDecimal |
             ScalarFuncSig::IfNullTime |
             ScalarFuncSig::IfNullDuration |
+            ScalarFuncSig::IfNullJson |
             ScalarFuncSig::LogicalAnd |
             ScalarFuncSig::LogicalOr |
             ScalarFuncSig::LogicalXor |
@@ -162,6 +163,7 @@ impl FnCall {
             ScalarFuncSig::StringIsNull |
             ScalarFuncSig::TimeIsNull |
             ScalarFuncSig::DurationIsNull |
+            ScalarFuncSig::JsonIsNull |
             ScalarFuncSig::AbsInt |
             ScalarFuncSig::AbsUInt |
             ScalarFuncSig::AbsReal |
@@ -186,6 +188,7 @@ impl FnCall {
             ScalarFuncSig::IfDecimal |
             ScalarFuncSig::IfTime |
             ScalarFuncSig::IfDuration |
+            ScalarFuncSig::IfJson |
             ScalarFuncSig::LikeSig => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
@@ -212,8 +215,6 @@ impl FnCall {
             ScalarFuncSig::JsonSetSig |
             ScalarFuncSig::JsonInsertSig |
             ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
-
-            _ => return Err(Error::UnknownSignature(sig)),
         };
         if args < min_args || args > max_args {
             return Err(box_err!("unexpected arguments"));
@@ -344,7 +345,6 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$j_sig => {
                         self.$j_func(ctx, row, $($j_arg)*).map(Datum::from)
                     })*
-                    _=>Err(Error::UnknownSignature(self.sig)),
                 }
             }
         }
@@ -439,6 +439,7 @@ dispatch_call! {
         StringIsNull => string_is_null,
         TimeIsNull => time_is_null,
         DurationIsNull => duration_is_null,
+        JsonIsNull => json_is_null,
 
         AbsInt => abs_int,
         AbsUInt => abs_uint,
@@ -570,6 +571,9 @@ dispatch_call! {
 
         CoalesceJson => coalesce_json,
         CaseWhenJson => case_when_json,
+
+        IfJson => if_json,
+        IfNullJson => if_null_json,
 
         JsonExtractSig => json_extract,
         JsonSetSig => json_set,
