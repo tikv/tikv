@@ -31,3 +31,6 @@ pub const COLLATION_ASCII: &'static str = "ascii_bin";
 pub const CHARSET_LATIN1: &'static str = "latin1";
 // `COLLATION_LATIN1` is the default collaction for `CHARSET_LATIN1`.
 pub const COLLATION_LATIN1: &'static str = "latin1_bin";
+
+// All utf8 charsets.
+pub const UTF8_CHARSETS: [&'static str; 3] = [CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_ASCII];
