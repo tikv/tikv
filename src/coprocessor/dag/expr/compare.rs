@@ -244,7 +244,7 @@ where
 #[inline]
 fn next_escaped(chars: &mut Chars, escape: char) -> Option<(char, bool)> {
     chars.next().map(|c| if c == escape {
-        chars.next().map(|c| (c, true)).unwrap_or((c, false))
+        chars.next().map_or((c, false), |c| (c, true))
     } else {
         (c, false)
     })
