@@ -260,6 +260,7 @@ fn like_match(target: &str, pattern: &str, escape: char) -> bool {
                     return false;
                 }
             }
+            return true;
         } else {
             if let Some(t) = tcs.next() {
                 if t == c || c == '_' {
