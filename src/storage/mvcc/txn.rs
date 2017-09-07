@@ -52,7 +52,7 @@ impl<'a> MvccTxn<'a> {
                 snapshot,
                 statistics,
                 mode,
-                fill_cache, // fill_cache
+                fill_cache,
                 None,
                 isolation_level,
             ),
@@ -767,7 +767,7 @@ mod tests {
             10,
             None,
             IsolationLevel::SI,
-            false,
+            true,
         );
         txn.commit(&key, 15).unwrap();
         assert!(txn.write_size() > 0);

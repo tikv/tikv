@@ -848,7 +848,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
-                ctx.get_not_fill_cache(),
+                !ctx.get_not_fill_cache(),
             );
             for k in keys {
                 try!(txn.rollback(k));
@@ -879,7 +879,7 @@ fn process_write_impl(
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
-                ctx.get_not_fill_cache(),
+                !ctx.get_not_fill_cache(),
             );
             for k in keys {
                 match commit_ts {
