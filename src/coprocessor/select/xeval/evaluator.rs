@@ -676,7 +676,7 @@ pub mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
     use coprocessor::codec::{datum, mysql, Datum};
-    use coprocessor::codec::mysql::{types, Decimal, DecimalEncoder, Duration, MAX_FSP};
+    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, MAX_FSP};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use tipb::expression::FieldType;
 
@@ -705,6 +705,8 @@ pub mod test {
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
                 expr.set_val(bs);
+                expr.mut_field_type()
+                    .set_charset(charset::CHARSET_UTF8.to_owned());
             }
             Datum::F64(f) => {
                 expr.set_tp(ExprType::Float64);
