@@ -242,26 +242,28 @@ where
 }
 
 #[inline]
-fn next_escaped(chars: &mut Chars, escape: char) -> Option<char> {
-    chars.next().and_then(|c| if c == escape {
-        chars.next().or_else(|| Some(c))
+fn next_escaped(chars: &mut Chars, escape: char) -> Option<(char, bool)> {
+    chars.next().map(|c| if c == escape {
+        chars.next().map(|c| (c, true)).unwrap_or((c, false))
     } else {
-        Some(c)
+        (c, false)
     })
 }
 
 /// Document is [here](https://dev.mysql.com/doc/refman/5.7/en/string-comparison-functions.html)
 fn like_match(target: &str, pattern: &str, escape: char) -> bool {
     let (mut tcs, mut pcs) = (target.chars(), pattern.chars());
-    while let Some(c) = next_escaped(&mut pcs, escape) {
-        if c == '%' {
-            if let Some(p) = next_escaped(&mut pcs, escape) {
-                while let Some(t) = tcs.next() {
-                    if t == p && like_match(tcs.as_str(), pcs.as_str(), escape) {
+    while let Some((c, escaped)) = next_escaped(&mut pcs, escape) {
+        if c == '%' && (!escaped || escape == '%') {
+            if !pcs.as_str().is_empty() {
+                loop {
+                    if like_match(tcs.as_str(), pcs.as_str(), escape) {
                         return true;
                     }
+                    if tcs.next().is_none() {
+                        return false;
+                    }
                 }
-                return false;
             }
             return true;
         } else {
@@ -410,6 +412,10 @@ mod test {
             (r#"C:\Programs\"#, r#"%%\"#, '%', true),
             (r#"C:\Programs%"#, r#"%%%"#, '%', true),
             (r#"C:\Programs%"#, r#"%%%%"#, '%', true),
+            (r#"hello"#, r#"\%"#, '\\', false),
+            (r#"%"#, r#"\%"#, '\\', true),
+            (r#"3hello"#, r#"%%hello"#, '%', true),
+            (r#"3hello"#, r#"__hello"#, '_', true),
         ];
         let ctx = StatementContext::default();
         for (target, pattern, escape, exp) in cases {
