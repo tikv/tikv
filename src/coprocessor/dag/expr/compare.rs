@@ -159,6 +159,7 @@ impl FnCall {
         do_coalesce(self, |v| v.eval_json(ctx, row))
     }
 
+    #[inline]
     pub fn like(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
