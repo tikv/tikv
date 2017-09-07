@@ -41,7 +41,7 @@ pub use self::limit::LimitExecutor;
 pub use self::aggregation::AggregationExecutor;
 
 pub struct ExprColumnRefVisitor {
-    pub cols_offset: HashSet<usize>,
+    cols_offset: HashSet<usize>,
     cols_len: usize,
 }
 

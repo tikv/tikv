@@ -59,6 +59,30 @@ impl AggrFuncExpr {
     }
 }
 
+impl AggrFunc {
+    fn build_with_expr(
+        ctx: &EvalContext,
+        expr: &AggrFuncExpr,
+        row: &[Datum],
+    ) -> Result<Box<AggrFunc>> {
+        let mut aggr = try!(aggregate::build_aggr_func(expr.tp));
+        let vals = try!(expr.eval_args(ctx, row));
+        try!(aggr.update(ctx, vals));
+        Ok(aggr)
+    }
+
+    fn update_with_expr(
+        &mut self,
+        ctx: &EvalContext,
+        expr: &AggrFuncExpr,
+        row: &[Datum],
+    ) -> Result<()> {
+        let vals = try!(expr.eval_args(ctx, row));
+        try!(self.update(ctx, vals));
+        Ok(())
+    }
+}
+
 pub struct AggregationExecutor<'a> {
     group_by: Vec<Expression>,
     aggr_func: Vec<AggrFuncExpr>,
@@ -130,9 +154,7 @@ impl<'a> AggregationExecutor<'a> {
                 Entry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
                     for expr in &self.aggr_func {
-                        let mut aggr = try!(aggregate::build_aggr_func(expr.tp));
-                        let vals = try!(expr.eval_args(&self.ctx, &cols));
-                        try!(aggr.update(&self.ctx, vals));
+                        let aggr = try!(AggrFunc::build_with_expr(&self.ctx, expr, &cols));
                         aggrs.push(aggr);
                     }
                     self.group_keys.push(group_key);
@@ -141,8 +163,7 @@ impl<'a> AggregationExecutor<'a> {
                 Entry::Occupied(e) => {
                     let aggrs = e.into_mut();
                     for (expr, aggr) in self.aggr_func.iter().zip(aggrs) {
-                        let vals = try!(expr.eval_args(&self.ctx, &cols));
-                        box_try!(aggr.update(&self.ctx, vals));
+                        try!(aggr.update_with_expr(&self.ctx, expr, &cols));
                     }
                 }
             }
