@@ -21,7 +21,8 @@ mod builtin_control;
 mod builtin_op;
 mod compare;
 mod arithmetic;
-use self::compare::CmpOp;
+mod math;
+mod json;
 
 use std::{error, io};
 use std::borrow::Cow;
@@ -30,8 +31,9 @@ use std::str::Utf8Error;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Res, Time, MAX_FSP};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
+use coprocessor::codec::mysql::json::JsonDecoder;
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
 use util;
@@ -63,7 +65,7 @@ quick_error! {
             description("column offset not found")
             display("illegal column offset: {}", offset)
         }
-        UnKnownSignature(sig: ScalarFuncSig) {
+        UnknownSignature(sig: ScalarFuncSig) {
             description("Unknown signature")
             display("Unknown signature: {:?}", sig)
         }
@@ -161,99 +163,12 @@ impl Expression {
         }
     }
 
+    #[allow(match_same_arms)]
     fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
             Expression::ColumnRef(ref column) => column.eval_int(row),
-            Expression::ScalarFn(ref f) => match f.sig {
-                ScalarFuncSig::LTInt => f.compare_int(ctx, row, CmpOp::LT),
-                ScalarFuncSig::LEInt => f.compare_int(ctx, row, CmpOp::LE),
-                ScalarFuncSig::GTInt => f.compare_int(ctx, row, CmpOp::GT),
-                ScalarFuncSig::GEInt => f.compare_int(ctx, row, CmpOp::GE),
-                ScalarFuncSig::EQInt => f.compare_int(ctx, row, CmpOp::EQ),
-                ScalarFuncSig::NEInt => f.compare_int(ctx, row, CmpOp::NE),
-                ScalarFuncSig::NullEQInt => f.compare_int(ctx, row, CmpOp::NullEQ),
-
-                ScalarFuncSig::LTReal => f.compare_real(ctx, row, CmpOp::LT),
-                ScalarFuncSig::LEReal => f.compare_real(ctx, row, CmpOp::LE),
-                ScalarFuncSig::GTReal => f.compare_real(ctx, row, CmpOp::GT),
-                ScalarFuncSig::GEReal => f.compare_real(ctx, row, CmpOp::GE),
-                ScalarFuncSig::EQReal => f.compare_real(ctx, row, CmpOp::EQ),
-                ScalarFuncSig::NEReal => f.compare_real(ctx, row, CmpOp::NE),
-                ScalarFuncSig::NullEQReal => f.compare_real(ctx, row, CmpOp::NullEQ),
-
-                ScalarFuncSig::LTDecimal => f.compare_decimal(ctx, row, CmpOp::LT),
-                ScalarFuncSig::LEDecimal => f.compare_decimal(ctx, row, CmpOp::LE),
-                ScalarFuncSig::GTDecimal => f.compare_decimal(ctx, row, CmpOp::GT),
-                ScalarFuncSig::GEDecimal => f.compare_decimal(ctx, row, CmpOp::GE),
-                ScalarFuncSig::EQDecimal => f.compare_decimal(ctx, row, CmpOp::EQ),
-                ScalarFuncSig::NEDecimal => f.compare_decimal(ctx, row, CmpOp::NE),
-                ScalarFuncSig::NullEQDecimal => f.compare_decimal(ctx, row, CmpOp::NullEQ),
-
-                ScalarFuncSig::LTString => f.compare_string(ctx, row, CmpOp::LT),
-                ScalarFuncSig::LEString => f.compare_string(ctx, row, CmpOp::LE),
-                ScalarFuncSig::GTString => f.compare_string(ctx, row, CmpOp::GT),
-                ScalarFuncSig::GEString => f.compare_string(ctx, row, CmpOp::GE),
-                ScalarFuncSig::EQString => f.compare_string(ctx, row, CmpOp::EQ),
-                ScalarFuncSig::NEString => f.compare_string(ctx, row, CmpOp::NE),
-                ScalarFuncSig::NullEQString => f.compare_string(ctx, row, CmpOp::NullEQ),
-
-                ScalarFuncSig::LTTime => f.compare_time(ctx, row, CmpOp::LT),
-                ScalarFuncSig::LETime => f.compare_time(ctx, row, CmpOp::LE),
-                ScalarFuncSig::GTTime => f.compare_time(ctx, row, CmpOp::GT),
-                ScalarFuncSig::GETime => f.compare_time(ctx, row, CmpOp::GE),
-                ScalarFuncSig::EQTime => f.compare_time(ctx, row, CmpOp::EQ),
-                ScalarFuncSig::NETime => f.compare_time(ctx, row, CmpOp::NE),
-                ScalarFuncSig::NullEQTime => f.compare_time(ctx, row, CmpOp::NullEQ),
-
-                ScalarFuncSig::LTDuration => f.compare_duration(ctx, row, CmpOp::LT),
-                ScalarFuncSig::LEDuration => f.compare_duration(ctx, row, CmpOp::LE),
-                ScalarFuncSig::GTDuration => f.compare_duration(ctx, row, CmpOp::GT),
-                ScalarFuncSig::GEDuration => f.compare_duration(ctx, row, CmpOp::GE),
-                ScalarFuncSig::EQDuration => f.compare_duration(ctx, row, CmpOp::EQ),
-                ScalarFuncSig::NEDuration => f.compare_duration(ctx, row, CmpOp::NE),
-                ScalarFuncSig::NullEQDuration => f.compare_duration(ctx, row, CmpOp::NullEQ),
-
-                ScalarFuncSig::LTJson => f.compare_json(ctx, row, CmpOp::LT),
-                ScalarFuncSig::LEJson => f.compare_json(ctx, row, CmpOp::LE),
-                ScalarFuncSig::GTJson => f.compare_json(ctx, row, CmpOp::GT),
-                ScalarFuncSig::GEJson => f.compare_json(ctx, row, CmpOp::GE),
-                ScalarFuncSig::EQJson => f.compare_json(ctx, row, CmpOp::EQ),
-                ScalarFuncSig::NEJson => f.compare_json(ctx, row, CmpOp::NE),
-                ScalarFuncSig::NullEQJson => f.compare_json(ctx, row, CmpOp::NullEQ),
-
-                ScalarFuncSig::CastIntAsInt => f.cast_int_as_int(ctx, row),
-                ScalarFuncSig::CastRealAsInt => f.cast_real_as_int(ctx, row),
-                ScalarFuncSig::CastDecimalAsInt => f.cast_decimal_as_int(ctx, row),
-                ScalarFuncSig::CastStringAsInt => f.cast_str_as_int(ctx, row),
-                ScalarFuncSig::CastTimeAsInt => f.cast_time_as_int(ctx, row),
-                ScalarFuncSig::CastDurationAsInt => f.cast_duration_as_int(ctx, row),
-                ScalarFuncSig::CastJsonAsInt => f.cast_json_as_int(ctx, row),
-
-                ScalarFuncSig::PlusInt => f.plus_int(ctx, row),
-                ScalarFuncSig::MinusInt => f.minus_int(ctx, row),
-                ScalarFuncSig::MultiplyInt => f.multiply_int(ctx, row),
-                ScalarFuncSig::LogicalAnd => f.logical_and(ctx, row),
-                ScalarFuncSig::LogicalOr => f.logical_or(ctx, row),
-                ScalarFuncSig::LogicalXor => f.logical_xor(ctx, row),
-
-                ScalarFuncSig::UnaryNot => f.unary_not(ctx, row),
-                ScalarFuncSig::UnaryMinusInt => f.unary_minus_int(ctx, row),
-                ScalarFuncSig::IntIsNull => f.int_is_null(ctx, row),
-                ScalarFuncSig::IntIsFalse => f.int_is_false(ctx, row),
-                ScalarFuncSig::RealIsTrue => f.real_is_true(ctx, row),
-                ScalarFuncSig::RealIsNull => f.real_is_null(ctx, row),
-                ScalarFuncSig::DecimalIsNull => f.decimal_is_null(ctx, row),
-                ScalarFuncSig::DecimalIsTrue => f.decimal_is_true(ctx, row),
-                ScalarFuncSig::StringIsNull => f.string_is_null(ctx, row),
-                ScalarFuncSig::TimeIsNull => f.time_is_null(ctx, row),
-                ScalarFuncSig::DurationIsNull => f.duration_is_null(ctx, row),
-
-                ScalarFuncSig::IfNullInt => f.if_null_int(ctx, row),
-                ScalarFuncSig::IfInt => f.if_int(ctx, row),
-
-                _ => Err(Error::UnKnownSignature(f.sig)),
-            },
+            Expression::ScalarFn(ref f) => f.eval_int(ctx, row),
         }
     }
 
@@ -261,28 +176,11 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
-            Expression::ScalarFn(ref f) => match f.sig {
-                ScalarFuncSig::CastIntAsReal => f.cast_int_as_real(ctx, row),
-                ScalarFuncSig::CastRealAsReal => f.cast_real_as_real(ctx, row),
-                ScalarFuncSig::CastDecimalAsReal => f.cast_decimal_as_real(ctx, row),
-                ScalarFuncSig::CastStringAsReal => f.cast_str_as_real(ctx, row),
-                ScalarFuncSig::CastTimeAsReal => f.cast_time_as_real(ctx, row),
-                ScalarFuncSig::CastDurationAsReal => f.cast_duration_as_real(ctx, row),
-                ScalarFuncSig::CastJsonAsReal => f.cast_json_as_real(ctx, row),
-                ScalarFuncSig::UnaryMinusReal => f.unary_minus_real(ctx, row),
-
-                ScalarFuncSig::PlusReal => f.plus_real(ctx, row),
-                ScalarFuncSig::MinusReal => f.minus_real(ctx, row),
-                ScalarFuncSig::MultiplyReal => f.multiply_real(ctx, row),
-
-                ScalarFuncSig::IfNullReal => f.if_null_real(ctx, row),
-                ScalarFuncSig::IfReal => f.if_real(ctx, row),
-
-                _ => Err(Error::UnKnownSignature(f.sig)),
-            },
+            Expression::ScalarFn(ref f) => f.eval_real(ctx, row),
         }
     }
 
+    #[allow(match_same_arms)]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
@@ -291,25 +189,7 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_decimal(),
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
-            Expression::ScalarFn(ref f) => match f.sig {
-                ScalarFuncSig::CastIntAsDecimal => f.cast_int_as_decimal(ctx, row),
-                ScalarFuncSig::CastRealAsDecimal => f.cast_real_as_decimal(ctx, row),
-                ScalarFuncSig::CastDecimalAsDecimal => f.cast_decimal_as_decimal(ctx, row),
-                ScalarFuncSig::CastStringAsDecimal => f.cast_str_as_decimal(ctx, row),
-                ScalarFuncSig::CastTimeAsDecimal => f.cast_time_as_decimal(ctx, row),
-                ScalarFuncSig::CastDurationAsDecimal => f.cast_duration_as_decimal(ctx, row),
-                ScalarFuncSig::CastJsonAsDecimal => f.cast_json_as_decimal(ctx, row),
-                ScalarFuncSig::UnaryMinusDecimal => f.unary_minus_decimal(ctx, row),
-
-                ScalarFuncSig::PlusDecimal => f.plus_decimal(ctx, row),
-                ScalarFuncSig::MinusDecimal => f.minus_decimal(ctx, row),
-                ScalarFuncSig::MultiplyDecimal => f.multiply_decimal(ctx, row),
-
-                ScalarFuncSig::IfNullDecimal => f.if_null_decimal(ctx, row),
-                ScalarFuncSig::IfDecimal => f.if_decimal(ctx, row),
-
-                _ => Err(Error::UnKnownSignature(f.sig)),
-            },
+            Expression::ScalarFn(ref f) => f.eval_decimal(ctx, row),
         }
     }
 
@@ -317,23 +197,11 @@ impl Expression {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),
-            Expression::ScalarFn(ref f) => match f.sig {
-                ScalarFuncSig::CastIntAsString => f.cast_int_as_str(ctx, row),
-                ScalarFuncSig::CastRealAsString => f.cast_real_as_str(ctx, row),
-                ScalarFuncSig::CastDecimalAsString => f.cast_decimal_as_str(ctx, row),
-                ScalarFuncSig::CastStringAsString => f.cast_str_as_str(ctx, row),
-                ScalarFuncSig::CastTimeAsString => f.cast_time_as_str(ctx, row),
-                ScalarFuncSig::CastDurationAsString => f.cast_duration_as_str(ctx, row),
-                ScalarFuncSig::CastJsonAsString => f.cast_json_as_str(ctx, row),
-
-                ScalarFuncSig::IfNullString => f.if_null_string(ctx, row),
-                ScalarFuncSig::IfString => f.if_string(ctx, row),
-                _ => Err(Error::UnKnownSignature(f.sig)),
-            },
+            Expression::ScalarFn(ref f) => f.eval_bytes(ctx, row),
         }
     }
 
@@ -345,19 +213,7 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_time(),
             Expression::ColumnRef(ref column) => column.eval_time(row),
-            Expression::ScalarFn(ref f) => match f.sig {
-                ScalarFuncSig::CastIntAsTime => f.cast_int_as_time(ctx, row),
-                ScalarFuncSig::CastRealAsTime => f.cast_real_as_time(ctx, row),
-                ScalarFuncSig::CastDecimalAsTime => f.cast_decimal_as_time(ctx, row),
-                ScalarFuncSig::CastStringAsTime => f.cast_str_as_time(ctx, row),
-                ScalarFuncSig::CastTimeAsTime => f.cast_time_as_time(ctx, row),
-                ScalarFuncSig::CastDurationAsTime => f.cast_duration_as_time(ctx, row),
-                ScalarFuncSig::CastJsonAsTime => f.cast_json_as_time(ctx, row),
-
-                ScalarFuncSig::IfNullTime => f.if_null_time(ctx, row),
-                ScalarFuncSig::IfTime => f.if_time(ctx, row),
-                _ => Err(Error::UnKnownSignature(f.sig)),
-            },
+            Expression::ScalarFn(ref f) => f.eval_time(ctx, row),
         }
     }
 
@@ -369,19 +225,7 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
-            Expression::ScalarFn(ref f) => match f.sig {
-                ScalarFuncSig::CastIntAsDuration => f.cast_int_as_duration(ctx, row),
-                ScalarFuncSig::CastRealAsDuration => f.cast_real_as_duration(ctx, row),
-                ScalarFuncSig::CastDecimalAsDuration => f.cast_decimal_as_duration(ctx, row),
-                ScalarFuncSig::CastStringAsDuration => f.cast_str_as_duration(ctx, row),
-                ScalarFuncSig::CastTimeAsDuration => f.cast_time_as_duration(ctx, row),
-                ScalarFuncSig::CastDurationAsDuration => f.cast_duration_as_duration(ctx, row),
-                ScalarFuncSig::CastJsonAsDuration => f.cast_json_as_duration(ctx, row),
-
-                ScalarFuncSig::IfNullDuration => f.if_null_duration(ctx, row),
-                ScalarFuncSig::IfDuration => f.if_duration(ctx, row),
-                _ => Err(Error::UnKnownSignature(f.sig)),
-            },
+            Expression::ScalarFn(ref f) => f.eval_duration(ctx, row),
         }
     }
 
@@ -393,16 +237,7 @@ impl Expression {
         match *self {
             Expression::Constant(ref constant) => constant.eval_json(),
             Expression::ColumnRef(ref column) => column.eval_json(row),
-            Expression::ScalarFn(ref f) => match f.sig {
-                ScalarFuncSig::CastIntAsJson => f.cast_int_as_json(ctx, row),
-                ScalarFuncSig::CastRealAsJson => f.cast_real_as_json(ctx, row),
-                ScalarFuncSig::CastDecimalAsJson => f.cast_decimal_as_json(ctx, row),
-                ScalarFuncSig::CastStringAsJson => f.cast_str_as_json(ctx, row),
-                ScalarFuncSig::CastTimeAsJson => f.cast_time_as_json(ctx, row),
-                ScalarFuncSig::CastDurationAsJson => f.cast_duration_as_json(ctx, row),
-                ScalarFuncSig::CastJsonAsJson => f.cast_json_as_json(ctx, row),
-                _ => Err(Error::UnKnownSignature(f.sig)),
-            },
+            Expression::ScalarFn(ref f) => f.eval_json(ctx, row),
         }
     }
 
@@ -426,80 +261,19 @@ impl Expression {
     }
 }
 
+fn filter<T: Into<Datum>>(x: Result<T>) -> Option<Result<Datum>> {
+    match x {
+        Err(Error::UnknownSignature(_)) => None,
+        e => Some(e.map(|x| x.into())),
+    }
+}
+
 impl Expression {
     pub fn eval(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Datum> {
         match *self {
             Expression::Constant(ref constant) => Ok(constant.eval()),
             Expression::ColumnRef(ref column) => Ok(column.eval(row)),
-            Expression::ScalarFn(ref f) => {
-                match self.eval_int(ctx, row) {
-                    Ok(v) => {
-                        let v = v.map_or(Datum::Null, |v| {
-                            if mysql::has_unsigned_flag(self.get_tp().get_flag() as u64) {
-                                Datum::U64(v as u64)
-                            } else {
-                                Datum::I64(v)
-                            }
-                        });
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_real(ctx, row) {
-                    Ok(d) => return Ok(d.into()),
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_decimal(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Dec(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_time(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Time(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_duration(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Dur(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_string(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Bytes(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                match self.eval_json(ctx, row) {
-                    Ok(d) => {
-                        let v = d.map_or(Datum::Null, |v| Datum::Json(v.into_owned()));
-                        return Ok(v);
-                    }
-                    Err(Error::UnKnownSignature(_)) => {}
-                    Err(e) => return Err(e),
-                }
-
-                Err(Error::UnKnownSignature(f.sig))
-            }
+            Expression::ScalarFn(ref f) => f.eval(ctx, row),
         }
     }
 
@@ -537,9 +311,9 @@ impl Expression {
             ExprType::MysqlTime => expr.get_val()
                 .decode_u64()
                 .and_then(|i| {
-                    let fsp = expr.get_field_type().get_decimal() as i8;
-                    let tp = expr.get_field_type().get_tp() as u8;
-                    Time::from_packed_u64(i, tp, fsp, &ctx.tz)
+                    let fsp = tp.get_decimal() as i8;
+                    let t = tp.get_tp() as u8;
+                    Time::from_packed_u64(i, t, fsp, &ctx.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp))
                 .map_err(Error::from),
@@ -552,6 +326,11 @@ impl Expression {
             ExprType::MysqlDecimal => expr.get_val()
                 .decode_decimal()
                 .map(Datum::Dec)
+                .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
+            ExprType::MysqlJson => expr.get_val()
+                .decode_json()
+                .map(Datum::Json)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
@@ -591,11 +370,24 @@ mod test {
     use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
     use coprocessor::select::xeval::evaluator::test::col_expr;
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-    use super::{Expression, StatementContext};
+    use super::{Error, Expression, StatementContext};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
         Datum::Dec(s.parse().unwrap())
+    }
+
+    #[inline]
+    pub fn make_null_datums(size: usize) -> Vec<Datum> {
+        (0..size).map(|_| Datum::Null).collect()
+    }
+
+    #[inline]
+    pub fn check_overflow(e: Error) -> Result<(), ()> {
+        match e {
+            Error::Overflow => Ok(()),
+            _ => Err(()),
+        }
     }
 
     pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
@@ -660,12 +452,7 @@ mod test {
                 assert_eq!(res, exp);
             }
         }
-    }
-
-    #[test]
-    fn test_expression_eval_as_int() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        // cases for integer
         let cases = vec![
             (
                 Some(types::UNSIGNED_FLAG),

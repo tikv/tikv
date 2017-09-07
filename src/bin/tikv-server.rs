@@ -79,21 +79,32 @@ use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERV
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
-fn exit_with_err<E: Error>(e: E) -> ! {
-    exit_with_msg(format!("{:?}", e))
-}
-
-fn exit_with_msg(msg: String) -> ! {
-    error!("{}", msg);
-    process::exit(1)
+macro_rules! fatal {
+    ($lvl:expr, $($arg:tt)+) => ({
+        error!($lvl, $($arg)+);
+        process::exit(1)
+    })
 }
 
 fn init_log(config: &TiKvConfig) {
     if config.log_file.is_empty() {
-        logger::init_log(StderrLogger, config.log_level).unwrap_or_else(|e| exit_with_err(e));
+        logger::init_log(StderrLogger, config.log_level).unwrap_or_else(|e| {
+            eprintln!("failed to initial log: {:?}", e);
+            process::exit(-1);
+        });
     } else {
-        let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| exit_with_err(e));
-        logger::init_log(w, config.log_level).unwrap_or_else(|e| exit_with_err(e));
+        let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
+            eprintln!(
+                "failed to initial log with file {:?}: {:?}",
+                config.log_file,
+                e
+            );
+            process::exit(-1);
+        });
+        logger::init_log(w, config.log_level).unwrap_or_else(|e| {
+            eprintln!("failed to initial log: {:?}", e);
+            process::exit(-1);
+        });
     }
 }
 
@@ -109,7 +120,8 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
-    util::monitor_threads("tikv").unwrap_or_else(|e| exit_with_err(e));
+    util::monitor_threads("tikv")
+        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
 
     util::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
 }
@@ -118,7 +130,7 @@ fn check_system_config(config: &TiKvConfig) {
     if let Err(e) = util::config::check_max_open_fds(
         RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
     ) {
-        exit_with_msg(format!("{:?}", e));
+        fatal!("{:?}", e);
     }
 
     for e in util::config::check_kernel() {
@@ -138,17 +150,19 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
 
-    let f = File::create(lock_path).unwrap_or_else(|e| exit_with_err(e));
+    let f = File::create(lock_path.as_path()).unwrap_or_else(|e| {
+        fatal!("failed to create lock at {}: {:?}", lock_path.display(), e)
+    });
     if f.try_lock_exclusive().is_err() {
-        exit_with_msg(format!(
+        fatal!(
             "lock {:?} failed, maybe another instance is using this directory.",
             store_path
-        ));
+        );
     }
 
     // Initialize raftstore channels.
-    let mut event_loop =
-        store::create_event_loop(&cfg.raft_store).unwrap_or_else(|e| exit_with_err(e));
+    let mut event_loop = store::create_event_loop(&cfg.raft_store)
+        .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
     let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
@@ -158,15 +172,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
     let kv_engine = Arc::new(
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
-            .unwrap_or_else(|s| exit_with_msg(s)),
+            .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
     let mut storage = create_raft_storage(raft_router.clone(), kv_engine.clone(), &cfg.storage)
-        .unwrap_or_else(|e| exit_with_err(e));
+        .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create pd client, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
-    let (mut worker, resolver) =
-        resolve::new_resolver(pd_client.clone()).unwrap_or_else(|e| exit_with_err(e));
+    let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
+        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
@@ -179,7 +193,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         snap_status_sender,
         resolver,
         snap_mgr.clone(),
-    ).unwrap_or_else(|e| exit_with_err(e));
+    ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
     // Create raft engine.
@@ -190,7 +204,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
             raft_db_cf_opts,
-        ).unwrap_or_else(|s| exit_with_msg(s)),
+        ).unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
     );
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
@@ -201,13 +215,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         trans,
         snap_mgr,
         snap_status_receiver,
-    ).unwrap_or_else(|e| exit_with_err(e));
+    ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
     // Start storage.
     info!("start storage");
     if let Err(e) = storage.start(&cfg.storage) {
-        panic!("failed to start storage, error = {:?}", e);
+        fatal!("failed to start storage, error: {:?}", e);
     }
 
     let mut metrics_flusher = MetricsFlusher::new(
@@ -217,21 +231,24 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     // Start metrics flusher
     if let Err(e) = metrics_flusher.start() {
-        error!("failed to start metrics flusher, error = {:?}", e);
+        error!("failed to start metrics flusher, error: {:?}", e);
     }
 
     // Run server.
     server
         .start(&cfg.server)
-        .unwrap_or_else(|e| exit_with_err(e));
+        .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
     signal_handler::handle_signal(engines, &cfg.rocksdb.backup_dir);
 
     // Stop.
-    server.stop().unwrap_or_else(|e| exit_with_err(e));
+    server
+        .stop()
+        .unwrap_or_else(|e| fatal!("failed to stop server: {:?}", e));
 
     metrics_flusher.stop();
 
-    node.stop().unwrap_or_else(|e| exit_with_err(e));
+    node.stop()
+        .unwrap_or_else(|e| fatal!("failed to stop node: {:?}", e));
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!("ignore failure when stopping resolver: {:?}", e);
     }
@@ -263,17 +280,21 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
     }
 
     if let Some(labels_vec) = matches.values_of("labels") {
-        let mut labels = HashMap::new();
+        let mut labels = HashMap::default();
         labels_vec
             .map(|s| {
                 let mut parts = s.split('=');
                 let key = parts.next().unwrap().to_owned();
                 let value = match parts.next() {
-                    None => exit_with_msg(format!("invalid label: {:?}", s)),
+                    None => {
+                        eprintln!("invalid label: {:?}", s);
+                        process::exit(-1)
+                    }
                     Some(v) => v.to_owned(),
                 };
                 if parts.next().is_some() {
-                    exit_with_msg(format!("invalid label: {:?}", s));
+                    eprintln!("invalid label: {:?}", s);
+                    process::exit(-1);
                 }
                 labels.insert(key, value);
             })
@@ -282,8 +303,11 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
     }
 
     if let Some(capacity_str) = matches.value_of("capacity") {
-        let capacity = capacity_str.parse().unwrap_or_else(|e| exit_with_err(e));
-        config.raft_store.capacity.0 = capacity;
+        let capacity = capacity_str.parse().unwrap_or_else(|e| {
+            eprintln!("invalid capacity: {}", e);
+            process::exit(-1)
+        });
+        config.raft_store.capacity = capacity;
     }
 }
 
@@ -422,7 +446,7 @@ fn main() {
                     Ok(c)
                 })
                 .unwrap_or_else(|e| {
-                    eprintln!("{:?}", e);
+                    eprintln!("invalid configuration file {:?}: {}", path, e);
                     process::exit(-1);
                 })
         },
@@ -431,7 +455,7 @@ fn main() {
     overwrite_config_with_cmd_args(&mut config, &matches);
 
     if let Err(e) = config.validate() {
-        eprintln!("{:?}", e);
+        eprintln!("invalid configuration: {:?}", e);
         process::exit(-1);
     }
 
@@ -450,12 +474,13 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    let pd_client = RpcClient::new(&config.pd.endpoints).unwrap_or_else(|e| exit_with_err(e));
+    let pd_client = RpcClient::new(&config.pd.endpoints)
+        .unwrap_or_else(|e| fatal!("failed to create rpc client: {:?}", e));
     let cluster_id = pd_client
         .get_cluster_id()
-        .unwrap_or_else(|e| exit_with_err(e));
+        .unwrap_or_else(|e| fatal!("failed to get cluster id: {:?}", e));
     if cluster_id == DEFAULT_CLUSTER_ID {
-        exit_with_msg(format!("cluster id can't be {}", DEFAULT_CLUSTER_ID));
+        fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
     }
     config.server.cluster_id = cluster_id;
     info!("connect to PD cluster {}", cluster_id);

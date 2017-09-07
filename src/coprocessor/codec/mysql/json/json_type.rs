@@ -25,7 +25,7 @@ const JSON_TYPE_ARRAY: &'static [u8] = b"ARRAY";
 impl Json {
     // json_type is the implementation for
     // https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-type
-    pub fn json_type(&self) -> &[u8] {
+    pub fn json_type(&self) -> &'static [u8] {
         match *self {
             Json::Object(_) => JSON_TYPE_OBJECT,
             Json::Array(_) => JSON_TYPE_ARRAY,
