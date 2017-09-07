@@ -185,7 +185,8 @@ impl FnCall {
             ScalarFuncSig::IfString |
             ScalarFuncSig::IfDecimal |
             ScalarFuncSig::IfTime |
-            ScalarFuncSig::IfDuration => (3, 3),
+            ScalarFuncSig::IfDuration |
+            ScalarFuncSig::LikeSig => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -207,6 +208,7 @@ impl FnCall {
             ScalarFuncSig::JsonExtractSig |
             ScalarFuncSig::JsonRemoveSig |
             ScalarFuncSig::JsonMergeSig => (2, usize::MAX),
+
             ScalarFuncSig::JsonSetSig |
             ScalarFuncSig::JsonInsertSig |
             ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
@@ -450,6 +452,8 @@ dispatch_call! {
 
         CoalesceInt => coalesce_int,
         CaseWhenInt => case_when_int,
+
+        LikeSig => like,
 
         BitAndSig => bit_and,
         BitNegSig => bit_neg,
