@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::str;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use coprocessor::codec::Datum;
@@ -171,11 +170,8 @@ impl<'a> JsonFuncArgsParser<'a> {
         It: Iterator<Item = &'b Expression>,
     {
         let func = |e: &'b Expression| {
-            let bytes: Cow<'a, [u8]> = try_opt!(e.eval_string(self.ctx, self.row));
-            str::from_utf8(&bytes)
-                .map_err(Error::from)
-                .and_then(|s| parse_json_path_expr(s).map_err(Error::from))
-                .map(Some)
+            let s = try_opt!(e.eval_string_and_decode(self.ctx, self.row));
+            parse_json_path_expr(&s).map_err(Error::from).map(Some)
         };
         JsonFuncArgsParser::parse(args, func)
     }
