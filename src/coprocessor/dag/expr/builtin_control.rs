@@ -14,7 +14,8 @@
 use std::borrow::Cow;
 use super::{FnCall, Result, StatementContext};
 use coprocessor::codec::Datum;
-use coprocessor::codec::mysql::{Decimal, Duration, Time};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::dag::expr::Expression;
 
 fn if_null<F, T>(f: F) -> Result<Option<T>>
 where
@@ -44,6 +45,30 @@ where
     }
 }
 
+/// See https://dev.mysql.com/doc/refman/5.7/en/case.html
+fn case_when<'a, F, T>(
+    expr: &'a FnCall,
+    ctx: &StatementContext,
+    row: &'a [Datum],
+    f: F,
+) -> Result<Option<T>>
+where
+    F: Fn(&'a Expression) -> Result<Option<T>>,
+{
+    for chunk in expr.children.chunks(2) {
+        if chunk.len() == 1 {
+            // else statement
+            return f(&chunk[0]);
+        }
+        let cond = try!(chunk[0].eval_int(ctx, row));
+        if cond.unwrap_or(0) == 0 {
+            continue;
+        }
+        return f(&chunk[1]);
+    }
+    Ok(None)
+}
+
 impl FnCall {
     pub fn if_null_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         if_null(|i| self.children[i].eval_int(ctx, row))
@@ -65,7 +90,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         if_null(|i| self.children[i].eval_string(ctx, row))
     }
 
@@ -83,6 +108,14 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         if_null(|i| self.children[i].eval_duration(ctx, row))
+    }
+
+    pub fn if_null_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        if_null(|i| self.children[i].eval_json(ctx, row))
     }
 
     pub fn if_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -105,7 +138,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         if_condition(self, ctx, row, |i| self.children[i].eval_string(ctx, row))
     }
 
@@ -124,16 +157,76 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Duration>>> {
         if_condition(self, ctx, row, |i| self.children[i].eval_duration(ctx, row))
     }
+
+    pub fn if_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        if_condition(self, ctx, row, |i| self.children[i].eval_json(ctx, row))
+    }
+
+    pub fn case_when_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        case_when(self, ctx, row, |v| v.eval_int(ctx, row))
+    }
+
+    pub fn case_when_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+        case_when(self, ctx, row, |v| v.eval_real(ctx, row))
+    }
+
+    pub fn case_when_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        case_when(self, ctx, row, |v| v.eval_decimal(ctx, row))
+    }
+
+    pub fn case_when_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        case_when(self, ctx, row, |v| v.eval_string(ctx, row))
+    }
+
+    pub fn case_when_time<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        case_when(self, ctx, row, |v| v.eval_time(ctx, row))
+    }
+
+    pub fn case_when_duration<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Duration>>> {
+        case_when(self, ctx, row, |v| v.eval_duration(ctx, row))
+    }
+
+    pub fn case_when_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        case_when(self, ctx, row, |v| v.eval_json(ctx, row))
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use tipb::expression::ScalarFuncSig;
+    use protobuf::RepeatedField;
+    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
+
     use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::Duration;
+    use coprocessor::codec::mysql::{Duration, Json, Time};
     use coprocessor::dag::expr::{Expression, StatementContext};
     use coprocessor::dag::expr::test::{fncall_expr, str2dec};
     use coprocessor::select::xeval::evaluator::test::datum_expr;
+    use coprocessor::select::xeval::evaluator::test::col_expr;
+
 
     #[test]
     fn test_if_null() {
@@ -210,22 +303,25 @@ mod test {
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
             ),
-            // TODO: add Time related tests after Time is implementted in Expression::build
+            (
+                ScalarFuncSig::IfNullTime,
+                Datum::Null,
+                Datum::Time(Time::parse_utc_datetime("1970-01-01 12:00:00", 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime("1970-01-01 12:00:00", 6).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfNullJson,
+                Datum::Null,
+                Datum::Json(Json::String("hello".to_owned())),
+                Datum::Json(Json::String("hello".to_owned())),
+            ),
         ];
         let ctx = StatementContext::default();
         for (operator, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(branch1);
             let arg2 = datum_expr(branch2);
-            let op = Expression::build(fncall_expr(operator, &[arg1, arg2]), 0, &ctx).unwrap();
-            let res: Datum = match operator {
-                ScalarFuncSig::IfNullInt => op.eval_int(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullReal => op.eval_real(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullString => op.eval_string(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullDecimal => op.eval_decimal(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullTime => op.eval_time(&ctx, &[]).unwrap().into(),
-                ScalarFuncSig::IfNullDuration => op.eval_duration(&ctx, &[]).unwrap().into(),
-                _ => unreachable!(),
-            };
+            let op = Expression::build(fncall_expr(operator, &[arg1, arg2]), &ctx).unwrap();
+            let res = op.eval(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -338,49 +434,104 @@ mod test {
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
                 Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
             ),
-            // TODO: add Time related tests after Time is implementted in Expression::build
+            (
+                ScalarFuncSig::IfTime,
+                Datum::I64(0),
+                Datum::Time(Time::parse_utc_datetime("1970-01-01 12:00:00", 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime("1971-01-01 12:00:00", 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime("1971-01-01 12:00:00", 6).unwrap()),
+            ),
+            (
+                ScalarFuncSig::IfJson,
+                Datum::I64(0),
+                Datum::Json(Json::I64(300)),
+                Datum::Json(Json::String("hello".to_owned())),
+                Datum::Json(Json::String("hello".to_owned())),
+            ),
         ];
         let ctx = StatementContext::default();
         for (operator, cond, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(cond);
             let arg2 = datum_expr(branch1);
             let arg3 = datum_expr(branch2);
-            let expected = Expression::build(datum_expr(exp), 0, &ctx).unwrap();
-            let op =
-                Expression::build(fncall_expr(operator, &[arg1, arg2, arg3]), 0, &ctx).unwrap();
-            match operator {
-                ScalarFuncSig::IfInt => {
-                    let lhs = op.eval_int(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_int(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfReal => {
-                    let lhs = op.eval_real(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_real(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfString => {
-                    let lhs = op.eval_string(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_string(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfDecimal => {
-                    let lhs = op.eval_decimal(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_decimal(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfTime => {
-                    let lhs = op.eval_time(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_time(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                ScalarFuncSig::IfDuration => {
-                    let lhs = op.eval_duration(&ctx, &[]).unwrap();
-                    let rhs = expected.eval_duration(&ctx, &[]).unwrap();
-                    assert_eq!(lhs, rhs);
-                }
-                _ => unreachable!(),
-            }
+            let expected = Expression::build(datum_expr(exp), &ctx).unwrap();
+            let op = Expression::build(fncall_expr(operator, &[arg1, arg2, arg3]), &ctx).unwrap();
+            let lhs = op.eval(&ctx, &[]).unwrap();
+            let rhs = expected.eval(&ctx, &[]).unwrap();
+            assert_eq!(lhs, rhs);
         }
     }
+
+    fn cond(ok: bool) -> Datum {
+        if ok {
+            Datum::I64(1)
+        } else {
+            Datum::I64(0)
+        }
+    }
+
+    #[test]
+    fn test_case_when() {
+        let dec1 = Datum::Dec("1.1".parse().unwrap());
+        let dec2 = Datum::Dec("2.2".parse().unwrap());
+        let dur1 = Datum::Dur(Duration::parse(b"01:00:00", 0).unwrap());
+        let dur2 = Datum::Dur(Duration::parse(b"12:00:12", 0).unwrap());
+        let time1 = Datum::Time(Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap());
+        let s = "你好".as_bytes().to_owned();
+
+        let cases = vec![
+            (
+                ScalarFuncSig::CaseWhenInt,
+                vec![cond(true), Datum::I64(3), cond(true), Datum::I64(5)],
+                Datum::I64(3),
+            ),
+            (
+                ScalarFuncSig::CaseWhenDecimal,
+                vec![cond(false), dec1, cond(true), dec2.clone()],
+                dec2,
+            ),
+            (
+                ScalarFuncSig::CaseWhenDuration,
+                vec![Datum::Null, dur1, cond(true), dur2.clone()],
+                dur2,
+            ),
+            (ScalarFuncSig::CaseWhenTime, vec![time1.clone()], time1),
+            (
+                ScalarFuncSig::CaseWhenReal,
+                vec![cond(false), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::CaseWhenString,
+                vec![cond(true), Datum::Bytes(s.clone())],
+                Datum::Bytes(s),
+            ),
+            (
+                ScalarFuncSig::CaseWhenJson,
+                vec![
+                    cond(false),
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::Json(Json::I64(23)),
+                ],
+                Datum::Json(Json::I64(23)),
+            ),
+        ];
+
+        let ctx = StatementContext::default();
+
+        for (sig, row, exp) in cases {
+            let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
+            let mut expr = Expr::new();
+            expr.set_tp(ExprType::ScalarFunc);
+            expr.set_sig(sig);
+
+            expr.set_children(RepeatedField::from_vec(children));
+            let e = Expression::build(expr, &ctx).unwrap();
+            let res = e.eval(&ctx, &row).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
 }

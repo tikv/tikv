@@ -18,6 +18,7 @@
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
+#![feature(iterator_step_by)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
@@ -45,7 +46,6 @@ extern crate rocksdb;
 extern crate kvproto;
 extern crate time;
 extern crate tipb;
-extern crate threadpool;
 extern crate num;
 extern crate libc;
 extern crate crc;
