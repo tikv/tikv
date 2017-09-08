@@ -20,7 +20,6 @@ use std::time::Instant;
 use std::result;
 use std::sync::{Arc, RwLock};
 
-use threadpool::ThreadPool;
 use mio::Token;
 use futures::{stream, Future, Stream};
 use grpc::{ChannelBuilder, Environment, WriteFlags};
@@ -29,6 +28,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::worker::Runnable;
 use util::buf::PipeBuffer;
 use util::collections::{HashMap, HashMapEntry as Entry};
@@ -179,7 +179,7 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     env: Arc<Environment>,
     snap_mgr: SnapManager,
     files: HashMap<Token, (Box<Snapshot>, RaftMessage)>,
-    pool: ThreadPool,
+    pool: ThreadPool<DefaultContext>,
     raft_router: R,
 }
 
@@ -189,7 +189,9 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
             env: env,
             snap_mgr: snap_mgr,
             files: map![],
-            pool: ThreadPool::new_with_name(thd_name!("snap sender"), DEFAULT_SENDER_POOL_SIZE),
+            pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap sender"))
+                .thread_count(DEFAULT_SENDER_POOL_SIZE)
+                .build(),
             raft_router: r,
         }
     }
@@ -294,7 +296,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
                 let env = self.env.clone();
                 let mgr = self.snap_mgr.clone();
-                self.pool.execute(move || {
+                self.pool.execute(move |_| {
                     let res = send_snap(env, mgr, addr, msg);
                     if res.is_err() {
                         error!("failed to send snap to {}: {:?}", addr, res);
