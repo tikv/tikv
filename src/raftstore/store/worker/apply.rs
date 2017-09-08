@@ -35,7 +35,7 @@ use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::store::msg::Callback;
-use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot};
+use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
                                      write_peer_state};
 use raftstore::store::peer::{check_epoch, parse_data_at, Peer};
@@ -247,15 +247,6 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
     cb(resp);
 }
 
-fn has_exclusive_request(reqs: &[Request]) -> bool {
-    for req in reqs {
-        if req.has_delete_range() {
-            return true;
-        }
-    }
-    false
-}
-
 fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     // When encounter ComputeHash cmd, we must flush the write batch to engine immediately.
     if cmd.has_admin_request() &&
@@ -269,8 +260,12 @@ fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
         return true;
     }
 
-    if has_exclusive_request(cmd.get_requests()) {
-        return true;
+    // When encounter DeleteRange command, we must flush current write batch to engine first,
+    // because current write batch may contains keys are covered by DeleteRange.
+    for req in cmd.get_requests() {
+        if req.has_delete_range() {
+            return true;
+        }
     }
 
     false
@@ -1023,7 +1018,7 @@ impl ApplyDelegate {
             let mut resp = try!(match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut ranges),
+                CmdType::DeleteRange => self.handle_delete_range(req, &mut ranges),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1129,12 +1124,7 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_delete_range(
-        &mut self,
-        ctx: &ExecContext,
-        req: &Request,
-        ranges: &mut Vec<Range>,
-    ) -> Result<Response> {
+    fn handle_delete_range(&mut self, req: &Request, ranges: &mut Vec<Range>) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         if !e_key.is_empty() && s_key >= e_key {
@@ -1177,23 +1167,11 @@ impl ApplyDelegate {
             });
 
         // Delete all remaining keys.
-        try!(self.engine.scan_cf(
+        try!(util::delete_in_range_cf(
+            &self.engine,
             cf,
             &start_key,
-            &end_key,
-            false,
-            &mut |key, _| {
-                ctx.wb.delete_cf(handle, key).unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete range [{}, {}): {:?}",
-                        self.tag,
-                        escape(&start_key),
-                        escape(&end_key),
-                        e
-                    )
-                });
-                Ok(true)
-            }
+            &end_key
         ));
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));

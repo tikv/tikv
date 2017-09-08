@@ -111,20 +111,13 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
     let mut wb = WriteBatch::new();
     it.seek(start_key.into());
     while it.valid() {
-        {
-            let key = it.key();
-            if key >= end_key {
-                break;
-            }
-
-            try!(wb.delete_cf(handle, key));
-            if wb.count() == MAX_DELETE_KEYS_COUNT {
-                // Can't use write_without_wal here.
-                // Otherwise it may cause dirty data when applying snapshot.
-                try!(db.write(wb));
-                wb = WriteBatch::new();
-            }
-        };
+        try!(wb.delete_cf(handle, it.key()));
+        if wb.count() == MAX_DELETE_KEYS_COUNT {
+            // Can't use write_without_wal here.
+            // Otherwise it may cause dirty data when applying snapshot.
+            try!(db.write(wb));
+            wb = WriteBatch::new();
+        }
 
         if !it.next() {
             break;
