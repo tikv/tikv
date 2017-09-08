@@ -66,6 +66,11 @@ fn track_hook(p: &PanicInfo) {
 
 /// Exit the whole process when panic.
 pub fn set_exit_hook() {
+    // HACK! New a backtrace ahead for caching necessary elf sections of this
+    // tikv-server, in case it can not open more files during panicking
+    // which leads to no stack info (0x5648bdfe4ff2 - <no info>).
+    Backtrace::new();
+
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &PanicInfo| {
         if log_enabled!(LogLevel::Error) {
