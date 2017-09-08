@@ -1167,7 +1167,7 @@ impl ApplyDelegate {
             });
 
         // Delete all remaining keys.
-        try!(util::delete_in_range_cf(
+        try!(util::delete_all_in_range_cf(
             &self.engine,
             cf,
             &start_key,
