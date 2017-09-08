@@ -212,8 +212,11 @@ where
 
     pub fn stop(&mut self) -> Result<(), String> {
         self.stop_flag.store(true, AtomicOrdering::SeqCst);
-        let &(_, ref cvar) = &*self.task_pool;
-        cvar.notify_all();
+        let &(ref lock, ref cvar) = &*self.task_pool;
+        {
+            let _guard = lock.lock().unwrap();
+            cvar.notify_all();
+        }
         let mut err_msg = String::new();
         for t in self.threads.drain(..) {
             if let Err(e) = t.join() {
