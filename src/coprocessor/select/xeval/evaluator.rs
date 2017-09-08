@@ -570,7 +570,7 @@ impl Evaluator {
         let mut children = children.into_iter();
         let first = try!(children.next().unwrap().cast_as_json());
         let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json()).collect());
-        Ok(Datum::Json(first.merge(suffixes)))
+        Ok(Datum::Json(first.merge_all(suffixes)))
     }
 
     fn eval_json_object(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
