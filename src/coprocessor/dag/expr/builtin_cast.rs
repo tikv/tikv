@@ -267,7 +267,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
             let uval = val as u64;
@@ -283,7 +283,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -294,7 +294,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -305,7 +305,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         self.produce_str_with_specified_tp(ctx, val).map(Some)
     }
@@ -314,7 +314,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let s = format!("{}", val);
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -326,7 +326,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let s = format!("{}", val);
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -337,7 +337,7 @@ impl FnCall {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.to_string();
         self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
@@ -505,7 +505,10 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let j = if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+        let flag = self.children[0].get_tp().get_flag();
+        let j = if mysql::has_is_boolean_flag(flag) {
+            Json::Boolean(val != 0)
+        } else if mysql::has_unsigned_flag(flag) {
             Json::U64(val as u64)
         } else {
             Json::I64(val)
@@ -541,7 +544,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try!(String::from_utf8(val.into_owned()));
-        if self.tp.get_decimal() == 0 {
+        if mysql::has_parse_to_json_flag(self.tp.get_flag()) {
             let j: Json = try!(s.parse());
             Ok(Some(Cow::Owned(j)))
         } else {
@@ -602,8 +605,8 @@ impl FnCall {
     fn produce_str_with_specified_tp<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
-        s: Cow<'a, Vec<u8>>,
-    ) -> Result<Cow<'a, Vec<u8>>> {
+        s: Cow<'a, [u8]>,
+    ) -> Result<Cow<'a, [u8]>> {
         let flen = self.tp.get_flen();
         let chs = self.tp.get_charset();
         if flen < 0 {
@@ -1609,6 +1612,16 @@ mod test {
                 vec![Datum::U64(32)],
                 Some(Json::U64(32)),
             ),
+            (
+                Some(types::UNSIGNED_FLAG | types::IS_BOOLEAN_FLAG),
+                vec![Datum::U64(1)],
+                Some(Json::Boolean(true)),
+            ),
+            (
+                Some(types::UNSIGNED_FLAG | types::IS_BOOLEAN_FLAG),
+                vec![Datum::I64(0)],
+                Some(Json::Boolean(false)),
+            ),
             (None, vec![Datum::I64(-1)], Some(Json::I64(-1))),
             (None, vec![Datum::Null], None),
         ];
@@ -1680,21 +1693,26 @@ mod test {
         ctx.ignore_truncate = true;
         let cases = vec![
             (
-                1,
+                false,
                 vec![Datum::Bytes(b"[1,2,3]".to_vec())],
                 Some(Json::String(String::from("[1,2,3]"))),
             ),
             (
-                0,
+                true,
                 vec![Datum::Bytes(b"[1,2,3]".to_vec())],
                 Some(Json::Array(vec![Json::I64(1), Json::I64(2), Json::I64(3)])),
             ),
-            (0, vec![Datum::Null], None),
+            (false, vec![Datum::Null], None),
+            (true, vec![Datum::Null], None),
         ];
-        for (decimal, cols, exp) in cases {
+        for (by_parse, cols, exp) in cases {
             let col_expr = col_expr(0, types::STRING as i32);
             let mut ex = fncall_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
-            ex.mut_field_type().set_decimal(decimal);
+            if by_parse {
+                let mut flag = ex.get_field_type().get_flag();
+                flag |= types::PARSE_TO_JSON_FLAG as u32;
+                ex.mut_field_type().set_flag(flag);
+            }
             let e = Expression::build(ex, &ctx).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
             if exp.is_none() {

@@ -149,6 +149,11 @@ impl FnCall {
         Ok(Some(arg.is_none() as i64))
     }
 
+    pub fn json_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        let arg = try!(self.children[0].eval_json(ctx, row));
+        Ok(Some(arg.is_none() as i64))
+    }
+
     pub fn bit_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
