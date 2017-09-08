@@ -12,27 +12,42 @@
 // limitations under the License.
 
 use std::usize;
-use std::time;
+use std::time::Duration;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{Builder, JoinHandle};
+use std::marker::PhantomData;
 use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::fmt::Write;
 
 pub const DEFAULT_TASKS_PER_TICK: usize = 10000;
-const WORKER_WAIT_TIME: u64 = 2000; // ms
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
+const DEFAULT_THREAD_COUNT: usize = 1;
+const NAP_SECS: u64 = 1;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 
 pub trait Context: Send {
-    fn on_task_started(&mut self);
-    fn on_task_finished(&mut self);
-    fn on_tick(&mut self);
+    fn on_task_started(&mut self) {}
+    fn on_task_finished(&mut self) {}
+    fn on_tick(&mut self) {}
 }
+
+#[derive(Default)]
+pub struct DefaultContext;
+
+impl Context for DefaultContext {}
 
 pub trait ContextFactory<Ctx: Context> {
     fn create(&self) -> Ctx;
+}
+
+pub struct DefaultContextFactory;
+
+impl<C: Context + Default> ContextFactory<C> for DefaultContextFactory {
+    fn create(&self) -> C {
+        C::default()
+    }
 }
 
 pub struct Task<C> {
@@ -77,6 +92,51 @@ impl<C: Context> FifoQueue<C> {
     }
 }
 
+pub struct ThreadPoolBuilder<C, F> {
+    name: String,
+    thread_count: usize,
+    tasks_per_tick: usize,
+    factory: F,
+    _ctx: PhantomData<C>,
+}
+
+impl<C: Context + Default + 'static> ThreadPoolBuilder<C, DefaultContextFactory> {
+    pub fn with_default_factory(name: String) -> ThreadPoolBuilder<C, DefaultContextFactory> {
+        ThreadPoolBuilder::new(name, DefaultContextFactory)
+    }
+}
+
+impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
+    pub fn new(name: String, factory: F) -> ThreadPoolBuilder<C, F> {
+        ThreadPoolBuilder {
+            name: name,
+            thread_count: DEFAULT_THREAD_COUNT,
+            tasks_per_tick: DEFAULT_TASKS_PER_TICK,
+            factory: factory,
+            _ctx: PhantomData,
+        }
+    }
+
+    pub fn thread_count(mut self, count: usize) -> ThreadPoolBuilder<C, F> {
+        self.thread_count = count;
+        self
+    }
+
+    pub fn tasks_per_tick(mut self, count: usize) -> ThreadPoolBuilder<C, F> {
+        self.tasks_per_tick = count;
+        self
+    }
+
+    pub fn build(self) -> ThreadPool<C> {
+        ThreadPool::new(
+            self.name,
+            self.thread_count,
+            self.tasks_per_tick,
+            self.factory,
+        )
+    }
+}
+
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it will get a task from the pool
@@ -92,7 +152,7 @@ impl<Ctx> ThreadPool<Ctx>
 where
     Ctx: Context + 'static,
 {
-    pub fn new<C: ContextFactory<Ctx>>(
+    fn new<C: ContextFactory<Ctx>>(
         name: String,
         num_threads: usize,
         tasks_per_tick: usize,
@@ -127,7 +187,7 @@ where
         }
     }
 
-    pub fn execute<F>(&mut self, job: F)
+    pub fn execute<F>(&self, job: F)
     where
         F: FnOnce(&mut Ctx) + Send + 'static,
         Ctx: Context,
@@ -137,9 +197,11 @@ where
         }
         let task = Task::new(job);
         let &(ref lock, ref cvar) = &*self.task_pool;
-        let mut queue = lock.lock().unwrap();
-        queue.push(task);
-        cvar.notify_one();
+        {
+            let mut queue = lock.lock().unwrap();
+            queue.push(task);
+            cvar.notify_one();
+        }
         self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
     }
 
@@ -196,20 +258,24 @@ where
         }
     }
 
-    fn get_task_timeout(&mut self, timeout: time::Duration) -> Option<Task<C>> {
+    fn get_task_timeout(&mut self, timeout: Option<Duration>) -> Option<Task<C>> {
         let &(ref lock, ref cvar) = &*self.task_queue;
         let mut task_queue = lock.lock().unwrap();
 
         if let Some(task) = task_queue.pop() {
             return Some(task);
         }
-        let (mut q, _) = cvar.wait_timeout(task_queue, timeout).unwrap();
+        let mut q = match timeout {
+            Some(t) => cvar.wait_timeout(task_queue, t).unwrap().0,
+            None => cvar.wait(task_queue).unwrap(),
+        };
         q.pop()
     }
 
     fn run(&mut self) {
+        let mut timeout = Some(Duration::from_secs(NAP_SECS));
         while !self.stop_flag.load(AtomicOrdering::SeqCst) {
-            if let Some(t) = self.get_task_timeout(time::Duration::from_millis(WORKER_WAIT_TIME)) {
+            if let Some(t) = self.get_task_timeout(timeout) {
                 self.ctx.on_task_started();
                 (t.task).call_once((&mut self.ctx,));
                 self.ctx.on_task_finished();
@@ -219,9 +285,11 @@ where
                     self.task_counter = 0;
                     self.ctx.on_tick();
                 }
+                timeout = Some(Duration::from_secs(NAP_SECS));
             } else {
                 self.task_counter = 0;
                 self.ctx.on_tick();
+                timeout = None;
             }
         }
     }
@@ -229,37 +297,17 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Context, ContextFactory, ThreadPool, DEFAULT_TASKS_PER_TICK};
+    use super::*;
+
     use std::time::Duration;
     use std::sync::mpsc::{channel, Sender};
     use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicIsize, Ordering};
 
-    #[derive(Clone)]
-    struct DummyContext {}
-
-    unsafe impl Send for DummyContext {}
-
-    impl Context for DummyContext {
-        fn on_task_started(&mut self) {}
-        fn on_task_finished(&mut self) {}
-        fn on_tick(&mut self) {}
-    }
-
-    struct DummyContextFactory {}
-
-    impl ContextFactory<DummyContext> for DummyContextFactory {
-        fn create(&self) -> DummyContext {
-            DummyContext {}
-        }
-    }
-
     #[test]
     fn test_get_task_count() {
         let name = thd_name!("test_get_task_count");
-        let concurrency = 1;
-        let f = DummyContextFactory {};
-        let mut task_pool = ThreadPool::new(name, concurrency, DEFAULT_TASKS_PER_TICK, f);
+        let mut task_pool = ThreadPoolBuilder::with_default_factory(name).build();
         let (tx, rx) = channel();
         let (ftx, frx) = channel();
         let receiver = Arc::new(Mutex::new(rx));
@@ -269,7 +317,7 @@ mod test {
         for gid in 0..group_num {
             let rxer = receiver.clone();
             let ftx = ftx.clone();
-            task_pool.execute(move |_: &mut DummyContext| {
+            task_pool.execute(move |_: &mut DefaultContext| {
                 let rx = rxer.lock().unwrap();
                 let id = rx.recv_timeout(timeout).unwrap();
                 assert_eq!(id, gid);
@@ -297,7 +345,7 @@ mod test {
     fn test_task_context() {
         struct TestContext {
             counter: Arc<AtomicIsize>,
-            tx: Sender<isize>,
+            tx: Sender<()>,
         }
 
         unsafe impl Send for TestContext {}
@@ -308,14 +356,14 @@ mod test {
             }
             fn on_task_finished(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
-                self.tx.send(self.counter.load(Ordering::SeqCst)).unwrap();
+                self.tx.send(()).unwrap();
             }
             fn on_tick(&mut self) {}
         }
 
         struct TestContextFactory {
             counter: Arc<AtomicIsize>,
-            tx: Sender<isize>,
+            tx: Sender<()>,
         }
 
         impl ContextFactory<TestContext> for TestContextFactory {
@@ -333,29 +381,25 @@ mod test {
             counter: Arc::new(AtomicIsize::new(0)),
             tx: tx,
         };
-
+        let ctx = f.create();
         let name = thd_name!("test_tasks_with_contexts");
-        let concurrency = 5;
-        let mut task_pool = ThreadPool::new(name, concurrency, DEFAULT_TASKS_PER_TICK, f);
+        let mut task_pool = ThreadPoolBuilder::new(name, f).thread_count(5).build();
 
         for _ in 0..10 {
             task_pool.execute(move |_: &mut TestContext| {});
         }
-        let mut fin: isize = -1;
-        let mut count = 0;
-        while count != 10 {
-            fin = rx.recv_timeout(Duration::from_millis(20)).unwrap();
-            count += 1;
+        for _ in 0..10 {
+            rx.recv_timeout(Duration::from_millis(20)).unwrap();
         }
         task_pool.stop().unwrap();
-        assert_eq!(fin, 20);
+        assert_eq!(ctx.counter.load(Ordering::SeqCst), 20);
     }
 
     #[test]
     fn test_task_tick() {
         struct TestContext {
             counter: Arc<AtomicIsize>,
-            tx: Sender<isize>,
+            tx: Sender<()>,
         }
 
         unsafe impl Send for TestContext {}
@@ -365,13 +409,13 @@ mod test {
             fn on_task_finished(&mut self) {}
             fn on_tick(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
-                self.tx.send(self.counter.load(Ordering::SeqCst)).unwrap();
+                let _ = self.tx.send(());
             }
         }
 
         struct TestContextFactory {
             counter: Arc<AtomicIsize>,
-            tx: Sender<isize>,
+            tx: Sender<()>,
         }
 
         impl ContextFactory<TestContext> for TestContextFactory {
@@ -389,19 +433,21 @@ mod test {
             counter: Arc::new(AtomicIsize::new(0)),
             tx: tx,
         };
-
+        let ctx = f.create();
         let name = thd_name!("test_tasks_tick");
-        let concurrency = 1;
-        let mut task_pool = ThreadPool::new(name, concurrency, 1, f);
+        let mut task_pool = ThreadPoolBuilder::new(name, f)
+            .thread_count(5)
+            .tasks_per_tick(1)
+            .build();
 
         for _ in 0..10 {
             task_pool.execute(move |_: &mut TestContext| {});
         }
-        let mut fin: isize = -1;
         for _ in 0..10 {
-            fin = rx.recv_timeout(Duration::from_millis(20)).unwrap();
+            rx.recv_timeout(Duration::from_millis(20)).unwrap();
         }
         task_pool.stop().unwrap();
-        assert_eq!(fin, 10);
+        // `on_tick` may be called even if there is no task.
+        assert!(ctx.counter.load(Ordering::SeqCst) >= 10);
     }
 }

@@ -22,8 +22,8 @@ use std::str;
 use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
-use threadpool::ThreadPool;
 
+use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::worker::Runnable;
 use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot};
@@ -267,14 +267,16 @@ impl SnapContext {
 }
 
 pub struct Runner {
-    pool: ThreadPool,
+    pool: ThreadPool<DefaultContext>,
     ctx: SnapContext,
 }
 
 impl Runner {
     pub fn new(kv_db: Arc<DB>, raft_db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
         Runner {
-            pool: ThreadPool::new_with_name(thd_name!("snap generator"), GENERATE_POOL_SIZE),
+            pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap generator"))
+                .thread_count(GENERATE_POOL_SIZE)
+                .build(),
             ctx: SnapContext {
                 kv_db: kv_db,
                 raft_db: raft_db,
@@ -296,7 +298,7 @@ impl Runnable<Task> for Runner {
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
                 self.pool
-                    .execute(move || ctx.handle_gen(region_id, notifier))
+                    .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
             Task::Apply { region_id, status } => self.ctx.handle_apply(region_id, status),
             Task::Destroy {

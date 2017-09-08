@@ -55,7 +55,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 
 macro_rules! cf_config {
     ($name:ident) => {
-        #[derive(Clone, Serialize, Deserialize)]
+        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
@@ -136,7 +136,7 @@ impl Default for DefaultCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(32),
+            target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -180,7 +180,7 @@ impl Default for WriteCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(32),
+            target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -226,7 +226,7 @@ impl Default for LockCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
-            target_file_size_base: ReadableSize::mb(32),
+            target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -265,7 +265,7 @@ impl Default for RaftCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
-            target_file_size_base: ReadableSize::mb(32),
+            target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -287,7 +287,7 @@ impl RaftCfConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
@@ -441,7 +441,7 @@ impl Default for RaftDefaultCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(32),
+            target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -466,7 +466,7 @@ impl RaftDefaultCfConfig {
 // When construct Options, options.env is set to same singleton Env::Default() object.
 // If we set same env parameter in different instance, we may overwrite other instance's config.
 // So we only set max_background_jobs in default rocksdb.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
@@ -567,7 +567,7 @@ impl RaftDbConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct PdConfig {
@@ -586,7 +586,7 @@ impl PdConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MetricConfig {
@@ -617,7 +617,7 @@ pub enum LogLevel {
     Off,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
