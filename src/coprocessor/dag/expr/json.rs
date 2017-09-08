@@ -59,7 +59,7 @@ impl FnCall {
         let mut pairs = BTreeMap::new();
         let parser = JsonFuncArgsParser::new(ctx, row);
         for chunk in self.children.chunks(2) {
-            let key = try_opt!(parser.get_string(&chunk[0]));
+            let key = try_opt!(chunk[0].eval_string_and_decode(ctx, row)).into_owned();
             let val = try_opt!(parser.get_json(&chunk[1]));
             pairs.insert(key, val);
         }
@@ -181,11 +181,6 @@ impl<'a> JsonFuncArgsParser<'a> {
     fn get_json_not_none(&self, e: &Expression) -> Result<Option<Json>> {
         let j = try_opt!(e.eval_json(self.ctx, self.row)).into_owned();
         Ok(Some(j))
-    }
-
-    fn get_string(&self, e: &Expression) -> Result<Option<String>> {
-        let bytes = try_opt!(e.eval_string(self.ctx, self.row)).into_owned();
-        String::from_utf8(bytes).map(Some).map_err(Error::from)
     }
 }
 

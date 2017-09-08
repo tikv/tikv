@@ -56,21 +56,6 @@ impl Json {
             (obj, suffix) => Json::Array(vec![obj, suffix]),
         }
     }
-
-    pub fn merge_all<It: IntoIterator<Item = Json>>(self, suffixes: It) -> Json {
-        let mut iter = suffixes.into_iter();
-        let res = match iter.next() {
-            Some(j) => self.merge(j),
-            None => {
-                return match self {
-                    Json::Object(obj) => Json::Object(obj),
-                    Json::Array(array) => Json::Array(array),
-                    json => Json::Array(vec![json]),
-                };
-            }
-        };
-        iter.fold(res, Json::merge)
-    }
 }
 
 #[cfg(test)]
@@ -80,61 +65,37 @@ mod test {
     #[test]
     fn test_merge() {
         let test_cases = vec![
-            (r#"{"a": 1}"#, r#"{"b": 2}"#, r#"{"a": 1, "b": 2}"#),
-            (r#"{"a": 1}"#, r#"{"a": 2}"#, r#"{"a": [1, 2]}"#),
-            (r#"{"a": 1}"#, r#"{"a": [2, 3]}"#, r#"{"a": [1, 2, 3]}"#),
-            (
+            vec![r#"{"a": 1}"#, r#"{"b": 2}"#, r#"{"a": 1, "b": 2}"#],
+            vec![r#"{"a": 1}"#, r#"{"a": 2}"#, r#"{"a": [1, 2]}"#],
+            vec![r#"{"a": 1}"#, r#"{"a": [2, 3]}"#, r#"{"a": [1, 2, 3]}"#],
+            vec![
                 r#"{"a": 1}"#,
                 r#"{"a": {"b": [2, 3]}}"#,
                 r#"{"a": [1, {"b": [2, 3]}]}"#,
-            ),
-            (
+            ],
+            vec![
                 r#"{"a": {"b": [2, 3]}}"#,
                 r#"{"a": 1}"#,
                 r#"{"a": [{"b": [2, 3]}, 1]}"#,
-            ),
-            (
+            ],
+            vec![
                 r#"{"a": [1, 2]}"#,
                 r#"{"a": {"b": [3, 4]}}"#,
                 r#"{"a": [1, 2, {"b": [3, 4]}]}"#,
-            ),
-            (
+            ],
+            vec![
                 r#"{"b": {"c": 2}}"#,
                 r#"{"a": 1, "b": {"d": 1}}"#,
                 r#"{"a": 1, "b": {"c": 2, "d": 1}}"#,
-            ),
-            (r#"[1]"#, r#"[2]"#, r#"[1, 2]"#),
-            (r#"{"a": 1}"#, r#"[1]"#, r#"[{"a": 1}, 1]"#),
-            (r#"[1]"#, r#"{"a": 1}"#, r#"[1, {"a": 1}]"#),
-            (r#"{"a": 1}"#, r#"4"#, r#"[{"a": 1}, 4]"#),
-            (r#"[1]"#, r#"4"#, r#"[1, 4]"#),
-            (r#"4"#, r#"{"a": 1}"#, r#"[4, {"a": 1}]"#),
-            (r#"1"#, r#"[4]"#, r#"[1, 4]"#),
-            (r#"4"#, r#"1"#, r#"[4, 1]"#),
-        ];
-        for (left, right, expect_str) in test_cases {
-            let left_json: Json = left.parse().unwrap();
-            let right_json: Json = right.parse().unwrap();
-            let get = left_json.merge(right_json);
-            let expect: Json = expect_str.parse().unwrap();
-            assert_eq!(get, expect);
-        }
-    }
-
-
-
-    #[test]
-    fn test_merge_all() {
-        let test_cases = vec![
-            vec![r#"{"a": 1}"#, r#"{"b": 2}"#, r#"{"a": 1, "b": 2}"#],
-            vec![r#"{"a": 1}"#, r#"{"a": 2}"#, r#"{"a": [1, 2]}"#],
+            ],
             vec![r#"[1]"#, r#"[2]"#, r#"[1, 2]"#],
             vec![r#"{"a": 1}"#, r#"[1]"#, r#"[{"a": 1}, 1]"#],
             vec![r#"[1]"#, r#"{"a": 1}"#, r#"[1, {"a": 1}]"#],
             vec![r#"{"a": 1}"#, r#"4"#, r#"[{"a": 1}, 4]"#],
             vec![r#"[1]"#, r#"4"#, r#"[1, 4]"#],
             vec![r#"4"#, r#"{"a": 1}"#, r#"[4, {"a": 1}]"#],
-            vec!["4", "1", "[4, 1]"],
+            vec![r#"1"#, r#"[4]"#, r#"[1, 4]"#],
+            vec![r#"4"#, r#"1"#, r#"[4, 1]"#],
             vec!["1", "2", "3", "[1, 2, 3]"],
             vec!["[1, 2]", "3", "[4, 5, 6]", "[1, 2, 3, 4, 5, 6]"],
             vec![
@@ -152,11 +113,11 @@ mod test {
             ],
         ];
         for case in test_cases {
-            let lhs: Json = case[0].parse().unwrap();
-            let args = case[1..case.len() - 1]
+            let base: Json = case[0].parse().unwrap();
+            let res = case[1..case.len() - 1]
                 .iter()
-                .map(|s| s.parse::<Json>().unwrap());
-            let res = lhs.merge_all(args);
+                .map(|s| s.parse().unwrap())
+                .fold(base, Json::merge);
             let expect: Json = case[case.len() - 1].parse().unwrap();
             assert_eq!(res, expect);
         }
