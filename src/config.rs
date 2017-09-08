@@ -55,7 +55,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 
 macro_rules! cf_config {
     ($name:ident) => {
-        #[derive(Clone, Serialize, Deserialize)]
+        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
@@ -287,7 +287,7 @@ impl RaftCfConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
@@ -463,7 +463,7 @@ impl RaftDefaultCfConfig {
 // When construct Options, options.env is set to same singleton Env::Default() object.
 // If we set same env parameter in different instance, we may overwrite other instance's config.
 // So we only set max_background_jobs in default rocksdb.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
@@ -564,7 +564,7 @@ impl RaftDbConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct PdConfig {
@@ -583,7 +583,7 @@ impl PdConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MetricConfig {
@@ -614,7 +614,7 @@ pub enum LogLevel {
     Off,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
