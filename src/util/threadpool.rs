@@ -18,7 +18,7 @@ use std::thread::{Builder, JoinHandle};
 use std::marker::PhantomData;
 use std::boxed::FnBox;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::fmt::Write;
 
 pub const DEFAULT_TASKS_PER_TICK: usize = 10000;
@@ -137,13 +137,17 @@ impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
     }
 }
 
+struct ScheduleState<Ctx> {
+    queue: FifoQueue<Ctx>,
+    stopped: bool,
+}
+
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
 pub struct ThreadPool<Ctx> {
-    stop_flag: Arc<AtomicBool>,
-    task_pool: Arc<(Mutex<FifoQueue<Ctx>>, Condvar)>,
+    state: Arc<(Mutex<ScheduleState<Ctx>>, Condvar)>,
     threads: Vec<JoinHandle<()>>,
     task_count: Arc<AtomicUsize>,
 }
@@ -159,20 +163,22 @@ where
         f: C,
     ) -> ThreadPool<Ctx> {
         assert!(num_threads >= 1);
-        let task_pool = Arc::new((Mutex::new(FifoQueue::new()), Condvar::new()));
+        let state = ScheduleState {
+            queue: FifoQueue::new(),
+            stopped: false,
+        };
+        let state = Arc::new((Mutex::new(state), Condvar::new()));
         let mut threads = Vec::with_capacity(num_threads);
         let task_count = Arc::new(AtomicUsize::new(0));
-        let stop_flag = Arc::new(AtomicBool::new(false));
         // Threadpool threads
         for _ in 0..num_threads {
-            let tasks = task_pool.clone();
+            let state = state.clone();
             let task_num = task_count.clone();
             let ctx = f.create();
-            let stop = stop_flag.clone();
             let thread = Builder::new()
                 .name(name.clone())
                 .spawn(move || {
-                    let mut worker = Worker::new(tasks, task_num, tasks_per_tick, stop, ctx);
+                    let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
                     worker.run();
                 })
                 .unwrap();
@@ -180,8 +186,7 @@ where
         }
 
         ThreadPool {
-            task_pool: task_pool,
-            stop_flag: stop_flag,
+            state: state,
             threads: threads,
             task_count: task_count,
         }
@@ -192,14 +197,14 @@ where
         F: FnOnce(&mut Ctx) + Send + 'static,
         Ctx: Context,
     {
-        if self.stop_flag.load(AtomicOrdering::SeqCst) {
-            return;
-        }
         let task = Task::new(job);
-        let &(ref lock, ref cvar) = &*self.task_pool;
+        let &(ref lock, ref cvar) = &*self.state;
         {
-            let mut queue = lock.lock().unwrap();
-            queue.push(task);
+            let mut state = lock.lock().unwrap();
+            if state.stopped {
+                return;
+            }
+            state.queue.push(task);
             cvar.notify_one();
         }
         self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
@@ -211,10 +216,10 @@ where
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        self.stop_flag.store(true, AtomicOrdering::SeqCst);
-        let &(ref lock, ref cvar) = &*self.task_pool;
+        let &(ref lock, ref cvar) = &*self.state;
         {
-            let _guard = lock.lock().unwrap();
+            let mut state = lock.lock().unwrap();
+            state.stopped = true;
             cvar.notify_all();
         }
         let mut err_msg = String::new();
@@ -232,8 +237,7 @@ where
 
 // Each thread has a worker.
 struct Worker<C> {
-    stop_flag: Arc<AtomicBool>,
-    task_queue: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
+    state: Arc<(Mutex<ScheduleState<C>>, Condvar)>,
     task_count: Arc<AtomicUsize>,
     tasks_per_tick: usize,
     task_counter: usize,
@@ -245,15 +249,13 @@ where
     C: Context,
 {
     fn new(
-        task_queue: Arc<(Mutex<FifoQueue<C>>, Condvar)>,
+        state: Arc<(Mutex<ScheduleState<C>>, Condvar)>,
         task_count: Arc<AtomicUsize>,
         tasks_per_tick: usize,
-        stop_flag: Arc<AtomicBool>,
         ctx: C,
     ) -> Worker<C> {
         Worker {
-            stop_flag: stop_flag,
-            task_queue: task_queue,
+            state: state,
             task_count: task_count,
             tasks_per_tick: tasks_per_tick,
             task_counter: 0,
@@ -261,38 +263,49 @@ where
         }
     }
 
-    fn get_task_timeout(&mut self, timeout: Option<Duration>) -> Option<Task<C>> {
-        let &(ref lock, ref cvar) = &*self.task_queue;
-        let mut task_queue = lock.lock().unwrap();
-
-        if let Some(task) = task_queue.pop() {
-            return Some(task);
+    fn next_task(&mut self, timeout: Duration) -> Option<Task<C>> {
+        let &(ref lock, ref cvar) = &*self.state;
+        let mut state = lock.lock().unwrap();
+        let mut timeout = Some(timeout);
+        loop {
+            if state.stopped {
+                return None;
+            }
+            match state.queue.pop() {
+                Some(t) => {
+                    self.task_counter += 1;
+                    return Some(t);
+                }
+                None => {
+                    state = match timeout {
+                        Some(t) => cvar.wait_timeout(state, t).unwrap().0,
+                        None => {
+                            self.task_counter = 0;
+                            self.ctx.on_tick();
+                            cvar.wait(state).unwrap()
+                        }
+                    };
+                    timeout = None;
+                }
+            }
         }
-        let mut q = match timeout {
-            Some(t) => cvar.wait_timeout(task_queue, t).unwrap().0,
-            None => cvar.wait(task_queue).unwrap(),
-        };
-        q.pop()
     }
 
     fn run(&mut self) {
-        let mut timeout = Some(Duration::from_secs(NAP_SECS));
-        while !self.stop_flag.load(AtomicOrdering::SeqCst) {
-            if let Some(t) = self.get_task_timeout(timeout) {
-                self.ctx.on_task_started();
-                (t.task).call_once((&mut self.ctx,));
-                self.ctx.on_task_finished();
-                self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
-                self.task_counter += 1;
-                if self.task_counter == self.tasks_per_tick {
-                    self.task_counter = 0;
-                    self.ctx.on_tick();
-                }
-                timeout = Some(Duration::from_secs(NAP_SECS));
-            } else {
+        let timeout = Duration::from_secs(NAP_SECS);
+        loop {
+            let task = match self.next_task(timeout) {
+                None => return,
+                Some(t) => t,
+            };
+
+            self.ctx.on_task_started();
+            (task.task).call_once((&mut self.ctx,));
+            self.ctx.on_task_finished();
+            self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
+            if self.task_counter == self.tasks_per_tick {
                 self.task_counter = 0;
                 self.ctx.on_tick();
-                timeout = None;
             }
         }
     }
