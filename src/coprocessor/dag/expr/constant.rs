@@ -47,7 +47,7 @@ impl Datum {
     }
 
     #[inline]
-    pub fn as_string(&self) -> Result<Option<Cow<Vec<u8>>>> {
+    pub fn as_string(&self) -> Result<Option<Cow<[u8]>>> {
         match *self {
             Datum::Null => Ok(None),
             Datum::Bytes(ref b) => Ok(Some(Cow::Borrowed(b))),
@@ -104,7 +104,7 @@ impl Constant {
     }
 
     #[inline]
-    pub fn eval_string(&self) -> Result<Option<Cow<Vec<u8>>>> {
+    pub fn eval_string(&self) -> Result<Option<Cow<[u8]>>> {
         self.val.as_string()
     }
 

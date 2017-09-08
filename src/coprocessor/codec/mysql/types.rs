@@ -15,6 +15,10 @@
 const NOT_NULL_FLAG: u64 = 1;
 /// The field is unsigned.
 pub const UNSIGNED_FLAG: u64 = 32;
+/// When cast to Json, should **PARSE** but not **COERCE**.
+pub const PARSE_TO_JSON_FLAG: u64 = 262144;
+/// Telling boolean literal from integers.
+pub const IS_BOOLEAN_FLAG: u64 = 524288;
 
 /// `has_unsigned_flag` checks if `UNSIGNED_FLAG` is set.
 #[inline]
@@ -27,6 +31,18 @@ pub fn has_unsigned_flag<T: Into<u64>>(flag: T) -> bool {
 #[inline]
 pub fn has_not_null_flag(flag: u64) -> bool {
     flag & NOT_NULL_FLAG > 0
+}
+
+#[inline]
+pub fn has_parse_to_json_flag<T: Into<u64>>(flag: T) -> bool {
+    let flag: u64 = flag.into();
+    flag & PARSE_TO_JSON_FLAG > 0
+}
+
+#[inline]
+pub fn has_is_boolean_flag<T: Into<u64>>(flag: T) -> bool {
+    let flag: u64 = flag.into();
+    flag & IS_BOOLEAN_FLAG > 0
 }
 
 /// `MySQL` type informations.

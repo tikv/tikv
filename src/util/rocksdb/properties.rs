@@ -252,6 +252,7 @@ impl IndexHandles {
     }
 
     fn get_approximate_distance_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
+        assert!(end >= start);
         let mut range = self.range::<[u8], _>((Included(start), Unbounded));
         let start_offset = match range.next() {
             Some((_, v)) => v.offset,
@@ -266,7 +267,15 @@ impl IndexHandles {
                 v.offset
             }
         };
-        assert!(end_offset >= start_offset);
+        if end_offset < start_offset {
+            panic!(
+                "start {:?} end {:?} start_offset {} end_offset {}",
+                start,
+                end,
+                start_offset,
+                end_offset
+            );
+        }
         end_offset - start_offset
     }
 }

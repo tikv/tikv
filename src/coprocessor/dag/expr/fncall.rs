@@ -88,6 +88,7 @@ impl FnCall {
             ScalarFuncSig::IfNullDecimal |
             ScalarFuncSig::IfNullTime |
             ScalarFuncSig::IfNullDuration |
+            ScalarFuncSig::IfNullJson |
             ScalarFuncSig::LogicalAnd |
             ScalarFuncSig::LogicalOr |
             ScalarFuncSig::LogicalXor |
@@ -150,15 +151,19 @@ impl FnCall {
             ScalarFuncSig::UnaryMinusInt |
             ScalarFuncSig::UnaryMinusReal |
             ScalarFuncSig::UnaryMinusDecimal |
+            ScalarFuncSig::IntIsTrue |
             ScalarFuncSig::IntIsFalse |
             ScalarFuncSig::IntIsNull |
             ScalarFuncSig::RealIsTrue |
+            ScalarFuncSig::RealIsFalse |
             ScalarFuncSig::RealIsNull |
             ScalarFuncSig::DecimalIsTrue |
+            ScalarFuncSig::DecimalIsFalse |
             ScalarFuncSig::DecimalIsNull |
             ScalarFuncSig::StringIsNull |
             ScalarFuncSig::TimeIsNull |
             ScalarFuncSig::DurationIsNull |
+            ScalarFuncSig::JsonIsNull |
             ScalarFuncSig::AbsInt |
             ScalarFuncSig::AbsUInt |
             ScalarFuncSig::AbsReal |
@@ -173,6 +178,8 @@ impl FnCall {
             ScalarFuncSig::FloorIntToDec |
             ScalarFuncSig::FloorDecToDec |
             ScalarFuncSig::FloorDecToInt |
+            ScalarFuncSig::JsonTypeSig |
+            ScalarFuncSig::JsonUnquoteSig |
             ScalarFuncSig::BitNegSig => (1, 1),
 
             ScalarFuncSig::IfInt |
@@ -180,7 +187,11 @@ impl FnCall {
             ScalarFuncSig::IfString |
             ScalarFuncSig::IfDecimal |
             ScalarFuncSig::IfTime |
-            ScalarFuncSig::IfDuration => (3, 3),
+            ScalarFuncSig::IfDuration |
+            ScalarFuncSig::IfJson |
+            ScalarFuncSig::LikeSig => (3, 3),
+
+            ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
             ScalarFuncSig::CoalesceDecimal |
             ScalarFuncSig::CoalesceDuration |
@@ -197,9 +208,25 @@ impl FnCall {
             ScalarFuncSig::CaseWhenString |
             ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
-            _ => return Err(Error::UnknownSignature(sig)),
+            ScalarFuncSig::JsonExtractSig |
+            ScalarFuncSig::JsonRemoveSig |
+            ScalarFuncSig::JsonMergeSig => (2, usize::MAX),
+
+            ScalarFuncSig::JsonSetSig |
+            ScalarFuncSig::JsonInsertSig |
+            ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
         };
         if args < min_args || args > max_args {
+            return Err(box_err!("unexpected arguments"));
+        }
+        let other_checks = match sig {
+            ScalarFuncSig::JsonObjectSig => args & 1 == 0,
+            ScalarFuncSig::JsonSetSig |
+            ScalarFuncSig::JsonInsertSig |
+            ScalarFuncSig::JsonReplaceSig => args & 1 == 1,
+            _ => true,
+        };
+        if !other_checks {
             return Err(box_err!("unexpected arguments"));
         }
         Ok(())
@@ -245,7 +272,7 @@ macro_rules! dispatch_call {
                 &'b self,
                 ctx: &StatementContext,
                 row: &'a [Datum]
-            ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+            ) -> Result<Option<Cow<'a, [u8]>>> {
                 match self.sig {
                     $(ScalarFuncSig::$b_sig => self.$b_func(ctx, row, $($b_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
@@ -318,7 +345,6 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$j_sig => {
                         self.$j_func(ctx, row, $($j_arg)*).map(Datum::from)
                     })*
-                    _=>Err(Error::UnknownSignature(self.sig)),
                 }
             }
         }
@@ -403,13 +429,17 @@ dispatch_call! {
         UnaryMinusInt => unary_minus_int,
         IntIsNull => int_is_null,
         IntIsFalse => int_is_false,
+        IntIsTrue => int_is_true,
         RealIsTrue => real_is_true,
+        RealIsFalse => real_is_false,
         RealIsNull => real_is_null,
         DecimalIsNull => decimal_is_null,
         DecimalIsTrue => decimal_is_true,
+        DecimalIsFalse => decimal_is_false,
         StringIsNull => string_is_null,
         TimeIsNull => time_is_null,
         DurationIsNull => duration_is_null,
+        JsonIsNull => json_is_null,
 
         AbsInt => abs_int,
         AbsUInt => abs_uint,
@@ -423,6 +453,8 @@ dispatch_call! {
 
         CoalesceInt => coalesce_int,
         CaseWhenInt => case_when_int,
+
+        LikeSig => like,
 
         BitAndSig => bit_and,
         BitNegSig => bit_neg,
@@ -495,6 +527,8 @@ dispatch_call! {
 
         CoalesceString => coalesce_string,
         CaseWhenString => case_when_string,
+        JsonTypeSig => json_type,
+        JsonUnquoteSig => json_unquote,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -537,5 +571,17 @@ dispatch_call! {
 
         CoalesceJson => coalesce_json,
         CaseWhenJson => case_when_json,
+
+        IfJson => if_json,
+        IfNullJson => if_null_json,
+
+        JsonExtractSig => json_extract,
+        JsonSetSig => json_set,
+        JsonInsertSig => json_insert,
+        JsonReplaceSig => json_replace,
+        JsonRemoveSig => json_remove,
+        JsonMergeSig => json_merge,
+        JsonArraySig => json_array,
+        JsonObjectSig => json_object,
     }
 }
