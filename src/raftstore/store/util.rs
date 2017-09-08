@@ -18,10 +18,11 @@ use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Error, Result};
 use raftstore::store::keys;
-use rocksdb::{Range, TablePropertiesCollection, DB};
+use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use storage::LARGE_CFS;
 use util::properties::SizeProperties;
 use util::rocksdb as rocksdb_util;
+use super::engine::{IterOption, Iterable};
 
 use super::peer_storage;
 
@@ -90,6 +91,47 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
     }
 }
 
+const MAX_DELETE_KEYS_COUNT: usize = 10000;
+
+pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    if start_key >= end_key {
+        return Ok(());
+    }
+
+    for cf in db.cf_names() {
+        try!(delete_all_in_range_cf(db, cf, start_key, end_key));
+    }
+
+    Ok(())
+}
+
+pub fn delete_all_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    let handle = try!(rocksdb_util::get_cf_handle(db, cf));
+    let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
+    let mut it = try!(db.new_iterator_cf(cf, iter_opt));
+    let mut wb = WriteBatch::new();
+    it.seek(start_key.into());
+    while it.valid() {
+        try!(wb.delete_cf(handle, it.key()));
+        if wb.count() == MAX_DELETE_KEYS_COUNT {
+            // Can't use write_without_wal here.
+            // Otherwise it may cause dirty data when applying snapshot.
+            try!(db.write(wb));
+            wb = WriteBatch::new();
+        }
+
+        if !it.next() {
+            break;
+        }
+    }
+
+    if wb.count() > 0 {
+        try!(db.write(wb));
+    }
+
+    Ok(())
+}
+
 // check whether epoch is staler than check_epoch.
 pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionEpoch) -> bool {
     epoch.get_version() < check_epoch.get_version() ||
@@ -137,16 +179,20 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 
 #[cfg(test)]
 mod tests {
+    use std::process;
+
     use kvproto::metapb;
     use kvproto::raft_serverpb::RaftMessage;
     use kvproto::eraftpb::{ConfChangeType, Message, MessageType};
 
     use super::*;
-    use tempdir::TempDir;
     use raftstore::store::peer_storage;
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
-    use util::rocksdb::CFOptions;
     use util::properties::SizePropertiesCollectorFactory;
+
+    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
+    use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+    use storage::ALL_CFS;
+    use tempdir::TempDir;
 
     // Tests the util function `check_key_in_region`.
     #[test]
@@ -302,5 +348,99 @@ mod tests {
             let size = get_region_approximate_size_cf(&db, cfname, &region).unwrap();
             assert_eq!(size, cf_size);
         }
+    }
+
+    fn check_data(db: &DB, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
+        for cf in cfs {
+            let handle = get_cf_handle(db, cf).unwrap();
+            let mut iter = db.iter_cf(handle);
+            iter.seek(SeekKey::Start);
+            for &(k, v) in expected {
+                assert_eq!(k, iter.key());
+                assert_eq!(v, iter.value());
+                iter.next();
+            }
+            assert!(!iter.valid());
+        }
+    }
+
+    #[test]
+    fn test_delete_all_in_range() {
+        let path = TempDir::new("_raftstore_util_delete_all_in_range").expect("");
+        let path_str = path.path().to_str().unwrap();
+
+        let cfs_opts = ALL_CFS
+            .into_iter()
+            .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
+            .collect();
+        let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
+
+        let wb = WriteBatch::new();
+        let kvs: Vec<(&[u8], &[u8])> = vec![
+            (b"k1", b"v1"),
+            (b"k2", b"v2"),
+            (b"k3", b"v3"),
+            (b"k4", b"v4"),
+        ];
+        let kvs_left: Vec<(&[u8], &[u8])> = vec![(b"k1", b"v1"), (b"k4", b"v4")];
+
+        for &(k, v) in kvs.as_slice() {
+            for cf in ALL_CFS {
+                let handle = get_cf_handle(&db, cf).unwrap();
+                wb.put_cf(handle, k, v).unwrap();
+            }
+        }
+        db.write(wb).unwrap();
+        check_data(&db, ALL_CFS, kvs.as_slice());
+
+        // Delete all in ["k2", "k4").
+        delete_all_in_range(&db, b"k2", b"k4").unwrap();
+        check_data(&db, ALL_CFS, kvs_left.as_slice());
+    }
+
+    fn exit_with_err(msg: String) -> ! {
+        error!("{}", msg);
+        process::exit(1)
+    }
+
+    #[test]
+    fn test_delete_range_prefix_bloom_case() {
+        let path = TempDir::new("_raftstore_util_delete_range_prefix_bloom").expect("");
+        let path_str = path.path().to_str().unwrap();
+
+        let mut opts = DBOptions::new();
+        opts.create_if_missing(true);
+
+        let mut cf_opts = ColumnFamilyOptions::new();
+        // Prefix extractor(trim the timestamp at tail) for write cf.
+        cf_opts
+            .set_prefix_extractor(
+                "FixedSuffixSliceTransform",
+                Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)),
+            )
+            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+        // Create prefix bloom filter for memtable.
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+        let cf = "default";
+        let db = DB::open_cf(opts, path_str, vec![cf], vec![cf_opts]).unwrap();
+        let wb = WriteBatch::new();
+        let kvs: Vec<(&[u8], &[u8])> = vec![
+            (b"kabcdefg1", b"v1"),
+            (b"kabcdefg2", b"v2"),
+            (b"kabcdefg3", b"v3"),
+            (b"kabcdefg4", b"v4"),
+        ];
+        let kvs_left: Vec<(&[u8], &[u8])> = vec![(b"kabcdefg1", b"v1"), (b"kabcdefg4", b"v4")];
+
+        for &(k, v) in kvs.as_slice() {
+            let handle = get_cf_handle(&db, cf).unwrap();
+            wb.put_cf(handle, k, v).unwrap();
+        }
+        db.write(wb).unwrap();
+        check_data(&db, &[cf], kvs.as_slice());
+
+        // Delete all in ["k2", "k4").
+        delete_all_in_range(&db, b"kabcdefg2", b"kabcdefg4").unwrap();
+        check_data(&db, &[cf], kvs_left.as_slice());
     }
 }

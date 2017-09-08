@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "0.0.1"
+version = "0.9.0"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -38,7 +38,6 @@ rand = "0.3"
 quick-error = "0.2"
 tempdir = "0.3"
 time = "0.1"
-threadpool = "1.0.0"
 toml = "0.4"
 num = "0.1"
 libc = "0.2"

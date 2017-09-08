@@ -22,11 +22,11 @@ use std::str;
 use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
-use threadpool::ThreadPool;
 
+use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::worker::Runnable;
 use util::{escape, rocksdb};
-use raftstore::store::engine::{IterOption, Iterable, Mutable, Snapshot};
+use raftstore::store::engine::{Mutable, Snapshot};
 use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING,
                                      JOB_STATUS_FAILED, JOB_STATUS_FINISHED, JOB_STATUS_PENDING,
                                      JOB_STATUS_RUNNING};
@@ -36,6 +36,7 @@ use raftstore::store::snap::{Error, Result};
 use storage::CF_RAFT;
 
 use super::metrics::*;
+use super::super::util;
 
 const GENERATE_POOL_SIZE: usize = 2;
 
@@ -138,53 +139,6 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    fn delete_all_in_range(
-        &self,
-        start_key: &[u8],
-        end_key: &[u8],
-        abort: &AtomicUsize,
-    ) -> Result<()> {
-        let mut wb = WriteBatch::new();
-        let mut size_cnt = 0;
-        for cf in self.kv_db.cf_names() {
-            try!(check_abort(abort));
-            let handle = box_try!(rocksdb::get_cf_handle(&self.kv_db, cf));
-
-            let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
-            let mut it = box_try!(self.kv_db.new_iterator_cf(cf, iter_opt));
-
-            try!(check_abort(abort));
-            it.seek(start_key.into());
-            while it.valid() {
-                {
-                    let key = it.key();
-                    if key >= end_key {
-                        break;
-                    }
-
-                    box_try!(wb.delete_cf(handle, key));
-                    size_cnt += key.len();
-                    if size_cnt >= self.batch_size {
-                        // Can't use write_without_wal here.
-                        // Otherwise it may cause dirty data when applying snapshot.
-                        box_try!(self.kv_db.write(wb));
-                        wb = WriteBatch::new();
-                        size_cnt = 0;
-                    }
-                };
-                try!(check_abort(abort));
-                if !it.next() {
-                    break;
-                }
-            }
-        }
-
-        if wb.count() > 0 {
-            box_try!(self.kv_db.write(wb));
-        }
-        Ok(())
-    }
-
     fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         try!(check_abort(&abort));
@@ -204,7 +158,9 @@ impl SnapContext {
         let region = region_state.get_region().clone();
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
-        box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
+        try!(check_abort(&abort));
+        box_try!(util::delete_all_in_range(&self.kv_db, &start_key, &end_key));
+        try!(check_abort(&abort));
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
@@ -295,8 +251,7 @@ impl SnapContext {
             escape(&start_key),
             escape(&end_key)
         );
-        let status = AtomicUsize::new(JOB_STATUS_PENDING);
-        if let Err(e) = self.delete_all_in_range(&start_key, &end_key, &status) {
+        if let Err(e) = util::delete_all_in_range(&self.kv_db, &start_key, &end_key) {
             error!(
                 "failed to delete data in [{}, {}): {:?}",
                 escape(&start_key),
@@ -308,14 +263,16 @@ impl SnapContext {
 }
 
 pub struct Runner {
-    pool: ThreadPool,
+    pool: ThreadPool<DefaultContext>,
     ctx: SnapContext,
 }
 
 impl Runner {
     pub fn new(kv_db: Arc<DB>, raft_db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
         Runner {
-            pool: ThreadPool::new_with_name(thd_name!("snap generator"), GENERATE_POOL_SIZE),
+            pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap generator"))
+                .thread_count(GENERATE_POOL_SIZE)
+                .build(),
             ctx: SnapContext {
                 kv_db: kv_db,
                 raft_db: raft_db,
@@ -337,7 +294,7 @@ impl Runnable<Task> for Runner {
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
                 self.pool
-                    .execute(move || ctx.handle_gen(region_id, notifier))
+                    .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
             Task::Apply { region_id, status } => self.ctx.handle_apply(region_id, status),
             Task::Destroy {

@@ -166,14 +166,14 @@ mod test {
         let mut expect_rows = Vec::new();
 
         for handle in 0..key_number {
-            let indice = map![
-                2 => Datum::Bytes(b"abc".to_vec()),
-                3 => Datum::Dec(handle.into())
+            let indice = vec![
+                (2, Datum::Bytes(b"abc".to_vec())),
+                (3, Datum::Dec(handle.into())),
             ];
             let mut expect_row = HashMap::default();
             let mut v: Vec<_> = indice
                 .iter()
-                .map(|(cid, value)| {
+                .map(|&(ref cid, ref value)| {
                     expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
                     value.clone()
                 })

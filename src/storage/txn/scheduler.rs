@@ -38,7 +38,6 @@ use std::thread;
 use std::hash::{Hash, Hasher};
 use std::u64;
 
-use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
@@ -51,6 +50,7 @@ use storage::engine::{self, Callback as EngineCallback, CbContext, Error as Engi
                       Result as EngineResult};
 use raftstore::store::engine::IterOption;
 use util::transport::{Error as TransportError, SyncSendCh};
+use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
 
@@ -297,10 +297,10 @@ pub struct Scheduler {
     sched_too_busy_threshold: usize,
 
     // worker pool
-    worker_pool: ThreadPool,
+    worker_pool: ThreadPool<DefaultContext>,
 
     // high priority commands will be delivered to this pool
-    high_priority_pool: ThreadPool,
+    high_priority_pool: ThreadPool<DefaultContext>,
 
     has_gc_command: bool,
 
@@ -357,16 +357,20 @@ impl Scheduler {
         Scheduler {
             engine: engine,
             cmd_ctxs: Default::default(),
-            grouped_cmds: Some(HashMap::with_capacity(CMD_BATCH_SIZE)),
+            grouped_cmds: Some(HashMap::with_capacity_and_hasher(
+                CMD_BATCH_SIZE,
+                Default::default(),
+            )),
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_too_busy_threshold: sched_too_busy_threshold,
-            worker_pool: ThreadPool::new_with_name(
-                thd_name!("sched-worker-pool"),
-                worker_pool_size,
-            ),
-            high_priority_pool: ThreadPool::new_with_name(thd_name!("sched-high-pri-pool"), 1),
+            worker_pool: ThreadPoolBuilder::with_default_factory(thd_name!("sched-worker-pool"))
+                .thread_count(worker_pool_size)
+                .build(),
+            high_priority_pool: ThreadPoolBuilder::with_default_factory(
+                thd_name!("sched-high-pri-pool"),
+            ).build(),
             has_gc_command: false,
             running_write_count: 0,
         }
@@ -975,7 +979,7 @@ impl Scheduler {
         ctx.tag
     }
 
-    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool {
+    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool<DefaultContext> {
         match priority {
             CommandPri::Low | CommandPri::Normal => &self.worker_pool,
             CommandPri::High => &self.high_priority_pool,
@@ -1004,9 +1008,9 @@ impl Scheduler {
         let readcmd = cmd.readonly();
         let worker_pool = self.fetch_worker_pool(cmd.priority());
         if readcmd {
-            worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
+            worker_pool.execute(move |_| process_read(cid, cmd, ch, snapshot));
         } else {
-            worker_pool.execute(move || process_write(cid, cmd, ch, snapshot));
+            worker_pool.execute(move |_| process_write(cid, cmd, ch, snapshot));
         }
     }
 
@@ -1396,6 +1400,10 @@ impl Scheduler {
             }
 
             if let Some(cmds) = self.grouped_cmds.take() {
+                self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
+                    CMD_BATCH_SIZE,
+                    Default::default(),
+                ));
                 let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
                     BATCH_COMMANDS
                         .with_label_values(&["all"])
@@ -1403,7 +1411,6 @@ impl Scheduler {
                     (hash_ctx.0, cids)
                 });
                 self.batch_get_snapshot(batch.collect());
-                self.grouped_cmds = Some(HashMap::with_capacity(CMD_BATCH_SIZE));
             }
         }
     }

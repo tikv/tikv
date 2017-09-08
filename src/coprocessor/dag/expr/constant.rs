@@ -15,7 +15,7 @@ use std::borrow::Cow;
 
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use super::{Constant, Error, Result};
+use super::{Constant, Result};
 
 impl Datum {
     #[inline]
@@ -24,7 +24,7 @@ impl Datum {
             Datum::Null => Ok(None),
             Datum::I64(i) => Ok(Some(i)),
             Datum::U64(u) => Ok(Some(u as i64)),
-            _ => Err(Error::Other("Can't eval_int from Datum")),
+            _ => Err(box_err!("Can't eval_int from Datum")),
         }
     }
 
@@ -33,7 +33,7 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::F64(f) => Ok(Some(f)),
-            _ => Err(Error::Other("Can't eval_real from Datum")),
+            _ => Err(box_err!("Can't eval_real from Datum")),
         }
     }
 
@@ -42,16 +42,16 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::Dec(ref d) => Ok(Some(Cow::Borrowed(d))),
-            _ => Err(Error::Other("Can't eval_decimal from Datum")),
+            _ => Err(box_err!("Can't eval_decimal from Datum")),
         }
     }
 
     #[inline]
-    pub fn as_string(&self) -> Result<Option<Cow<Vec<u8>>>> {
+    pub fn as_string(&self) -> Result<Option<Cow<[u8]>>> {
         match *self {
             Datum::Null => Ok(None),
             Datum::Bytes(ref b) => Ok(Some(Cow::Borrowed(b))),
-            _ => Err(Error::Other("Can't eval_string from Datum")),
+            _ => Err(box_err!("Can't eval_string from Datum")),
         }
     }
 
@@ -60,7 +60,7 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::Time(ref t) => Ok(Some(Cow::Borrowed(t))),
-            _ => Err(Error::Other("Can't eval_time from Datum")),
+            _ => Err(box_err!("Can't eval_time from Datum")),
         }
     }
 
@@ -69,7 +69,7 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::Dur(ref d) => Ok(Some(Cow::Borrowed(d))),
-            _ => Err(Error::Other("Can't eval_duration from Datum")),
+            _ => Err(box_err!("Can't eval_duration from Datum")),
         }
     }
 
@@ -78,12 +78,16 @@ impl Datum {
         match *self {
             Datum::Null => Ok(None),
             Datum::Json(ref j) => Ok(Some(Cow::Borrowed(j))),
-            _ => Err(Error::Other("Can't eval_json from Datum")),
+            _ => Err(box_err!("Can't eval_json from Datum")),
         }
     }
 }
 
 impl Constant {
+    pub fn eval(&self) -> Datum {
+        self.val.clone()
+    }
+
     #[inline]
     pub fn eval_int(&self) -> Result<Option<i64>> {
         self.val.as_int()
@@ -100,7 +104,7 @@ impl Constant {
     }
 
     #[inline]
-    pub fn eval_string(&self) -> Result<Option<Cow<Vec<u8>>>> {
+    pub fn eval_string(&self) -> Result<Option<Cow<[u8]>>> {
         self.val.as_string()
     }
 
@@ -167,7 +171,7 @@ mod test {
 
         let ctx = StatementContext::default();
         for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
-            let e = Expression::build(case, 0).unwrap();
+            let e = Expression::build(case, &ctx).unwrap();
 
             let i = e.eval_int(&ctx, &[]).unwrap_or(None);
             let r = e.eval_real(&ctx, &[]).unwrap_or(None);

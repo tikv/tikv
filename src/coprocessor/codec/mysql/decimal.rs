@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ascii::AsciiExt;
 use std::fmt::{self, Display, Formatter};
 use std::str::{self, FromStr};
 use std::io::Write;
@@ -22,7 +23,11 @@ use byteorder::ReadBytesExt;
 
 use coprocessor::select::xeval::EvalContext;
 use util::codec::bytes::BytesDecoder;
-use super::super::{convert, Error, Result, TEN_POW};
+use util::escape;
+use coprocessor::codec::{convert, Error, Result, TEN_POW};
+
+// TODO: We should use same Error in mod `coprocessor`.
+use coprocessor::dag::expr::Error as ExprError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -56,6 +61,13 @@ impl<T> Res<T> {
     pub fn is_overflow(&self) -> bool {
         match *self {
             Res::Overflow(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_truncated(&self) -> bool {
+        match *self {
+            Res::Truncated(_) => true,
             _ => false,
         }
     }
@@ -835,6 +847,31 @@ pub enum RoundMode {
 }
 
 impl Decimal {
+    /// abs the Decimal into a new Decimal.
+    #[inline]
+    pub fn abs(mut self) -> Res<Decimal> {
+        self.negative = false;
+        Res::Ok(self)
+    }
+
+    /// ceil the Decimal into a new Decimal.
+    pub fn ceil(&self) -> Res<Decimal> {
+        if !self.negative {
+            self.clone().round(0, RoundMode::Ceiling)
+        } else {
+            self.clone().round(0, RoundMode::Truncate)
+        }
+    }
+
+    /// floor the Decimal into a new Decimal.
+    pub fn floor(&self) -> Res<Decimal> {
+        if !self.negative {
+            self.clone().round(0, RoundMode::Truncate)
+        } else {
+            self.clone().round(0, RoundMode::Ceiling)
+        }
+    }
+
     /// create a new decimal for internal usage.
     fn new(int_cnt: u8, frac_cnt: u8, negative: bool) -> Decimal {
         Decimal {
@@ -1428,6 +1465,13 @@ impl Decimal {
         Res::Ok(x)
     }
 
+    /// `as_i64_with_ctx` returns int part of the decimal.
+    pub fn as_i64_with_ctx(&self, ctx: &EvalContext) -> ::std::result::Result<i64, ExprError> {
+        let res = self.as_i64();
+        try!(convert::handle_truncate(ctx, res.is_truncated()));
+        res.into()
+    }
+
     /// `as_u64` returns int part of the decimal
     pub fn as_u64(&self) -> Res<u64> {
         if self.negative {
@@ -1475,11 +1519,15 @@ impl Decimal {
         Ok(f)
     }
 
-    fn from_str(s: &str, word_buf_len: u8) -> Result<Res<Decimal>> {
-        let mut bs = s.trim_left().as_bytes();
-        if bs.is_empty() {
-            return Err(box_err!("{} is empty", s));
-        }
+    pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
+        Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
+    }
+
+    fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
+        let mut bs = match s.iter().position(|c| !c.is_ascii_whitespace()) {
+            None => return Err(box_err!("\"{}\" is empty", escape(s))),
+            Some(pos) => &s[pos..],
+        };
         let mut negative = false;
         match bs[0] {
             b'-' => {
@@ -1499,7 +1547,7 @@ impl Decimal {
             0
         };
         if int_cnt + frac_cnt == 0 {
-            return Err(box_err!("{} is invalid number", s));
+            return Err(box_err!("\"{}\" is invalid number", escape(s)));
         }
         let int_word_cnt = word_cnt!(int_cnt);
         let frac_word_cnt = word_cnt!(frac_cnt);
@@ -1653,7 +1701,7 @@ impl FromStr for Decimal {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Decimal> {
-        match try!(Decimal::from_str(s, WORD_BUF_LEN)) {
+        match try!(Decimal::from_bytes(s.as_bytes())) {
             Res::Ok(d) => Ok(d),
             Res::Overflow(_) => Err(box_err!("parsing {} will overflow", s)),
             Res::Truncated(_) => Err(box_err!("parsing {} will truncated", s)),
@@ -1965,7 +2013,7 @@ impl Ord for Decimal {
     }
 }
 
-impl<'a> Add<&'a Decimal> for &'a Decimal {
+impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -1980,7 +2028,7 @@ impl<'a> Add<&'a Decimal> for &'a Decimal {
     }
 }
 
-impl<'a> Sub<&'a Decimal> for &'a Decimal {
+impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn sub(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -1995,7 +2043,7 @@ impl<'a> Sub<&'a Decimal> for &'a Decimal {
     }
 }
 
-impl<'a> Mul for &'a Decimal {
+impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn mul(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -2171,274 +2219,286 @@ mod test {
     #[test]
     fn test_shift() {
         let cases = vec![
-            (WORD_BUF_LEN, "123.123", 1, Res::Ok("1231.23")),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123.123" as &'static [u8],
+                1,
+                Res::Ok("1231.23"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
                 1,
                 Res::Ok("1234571891.23123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123457189.123123456789000",
                 8,
                 Res::Ok("12345718912312345.6789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123457189.123123456789000",
                 9,
                 Res::Ok("123457189123123456.789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123457189.123123456789000",
                 10,
                 Res::Ok("1234571891231234567.89"),
             ),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123457189.123123456789000",
                 17,
                 Res::Ok("12345718912312345678900000"),
             ),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123457189.123123456789000",
                 18,
                 Res::Ok("123457189123123456789000000"),
             ),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123457189.123123456789000",
                 19,
                 Res::Ok("1234571891231234567890000000"),
             ),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123457189.123123456789000",
                 26,
                 Res::Ok("12345718912312345678900000000000000"),
             ),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123457189.123123456789000",
                 27,
                 Res::Ok("123457189123123456789000000000000000"),
             ),
             (
                 WORD_BUF_LEN,
-                "123457189.123123456789000",
+                b"123457189.123123456789000",
                 28,
                 Res::Ok("1234571891231234567890000000000000000"),
             ),
             (
                 WORD_BUF_LEN,
-                "000000000000000000000000123457189.123123456789000",
+                b"000000000000000000000000123457189.123123456789000",
                 26,
                 Res::Ok("12345718912312345678900000000000000"),
             ),
             (
                 WORD_BUF_LEN,
-                "00000000123457189.123123456789000",
+                b"00000000123457189.123123456789000",
                 27,
                 Res::Ok("123457189123123456789000000000000000"),
             ),
             (
                 WORD_BUF_LEN,
-                "00000000000000000123457189.123123456789000",
+                b"00000000000000000123457189.123123456789000",
                 28,
                 Res::Ok("1234571891231234567890000000000000000"),
             ),
-            (WORD_BUF_LEN, "123", 1, Res::Ok("1230")),
-            (WORD_BUF_LEN, "123", 10, Res::Ok("1230000000000")),
-            (WORD_BUF_LEN, ".123", 1, Res::Ok("1.23")),
-            (WORD_BUF_LEN, ".123", 10, Res::Ok("1230000000")),
-            (WORD_BUF_LEN, ".123", 14, Res::Ok("12300000000000")),
-            (WORD_BUF_LEN, "000.000", 1000, Res::Ok("0")),
-            (WORD_BUF_LEN, "000.", 1000, Res::Ok("0")),
-            (WORD_BUF_LEN, ".000", 1000, Res::Ok("0")),
-            (WORD_BUF_LEN, "1", 1000, Res::Overflow("1")),
-            (WORD_BUF_LEN, "123.123", -1, Res::Ok("12.3123")),
+            (WORD_BUF_LEN, b"123", 1, Res::Ok("1230")),
+            (WORD_BUF_LEN, b"123", 10, Res::Ok("1230000000000")),
+            (WORD_BUF_LEN, b".123", 1, Res::Ok("1.23")),
+            (WORD_BUF_LEN, b".123", 10, Res::Ok("1230000000")),
+            (WORD_BUF_LEN, b".123", 14, Res::Ok("12300000000000")),
+            (WORD_BUF_LEN, b"000.000", 1000, Res::Ok("0")),
+            (WORD_BUF_LEN, b"000.", 1000, Res::Ok("0")),
+            (WORD_BUF_LEN, b".000", 1000, Res::Ok("0")),
+            (WORD_BUF_LEN, b"1", 1000, Res::Overflow("1")),
+            (WORD_BUF_LEN, b"123.123", -1, Res::Ok("12.3123")),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -1,
                 Res::Ok("12398765432.1123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -2,
                 Res::Ok("1239876543.21123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -3,
                 Res::Ok("123987654.321123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -8,
                 Res::Ok("1239.87654321123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -9,
                 Res::Ok("123.987654321123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -10,
                 Res::Ok("12.3987654321123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -11,
                 Res::Ok("1.23987654321123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -12,
                 Res::Ok("0.123987654321123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -13,
                 Res::Ok("0.0123987654321123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "123987654321.123456789000",
+                b"123987654321.123456789000",
                 -14,
                 Res::Ok("0.00123987654321123456789"),
             ),
             (
                 WORD_BUF_LEN,
-                "00000087654321.123456789000",
+                b"00000087654321.123456789000",
                 -14,
                 Res::Ok("0.00000087654321123456789"),
             ),
-            (2, "123.123", -2, Res::Ok("1.23123")),
-            (2, "123.123", -3, Res::Ok("0.123123")),
-            (2, "123.123", -6, Res::Ok("0.000123123")),
-            (2, "123.123", -7, Res::Ok("0.0000123123")),
-            (2, "123.123", -15, Res::Ok("0.000000000000123123")),
-            (2, "123.123", -16, Res::Truncated("0.000000000000012312")),
-            (2, "123.123", -17, Res::Truncated("0.000000000000001231")),
-            (2, "123.123", -18, Res::Truncated("0.000000000000000123")),
-            (2, "123.123", -19, Res::Truncated("0.000000000000000012")),
-            (2, "123.123", -20, Res::Truncated("0.000000000000000001")),
-            (2, "123.123", -21, Res::Truncated("0")),
-            (2, ".000000000123", -1, Res::Ok("0.0000000000123")),
-            (2, ".000000000123", -6, Res::Ok("0.000000000000000123")),
+            (2, b"123.123", -2, Res::Ok("1.23123")),
+            (2, b"123.123", -3, Res::Ok("0.123123")),
+            (2, b"123.123", -6, Res::Ok("0.000123123")),
+            (2, b"123.123", -7, Res::Ok("0.0000123123")),
+            (2, b"123.123", -15, Res::Ok("0.000000000000123123")),
+            (2, b"123.123", -16, Res::Truncated("0.000000000000012312")),
+            (2, b"123.123", -17, Res::Truncated("0.000000000000001231")),
+            (2, b"123.123", -18, Res::Truncated("0.000000000000000123")),
+            (2, b"123.123", -19, Res::Truncated("0.000000000000000012")),
+            (2, b"123.123", -20, Res::Truncated("0.000000000000000001")),
+            (2, b"123.123", -21, Res::Truncated("0")),
+            (2, b".000000000123", -1, Res::Ok("0.0000000000123")),
+            (2, b".000000000123", -6, Res::Ok("0.000000000000000123")),
             (
                 2,
-                ".000000000123",
+                b".000000000123",
                 -7,
                 Res::Truncated("0.000000000000000012"),
             ),
             (
                 2,
-                ".000000000123",
+                b".000000000123",
                 -8,
                 Res::Truncated("0.000000000000000001"),
             ),
-            (2, ".000000000123", -9, Res::Truncated("0")),
-            (2, ".000000000123", 1, Res::Ok("0.00000000123")),
-            (2, ".000000000123", 8, Res::Ok("0.0123")),
-            (2, ".000000000123", 9, Res::Ok("0.123")),
-            (2, ".000000000123", 10, Res::Ok("1.23")),
-            (2, ".000000000123", 17, Res::Ok("12300000")),
-            (2, ".000000000123", 18, Res::Ok("123000000")),
-            (2, ".000000000123", 19, Res::Ok("1230000000")),
-            (2, ".000000000123", 20, Res::Ok("12300000000")),
-            (2, ".000000000123", 21, Res::Ok("123000000000")),
-            (2, ".000000000123", 22, Res::Ok("1230000000000")),
-            (2, ".000000000123", 23, Res::Ok("12300000000000")),
-            (2, ".000000000123", 24, Res::Ok("123000000000000")),
-            (2, ".000000000123", 25, Res::Ok("1230000000000000")),
-            (2, ".000000000123", 26, Res::Ok("12300000000000000")),
-            (2, ".000000000123", 27, Res::Ok("123000000000000000")),
-            (2, ".000000000123", 28, Res::Overflow("0.000000000123")),
+            (2, b".000000000123", -9, Res::Truncated("0")),
+            (2, b".000000000123", 1, Res::Ok("0.00000000123")),
+            (2, b".000000000123", 8, Res::Ok("0.0123")),
+            (2, b".000000000123", 9, Res::Ok("0.123")),
+            (2, b".000000000123", 10, Res::Ok("1.23")),
+            (2, b".000000000123", 17, Res::Ok("12300000")),
+            (2, b".000000000123", 18, Res::Ok("123000000")),
+            (2, b".000000000123", 19, Res::Ok("1230000000")),
+            (2, b".000000000123", 20, Res::Ok("12300000000")),
+            (2, b".000000000123", 21, Res::Ok("123000000000")),
+            (2, b".000000000123", 22, Res::Ok("1230000000000")),
+            (2, b".000000000123", 23, Res::Ok("12300000000000")),
+            (2, b".000000000123", 24, Res::Ok("123000000000000")),
+            (2, b".000000000123", 25, Res::Ok("1230000000000000")),
+            (2, b".000000000123", 26, Res::Ok("12300000000000000")),
+            (2, b".000000000123", 27, Res::Ok("123000000000000000")),
+            (2, b".000000000123", 28, Res::Overflow("0.000000000123")),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
                 -1,
                 Res::Truncated("12345678.998765432"),
             ),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
                 -2,
                 Res::Truncated("1234567.899876543"),
             ),
-            (2, "123456789.987654321", -8, Res::Truncated("1.234567900")),
+            (2, b"123456789.987654321", -8, Res::Truncated("1.234567900")),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
                 -9,
                 Res::Ok("0.123456789987654321"),
             ),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
                 -10,
                 Res::Truncated("0.012345678998765432"),
             ),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
                 -17,
                 Res::Truncated("0.000000001234567900"),
             ),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
                 -18,
                 Res::Truncated("0.000000000123456790"),
             ),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
                 -19,
                 Res::Truncated("0.000000000012345679"),
             ),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
                 -26,
                 Res::Truncated("0.000000000000000001"),
             ),
-            (2, "123456789.987654321", -27, Res::Truncated("0")),
-            (2, "123456789.987654321", 1, Res::Truncated("1234567900")),
-            (2, "123456789.987654321", 2, Res::Truncated("12345678999")),
-            (2, "123456789.987654321", 4, Res::Truncated("1234567899877")),
+            (2, b"123456789.987654321", -27, Res::Truncated("0")),
+            (2, b"123456789.987654321", 1, Res::Truncated("1234567900")),
+            (2, b"123456789.987654321", 2, Res::Truncated("12345678999")),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
+                4,
+                Res::Truncated("1234567899877"),
+            ),
+            (
+                2,
+                b"123456789.987654321",
                 8,
                 Res::Truncated("12345678998765432"),
             ),
-            (2, "123456789.987654321", 9, Res::Ok("123456789987654321")),
+            (2, b"123456789.987654321", 9, Res::Ok("123456789987654321")),
             (
                 2,
-                "123456789.987654321",
+                b"123456789.987654321",
                 10,
                 Res::Overflow("123456789.987654321"),
             ),
-            (2, "123456789.987654321", 0, Res::Ok("123456789.987654321")),
+            (2, b"123456789.987654321", 0, Res::Ok("123456789.987654321")),
         ];
 
-        for (word_buf_len, dec_str, shift, exp) in cases {
-            let dec = Decimal::from_str(dec_str, word_buf_len).unwrap().unwrap();
+        for (word_buf_len, dec, shift, exp) in cases {
+            let dec = Decimal::from_bytes_with_word_buf(dec, word_buf_len)
+                .unwrap()
+                .unwrap();
             let shifted = dec.shift_with_word_buf_len(shift, word_buf_len);
             let res = shifted.map(|d| d.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
@@ -2507,56 +2567,63 @@ mod test {
     #[test]
     fn test_string() {
         let cases = vec![
-            (WORD_BUF_LEN, "12345", Res::Ok("12345")),
-            (WORD_BUF_LEN, "12345.", Res::Ok("12345")),
-            (WORD_BUF_LEN, "123.45.", Res::Ok("123.45")),
-            (WORD_BUF_LEN, "-123.45.", Res::Ok("-123.45")),
+            (WORD_BUF_LEN, b"12345" as &'static [u8], Res::Ok("12345")),
+            (WORD_BUF_LEN, b"12345.", Res::Ok("12345")),
+            (WORD_BUF_LEN, b"123.45.", Res::Ok("123.45")),
+            (WORD_BUF_LEN, b"-123.45.", Res::Ok("-123.45")),
             (
                 WORD_BUF_LEN,
-                ".00012345000098765",
+                b".00012345000098765",
                 Res::Ok("0.00012345000098765"),
             ),
-            (WORD_BUF_LEN, ".12345000098765", Res::Ok("0.12345000098765")),
             (
                 WORD_BUF_LEN,
-                "-.000000012345000098765",
+                b".12345000098765",
+                Res::Ok("0.12345000098765"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"-.000000012345000098765",
                 Res::Ok("-0.000000012345000098765"),
             ),
-            (WORD_BUF_LEN, "1234500009876.5", Res::Ok("1234500009876.5")),
-            (WORD_BUF_LEN, "123E5", Res::Ok("12300000")),
-            (WORD_BUF_LEN, "123E-2", Res::Ok("1.23")),
-            (1, "123450000098765", Res::Overflow("98765")),
-            (1, "123450.000098765", Res::Truncated("123450")),
-            (WORD_BUF_LEN, "123.123", Res::Ok("123.123")),
-            (WORD_BUF_LEN, "123.1230", Res::Ok("123.1230")),
-            (WORD_BUF_LEN, "00123.123", Res::Ok("123.123")),
-            (WORD_BUF_LEN, "1.21", Res::Ok("1.21")),
-            (WORD_BUF_LEN, ".21", Res::Ok("0.21")),
-            (WORD_BUF_LEN, "1.00", Res::Ok("1.00")),
-            (WORD_BUF_LEN, "100", Res::Ok("100")),
-            (WORD_BUF_LEN, "-100", Res::Ok("-100")),
-            (WORD_BUF_LEN, "100.00", Res::Ok("100.00")),
-            (WORD_BUF_LEN, "00100.00", Res::Ok("100.00")),
-            (WORD_BUF_LEN, "-100.00", Res::Ok("-100.00")),
-            (WORD_BUF_LEN, "-0.00", Res::Ok("0.00")),
-            (WORD_BUF_LEN, "00.00", Res::Ok("0.00")),
-            (WORD_BUF_LEN, "0.00", Res::Ok("0.00")),
-            (WORD_BUF_LEN, "-2.010", Res::Ok("-2.010")),
-            (WORD_BUF_LEN, "12345", Res::Ok("12345")),
-            (WORD_BUF_LEN, "-12345", Res::Ok("-12345")),
-            (WORD_BUF_LEN, "-3.", Res::Ok("-3")),
-            (WORD_BUF_LEN, "1.456e3", Res::Ok("1456")),
-            (WORD_BUF_LEN, "3.", Res::Ok("3")),
-            (WORD_BUF_LEN, "314e-2", Res::Ok("3.14")),
-            (WORD_BUF_LEN, "1e2", Res::Ok("100")),
-            (WORD_BUF_LEN, "2E-1", Res::Ok("0.2")),
-            (WORD_BUF_LEN, "2E0", Res::Ok("2")),
-            (WORD_BUF_LEN, "2.2E-1", Res::Ok("0.22")),
-            (WORD_BUF_LEN, "2.23E2", Res::Ok("223")),
+            (WORD_BUF_LEN, b"1234500009876.5", Res::Ok("1234500009876.5")),
+            (WORD_BUF_LEN, b"123E5", Res::Ok("12300000")),
+            (WORD_BUF_LEN, b"123E-2", Res::Ok("1.23")),
+            (1, b"123450000098765", Res::Overflow("98765")),
+            (1, b"123450.000098765", Res::Truncated("123450")),
+            (WORD_BUF_LEN, b"123.123", Res::Ok("123.123")),
+            (WORD_BUF_LEN, b"123.1230", Res::Ok("123.1230")),
+            (WORD_BUF_LEN, b"00123.123", Res::Ok("123.123")),
+            (WORD_BUF_LEN, b"1.21", Res::Ok("1.21")),
+            (WORD_BUF_LEN, b".21", Res::Ok("0.21")),
+            (WORD_BUF_LEN, b"1.00", Res::Ok("1.00")),
+            (WORD_BUF_LEN, b"100", Res::Ok("100")),
+            (WORD_BUF_LEN, b"-100", Res::Ok("-100")),
+            (WORD_BUF_LEN, b"100.00", Res::Ok("100.00")),
+            (WORD_BUF_LEN, b"00100.00", Res::Ok("100.00")),
+            (WORD_BUF_LEN, b"-100.00", Res::Ok("-100.00")),
+            (WORD_BUF_LEN, b"-0.00", Res::Ok("0.00")),
+            (WORD_BUF_LEN, b"00.00", Res::Ok("0.00")),
+            (WORD_BUF_LEN, b"0.00", Res::Ok("0.00")),
+            (WORD_BUF_LEN, b"-2.010", Res::Ok("-2.010")),
+            (WORD_BUF_LEN, b"12345", Res::Ok("12345")),
+            (WORD_BUF_LEN, b"-12345", Res::Ok("-12345")),
+            (WORD_BUF_LEN, b"-3.", Res::Ok("-3")),
+            (WORD_BUF_LEN, b"1.456e3", Res::Ok("1456")),
+            (WORD_BUF_LEN, b"3.", Res::Ok("3")),
+            (WORD_BUF_LEN, b"314e-2", Res::Ok("3.14")),
+            (WORD_BUF_LEN, b"1e2", Res::Ok("100")),
+            (WORD_BUF_LEN, b"2E-1", Res::Ok("0.2")),
+            (WORD_BUF_LEN, b"2E0", Res::Ok("2")),
+            (WORD_BUF_LEN, b"2.2E-1", Res::Ok("0.22")),
+            (WORD_BUF_LEN, b"2.23E2", Res::Ok("223")),
+            (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
+            (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
+            (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
         ];
 
-        for (word_buf_len, dec_str, exp) in cases {
-            let d = Decimal::from_str(dec_str, word_buf_len).unwrap();
+        for (word_buf_len, dec, exp) in cases {
+            let d = Decimal::from_bytes_with_word_buf(dec, word_buf_len).unwrap();
             let res = d.map(|d| d.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
@@ -2996,6 +3063,59 @@ mod test {
             assert!(!dec.is_zero());
             dec.reset_to_zero();
             assert!(dec.is_zero());
+        }
+    }
+
+    #[test]
+    fn test_ceil() {
+        let cases = vec![
+            ("12345", "12345"),
+            ("0.99999", "1"),
+            ("-0.99999", "0"),
+            ("18446744073709551615", "18446744073709551615"),
+            ("18446744073709551616", "18446744073709551616"),
+            ("-18446744073709551615", "-18446744073709551615"),
+            ("-18446744073709551616", "-18446744073709551616"),
+            ("-1", "-1"),
+            ("1.23", "2"),
+            ("-1.23", "-1"),
+            ("1.00000", "1"),
+            ("-1.00000", "-1"),
+            (
+                "9999999999999999999999999.001",
+                "10000000000000000000000000",
+            ),
+        ];
+        for (input, exp) in cases {
+            let dec: Decimal = input.parse().unwrap();
+            let exp: Decimal = exp.parse().unwrap();
+            let got = dec.ceil().unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_floor() {
+        let cases = vec![
+            ("12345", "12345"),
+            ("0.99999", "0"),
+            ("-0.99999", "-1"),
+            ("18446744073709551615", "18446744073709551615"),
+            ("18446744073709551616", "18446744073709551616"),
+            ("-18446744073709551615", "-18446744073709551615"),
+            ("-18446744073709551616", "-18446744073709551616"),
+            ("-1", "-1"),
+            ("1.23", "1"),
+            ("-1.23", "-2"),
+            ("00001.00000", "1"),
+            ("-00001.00000", "-1"),
+            ("9999999999999999999999999.001", "9999999999999999999999999"),
+        ];
+        for (input, exp) in cases {
+            let dec: Decimal = input.parse().unwrap();
+            let exp: Decimal = exp.parse().unwrap();
+            let got = dec.floor().unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
