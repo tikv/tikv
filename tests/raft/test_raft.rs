@@ -3653,3 +3653,117 @@ fn test_pre_vote_with_split_vote() {
     assert_eq!(nt.peers[&2].state, StateRole::Leader);
     assert_eq!(nt.peers[&3].state, StateRole::Follower);
 }
+
+// simulate rolling update a cluster for Pre-Vote. cluster has 3 nodes [n1, n2, n3].
+// n1 is leader with term 2
+// n2 is follower with term 2
+// n3 is partitioned, with term 4 and less log, state is candidate
+fn new_pre_vote_migration_cluster() -> Network {
+    let mut n1 = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let mut n2 = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let mut n3 = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+
+    n1.become_follower(1, INVALID_ID);
+    n2.become_follower(1, INVALID_ID);
+    n3.become_follower(1, INVALID_ID);
+
+    n1.pre_vote = true;
+    n2.pre_vote = true;
+    // We intentionally do not enable PreVote for n3, this is done so in order
+    // to simulate a rolling restart process where it's possible to have a mixed
+    // version cluster with replicas with PreVote enabled, and replicas without.
+
+    let mut nt = Network::new(vec![Some(n1), Some(n2), Some(n3)]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    // Cause a network partition to isolate n3.
+    nt.isolate(3);
+    nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+    // check state
+    // n1 == leader
+    // n2 == follower
+    // n3 == candidate
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
+
+    // check term
+    // n1.Term == 2
+    // n2.Term == 2
+    // n3.Term == 4
+    assert_eq!(nt.peers[&1].term, 2);
+    assert_eq!(nt.peers[&2].term, 2);
+    assert_eq!(nt.peers[&3].term, 4);
+
+    // Enable prevote on n3, then recover the network
+    nt.peers.get_mut(&3).unwrap().pre_vote = true;
+    // n3.pre_vote = true;
+    nt.recover();
+
+    nt
+}
+
+#[test]
+fn test_pre_vote_migration_can_complete_election() {
+    let mut nt = new_pre_vote_migration_cluster();
+
+    // n1 is leader with term 2
+    // n2 is follower with term 2
+    // n3 is pre-candidate with term 4, and less log
+
+    // simulate leader down
+    nt.isolate(1);
+
+    // Call for elections from both n2 and n3.
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+    nt.send(vec![new_message(2, 2, MessageType::MsgHup, 0)]);
+
+    // check state
+    // n2.state == Follower
+    // n2.state == PreCandidate
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::PreCandidate);
+
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+    nt.send(vec![new_message(2, 2, MessageType::MsgHup, 0)]);
+
+    // Do we have a leader?
+    assert_eq!(nt.peers[&2].state, StateRole::Leader);
+    assert_eq!(nt.peers[&3].state, StateRole::Follower);
+}
+
+#[test]
+fn test_pre_vote_migration_with_free_stuck_pre_candidate() {
+    let mut nt = new_pre_vote_migration_cluster();
+
+    // n1 is leader with term 2
+    // n2 is follower with term 2
+    // n3 is pre-candidate with term 4, and less log
+
+    // Call for elections from both n2 and n3.
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+    // check state
+    // n1.state == Follower
+    // n2.state == Follower
+    // n2.state == PreCandidate
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::PreCandidate);
+
+    // Pre-Vote again for safety
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::PreCandidate);
+
+    nt.send(vec![new_message(1, 3, MessageType::MsgHeartbeat, 0)]);
+
+    // Disrupt the leader so that the stuck peer is freed
+    assert_eq!(nt.peers[&1].state, StateRole::Follower);
+    assert_eq!(nt.peers[&1].term, nt.peers[&3].term);
+}

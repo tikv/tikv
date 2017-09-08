@@ -926,7 +926,7 @@ impl<T: Storage> Raft<T> {
                 self.become_follower(m.get_term(), INVALID_ID);
             }
         } else if m.get_term() < self.term {
-            if self.check_quorum &&
+            if (self.check_quorum || self.pre_vote) &&
                 (m.get_msg_type() == MessageType::MsgHeartbeat ||
                     m.get_msg_type() == MessageType::MsgAppend)
             {
@@ -942,7 +942,18 @@ impl<T: Storage> Raft<T> {
                 // removed from the cluster's configuration: a removed node will send MsgVotes
                 // which will be ignored, but it will not receive MsgApp or MsgHeartbeat, so it
                 // will not create disruptive term increases
+                // The above comments also true for Pre-Vote
                 let to_send = new_message(m.get_from(), MessageType::MsgAppendResponse, None);
+                self.send(to_send);
+            } else if m.get_msg_type() == MessageType::MsgRequestPreVote {
+                // Before Pre-Vote enable, there may have candidate with higher term,
+                // but less log. After update to Pre-Vote, the cluster may deadlock if
+                // we drop messages with a lower term.
+                self.log_vote_reject(&m);
+                let mut to_send =
+                    new_message(m.get_from(), MessageType::MsgRequestPreVoteResponse, None);
+                to_send.set_term(self.term);
+                to_send.set_reject(true);
                 self.send(to_send);
             } else {
                 // ignore other cases
