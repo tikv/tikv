@@ -15,7 +15,7 @@ use std::{f64, i64, u64};
 use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::mysql::{Decimal, Res};
 use super::{Error, FnCall, Result, StatementContext};
 
 impl FnCall {
@@ -144,6 +144,36 @@ impl FnCall {
         };
         res.ok_or(Error::Overflow).map(Some)
     }
+
+    pub fn divide_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+        if rhs == 0f64 {
+            return Ok(None);
+        }
+        let res = lhs / rhs;
+        if res.is_infinite() {
+            Err(Error::Overflow)
+        } else {
+            Ok(Some(res))
+        }
+    }
+
+    pub fn divide_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        match lhs.into_owned() / rhs.into_owned() {
+            Some(v) => match v {
+                Res::Ok(v) => Ok(Some(Cow::Owned(v))),
+                Res::Truncated(_) | Res::Overflow(_) => Err(Error::Overflow),
+            },
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -217,17 +247,14 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
+            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
 
-            let expected = Expression::build(datum_expr(tt.3), 0, &ctx).unwrap();
-
-            let got = op.eval_int(&ctx, &[]).unwrap();
-            let exp = expected.eval_int(&ctx, &[]).unwrap();
-            assert_eq!(got, exp);
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, tt.3);
         }
     }
 
@@ -252,18 +279,51 @@ mod test {
                 Datum::F64(-0.01),
                 Datum::F64(-0.0101001),
             ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(2.0),
+                Datum::F64(0.3),
+                Datum::F64(6.666666666666667),
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(44.3),
+                Datum::F64(0.000),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::Null,
+                Datum::F64(1.0),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(1.0),
+                Datum::Null,
+                Datum::Null,
+            ), // TODO: support precision in divide.
+               // (
+               //     ScalarFuncSig::DivideReal,
+               //     Datum::F64(-12.3),
+               //     Datum::F64(41f64),
+               //     Datum::F64(-0.3),
+               // ),
+               // (
+               //     ScalarFuncSig::DivideReal,
+               //     Datum::F64(12.3),
+               //     Datum::F64(0.3),
+               //     Datum::F64(41f64)
+               // )
         ];
         let ctx = StatementContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
-            let expected = Expression::build(datum_expr(tt.3), 0, &ctx).unwrap();
-
-            let got = op.eval_real(&ctx, &[]).unwrap();
-            let exp = expected.eval_real(&ctx, &[]).unwrap();
-            assert_eq!(got, exp);
+            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, tt.3);
         }
     }
 
@@ -288,18 +348,45 @@ mod test {
                 str2dec("2.2"),
                 str2dec("2.42"),
             ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("12.3"),
+                str2dec("-0.3"),
+                str2dec("-41"),
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("12.3"),
+                str2dec("0.3"),
+                str2dec("41"),
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("12.3"),
+                str2dec("0"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                Datum::Null,
+                str2dec("123"),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                str2dec("123"),
+                Datum::Null,
+                Datum::Null,
+            ),
         ];
         let ctx = StatementContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
-            let expected = Expression::build(datum_expr(tt.3), 0, &ctx).unwrap();
-
-            let got = op.eval_decimal(&ctx, &[]).unwrap();
-            let exp = expected.eval_decimal(&ctx, &[]).unwrap();
-            assert_eq!(got, exp);
+            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap();
+            assert_eq!(got, tt.3);
         }
     }
 
@@ -355,13 +442,13 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
+            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
 
-            let got = op.eval_int(&ctx, &[]).unwrap_err();
+            let got = op.eval(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
@@ -384,14 +471,19 @@ mod test {
                 Datum::F64(f64::MIN),
                 Datum::F64(f64::MAX),
             ),
+            (
+                ScalarFuncSig::DivideReal,
+                Datum::F64(f64::MAX),
+                Datum::F64(0.00001),
+            ),
         ];
         let ctx = StatementContext::default();
         for tt in tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), 0, &ctx).unwrap();
-            let got = op.eval_real(&ctx, &[]).unwrap_err();
+            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
+            let got = op.eval(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }

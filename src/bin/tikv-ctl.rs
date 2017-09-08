@@ -54,6 +54,7 @@ fn main() {
         )
         .arg(
             Arg::with_name("raftdb")
+                .short("r")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
@@ -249,8 +250,12 @@ fn main() {
     };
     let db_path = matches.value_of("db").unwrap();
     let db = util::rocksdb::open(db_path, ALL_CFS).unwrap();
-    let raft_db_path = matches.value_of("raftdb").unwrap();
-    let raft_db = util::rocksdb::open(raft_db_path, &[]).unwrap();
+    let raft_db = if let Some(raftdb_path) = matches.value_of("raftdb") {
+        util::rocksdb::open(raftdb_path, &[CF_DEFAULT]).unwrap()
+    } else {
+        let raftdb_path = db_path.to_owned() + "../raft";
+        util::rocksdb::open(&raftdb_path, &[CF_DEFAULT]).unwrap()
+    };
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
