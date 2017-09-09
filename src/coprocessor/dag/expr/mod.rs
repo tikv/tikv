@@ -22,8 +22,9 @@ mod builtin_op;
 mod compare;
 mod arithmetic;
 mod math;
+mod json;
 
-use std::{error, io};
+use std::{error, io, str};
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
 use std::str::Utf8Error;
@@ -32,7 +33,8 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
 use coprocessor::codec::mysql::decimal::DecimalDecoder;
-use coprocessor::codec::mysql::types;
+use coprocessor::codec::mysql::json::JsonDecoder;
+use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::Datum;
 use util;
 use util::codec::number::NumberDecoder;
@@ -195,12 +197,29 @@ impl Expression {
         &'b self,
         ctx: &StatementContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Vec<u8>>>> {
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
             Expression::ColumnRef(ref column) => column.eval_string(row),
             Expression::ScalarFn(ref f) => f.eval_bytes(ctx, row),
         }
+    }
+
+    fn eval_string_and_decode<'a, 'b: 'a>(
+        &'b self,
+        ctx: &StatementContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, str>>> {
+        let bytes = try_opt!(self.eval_string(ctx, row));
+        let chrst = self.get_tp().get_charset();
+        if charset::UTF8_CHARSETS.contains(&chrst) {
+            let s = match bytes {
+                Cow::Borrowed(bs) => str::from_utf8(bs).map_err(Error::from).map(Cow::Borrowed),
+                Cow::Owned(bs) => String::from_utf8(bs).map_err(Error::from).map(Cow::Owned),
+            };
+            return s.map(Some);
+        }
+        Err(box_err!("unsupported codec"))
     }
 
     fn eval_time<'a, 'b: 'a>(
@@ -317,6 +336,11 @@ impl Expression {
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
+            ExprType::MysqlJson => expr.get_val()
+                .decode_json()
+                .map(Datum::Json)
+                .map(|e| Expression::new_const(e, tp))
+                .map_err(Error::from),
             ExprType::ScalarFunc => {
                 try!(FnCall::check_args(
                     expr.get_sig(),
@@ -359,6 +383,11 @@ mod test {
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
         Datum::Dec(s.parse().unwrap())
+    }
+
+    #[inline]
+    pub fn make_null_datums(size: usize) -> Vec<Datum> {
+        (0..size).map(|_| Datum::Null).collect()
     }
 
     #[inline]

@@ -55,6 +55,7 @@ use std::fs::File;
 use std::usize;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 use std::io::Read;
 use std::env;
 use std::time::Duration;
@@ -79,9 +80,16 @@ use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERV
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
+// A workaround for checking if log is initialized.
+static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
+
 macro_rules! fatal {
     ($lvl:expr, $($arg:tt)+) => ({
-        error!($lvl, $($arg)+);
+        if LOG_INITIALIZED.load(Ordering::SeqCst) {
+            error!($lvl, $($arg)+);
+        } else {
+            eprintln!($lvl, $($arg)+);
+        }
         process::exit(1)
     })
 }
@@ -89,23 +97,21 @@ macro_rules! fatal {
 fn init_log(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         logger::init_log(StderrLogger, config.log_level).unwrap_or_else(|e| {
-            eprintln!("failed to initial log: {:?}", e);
-            process::exit(1)
+            fatal!("failed to initial log: {:?}", e);
         });
     } else {
         let w = RotatingFileLogger::new(&config.log_file).unwrap_or_else(|e| {
-            eprintln!(
+            fatal!(
                 "failed to initial log with file {:?}: {:?}",
                 config.log_file,
                 e
             );
-            process::exit(1)
         });
         logger::init_log(w, config.log_level).unwrap_or_else(|e| {
-            eprintln!("failed to initial log: {:?}", e);
-            process::exit(1)
+            fatal!("failed to initial log: {:?}", e);
         });
     }
+    LOG_INITIALIZED.store(true, Ordering::SeqCst);
 }
 
 fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
@@ -299,10 +305,10 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
     }
 
     if let Some(capacity_str) = matches.value_of("capacity") {
-        let capacity = capacity_str
-            .parse()
-            .unwrap_or_else(|e| fatal!("invalid capacity {}: {:?}", capacity_str, e));
-        config.raft_store.capacity.0 = capacity;
+        let capacity = capacity_str.parse().unwrap_or_else(|e| {
+            fatal!("invalid capacity: {}", e);
+        });
+        config.raft_store.capacity = capacity;
     }
 }
 
@@ -441,8 +447,7 @@ fn main() {
                     Ok(c)
                 })
                 .unwrap_or_else(|e| {
-                    eprintln!("invalid configuration file {:?}: {}", path, e);
-                    process::exit(-1);
+                    fatal!("invalid configuration file {:?}: {}", path, e);
                 })
         },
     );
@@ -450,8 +455,7 @@ fn main() {
     overwrite_config_with_cmd_args(&mut config, &matches);
 
     if let Err(e) = config.validate() {
-        eprintln!("invalid configuration: {:?}", e);
-        process::exit(-1);
+        fatal!("invalid configuration: {:?}", e);
     }
 
     init_log(&config);

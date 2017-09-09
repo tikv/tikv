@@ -18,7 +18,7 @@ use time::Duration as TimeDuration;
 use raftstore::Result;
 use util::config::{ReadableDuration, ReadableSize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
