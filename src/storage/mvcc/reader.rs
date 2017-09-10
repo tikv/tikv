@@ -599,7 +599,7 @@ mod tests {
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let mut stat = Statistics::default();
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI);
+            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI, true);
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.modifies());
         }
@@ -608,7 +608,7 @@ mod tests {
             let k = make_key(pk);
             let mut stat = Statistics::default();
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI);
+            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI, true);
             txn.commit(&k, commit_ts).unwrap();
             self.write(txn.modifies());
         }
@@ -617,7 +617,8 @@ mod tests {
             let k = make_key(pk);
             let mut stat = Statistics::default();
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(&snap, &mut stat, safe_point, None, IsolationLevel::SI);
+            let mut txn =
+                MvccTxn::new(&snap, &mut stat, safe_point, None, IsolationLevel::SI, true);
             txn.gc(&k, safe_point).unwrap();
             self.write(txn.modifies());
         }
