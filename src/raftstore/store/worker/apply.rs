@@ -435,6 +435,10 @@ impl ApplyDelegate {
                         panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                     });
 
+                self.engine.flush_wal(false).unwrap_or_else(|e| {
+                    panic!("{} failed to flush wal, error: {:?}", self.tag, e)
+                });
+
                 // call callback
                 for (cb, resp) in apply_ctx.cbs.drain(..) {
                     cb(resp);

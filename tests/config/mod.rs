@@ -130,6 +130,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
+        manual_wal_flush: true,
         backup_dir: "/var".to_owned(),
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),

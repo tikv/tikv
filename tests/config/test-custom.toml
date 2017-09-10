@@ -93,6 +93,7 @@ max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
+manual-wal-flush = true
 backup-dir = "/var"
 
 [rocksdb.defaultcf]
