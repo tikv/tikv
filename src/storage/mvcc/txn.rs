@@ -44,6 +44,7 @@ impl<'a> MvccTxn<'a> {
         start_ts: u64,
         mode: Option<ScanMode>,
         isolation_level: IsolationLevel,
+        fill_cache: bool,
     ) -> MvccTxn<'a> {
         MvccTxn {
             // Todo: use session variable to indicate fill cache or not
@@ -51,7 +52,7 @@ impl<'a> MvccTxn<'a> {
                 snapshot,
                 statistics,
                 mode,
-                true, // fill_cache
+                fill_cache,
                 None,
                 isolation_level,
             ),
@@ -742,6 +743,7 @@ mod tests {
             10,
             None,
             IsolationLevel::SI,
+            true,
         );
         let key = make_key(k);
         assert_eq!(txn.write_size, 0);
@@ -765,6 +767,7 @@ mod tests {
             10,
             None,
             IsolationLevel::SI,
+            true,
         );
         txn.commit(&key, 15).unwrap();
         assert!(txn.write_size() > 0);
@@ -796,6 +799,7 @@ mod tests {
             5,
             None,
             IsolationLevel::SI,
+            true,
         );
         assert!(
             txn.prewrite(
@@ -814,6 +818,7 @@ mod tests {
             5,
             None,
             IsolationLevel::SI,
+            true,
         );
         let mut opt = Options::default();
         opt.skip_constraint_check = true;
@@ -846,6 +851,7 @@ mod tests {
             ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect);
     }
@@ -860,6 +866,7 @@ mod tests {
             ts,
             None,
             IsolationLevel::RC,
+            true,
         );
         assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect)
     }
@@ -874,6 +881,7 @@ mod tests {
             ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         assert!(txn.get(&make_key(key)).unwrap().is_none());
     }
@@ -888,6 +896,7 @@ mod tests {
             ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         assert!(txn.get(&make_key(key)).is_err());
     }
@@ -902,6 +911,7 @@ mod tests {
             ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         txn.prewrite(
             Mutation::Put((make_key(key), value.to_vec())),
@@ -921,6 +931,7 @@ mod tests {
             ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         txn.prewrite(Mutation::Delete(make_key(key)), pk, &Options::default())
             .unwrap();
@@ -937,6 +948,7 @@ mod tests {
             ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         txn.prewrite(Mutation::Lock(make_key(key)), pk, &Options::default())
             .unwrap();
@@ -953,6 +965,7 @@ mod tests {
             ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         assert!(
             txn.prewrite(Mutation::Lock(make_key(key)), pk, &Options::default())
@@ -970,6 +983,7 @@ mod tests {
             start_ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         txn.commit(&make_key(key), commit_ts).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
@@ -985,6 +999,7 @@ mod tests {
             start_ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         assert!(txn.commit(&make_key(key), commit_ts).is_err());
     }
@@ -999,6 +1014,7 @@ mod tests {
             start_ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         txn.rollback(&make_key(key)).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
@@ -1014,6 +1030,7 @@ mod tests {
             start_ts,
             None,
             IsolationLevel::SI,
+            true,
         );
         assert!(txn.rollback(&make_key(key)).is_err());
     }
@@ -1028,6 +1045,7 @@ mod tests {
             0,
             None,
             IsolationLevel::SI,
+            true,
         );
         txn.gc(&make_key(key), safe_point).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
