@@ -6,19 +6,19 @@
 #    e.g.: 78_000 = "1.3m"
 
 # log level: trace, debug, info, warn, error, off.
-log-level = "info"
+# log-level = "info"
 # file to store log, write to stderr if it's empty.
 # log-file = ""
 
 [server]
 # set listening address.
-addr = "127.0.0.1:20160"
+# addr = "127.0.0.1:20160"
 # set advertise listening address for client communication, if not set, use addr instead.
-#advertise-addr = ""
+# advertise-addr = ""
 # notify capacity, 40960 is suitable for about 7000 regions.
-notify-capacity = 40960
+# notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
-messages-per-tick = 4096
+# messages-per-tick = 4096
 
 # size of thread pool for grpc server.
 # grpc-concurrency = 4
@@ -36,11 +36,11 @@ messages-per-tick = 4096
 # end-point-max-tasks = 2000
 
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
-labels = {}
+# labels = {}
 
 [storage]
 # set the path to rocksdb directory.
-data-dir = "/tmp/tikv/store"
+# data-dir = "/tmp/tikv/store"
 
 # notify capacity of scheduler's channel
 # scheduler-notify-capacity = 10240
@@ -57,19 +57,19 @@ data-dir = "/tmp/tikv/store"
 
 [pd]
 # pd endpoints
-endpoints = []
+# endpoints = []
 
 [metric]
 # the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
-interval = "15s"
+# interval = "15s"
 # the Prometheus pushgateway address. Leaving it empty stops Prometheus client from pushing.
-address = ""
+# address = ""
 # the Prometheus client push job name. Note: A node id will automatically append, e.g., "tikv_1".
-job = "tikv"
+# job = "tikv"
 
 [raftstore]
 # true (default value) for high reliability, this can prevent data loss when power failure.
-sync-log = true
+# sync-log = true
 
 # set the path to raftdb directory, default value is data-dir/raft
 # raftdb-path = ""
@@ -78,27 +78,27 @@ sync-log = true
 # capacity = 0
 
 # notify capacity, 40960 is suitable for about 7000 regions.
-notify-capacity = 40960
+# notify-capacity = 40960
 
 # maximum number of messages can be processed in one tick.
-messages-per-tick = 4096
+# messages-per-tick = 4096
 
 # Region heartbeat tick interval for reporting to pd.
-pd-heartbeat-tick-interval = "60s"
+# pd-heartbeat-tick-interval = "60s"
 # Store heartbeat tick interval for reporting to pd.
-pd-store-heartbeat-tick-interval = "10s"
+# pd-store-heartbeat-tick-interval = "10s"
 
 # When the region's size exceeds region-max-size, we will split the region
 # into two which the left region's size will be region-split-size or a little
 # bit smaller.
-region-max-size = "384MB"
-region-split-size = "256MB"
+# region-max-size = "384MB"
+# region-split-size = "256MB"
 # When region size changes exceeds region-split-check-diff, we should check
 # whether the region should be split or not.
-region-split-check-diff = "32MB"
+# region-split-check-diff = "32MB"
 
 # Interval to check region whether need to be split or not.
-split-region-check-tick-interval = "10s"
+# split-region-check-tick-interval = "10s"
 
 # When raft entry exceed the max size, reject to propose the entry.
 # raft-entry-max-size = "8MB"
@@ -115,7 +115,7 @@ split-region-check-tick-interval = "10s"
 
 # When a peer hasn't been active for max-peer-down-duration,
 # we will consider this peer to be down and report it to pd.
-max-peer-down-duration = "5m"
+# max-peer-down-duration = "5m"
 
 # Interval to check whether start manual compaction for a region,
 # 0 is the default value, means disable manual compaction.
@@ -152,17 +152,17 @@ max-peer-down-duration = "5m"
 
 # Max size of rocksdb's MANIFEST file.
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
-max-manifest-file-size = "20MB"
+# max-manifest-file-size = "20MB"
 
 # If true, the database will be created if it is missing.
-create-if-missing = true
+# create-if-missing = true
 
 # rocksdb wal recovery mode
 # 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
 # 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;
 # 2 : PointInTimeRecovery, Recover to point-in-time consistency;
 # 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
-wal-recovery-mode = 2
+# wal-recovery-mode = 2
 
 # rocksdb write-ahead logs dir path
 # This specifies the absolute dir path for write-ahead logs (WAL).
@@ -202,7 +202,7 @@ wal-recovery-mode = 2
 
 # Dump statistics periodically in information logs.
 # Same as rocksdb's default value (10 min).
-stats-dump-period = "10m"
+# stats-dump-period = "10m"
 
 # Due to Rocksdb FAQ: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ,
 # If you want to use rocksdb on multi disks or spinning disks, you should set value at
@@ -277,7 +277,7 @@ stats-dump-period = "10m"
 # max-bytes-for-level-base = "512MB"
 
 # Target file size for compaction.
-# target-file-size-base = "32MB"
+# target-file-size-base = "8MB"
 
 # Max bytes for compaction.max_compaction_bytes
 # max-compaction-bytes = "2GB"
@@ -307,7 +307,7 @@ stats-dump-period = "10m"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "512MB"
-# target-file-size-base = "32MB"
+# target-file-size-base = "8MB"
 
 # in normal cases should tune to 10%-30% system's total memory.
 # block-cache-size = "256MB"
@@ -325,7 +325,7 @@ stats-dump-period = "10m"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "128MB"
-# target-file-size-base = "32MB"
+# target-file-size-base = "8MB"
 # block-cache-size = "256MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
@@ -336,12 +336,12 @@ stats-dump-period = "10m"
 [raftdb]
 # max-sub-compactions = 1
 # max-open-files = 40960
-max-manifest-file-size = "20MB"
-create-if-missing = true
+# max-manifest-file-size = "20MB"
+# create-if-missing = true
 # writable-file-max-buffer-size = "1MB"
 
 # enable-statistics = true
-stats-dump-period = "10m"
+# stats-dump-period = "10m"
 
 # compaction-readahead-size = 0
 # writable-file-max-buffer-size = "1MB"
@@ -356,7 +356,7 @@ stats-dump-period = "10m"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "512MB"
-# target-file-size-base = "32MB"
+# target-file-size-base = "8MB"
 
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"

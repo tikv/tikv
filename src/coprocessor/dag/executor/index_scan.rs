@@ -166,14 +166,14 @@ mod test {
         let mut expect_rows = Vec::new();
 
         for handle in 0..key_number {
-            let indice = map![
-                2 => Datum::Bytes(b"abc".to_vec()),
-                3 => Datum::Dec(handle.into())
+            let indice = vec![
+                (2, Datum::Bytes(b"abc".to_vec())),
+                (3, Datum::Dec(handle.into())),
             ];
             let mut expect_row = HashMap::default();
             let mut v: Vec<_> = indice
                 .iter()
-                .map(|(cid, value)| {
+                .map(|&(ref cid, ref value)| {
                     expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
                     value.clone()
                 })
@@ -250,7 +250,7 @@ mod test {
         r2.set_end(end_key.clone());
         wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
@@ -281,7 +281,7 @@ mod test {
         wrapper.ranges = vec![r1, r2, r3];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
@@ -306,7 +306,7 @@ mod test {
         let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::include_pk_cols();
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);

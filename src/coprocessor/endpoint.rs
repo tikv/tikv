@@ -26,7 +26,7 @@ use kvproto::kvrpcpb::CommandPri;
 use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
-use util::threadpool::{Context, ContextFactory, ThreadPool, DEFAULT_TASKS_PER_TICK};
+use util::threadpool::{Context, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
 use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
 use storage::engine::Error as EngineError;
@@ -69,6 +69,7 @@ pub struct Host {
     max_running_task_count: usize,
 }
 
+#[derive(Default)]
 struct CopContext {
     task_count: u64,
     select_stats: Statistics,
@@ -94,11 +95,7 @@ impl CopContext {
     }
 }
 
-unsafe impl Send for CopContext {}
-
 impl Context for CopContext {
-    fn on_task_started(&mut self) {}
-    fn on_task_finished(&mut self) {}
     fn on_tick(&mut self) {
         if self.task_count == 0 {
             return;
@@ -119,19 +116,6 @@ impl Context for CopContext {
     }
 }
 
-struct CopContextFactory;
-
-impl ContextFactory<CopContext> for CopContextFactory {
-    fn create(&self) -> CopContext {
-        CopContext {
-            task_count: 0,
-            select_stats: Default::default(),
-            index_stats: Default::default(),
-            dag_stats: Default::default(),
-        }
-    }
-}
-
 impl Host {
     pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config) -> Host {
         Host {
@@ -140,24 +124,17 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
-            pool: ThreadPool::new(
-                thd_name!("endpoint-normal-pool"),
-                cfg.end_point_concurrency,
-                DEFAULT_TASKS_PER_TICK,
-                CopContextFactory {},
-            ),
-            low_priority_pool: ThreadPool::new(
+            pool: ThreadPoolBuilder::with_default_factory(thd_name!("endpoint-normal-pool"))
+                .thread_count(cfg.end_point_concurrency)
+                .build(),
+            low_priority_pool: ThreadPoolBuilder::with_default_factory(
                 thd_name!("endpoint-low-pool"),
-                cfg.end_point_concurrency,
-                DEFAULT_TASKS_PER_TICK,
-                CopContextFactory {},
-            ),
-            high_priority_pool: ThreadPool::new(
+            ).thread_count(cfg.end_point_concurrency)
+                .build(),
+            high_priority_pool: ThreadPoolBuilder::with_default_factory(
                 thd_name!("endpoint-high-pool"),
-                cfg.end_point_concurrency,
-                DEFAULT_TASKS_PER_TICK,
-                CopContextFactory {},
-            ),
+            ).thread_count(cfg.end_point_concurrency)
+                .build(),
         }
     }
 
@@ -558,6 +535,7 @@ impl TiDbEndPoint {
             self.snap.as_ref(),
             sel.get_start_ts(),
             t.req.get_context().get_isolation_level(),
+            !t.req.get_context().get_not_fill_cache(),
         );
         let ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let range = t.req.get_ranges().to_vec();
@@ -578,6 +556,7 @@ impl TiDbEndPoint {
             self.snap.as_ref(),
             eval_ctx.clone(),
             t.req.get_context().get_isolation_level(),
+            !t.req.get_context().get_not_fill_cache(),
         );
         ctx.handle_request(&mut t.statistics)
     }

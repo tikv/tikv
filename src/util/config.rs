@@ -184,7 +184,10 @@ pub mod order_map_serde {
             where
                 M: MapAccess<'de>,
             {
-                let mut map = HashMap::with_capacity(access.size_hint().unwrap_or(0));
+                let mut map = HashMap::with_capacity_and_hasher(
+                    access.size_hint().unwrap_or(0),
+                    Default::default(),
+                );
                 while let Some((key, value)) = access.next_entry()? {
                     map.insert(key, value);
                 }
@@ -299,7 +302,7 @@ const SECOND: u64 = MS * TIME_MAGNITUDE_1;
 const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, PartialEq)]
 pub struct ReadableSize(pub u64);
 
 impl ReadableSize {
@@ -370,6 +373,54 @@ impl Serialize for ReadableSize {
     }
 }
 
+impl FromStr for ReadableSize {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<ReadableSize, String> {
+        let size_str = s.trim();
+        if size_str.is_empty() {
+            return Err(format!("{:?} is not a valid size.", s));
+        }
+
+        if !size_str.is_ascii() {
+            return Err(format!("ASCII string is expected, but got {:?}", s));
+        }
+
+        let mut chrs = size_str.chars();
+        let mut number_str = size_str;
+        let mut unit_char = chrs.next_back().unwrap();
+        if unit_char < '0' || unit_char > '9' {
+            number_str = chrs.as_str();
+            if unit_char == 'B' {
+                let b = match chrs.next_back() {
+                    Some(b) => b,
+                    None => return Err(format!("numeric value is expected: {:?}", s)),
+                };
+                if b < '0' || b > '9' {
+                    number_str = chrs.as_str();
+                    unit_char = b;
+                }
+            }
+        } else {
+            unit_char = 'B';
+        }
+
+        let unit = match unit_char {
+            'K' => KB,
+            'M' => MB,
+            'G' => GB,
+            'T' => TB,
+            'P' => PB,
+            'B' => UNIT,
+            _ => return Err(format!("only B, KB, MB, GB, TB, PB are supported: {:?}", s)),
+        };
+        match number_str.trim().parse::<f64>() {
+            Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
+            Err(_) => Err(format!("invalid size string: {:?}", s)),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for ReadableSize {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -406,41 +457,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
             where
                 E: de::Error,
             {
-                let err_msg = "valid size, only KB, MB, GB, TB, PB are supported.";
-                let size_str = size_str.trim();
-                if size_str.len() < 2 {
-                    // When it's a string, it should contains a unit and a number.
-                    // So its length should be at least 2.
-                    return Err(E::invalid_value(Unexpected::Str(size_str), &err_msg));
-                }
-
-                if !size_str.is_ascii() {
-                    return Err(E::invalid_value(Unexpected::Str(size_str), &"ascii str"));
-                }
-
-                let mut chrs = size_str.chars();
-                let mut unit_char = chrs.next_back().unwrap();
-                let mut number_str = chrs.as_str();
-                if unit_char == 'B' {
-                    let b = chrs.next_back().unwrap();
-                    if b < '0' || b > '9' {
-                        number_str = chrs.as_str();
-                        unit_char = b;
-                    }
-                }
-
-                let unit = match unit_char {
-                    'K' => KB,
-                    'M' => MB,
-                    'G' => GB,
-                    'T' => TB,
-                    'P' => PB,
-                    _ => return Err(E::invalid_value(Unexpected::Str(size_str), &err_msg)),
-                };
-                match number_str.trim().parse::<f64>() {
-                    Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
-                    Err(_) => Err(E::invalid_value(Unexpected::Str(size_str), &err_msg)),
-                }
+                size_str.parse().map_err(E::custom)
             }
         }
 
@@ -448,7 +465,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
 impl ReadableDuration {
@@ -845,6 +862,9 @@ mod test {
             ("0.5G", GB / 2),
             ("0.5M", MB / 2),
             ("0.5K", KB / 2),
+            ("23", 23),
+            ("1", 1),
+            ("1024B", KB),
         ];
         for (src, exp) in decode_cases {
             let src = format!("s = {:?}", src);
@@ -852,7 +872,17 @@ mod test {
             assert_eq!(res.s.0, exp);
         }
 
-        let illegal_cases = vec!["0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "gb", "1b"];
+        let illegal_cases = vec![
+            "0.5kb",
+            "0.5kB",
+            "0.5Kb",
+            "0.5k",
+            "0.5g",
+            "b",
+            "gb",
+            "1b",
+            "B",
+        ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
@@ -882,7 +912,7 @@ mod test {
         }
         // inline table should be supported.
         let m: MapHolder = toml::from_str(r#"m = {"k1" = "v1"}"#).unwrap();
-        assert_eq!(m.m.get("k1").unwrap(), "v1");
+        assert_eq!(&m.m["k1"], "v1");
     }
 
     #[test]

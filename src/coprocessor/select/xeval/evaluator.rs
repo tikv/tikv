@@ -24,7 +24,7 @@ use util::collections::{HashMap, HashMapEntry};
 
 use coprocessor::codec;
 use coprocessor::codec::datum::{Datum, DatumDecoder};
-use coprocessor::codec::mysql::{DecimalDecoder, Duration, Json, ModifyType, PathExpression, Time,
+use coprocessor::codec::mysql::{DecimalDecoder, Duration, ModifyType, PathExpression, Time,
                                 MAX_FSP};
 use coprocessor::codec::mysql::json::{json_array, json_object};
 use super::{Error, Result};
@@ -568,9 +568,12 @@ impl Evaluator {
             return Ok(Datum::Null);
         }
         let mut children = children.into_iter();
-        let first = try!(children.next().unwrap().cast_as_json());
-        let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json()).collect());
-        Ok(Datum::Json(first.merge(suffixes)))
+        let mut res = try!(children.next().unwrap().cast_as_json());
+        for item in children {
+            let j = try!(item.cast_as_json());
+            res = res.merge(j);
+        }
+        Ok(Datum::Json(res))
     }
 
     fn eval_json_object(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -676,7 +679,8 @@ pub mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
     use coprocessor::codec::{datum, mysql, Datum};
-    use coprocessor::codec::mysql::{types, Decimal, DecimalEncoder, Duration, MAX_FSP};
+    use coprocessor::codec::mysql::{charset, types, Decimal, DecimalEncoder, Duration, MAX_FSP};
+    use coprocessor::codec::mysql::json::JsonEncoder;
     use tipb::expression::FieldType;
 
     use std::i32;
@@ -704,6 +708,8 @@ pub mod test {
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
                 expr.set_val(bs);
+                expr.mut_field_type()
+                    .set_charset(charset::CHARSET_UTF8.to_owned());
             }
             Datum::F64(f) => {
                 expr.set_tp(ExprType::Float64);
@@ -733,6 +739,12 @@ pub mod test {
                 let u = t.to_packed_u64();
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
                 buf.encode_u64(u).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Json(j) => {
+                expr.set_tp(ExprType::MysqlJson);
+                let mut buf = Vec::new();
+                buf.encode_json(&j).unwrap();
                 expr.set_val(buf);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
