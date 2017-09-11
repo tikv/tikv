@@ -448,24 +448,25 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 }
 
 #[test]
-fn test_raft_and_coprocessor() {
+fn test_raft() {
     let (_cluster, client, _) = must_new_cluster_and_client();
 
     // Raft commands
-    {
-        let (sink, _) = client.raft();
-        sink.send((RaftMessage::new(), Default::default()))
-            .wait()
-            .unwrap();
+    let (sink, _) = client.raft();
+    sink.send((RaftMessage::new(), Default::default()))
+        .wait()
+        .unwrap();
 
-        let (sink, _) = client.snapshot();
-        sink.send((SnapshotChunk::new(), Default::default()))
-            .wait()
-            .unwrap();
-    }
+    let (sink, _) = client.snapshot();
+    sink.send((SnapshotChunk::new(), Default::default()))
+        .wait()
+        .unwrap();
+}
+
+#[test]
+fn test_coprocessor() {
+    let (_cluster, client, _) = must_new_cluster_and_client();
 
     // SQL push down commands
-    {
-        client.coprocessor(Request::new()).unwrap();
-    }
+    client.coprocessor(Request::new()).unwrap();
 }
