@@ -291,7 +291,7 @@ impl SliceTransform for NoopSliceTransform {
     }
 }
 
-pub fn roughly_cleanup_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
+pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
     if start_key > end_key {
         return Err(format!(
             "[roughly_cleanup_in_range] start_key({:?}) should't larger than end_key({:?}).",
@@ -307,6 +307,7 @@ pub fn roughly_cleanup_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Re
     for cf in db.cf_names() {
         let handle = try!(get_cf_handle(db, cf));
         if cf == CF_LOCK {
+            // Todo: use delete_files_in_range after rocksdb support [start, end) semantics.
             let mut iter_opt = ReadOptions::new();
             iter_opt.fill_cache(false);
             iter_opt.set_iterate_upper_bound(end_key);
