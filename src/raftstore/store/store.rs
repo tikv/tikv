@@ -359,7 +359,7 @@ impl<T, C> Store<T, C> {
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            try!(rocksdb::delete_file_in_range(
+            try!(rocksdb::roughly_cleanup_in_range(
                 &self.kv_engine,
                 &last_start_key,
                 &start_key
@@ -367,7 +367,7 @@ impl<T, C> Store<T, C> {
             last_start_key = keys::enc_end_key(region);
         }
 
-        try!(rocksdb::delete_file_in_range(
+        try!(rocksdb::roughly_cleanup_in_range(
             &self.kv_engine,
             &last_start_key,
             keys::DATA_MAX_KEY
