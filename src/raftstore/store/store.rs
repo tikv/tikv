@@ -1174,6 +1174,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(p) => if p.peer_id() == peer.get_id() {
                 p
             } else {
+                assert!(p.peer_id() > peer.get_id());
                 // It has been destroyed.
                 self.region_peers.insert(region_id, p);
                 return;
