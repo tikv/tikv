@@ -1386,7 +1386,7 @@ impl Scheduler {
 
             for msg in msgs.drain(..) {
                 match msg {
-                    Msg::Quit => return self.on_quit(),
+                    Msg::Quit => return self.shutdown(),
                     Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
                     Msg::RetryGetSnapshots(tasks) => for (ctx, cids) in tasks {
                         self.get_snapshot(&ctx, cids);
@@ -1433,7 +1433,7 @@ impl Scheduler {
         }
     }
 
-    fn on_quit(&mut self) -> Result<()> {
+    fn shutdown(&mut self) -> Result<()> {
         if let Err(e) = self.worker_pool.stop() {
             return Err(Error::Other(box_err!("{:?}", e)));
         }
