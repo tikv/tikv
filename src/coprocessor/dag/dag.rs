@@ -25,7 +25,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{check_if_outdated, get_chunk, get_pk, to_pb_error, REQ_TYPE_DAG};
+use coprocessor::endpoint::{check_if_outdated, get_chunk, get_pk, to_pb_error};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{AggregationExecutor, Executor as DAGExecutor, IndexScanExecutor,
@@ -41,28 +41,31 @@ pub struct DAGContext<'s> {
     eval_ctx: Rc<EvalContext>,
     isolation_level: IsolationLevel,
     fill_cache: bool,
+    table_scan: bool,
 }
+
+// deadline, isolation_level, fill_cache, table_scan
+pub type ReqCtx = (Instant, IsolationLevel, bool, bool);
 
 impl<'s> DAGContext<'s> {
     pub fn new(
         req: DAGRequest,
-        deadline: Instant,
+        ctx: ReqCtx,
         ranges: Vec<KeyRange>,
         snap: &'s Snapshot,
         eval_ctx: Rc<EvalContext>,
-        isolation_level: IsolationLevel,
-        fill_cache: bool,
     ) -> DAGContext<'s> {
         DAGContext {
             req: req,
-            deadline: deadline,
+            deadline: ctx.0,
             columns: Rc::new(vec![]),
             ranges: ranges,
             snap: snap,
             has_aggr: false,
             eval_ctx: eval_ctx,
-            isolation_level: isolation_level,
-            fill_cache: fill_cache,
+            isolation_level: ctx.1,
+            fill_cache: ctx.2,
+            table_scan: ctx.3,
         }
     }
 
@@ -73,7 +76,7 @@ impl<'s> DAGContext<'s> {
         loop {
             match exec.next() {
                 Ok(Some(row)) => {
-                    try!(check_if_outdated(self.deadline, REQ_TYPE_DAG));
+                    try!(check_if_outdated(self.deadline, self.table_scan));
                     let chunk = get_chunk(&mut chunks);
                     let length = chunk.get_rows_data().len();
                     if self.has_aggr {

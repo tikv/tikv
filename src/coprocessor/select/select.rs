@@ -106,7 +106,7 @@ impl<'a> SelectContext<'a> {
                 duration_to_ms(timer.elapsed())
             );
             collected += row_cnt;
-            try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
+            try!(check_if_outdated(self.deadline, true));
         }
         if self.core.topn {
             self.core.collect_topn_rows()
@@ -165,7 +165,7 @@ impl<'a> SelectContext<'a> {
             ));
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
-                    try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
+                    try!(check_if_outdated(self.deadline, true));
                 }
                 let kv = if self.core.desc_scan {
                     try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
@@ -208,7 +208,7 @@ impl<'a> SelectContext<'a> {
                 break;
             }
             collected += try!(self.get_idx_row_from_range(r));
-            try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
+            try!(check_if_outdated(self.deadline, true));
         }
         if self.core.topn {
             self.core.collect_topn_rows()
@@ -244,7 +244,7 @@ impl<'a> SelectContext<'a> {
         ));
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
-                try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
+                try!(check_if_outdated(self.deadline, true));
             }
             let nk = if self.core.desc_scan {
                 try!(scanner.reverse_seek(Key::from_raw(&seek_key)))

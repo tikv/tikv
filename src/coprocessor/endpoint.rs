@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
 
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
+use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
 use protobuf::Message as PbMsg;
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -74,7 +75,6 @@ struct CopContext {
     task_count: u64,
     select_stats: Statistics,
     index_stats: Statistics,
-    dag_stats: Statistics,
 }
 
 impl CopContext {
@@ -86,7 +86,6 @@ impl CopContext {
         match type_str {
             STR_REQ_TYPE_SELECT => &mut self.select_stats,
             STR_REQ_TYPE_INDEX => &mut self.index_stats,
-            STR_REQ_TYPE_DAG => &mut self.dag_stats,
             _ => {
                 warn!("unknown STR_REQ_TYPE: {}", type_str);
                 &mut self.select_stats
@@ -101,7 +100,7 @@ impl Context for CopContext {
             return;
         }
         let task_count = self.task_count;
-        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX, STR_REQ_TYPE_DAG] {
+        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
             let this_statistics = self.get_statistics(type_str);
             for (cf, details) in this_statistics.details() {
                 for (tag, count) in details {
@@ -162,7 +161,7 @@ impl Host {
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
-            let type_str = get_req_type_str(req.req.get_tp());
+            let type_str = get_scan_tag(req.table_scan);
             COPR_PENDING_REQS
                 .with_label_values(&[type_str, pri_str])
                 .add(1.0);
@@ -210,6 +209,8 @@ enum CopRequest {
 
 pub struct RequestTask {
     req: Request,
+    // whether is a table scan request.
+    table_scan: bool,
     start_ts: Option<u64>,
     wait_time: Option<f64>,
     timer: Instant,
@@ -226,8 +227,12 @@ impl RequestTask {
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;
         let tp = req.get_tp();
+        let mut table_scan = false;
         let cop_req = match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
+                if tp == REQ_TYPE_SELECT {
+                    table_scan = true;
+                }
                 let mut sel = SelectRequest::new();
                 if let Err(e) = sel.merge_from_bytes(req.get_data()) {
                     Err(box_err!(e))
@@ -242,6 +247,11 @@ impl RequestTask {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(dag.get_start_ts());
+                    if let Some(scan) = dag.get_executors().iter().next() {
+                        if scan.get_tp() == ExecType::TypeTableScan {
+                            table_scan = true;
+                        }
+                    }
                     Ok(CopRequest::DAG(dag))
                 }
             }
@@ -249,6 +259,7 @@ impl RequestTask {
         };
         RequestTask {
             req: req,
+            table_scan: table_scan,
             start_ts: start_ts,
             wait_time: None,
             timer: timer,
@@ -261,7 +272,7 @@ impl RequestTask {
 
     #[inline]
     fn check_outdated(&self) -> Result<()> {
-        check_if_outdated(self.deadline, self.req.get_tp())
+        check_if_outdated(self.deadline, self.table_scan)
     }
 
     fn stop_record_waiting(&mut self) {
@@ -270,7 +281,7 @@ impl RequestTask {
         }
         let wait_time = duration_to_sec(self.timer.elapsed());
         COPR_REQ_WAIT_TIME
-            .with_label_values(&[get_req_type_str(self.req.get_tp())])
+            .with_label_values(&[get_scan_tag(self.table_scan)])
             .observe(wait_time);
         self.wait_time = Some(wait_time);
     }
@@ -279,7 +290,7 @@ impl RequestTask {
         self.stop_record_waiting();
 
         let handle_time = duration_to_sec(self.timer.elapsed());
-        let type_str = get_req_type_str(self.req.get_tp());
+        let type_str = get_scan_tag(self.table_scan);
         COPR_REQ_HISTOGRAM_VEC
             .with_label_values(&[type_str])
             .observe(handle_time);
@@ -448,8 +459,8 @@ fn err_resp(e: Error) -> Response {
             resp.set_locked(info);
             COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
         }
-        Error::Outdated(deadline, now, tp) => {
-            let t = get_req_type_str(tp);
+        Error::Outdated(deadline, now, table_scan) => {
+            let t = get_scan_tag(table_scan);
             let elapsed =
                 now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
             COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
@@ -489,10 +500,10 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     }
 }
 
-pub fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
+pub fn check_if_outdated(deadline: Instant, table_scan: bool) -> Result<()> {
     let now = Instant::now();
     if deadline <= now {
-        return Err(Error::Outdated(deadline, now, tp));
+        return Err(Error::Outdated(deadline, now, table_scan));
     }
     Ok(())
 }
@@ -549,15 +560,13 @@ impl TiDbEndPoint {
             dag.get_time_zone_offset(),
             dag.get_flags()
         )));
-        let ctx = DAGContext::new(
-            dag,
+        let req_ctx = (
             t.deadline,
-            ranges,
-            self.snap.as_ref(),
-            eval_ctx.clone(),
             t.req.get_context().get_isolation_level(),
             !t.req.get_context().get_not_fill_cache(),
+            t.table_scan,
         );
+        let ctx = DAGContext::new(dag, req_ctx, ranges, self.snap.as_ref(), eval_ctx.clone());
         ctx.handle_request(&mut t.statistics)
     }
 }
@@ -621,16 +630,13 @@ pub fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
 
 pub const STR_REQ_TYPE_SELECT: &'static str = "select";
 pub const STR_REQ_TYPE_INDEX: &'static str = "index";
-pub const STR_REQ_TYPE_DAG: &'static str = "dag";
-pub const STR_REQ_TYPE_UNKNOWN: &'static str = "unknown";
 
 #[inline]
-pub fn get_req_type_str(tp: i64) -> &'static str {
-    match tp {
-        REQ_TYPE_SELECT => STR_REQ_TYPE_SELECT,
-        REQ_TYPE_INDEX => STR_REQ_TYPE_INDEX,
-        REQ_TYPE_DAG => STR_REQ_TYPE_DAG,
-        _ => STR_REQ_TYPE_UNKNOWN,
+pub fn get_scan_tag(table_scan: bool) -> &'static str {
+    if table_scan {
+        STR_REQ_TYPE_SELECT
+    } else {
+        STR_REQ_TYPE_INDEX
     }
 }
 
@@ -658,14 +664,6 @@ mod tests {
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
-
-    #[test]
-    fn test_get_req_type_str() {
-        assert_eq!(get_req_type_str(REQ_TYPE_SELECT), STR_REQ_TYPE_SELECT);
-        assert_eq!(get_req_type_str(REQ_TYPE_INDEX), STR_REQ_TYPE_INDEX);
-        assert_eq!(get_req_type_str(REQ_TYPE_DAG), STR_REQ_TYPE_DAG);
-        assert_eq!(get_req_type_str(0), STR_REQ_TYPE_UNKNOWN);
-    }
 
     #[test]
     fn test_req_outdated() {
