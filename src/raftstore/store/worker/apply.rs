@@ -260,6 +260,14 @@ fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
         return true;
     }
 
+    // When encounter DeleteRange command, we must flush current write batch to engine first,
+    // because current write batch may contains keys are covered by DeleteRange.
+    for req in cmd.get_requests() {
+        if req.has_delete_range() {
+            return true;
+        }
+    }
+
     false
 }
 
@@ -1010,7 +1018,7 @@ impl ApplyDelegate {
             let mut resp = try!(match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut ranges),
+                CmdType::DeleteRange => self.handle_delete_range(req, &mut ranges),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1116,12 +1124,7 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_delete_range(
-        &mut self,
-        ctx: &ExecContext,
-        req: &Request,
-        ranges: &mut Vec<Range>,
-    ) -> Result<Response> {
+    fn handle_delete_range(&mut self, req: &Request, ranges: &mut Vec<Range>) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         if !e_key.is_empty() && s_key >= e_key {
@@ -1163,18 +1166,17 @@ impl ApplyDelegate {
                 )
             });
 
-        // Use delete_range to mark all the contents in this range is deleted.
-        ctx.wb
-            .delete_range_cf(handle, &start_key, &end_key)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete range [{}, {}): {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    e
-                )
-            });
+        // Delete all remaining keys.
+        util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                self.tag,
+                escape(&start_key),
+                escape(&end_key),
+                cf,
+                e
+            );
+        });
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
