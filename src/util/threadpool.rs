@@ -263,10 +263,10 @@ where
         }
     }
 
-    fn next_task(&mut self, timeout: Duration) -> Option<Task<C>> {
+    fn next_task(&mut self) -> Option<Task<C>> {
         let &(ref lock, ref cvar) = &*self.state;
         let mut state = lock.lock().unwrap();
-        let mut timeout = Some(timeout);
+        let mut timeout = Some(Duration::from_secs(NAP_SECS));
         loop {
             if state.stopped {
                 return None;
@@ -292,9 +292,8 @@ where
     }
 
     fn run(&mut self) {
-        let timeout = Duration::from_secs(NAP_SECS);
         loop {
-            let task = match self.next_task(timeout) {
+            let task = match self.next_task() {
                 None => return,
                 Some(t) => t,
             };
