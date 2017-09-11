@@ -14,9 +14,10 @@
 use super::Json;
 
 impl Json {
-    // merge is the implementation for JSON_MERGE in mysql
+    // `merge` is the implementation for JSON_MERGE in mysql
     // https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#function_json-merge
-    // It merges suffixes into self according the following rules:
+    //
+    // The merge rules are listed as following:
     // 1. adjacent arrays are merged to a single array;
     // 2. adjacent object are merged to a single object;
     // 3. a scalar value is autowrapped as an array before merge;

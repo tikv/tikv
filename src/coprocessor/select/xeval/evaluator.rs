@@ -567,14 +567,6 @@ impl Evaluator {
         if children.iter().any(|item| *item == Datum::Null) {
             return Ok(Datum::Null);
         }
-        let l = children.len();
-        if l < 2 {
-            return Err(Error::Expr(format!(
-                "{:?} requires at lease 2 operands but got {}",
-                expr.get_tp(),
-                l
-            )));
-        }
         let mut children = children.into_iter();
         let mut res = try!(children.next().unwrap().cast_as_json());
         for item in children {
