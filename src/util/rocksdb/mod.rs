@@ -23,8 +23,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use storage::{ALL_CFS, CF_DEFAULT};
-use rocksdb::{ColumnFamilyOptions, DBCompressionType, DBOptions, SliceTransform, DB};
+use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK};
+use rocksdb::{ColumnFamilyOptions, DBCompressionType, DBOptions, ReadOptions, SliceTransform, DB};
 use rocksdb::rocksdb::supported_compression;
 use util::rocksdb::engine_metrics::{ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
 use util::rocksdb;
@@ -305,7 +305,30 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
 
     for cf in db.cf_names() {
         let handle = try!(get_cf_handle(db, cf));
-        try!(db.delete_file_in_range_cf(handle, start_key, end_key));
+
+        // Keys in CF_LOCK not have ts tail, at the same time DeleteFilesInRange treat
+        // input range as closed interval, but we don't want to delete the end_key, so
+        // we treat CF_LOCK especially. For the others column families: 1) the data set
+        // in these column families usually are very large, so we don't want to trigger
+        // seek for these column families; 2) keys in these column families have ts tail,
+        // so end_key never exists in these column families.
+        if cf == CF_LOCK {
+            let mut iter_opt = ReadOptions::new();
+            iter_opt.fill_cache(false);
+            let mut iter = db.iter_cf_opt(handle, iter_opt);
+            iter.seek_for_prev(end_key.into());
+            if iter.valid() {
+                if iter.key() == end_key {
+                    iter.prev();
+                }
+
+                if iter.valid() && iter.key() > start_key {
+                    try!(db.delete_file_in_range_cf(handle, start_key, iter.key()));
+                }
+            }
+        } else {
+            try!(db.delete_file_in_range_cf(handle, start_key, end_key));
+        }
     }
 
     Ok(())
