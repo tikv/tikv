@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use tipb::executor::{ExecType, Executor};
 use tipb::schema::ColumnInfo;
-use tipb::select::{DAGRequest, RowMeta, SelectResponse};
+use tipb::select::{DAGRequest, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use kvproto::kvrpcpb::IsolationLevel;
 use protobuf::{Message as PbMsg, RepeatedField};
@@ -75,7 +75,6 @@ impl<'s> DAGContext<'s> {
                 Ok(Some(row)) => {
                     try!(check_if_outdated(self.deadline, REQ_TYPE_DAG));
                     let chunk = get_chunk(&mut chunks);
-                    let length = chunk.get_rows_data().len();
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
@@ -86,10 +85,6 @@ impl<'s> DAGContext<'s> {
                         ));
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
-                    let mut meta = RowMeta::new();
-                    meta.set_handle(row.handle);
-                    meta.set_length((chunk.get_rows_data().len() - length) as i64);
-                    chunk.mut_rows_meta().push(meta);
                 }
                 Ok(None) => {
                     let mut resp = Response::new();

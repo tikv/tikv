@@ -84,6 +84,8 @@ impl ExprColumnRefVisitor {
     }
 }
 
+pub const EXTRA_HANDLE_COLUMN_ID: i64 = -1;
+
 #[derive(Debug)]
 pub struct Row {
     pub handle: i64,

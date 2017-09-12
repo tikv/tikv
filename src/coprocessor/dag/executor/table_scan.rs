@@ -16,12 +16,12 @@ use tipb::executor::TableScan;
 
 use util::collections::HashSet;
 use storage::{SnapshotStore, Statistics};
-use coprocessor::codec::table;
+use coprocessor::codec::{datum, table};
 use coprocessor::endpoint::{is_point, prefix_next};
 use coprocessor::Result;
 use coprocessor::metrics::*;
 
-use super::{Executor, Row};
+use super::{Executor, Row, EXTRA_HANDLE_COLUMN_ID};
 use super::scanner::Scanner;
 
 
@@ -68,7 +68,12 @@ impl<'a> TableScanExecutor<'a> {
             None => return Ok(None),
         };
         let h = box_try!(table::decode_handle(&key));
-        let row_data = box_try!(table::cut_row(value, &self.col_ids));
+        let mut row_data = box_try!(table::cut_row(value, &self.col_ids));
+        if self.col_ids.contains(&EXTRA_HANDLE_COLUMN_ID) {
+            let handle_datum = datum::Datum::I64(h);
+            let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
+            row_data.append(EXTRA_HANDLE_COLUMN_ID, &mut bytes);
+        }
         let seek_key = if self.desc {
             box_try!(table::truncate_as_row_key(&key)).to_vec()
         } else {
@@ -82,8 +87,13 @@ impl<'a> TableScanExecutor<'a> {
         let key = self.key_ranges[self.cursor].get_start();
         let value = try!(self.scanner.get_row(key));
         if let Some(value) = value {
-            let values = box_try!(table::cut_row(value, &self.col_ids));
+            let mut values = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(key));
+            if self.col_ids.contains(&EXTRA_HANDLE_COLUMN_ID) {
+                let handle_datum = datum::Datum::I64(h);
+                let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
+                values.append(EXTRA_HANDLE_COLUMN_ID, &mut bytes);
+            }
             return Ok(Some(Row::new(h, values)));
         }
         Ok(None)
