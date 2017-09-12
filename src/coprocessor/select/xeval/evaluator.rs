@@ -24,7 +24,7 @@ use util::collections::{HashMap, HashMapEntry};
 
 use coprocessor::codec;
 use coprocessor::codec::datum::{Datum, DatumDecoder};
-use coprocessor::codec::mysql::{DecimalDecoder, Duration, Json, ModifyType, PathExpression, Time,
+use coprocessor::codec::mysql::{DecimalDecoder, Duration, ModifyType, PathExpression, Time,
                                 MAX_FSP};
 use coprocessor::codec::mysql::json::{json_array, json_object};
 use super::{Error, Result};
@@ -568,9 +568,12 @@ impl Evaluator {
             return Ok(Datum::Null);
         }
         let mut children = children.into_iter();
-        let first = try!(children.next().unwrap().cast_as_json());
-        let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json()).collect());
-        Ok(Datum::Json(first.merge(suffixes)))
+        let mut res = try!(children.next().unwrap().cast_as_json());
+        for item in children {
+            let j = try!(item.cast_as_json());
+            res = res.merge(j);
+        }
+        Ok(Datum::Json(res))
     }
 
     fn eval_json_object(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {

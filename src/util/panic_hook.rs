@@ -75,7 +75,11 @@ pub fn set_exit_hook() {
     // See more: https://github.com/alexcrichton/backtrace-rs/blob/\
     //           597ad44b131132f17ed76bf94ac489274dd16c7f/\
     //           src/symbolize/libbacktrace.rs#L126-L159
-    Backtrace::new();
+    // Caching is slow, spawn it in another thread to speed up.
+    thread::Builder::new()
+        .name(thd_name!("backtrace-loader"))
+        .spawn(Backtrace::new)
+        .unwrap();
 
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &PanicInfo| {
