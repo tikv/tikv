@@ -35,3 +35,4 @@ mod test_region_heartbeat;
 mod test_stale_peer;
 mod test_lease_read;
 mod test_bootstrap;
+mod test_service;
