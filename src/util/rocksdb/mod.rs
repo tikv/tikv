@@ -316,9 +316,7 @@ pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Resul
             let wb = WriteBatch::new();
             while iter.valid() {
                 try!(wb.delete_cf(handle, iter.key()));
-                if !iter.next() {
-                    break;
-                }
+                iter.next();
             }
             if wb.count() > 0 {
                 try!(db.write(wb));
