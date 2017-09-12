@@ -389,7 +389,10 @@ fn get_var_u64_binary_len(mut v: u64) -> usize {
 
 #[cfg(test)]
 mod test {
+    use serde_json;
+    use test::Bencher;
     use super::*;
+    use coprocessor::codec::mysql::json::test::load_test_jsons;
 
     #[test]
     fn test_json_binary() {
@@ -443,5 +446,55 @@ mod test {
             let json: Json = json_str.parse().unwrap();
             assert_eq!(json.get_type_code(), code);
         }
+    }
+
+    #[bench]
+    fn bench_encode_binary(b: &mut Bencher) {
+        let jsons: Vec<Json> = load_test_jsons()
+            .into_iter()
+            .map(|t| t.parse().unwrap())
+            .collect();
+        let mut buf = Vec::with_capacity(65536);
+        b.iter(|| for j in jsons.iter() {
+            buf.clear();
+            buf.encode_json(j).unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_encode_text(b: &mut Bencher) {
+        let jsons: Vec<Json> = load_test_jsons()
+            .into_iter()
+            .map(|t| t.parse().unwrap())
+            .collect();
+        let mut buf = Vec::with_capacity(65536);
+        b.iter(|| for j in jsons.iter() {
+            buf.clear();
+            serde_json::to_writer(&mut buf, j).unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_decode_text(b: &mut Bencher) {
+        let texts = load_test_jsons();
+        b.iter(|| for text in texts.iter() {
+            text.parse::<Json>().unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_decode_binary(b: &mut Bencher) {
+        let binaries = load_test_jsons()
+            .into_iter()
+            .map(|t| t.parse::<Json>().unwrap())
+            .map(|j| {
+                let mut buf = Vec::new();
+                buf.encode_json(&j).unwrap();
+                buf
+            })
+            .collect::<Vec<Vec<u8>>>();
+        b.iter(|| for binary in binaries.iter() {
+            binary.as_slice().decode_json().unwrap();
+        });
     }
 }

@@ -97,6 +97,10 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
 
 #[cfg(test)]
 mod test {
+    use std::fs::File;
+    use std::io::prelude::*;
+    use std::io::BufReader;
+    use std::path::Path;
     use super::*;
 
     #[test]
@@ -150,5 +154,26 @@ mod test {
         for (d, ep_json) in cases {
             assert_eq!(json_object(d).unwrap(), ep_json);
         }
+    }
+
+    #[inline]
+    fn open_file_read_lines<P: AsRef<Path>>(filename: P) -> Vec<String> {
+        File::open(filename)
+            .map(BufReader::new)
+            .and_then(|reader| {
+                reader.lines().collect::<::std::io::Result<Vec<_>>>()
+            })
+            .unwrap()
+    }
+
+    pub fn load_test_jsons() -> Vec<String> {
+        let base = Path::new("src/coprocessor/codec/mysql/json");
+        open_file_read_lines(base.join("world_bank.json"))
+    }
+
+    #[test]
+    fn test_load_test_jsons() {
+        let json_texts = load_test_jsons();
+        assert_eq!(json_texts.len(), 500);
     }
 }
