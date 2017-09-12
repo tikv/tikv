@@ -34,8 +34,8 @@ use kvproto::pdpb::StoreStats;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
 use pd::PdClient;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
-                          StatusCmdType, StatusResponse};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest,
+                          RaftCmdResponse, SplitResponse, StatusCmdType, StatusResponse};
 use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Error, Result};
@@ -43,7 +43,7 @@ use kvproto::metapb;
 use util::worker::{FutureWorker, Scheduler, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
-use util::collections::{HashMap, HashSet};
+use util::collections::{HashMap, HashMapEntry, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -131,6 +131,8 @@ pub struct Store<T, C: 'static> {
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
+    // region split key -> split callback
+    split_callbacks: HashMap<Key, Callback>,
     // the regions with pending snapshots between two mio ticks.
     pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
@@ -217,6 +219,7 @@ impl<T, C> Store<T, C> {
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
             region_ranges: BTreeMap::new(),
+            split_callbacks: HashMap::default(),
             pending_snapshot_regions: vec![],
             trans: trans,
             pd_client: pd_client,
@@ -1375,6 +1378,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 let _ = self.on_raft_message(msg);
             }
         }
+
+        if let Some(cb) = self.split_callbacks.remove(left.get_end_key()) {
+            let mut resp = RaftCmdResponse::new();
+            let mut admin_resp = AdminResponse::new();
+            admin_resp.set_cmd_type(AdminCmdType::Split);
+            let mut split_resp = SplitResponse::new();
+            split_resp.set_left(left);
+            split_resp.set_right(right);
+            admin_resp.set_split(split_resp);
+            resp.set_admin_response(admin_resp);
+            cb(resp)
+        }
     }
 
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
@@ -1813,32 +1828,88 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         epoch: metapb::RegionEpoch,
         split_key: Vec<u8>,
     ) {
+        self.on_split_region(split_key, Some(region_id), Some(epoch), None);
+    }
+
+    fn on_split_region(
+        &mut self,
+        split_key: Vec<u8>,
+        region_id: Option<u64>,
+        epoch: Option<metapb::RegionEpoch>,
+        cb: Option<Callback>,
+    ) {
+        let region_id = match region_id {
+            Some(id) => id,
+            None => match self.region_ranges
+                .range((Excluded(split_key.clone()), Unbounded::<Key>))
+                .next()
+            {
+                Some((_, id)) => *id,
+                None => *self.region_ranges.values().last().unwrap(),
+            },
+        };
+
         if split_key.is_empty() {
             error!("[region {}] split key should not be empty!!!", region_id);
+            cb.map(|cb| {
+                cb(new_error(box_err!(
+                    "[region {}] split key should not be empty",
+                    region_id
+                )))
+            });
             return;
         }
-        let p = self.region_peers.get(&region_id);
-        if p.is_none() || !p.unwrap().is_leader() {
-            // region on this store is no longer leader, skipped.
-            info!(
-                "[region {}] region on {} doesn't exist or is not leader, skip.",
-                region_id,
-                self.store_id()
-            );
-            return;
-        }
+        let peer = match self.region_peers.get(&region_id) {
+            None => {
+                error!(
+                    "[region {}] region on {} doesn't exist, skip.",
+                    region_id,
+                    self.store_id()
+                );
+                cb.map(|cb| cb(new_error(Error::RegionNotFound(region_id))));
+                return;
+            }
+            Some(peer) => {
+                if !peer.is_leader() {
+                    // region on this store is no longer leader, skipped.
+                    error!(
+                        "[region {}] region on {} is not leader, skip.",
+                        region_id,
+                        self.store_id()
+                    );
+                    cb.map(|cb| {
+                        cb(new_error(
+                            Error::NotLeader(region_id, Some(peer.peer.clone())),
+                        ))
+                    });
+                    return;
+                }
+                peer
+            }
+        };
 
-        let peer = p.unwrap();
         let region = peer.region();
 
-        if region.get_region_epoch().get_version() != epoch.get_version() {
-            info!(
-                "{} epoch changed {:?} != {:?}, need re-check later",
-                peer.tag,
-                region.get_region_epoch(),
-                epoch
-            );
-            return;
+        if let Some(epoch) = epoch {
+            if region.get_region_epoch().get_version() != epoch.get_version() {
+                error!(
+                    "[region {}] {} epoch changed {:?} != {:?}, need re-check later",
+                    region_id,
+                    peer.tag,
+                    region.get_region_epoch(),
+                    epoch
+                );
+                cb.map(|cb| {
+                    cb(new_error(box_err!(
+                        "[region {}] {} epoch changed {:?} != {:?}, need re-check later",
+                        region_id,
+                        peer.tag,
+                        region.get_region_epoch(),
+                        epoch
+                    )))
+                });
+                return;
+            }
         }
 
         let key = keys::origin_key(&split_key);
@@ -1851,11 +1922,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if let Err(e) = self.pd_worker.schedule(task) {
             error!(
-                "{} failed to notify pd to split at {:?}: {}",
+                "[region {}] {} failed to notify pd to split at {:?}: {}",
+                region_id,
                 peer.tag,
                 split_key,
                 e
             );
+            cb.map(|cb| {
+                cb(new_error(
+                    box_err!("failed to split at {:?}: {}", split_key, e),
+                ))
+            });
+        } else if let Some(callback) = cb {
+            match self.split_callbacks.entry(split_key.clone()) {
+                HashMapEntry::Occupied(_) => {
+                    error!(
+                        "[region {}] is already splitting at {:?}",
+                        region_id,
+                        split_key
+                    );
+                    callback(new_error(box_err!("already splitting at {:?}", split_key)));
+                    return;
+                }
+                HashMapEntry::Vacant(entry) => {
+                    entry.insert(callback);
+                }
+            }
         }
     }
 
@@ -2402,6 +2494,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 hash,
             } => {
                 self.on_hash_computed(region_id, index, hash);
+            }
+            Msg::SplitRegion {
+                split_key,
+                callback,
+            } => {
+                self.on_split_region(split_key, None, None, Some(callback));
             }
         }
     }

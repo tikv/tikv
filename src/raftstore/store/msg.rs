@@ -81,6 +81,11 @@ pub enum Msg {
         index: u64,
         hash: Vec<u8>,
     },
+
+    SplitRegion {
+        split_key: Vec<u8>,
+        callback: Callback,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -112,6 +117,9 @@ impl fmt::Debug for Msg {
                 index,
                 escape(hash)
             ),
+            Msg::SplitRegion { ref split_key, .. } => {
+                write!(fmt, "Split region at key {:?}", split_key)
+            }
         }
     }
 }

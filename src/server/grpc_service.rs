@@ -33,6 +33,7 @@ use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
 use storage::mvcc::{Error as MvccError, Write as MvccWrite, WriteType};
 use storage::engine::Error as EngineError;
+use raftstore::store::Msg as StoreMessage;
 use super::transport::RaftStoreRouter;
 use coprocessor::{EndPointTask, RequestTask};
 use super::snap::Task as SnapTask;
@@ -929,6 +930,54 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 debug!("{} failed: {:?}", label, e);
                 GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
             });
+        ctx.spawn(future);
+    }
+
+    fn split_region(
+        &self,
+        ctx: RpcContext,
+        mut req: SplitRegionRequest,
+        sink: UnarySink<SplitRegionResponse>,
+    ) {
+        let label = "split_region";
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .with_label_values(&[label])
+            .start_coarse_timer();
+
+        let (cb, future) = make_callback();
+        let req = StoreMessage::SplitRegion {
+            split_key: req.take_split_key(),
+            callback: cb,
+        };
+
+        if let Err(e) = self.ch.try_send(req) {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future
+            .map_err(Error::from)
+            .map(|mut v| {
+                let mut resp = SplitRegionResponse::new();
+                if v.has_header() {
+                    let mut header = v.mut_header();
+                    if header.has_error() {
+                        resp.set_region_error(header.take_error());
+                    }
+                }
+                let admin_resp = v.mut_admin_response();
+                let split_resp = admin_resp.mut_split();
+                resp.set_left(split_resp.take_left());
+                resp.set_right(split_resp.take_right());
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+
         ctx.spawn(future);
     }
 }
