@@ -936,7 +936,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     fn split_region(
         &self,
         ctx: RpcContext,
-        mut req: SplitRegionRequest,
+        req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
         let label = "split_region";
@@ -946,7 +946,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (cb, future) = make_callback();
         let req = StoreMessage::SplitRegion {
-            split_key: req.take_split_key(),
+            split_key: Key::from_raw(req.get_split_key()).encoded().clone(),
             callback: cb,
         };
 

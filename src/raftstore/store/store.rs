@@ -132,7 +132,7 @@ pub struct Store<T, C: 'static> {
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
     // region split key -> split callback
-    split_callbacks: HashMap<Key, Callback>,
+    split_callbacks: HashMap<Key, Option<Callback>>,
     // the regions with pending snapshots between two mio ticks.
     pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
@@ -1379,7 +1379,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        if let Some(cb) = self.split_callbacks.remove(left.get_end_key()) {
+        if let Some(Some(cb)) = self.split_callbacks.remove(left.get_end_key()) {
             let mut resp = RaftCmdResponse::new();
             let mut admin_resp = AdminResponse::new();
             admin_resp.set_cmd_type(AdminCmdType::Split);
@@ -1828,10 +1828,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         epoch: metapb::RegionEpoch,
         split_key: Vec<u8>,
     ) {
-        self.on_split_region(split_key, Some(region_id), Some(epoch), None);
+        self.on_prepare_split_region(split_key, Some(region_id), Some(epoch), None);
     }
 
-    fn on_split_region(
+    fn on_prepare_split_region(
         &mut self,
         split_key: Vec<u8>,
         region_id: Option<u64>,
@@ -1841,11 +1841,27 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = match region_id {
             Some(id) => id,
             None => match self.region_ranges
-                .range((Excluded(split_key.clone()), Unbounded::<Key>))
+                .range((Included(split_key.clone()), Unbounded::<Key>))
                 .next()
             {
-                Some((_, id)) => *id,
-                None => *self.region_ranges.values().last().unwrap(),
+                Some((end_key, id)) => if end_key != &split_key {
+                    *id
+                } else {
+                    error!(
+                        "[region {}] split key {:?} is the same as end_key!!!",
+                        id,
+                        split_key
+                    );
+                    cb.map(|cb| {
+                        cb(new_error(box_err!(
+                            "split key {:?} is the same as region {} end_key",
+                            split_key,
+                            id
+                        )))
+                    });
+                    return;
+                },
+                None => *self.region_ranges.values().next_back().unwrap(),
             },
         };
 
@@ -1912,40 +1928,42 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        let key = keys::origin_key(&split_key);
-        let task = PdTask::AskSplit {
-            region: region.clone(),
-            split_key: key.to_vec(),
-            peer: peer.peer.clone(),
-            right_derive: self.cfg.right_derive_when_split,
-        };
+        match self.split_callbacks.entry(split_key.clone()) {
+            HashMapEntry::Occupied(_) => {
+                error!(
+                    "[region {}] is already splitting at {:?}",
+                    region_id,
+                    split_key
+                );
+                cb.map(|cb| {
+                    cb(new_error(box_err!("already splitting at {:?}", split_key)));
+                });
+                return;
+            }
+            HashMapEntry::Vacant(entry) => {
+                let key = keys::origin_key(&split_key);
+                let task = PdTask::AskSplit {
+                    region: region.clone(),
+                    split_key: key.to_vec(),
+                    peer: peer.peer.clone(),
+                    right_derive: self.cfg.right_derive_when_split,
+                };
 
-        if let Err(e) = self.pd_worker.schedule(task) {
-            error!(
-                "[region {}] {} failed to notify pd to split at {:?}: {}",
-                region_id,
-                peer.tag,
-                split_key,
-                e
-            );
-            cb.map(|cb| {
-                cb(new_error(
-                    box_err!("failed to split at {:?}: {}", split_key, e),
-                ))
-            });
-        } else if let Some(callback) = cb {
-            match self.split_callbacks.entry(split_key.clone()) {
-                HashMapEntry::Occupied(_) => {
+                if let Err(e) = self.pd_worker.schedule(task) {
                     error!(
-                        "[region {}] is already splitting at {:?}",
+                        "[region {}] {} failed to notify pd to split at {:?}: {}",
                         region_id,
-                        split_key
+                        peer.tag,
+                        split_key,
+                        e
                     );
-                    callback(new_error(box_err!("already splitting at {:?}", split_key)));
-                    return;
-                }
-                HashMapEntry::Vacant(entry) => {
-                    entry.insert(callback);
+                    cb.map(|cb| {
+                        cb(new_error(
+                            box_err!("failed to split at {:?}: {}", split_key, e),
+                        ))
+                    });
+                } else {
+                    entry.insert(cb);
                 }
             }
         }
@@ -2499,7 +2517,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 split_key,
                 callback,
             } => {
-                self.on_split_region(split_key, None, None, Some(callback));
+                self.on_prepare_split_region(split_key, None, None, Some(callback));
             }
         }
     }
