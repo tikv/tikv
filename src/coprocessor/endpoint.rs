@@ -666,7 +666,20 @@ mod tests {
 
     use std::sync::*;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn test_get_reg_scan_tag() {
+        let mut ctx = ReqCtx {
+            deadline: Instant::now(),
+            isolation_level: IsolationLevel::RC,
+            fill_cache: true,
+            table_scan: true,
+        };
+        assert_eq!(ctx.get_scan_tag(), STR_REQ_TYPE_SELECT);
+        ctx.table_scan = false;
+        assert_eq!(ctx.get_scan_tag(), STR_REQ_TYPE_INDEX);
+    }
 
     #[test]
     fn test_req_outdated() {
