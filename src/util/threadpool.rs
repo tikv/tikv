@@ -299,7 +299,7 @@ where
             };
 
             self.ctx.on_task_started();
-            (task.task).call_once((&mut self.ctx,));
+            (task.task).call_box((&mut self.ctx,));
             self.ctx.on_task_finished();
             self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
             if self.task_counter == self.tasks_per_tick {
