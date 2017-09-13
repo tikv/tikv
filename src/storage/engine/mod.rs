@@ -216,11 +216,23 @@ impl CFStatistics {
     }
 }
 
-#[derive(Default)]
 pub struct Statistics {
     pub lock: CFStatistics,
     pub write: CFStatistics,
     pub data: CFStatistics,
+    // number of statistics
+    pub count: u64,
+}
+
+impl Default for Statistics {
+    fn default() -> Statistics {
+        Statistics {
+            lock: Default::default(),
+            write: Default::default(),
+            data: Default::default(),
+            count: 1,
+        }
+    }
 }
 
 impl Statistics {
@@ -244,6 +256,7 @@ impl Statistics {
         self.lock.add_cf_statistics(&other.lock);
         self.write.add_cf_statistics(&other.write);
         self.data.add_cf_statistics(&other.data);
+        self.count += other.count;
     }
 }
 

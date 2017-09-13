@@ -72,7 +72,6 @@ pub struct Host {
 
 #[derive(Default)]
 struct CopContext {
-    task_count: u64,
     select_stats: Statistics,
     index_stats: Statistics,
 }
@@ -96,12 +95,12 @@ impl CopContext {
 
 impl Context for CopContext {
     fn on_tick(&mut self) {
-        if self.task_count == 0 {
-            return;
-        }
-        let task_count = self.task_count;
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
             let this_statistics = self.get_statistics(type_str);
+            let task_count = this_statistics.count - 1;
+            if task_count == 0 {
+                continue;
+            }
             for (cf, details) in this_statistics.details() {
                 for (tag, count) in details {
                     COPR_SCAN_DETAILS
@@ -111,7 +110,6 @@ impl Context for CopContext {
             }
             *this_statistics = Default::default();
         }
-        self.task_count = 0;
     }
 }
 
@@ -174,7 +172,6 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let stats = end_point.handle_request(req);
-                ctx.task_count += 1;
                 ctx.add_statistics(type_str, &stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
@@ -207,7 +204,7 @@ enum CopRequest {
     DAG(DAGRequest),
 }
 
-pub struct ReqCtx {
+pub struct ReqContext {
     // The deadline before which the task should be responded.
     pub deadline: Instant,
     pub isolation_level: IsolationLevel,
@@ -216,7 +213,7 @@ pub struct ReqCtx {
     pub table_scan: bool,
 }
 
-impl ReqCtx {
+impl ReqContext {
     #[inline]
     fn get_scan_tag(&self) -> &'static str {
         if self.table_scan {
@@ -243,7 +240,7 @@ pub struct RequestTask {
     statistics: Statistics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
-    ctx: ReqCtx,
+    ctx: ReqContext,
 }
 
 impl RequestTask {
@@ -282,7 +279,7 @@ impl RequestTask {
             }
             _ => Err(box_err!("unsupported tp {}", tp)),
         };
-        let req_ctx = ReqCtx {
+        let req_ctx = ReqContext {
             deadline: deadline,
             isolation_level: req.get_context().get_isolation_level(),
             fill_cache: !req.get_context().get_not_fill_cache(),
@@ -670,7 +667,7 @@ mod tests {
 
     #[test]
     fn test_get_reg_scan_tag() {
-        let mut ctx = ReqCtx {
+        let mut ctx = ReqContext {
             deadline: Instant::now(),
             isolation_level: IsolationLevel::RC,
             fill_cache: true,

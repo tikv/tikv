@@ -23,7 +23,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqCtx};
+use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{AggregationExecutor, Executor as DAGExecutor, IndexScanExecutor,
@@ -36,7 +36,7 @@ pub struct DAGContext<'s> {
     ranges: Vec<KeyRange>,
     snap: &'s Snapshot,
     eval_ctx: Rc<EvalContext>,
-    req_ctx: &'s ReqCtx,
+    req_ctx: &'s ReqContext,
 }
 
 impl<'s> DAGContext<'s> {
@@ -45,7 +45,7 @@ impl<'s> DAGContext<'s> {
         ranges: Vec<KeyRange>,
         snap: &'s Snapshot,
         eval_ctx: Rc<EvalContext>,
-        req_ctx: &'s ReqCtx,
+        req_ctx: &'s ReqContext,
     ) -> DAGContext<'s> {
         DAGContext {
             req: req,

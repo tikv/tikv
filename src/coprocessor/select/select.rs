@@ -26,7 +26,7 @@ use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::codec::datum::Datum;
 use coprocessor::metrics::*;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_chunk, get_pk, is_point, prefix_next, to_pb_error, ReqCtx,
+use coprocessor::endpoint::{get_chunk, get_pk, is_point, prefix_next, to_pb_error, ReqContext,
                             BATCH_ROW_COUNT, SINGLE_GROUP};
 use util::{escape, Either};
 use util::time::duration_to_ms;
@@ -44,7 +44,7 @@ pub struct SelectContext<'a> {
     snap: SnapshotStore<'a>,
     statistics: &'a mut Statistics,
     core: SelectContextCore,
-    req_ctx: &'a ReqCtx,
+    req_ctx: &'a ReqContext,
 }
 
 impl<'a> SelectContext<'a> {
@@ -52,7 +52,7 @@ impl<'a> SelectContext<'a> {
         sel: SelectRequest,
         snap: &'a Snapshot,
         statistics: &'a mut Statistics,
-        req_ctx: &'a ReqCtx,
+        req_ctx: &'a ReqContext,
     ) -> Result<SelectContext<'a>> {
         let snap = SnapshotStore::new(
             snap,
