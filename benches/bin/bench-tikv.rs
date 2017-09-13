@@ -34,9 +34,7 @@ extern crate rocksdb;
 extern crate tempdir;
 extern crate test;
 extern crate kvproto;
-extern crate time;
 extern crate futures;
-extern crate tokio_core;
 extern crate grpcio as grpc;
 
 #[allow(dead_code)]
