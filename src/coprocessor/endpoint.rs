@@ -29,7 +29,7 @@ use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, Snapshot, Statistics};
+use storage::{self, engine, Engine, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
 
 use super::codec::mysql;
@@ -72,8 +72,8 @@ pub struct Host {
 
 #[derive(Default)]
 struct CopContext {
-    select_stats: Statistics,
-    index_stats: Statistics,
+    select_stats: StatisticsSummary,
+    index_stats: StatisticsSummary,
 }
 
 impl CopContext {
@@ -81,7 +81,7 @@ impl CopContext {
         self.get_statistics(type_str).add_statistics(stats);
     }
 
-    fn get_statistics(&mut self, type_str: &str) -> &mut Statistics {
+    fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
         match type_str {
             STR_REQ_TYPE_SELECT => &mut self.select_stats,
             STR_REQ_TYPE_INDEX => &mut self.index_stats,
@@ -97,15 +97,14 @@ impl Context for CopContext {
     fn on_tick(&mut self) {
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
             let this_statistics = self.get_statistics(type_str);
-            let task_count = this_statistics.count - 1;
-            if task_count == 0 {
+            if this_statistics.count == 0 {
                 continue;
             }
-            for (cf, details) in this_statistics.details() {
+            for (cf, details) in this_statistics.stat.details() {
                 for (tag, count) in details {
                     COPR_SCAN_DETAILS
                         .with_label_values(&[type_str, cf, tag])
-                        .observe(count as f64 / task_count as f64);
+                        .observe(count as f64 / this_statistics.count as f64);
                 }
             }
             *this_statistics = Default::default();
