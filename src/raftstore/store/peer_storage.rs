@@ -826,14 +826,14 @@ impl PeerStorage {
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append(
+    pub fn append<T>(
         &mut self,
-        ctx: &mut InvokeContext,
+        invoke_ctx: &mut InvokeContext,
         entries: &[Entry],
-        raft_wb: &mut WriteBatch,
+        ready_ctx: &mut ReadyContext<T>,
     ) -> Result<u64> {
         debug!("{} append {} entries", self.tag, entries.len());
-        let prev_last_index = ctx.raft_state.get_last_index();
+        let prev_last_index = invoke_ctx.raft_state.get_last_index();
         if entries.is_empty() {
             return Ok(prev_last_index);
         }
@@ -844,7 +844,10 @@ impl PeerStorage {
         };
 
         for entry in entries {
-            try!(raft_wb.put_msg(
+            if entry.has_sync_log() && entry.get_sync_log() {
+                ready_ctx.sync_log = true;
+            }
+            try!(ready_ctx.raft_wb.put_msg(
                 &keys::raft_log_key(self.get_region_id(), entry.get_index()),
                 entry
             ));
@@ -852,11 +855,15 @@ impl PeerStorage {
 
         // Delete any previously appended log entries which never committed.
         for i in (last_index + 1)..(prev_last_index + 1) {
-            try!(raft_wb.delete(&keys::raft_log_key(self.get_region_id(), i)));
+            try!(
+                ready_ctx
+                    .raft_wb
+                    .delete(&keys::raft_log_key(self.get_region_id(), i))
+            );
         }
 
-        ctx.raft_state.set_last_index(last_index);
-        ctx.last_term = last_term;
+        invoke_ctx.raft_state.set_last_index(last_index);
+        invoke_ctx.last_term = last_term;
 
         // TODO: if the writebatch is failed to commit, the cache will be wrong.
         self.cache.append(&self.tag, entries);
@@ -1106,11 +1113,7 @@ impl PeerStorage {
         };
 
         if !ready.entries.is_empty() {
-            try!(self.append(
-                &mut ctx,
-                &ready.entries,
-                &mut ready_ctx.raft_wb
-            ));
+            try!(self.append(&mut ctx, &ready.entries, ready_ctx));
         }
 
         // Last index is 0 means the peer is created from raft message
@@ -1397,6 +1400,7 @@ mod test {
     use raftstore::store::{bootstrap, Engines};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
+    use raftstore::store::local_metrics::RaftMetrics;
     use util::worker::{Scheduler, Worker};
     use util::rocksdb::new_engine;
     use storage::{ALL_CFS, CF_DEFAULT};
@@ -1425,9 +1429,13 @@ mod test {
     ) -> PeerStorage {
         let mut store = new_storage(sched, path);
         let mut kv_wb = WriteBatch::new();
-        let mut raft_wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
-        store.append(&mut ctx, &ents[1..], &mut raft_wb).expect("");
+        let mut metrics = RaftMetrics::default();
+        let trans = 0;
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, ents.len());
+        store
+            .append(&mut ctx, &ents[1..], &mut ready_ctx)
+            .expect("");
         ctx.apply_state
             .mut_truncated_state()
             .set_index(ents[0].get_index());
@@ -1438,7 +1446,7 @@ mod test {
             .set_applied_index(ents.last().unwrap().get_index());
         ctx.save_apply_state_to(&store.kv_engine, &mut kv_wb)
             .unwrap();
-        store.raft_engine.write(raft_wb).expect("");
+        store.raft_engine.write(ready_ctx.raft_wb).expect("");
         store.kv_engine.write(kv_wb).expect("");
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
@@ -1447,10 +1455,12 @@ mod test {
 
     fn append_ents(store: &mut PeerStorage, ents: &[Entry]) {
         let mut ctx = InvokeContext::new(store);
-        let mut raft_wb = WriteBatch::new();
-        store.append(&mut ctx, ents, &mut raft_wb).unwrap();
-        ctx.save_raft_state_to(&mut raft_wb).unwrap();
-        store.raft_engine.write(raft_wb).expect("");
+        let mut metrics = RaftMetrics::default();
+        let trans = 0;
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, ents.len());
+        store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
+        ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
+        store.raft_engine.write(ready_ctx.raft_wb).expect("");
         store.raft_state = ctx.raft_state;
     }
 
@@ -1705,19 +1715,24 @@ mod test {
 
         let mut ctx = InvokeContext::new(&s);
         let mut kv_wb = WriteBatch::new();
-        let mut raft_wb = WriteBatch::new();
-        s.append(&mut ctx, &[new_entry(6, 5), new_entry(7, 5)], &mut raft_wb)
-            .unwrap();
+        let mut metrics = RaftMetrics::default();
+        let trans = 0;
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, 2);
+        s.append(
+            &mut ctx,
+            &[new_entry(6, 5), new_entry(7, 5)],
+            &mut ready_ctx,
+        ).unwrap();
         let mut hs = HardState::new();
         hs.set_commit(7);
         hs.set_term(5);
         ctx.raft_state.set_hard_state(hs);
         ctx.raft_state.set_last_index(7);
         ctx.apply_state.set_applied_index(7);
-        ctx.save_raft_state_to(&mut raft_wb).unwrap();
+        ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
         ctx.save_apply_state_to(&s.kv_engine, &mut kv_wb).unwrap();
         s.kv_engine.write(kv_wb).unwrap();
-        s.raft_engine.write(raft_wb).unwrap();
+        s.raft_engine.write(ready_ctx.raft_wb).unwrap();
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);

@@ -1044,7 +1044,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
         let mut region_proposals = Vec::with_capacity(pending_count);
-        let (kv_wb, raft_wb, append_res) = {
+        let (kv_wb, raft_wb, append_res, sync_log) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
@@ -1054,7 +1054,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
-            (ctx.kv_wb, ctx.raft_wb, ctx.ready_res)
+            (ctx.kv_wb, ctx.raft_wb, ctx.ready_res, ctx.sync_log)
         };
 
         if !region_proposals.is_empty() {
@@ -1071,7 +1071,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if !kv_wb.is_empty() {
             // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log);
+            write_opts.set_sync(self.cfg.sync_log || sync_log);
             self.kv_engine
                 .write_opt(kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
@@ -1082,7 +1082,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if !raft_wb.is_empty() {
             // RaftLocalState, Raft Log Entry
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log);
+            write_opts.set_sync(self.cfg.sync_log || sync_log);
             self.raft_engine
                 .write_opt(raft_wb, &write_opts)
                 .unwrap_or_else(|e| {

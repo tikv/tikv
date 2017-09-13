@@ -122,6 +122,7 @@ fn ents_with_config(terms: Vec<u64>, pre_vote: bool) -> Interface {
         let mut e = Entry::new();
         e.set_index(i as u64 + 1);
         e.set_term(*term);
+        e.set_sync_log(false);
         store.wl().append(&[e]).expect("");
     }
     let mut raft = new_test_raft_with_prevote(1, vec![], 5, 1, store, pre_vote);
@@ -255,6 +256,7 @@ pub fn new_entry(term: u64, index: u64, data: Option<&str>) -> Entry {
     let mut e = Entry::new();
     e.set_index(index);
     e.set_term(term);
+    e.set_sync_log(false);
     if let Some(d) = data {
         e.set_data(d.as_bytes().to_vec());
     }
@@ -2902,6 +2904,7 @@ fn test_step_ignore_config() {
     let mut m = new_message(1, 1, MessageType::MsgPropose, 0);
     let mut e = Entry::new();
     e.set_entry_type(EntryType::EntryConfChange);
+    e.set_sync_log(false);
     m.mut_entries().push(e);
     r.step(m.clone()).expect("");
     let index = r.raft_log.last_index();

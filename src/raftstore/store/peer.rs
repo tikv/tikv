@@ -143,6 +143,7 @@ impl ProposalQueue {
 pub struct ReadyContext<'a, T: 'a> {
     pub kv_wb: WriteBatch,
     pub raft_wb: WriteBatch,
+    pub sync_log: bool,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
     pub ready_res: Vec<(Ready, InvokeContext)>,
@@ -153,6 +154,7 @@ impl<'a, T> ReadyContext<'a, T> {
         ReadyContext {
             kv_wb: WriteBatch::new(),
             raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
+            sync_log: false,
             metrics: metrics,
             trans: t,
             ready_res: Vec::with_capacity(cap),
@@ -1358,7 +1360,7 @@ impl Peer {
         }
 
         let propose_index = self.next_proposal_index();
-        try!(self.raft_group.propose(data));
+        try!(self.raft_group.propose(data, req.get_sync_log()));
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.

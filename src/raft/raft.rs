@@ -767,7 +767,9 @@ impl<T: Storage> Raft<T> {
         if nconf == 1 {
             self.pending_conf = true;
         }
-        self.append_entry(&mut [Entry::new()]);
+        let mut empty_entry = Entry::new();
+        empty_entry.set_sync_log(false);
+        self.append_entry(&mut [empty_entry]);
         info!("{} became leader at term {}", self.tag, self.term);
     }
 
@@ -1339,6 +1341,7 @@ impl<T: Storage> Raft<T> {
                             );
                             *e = Entry::new();
                             e.set_entry_type(EntryType::EntryNormal);
+                            e.set_sync_log(false);
                         }
                         self.pending_conf = true;
                     }
