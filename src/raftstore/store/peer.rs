@@ -1009,14 +1009,15 @@ impl Peer {
         metrics.all += 1;
 
         let mut is_conf_change = false;
+        let mut sync_log = false;
 
-        let res = match self.get_handle_policy(&req) {
+        let res = match self.get_handle_policy(&req, &mut sync_log) {
             Ok(RequestPolicy::ReadLocal) => {
                 self.read_local(req, cb, metrics);
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(req, cb, metrics),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
+            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics, sync_log),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(req, cb, metrics)
             }
@@ -1061,8 +1062,8 @@ impl Peer {
         metrics.all += 1;
 
         // TODO: deny non-snapshot request.
-
-        match self.get_handle_policy(&req) {
+        let mut sync_log = false;
+        match self.get_handle_policy(&req, &mut sync_log) {
             Ok(RequestPolicy::ReadLocal) => {
                 metrics.local_read += 1;
                 Some(self.handle_read(req))
@@ -1088,13 +1089,20 @@ impl Peer {
         self.proposals.push(meta);
     }
 
-    fn get_handle_policy(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
+    fn get_handle_policy(
+        &mut self,
+        req: &RaftCmdRequest,
+        sync_log: &mut bool,
+    ) -> Result<RequestPolicy> {
         if req.has_admin_request() {
             if apply::get_change_peer_cmd(req).is_some() {
                 return Ok(RequestPolicy::ProposeConfChange);
             }
             if get_transfer_leader_cmd(req).is_some() {
                 return Ok(RequestPolicy::ProposeTransferLeader);
+            }
+            if req.get_admin_request().get_cmd_type() == AdminCmdType::Split {
+                *sync_log = true;
             }
             return Ok(RequestPolicy::ProposeNormal);
         }
@@ -1119,6 +1127,9 @@ impl Peer {
         }
 
         if is_write {
+            if req.has_header() && req.get_header().get_sync_log() {
+                *sync_log = true;
+            }
             return Ok(RequestPolicy::ProposeNormal);
         }
 
@@ -1328,7 +1339,7 @@ impl Peer {
         // update leader lease.
 
         let req = RaftCmdRequest::new();
-        if let Ok(index) = self.propose_normal(req, metrics) {
+        if let Ok(index) = self.propose_normal(req, metrics, false) {
             let meta = ProposalMeta {
                 index: index,
                 term: self.term(),
@@ -1344,6 +1355,7 @@ impl Peer {
         &mut self,
         mut req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
+        sync_log: bool,
     ) -> Result<u64> {
         metrics.normal += 1;
 
@@ -1360,7 +1372,7 @@ impl Peer {
         }
 
         let propose_index = self.next_proposal_index();
-        try!(self.raft_group.propose(data, req.get_sync_log()));
+        try!(self.raft_group.propose(data, sync_log));
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.

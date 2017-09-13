@@ -241,7 +241,7 @@ pub fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
     if n > 0 {
         let mut ents = Vec::with_capacity(n);
         for _ in 0..n {
-            ents.push(new_entry(0, 0, SOME_DATA));
+            ents.push(new_entry(0, 0, SOME_DATA, false));
         }
         m.set_entries(RepeatedField::from_vec(ents));
     }
@@ -249,16 +249,18 @@ pub fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
 }
 
 pub fn empty_entry(term: u64, index: u64) -> Entry {
-    new_entry(term, index, None)
+    new_entry(term, index, None, true)
 }
 
-pub fn new_entry(term: u64, index: u64, data: Option<&str>) -> Entry {
+pub fn new_entry(term: u64, index: u64, data: Option<&str>, empty_entry: bool) -> Entry {
     let mut e = Entry::new();
     e.set_index(index);
     e.set_term(term);
-    e.set_sync_log(false);
     if let Some(d) = data {
         e.set_data(d.as_bytes().to_vec());
+    }
+    if !empty_entry {
+        e.set_sync_log(false);
     }
     e
 }
@@ -1191,7 +1193,9 @@ fn test_candidate_concede() {
     // send a proposal to 3 to flush out a MsgAppend to 1
     let data = "force follower";
     let mut m = new_message(3, 3, MessageType::MsgPropose, 0);
-    m.set_entries(RepeatedField::from_vec(vec![new_entry(0, 0, Some(data))]));
+    m.set_entries(RepeatedField::from_vec(
+        vec![new_entry(0, 0, Some(data), false)],
+    ));
     tt.send(vec![m]);
     // send heartbeat; flush out commit
     tt.send(vec![new_message(3, 3, MessageType::MsgBeat, 0)]);
@@ -1199,7 +1203,7 @@ fn test_candidate_concede() {
     assert_eq!(tt.peers[&1].state, StateRole::Follower);
     assert_eq!(tt.peers[&1].term, 1);
 
-    let ents = vec![empty_entry(1, 1), new_entry(1, 2, Some(data))];
+    let ents = vec![empty_entry(1, 1), new_entry(1, 2, Some(data), false)];
     let want_log = ltoa(&new_raft_log(ents, 3, 2));
     for (id, p) in &tt.peers {
         let l = ltoa(&p.raft_log);
@@ -1244,7 +1248,7 @@ fn test_old_messages() {
         empty_entry(1, 1),
         empty_entry(2, 2),
         empty_entry(3, 3),
-        new_entry(3, 4, SOME_DATA),
+        new_entry(3, 4, SOME_DATA, false),
     ];
     let ilog = new_raft_log(ents, 5, 4);
     let base = ltoa(&ilog);
@@ -1285,7 +1289,11 @@ fn test_proposal() {
         send(&mut nw, new_message(1, 1, MessageType::MsgPropose, 1));
 
         let want_log = if success {
-            new_raft_log(vec![empty_entry(1, 1), new_entry(1, 2, SOME_DATA)], 3, 2)
+            new_raft_log(
+                vec![empty_entry(1, 1), new_entry(1, 2, SOME_DATA, false)],
+                3,
+                2,
+            )
         } else {
             new_raft_log_with_storage(new_storage())
         };
@@ -1317,7 +1325,11 @@ fn test_proposal_by_proxy() {
         // propose via follower
         tt.send(vec![new_message(2, 2, MessageType::MsgPropose, 1)]);
 
-        let want_log = new_raft_log(vec![empty_entry(1, 1), new_entry(1, 2, SOME_DATA)], 3, 2);
+        let want_log = new_raft_log(
+            vec![empty_entry(1, 1), new_entry(1, 2, SOME_DATA, false)],
+            3,
+            2,
+        );
         let base = ltoa(&want_log);
         for (id, p) in &tt.peers {
             if p.raft.is_none() {
@@ -1657,7 +1669,7 @@ fn test_raft_frees_read_only_mem() {
         2,
         1,
         MessageType::MsgReadIndex,
-        vec![new_entry(0, 0, Some(ctx))],
+        vec![new_entry(0, 0, Some(ctx), false)],
     );
     sm.step(m).expect("");
     let msgs = sm.read_messages();
@@ -2233,7 +2245,7 @@ fn test_read_only_option_safe() {
             nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
         }
 
-        let e = new_entry(0, 0, Some(wctx));
+        let e = new_entry(0, 0, Some(wctx), false);
         nt.send(vec![
             new_message_with_entries(id, id, MessageType::MsgReadIndex, vec![e]),
         ]);
@@ -2307,7 +2319,7 @@ fn test_read_only_option_lease() {
             nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
         }
 
-        let e = new_entry(0, 0, Some(wctx));
+        let e = new_entry(0, 0, Some(wctx), false);
         nt.send(vec![
             new_message_with_entries(id, id, MessageType::MsgReadIndex, vec![e]),
         ]);
@@ -2350,7 +2362,7 @@ fn test_read_only_option_lease_without_check_quorum() {
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
     let ctx = "ctx1";
-    let e = new_entry(0, 0, Some(ctx));
+    let e = new_entry(0, 0, Some(ctx), false);
     nt.send(vec![
         new_message_with_entries(2, 2, MessageType::MsgReadIndex, vec![e]),
     ]);
@@ -2403,7 +2415,7 @@ fn test_read_only_for_new_leader() {
             1,
             1,
             MessageType::MsgReadIndex,
-            vec![new_entry(0, 0, Some(wctx))],
+            vec![new_entry(0, 0, Some(wctx), false)],
         ),
     ]);
     assert_eq!(nt.peers[&1].read_states.len(), 0);
@@ -2430,7 +2442,7 @@ fn test_read_only_for_new_leader() {
             1,
             1,
             MessageType::MsgReadIndex,
-            vec![new_entry(0, 0, Some(wctx))],
+            vec![new_entry(0, 0, Some(wctx), false)],
         ),
     ]);
     let read_states: Vec<ReadState> = nt.peers
@@ -2650,7 +2662,7 @@ fn test_send_append_for_progress_probe() {
             // we expect that raft will only send out one msgAPP on the first
             // loop. After that, the follower is paused until a heartbeat response is
             // received.
-            r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
+            r.append_entry(&mut [new_entry(0, 0, SOME_DATA, false)]);
             r.send_append(2);
             let msg = r.read_messages();
             assert_eq!(msg.len(), 1);
@@ -2659,7 +2671,7 @@ fn test_send_append_for_progress_probe() {
 
         assert!(r.prs[&2].paused);
         for _ in 0..10 {
-            r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
+            r.append_entry(&mut [new_entry(0, 0, SOME_DATA, false)]);
             r.send_append(2);
             assert_eq!(r.read_messages().len(), 0);
         }
@@ -2695,7 +2707,7 @@ fn test_send_append_for_progress_replicate() {
     r.prs.get_mut(&2).unwrap().become_replicate();
 
     for _ in 0..10 {
-        r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
+        r.append_entry(&mut [new_entry(0, 0, SOME_DATA, false)]);
         r.send_append(2);
         assert_eq!(r.read_messages().len(), 1);
     }
@@ -2710,7 +2722,7 @@ fn test_send_append_for_progress_snapshot() {
     r.prs.get_mut(&2).unwrap().become_snapshot(10);
 
     for _ in 0..10 {
-        r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
+        r.append_entry(&mut [new_entry(0, 0, SOME_DATA, false)]);
         r.send_append(2);
         assert_eq!(r.read_messages().len(), 0);
     }
@@ -3063,7 +3075,7 @@ fn test_commit_after_remove_node() {
 
     // While the config change is pending, make another proposal.
     let mut m = new_message(0, 0, MessageType::MsgPropose, 0);
-    let mut e = new_entry(0, 0, Some("hello"));
+    let mut e = new_entry(0, 0, Some("hello"), false);
     e.set_entry_type(EntryType::EntryNormal);
     m.mut_entries().push(e);
     r.step(m).expect("");
@@ -3286,7 +3298,12 @@ fn test_leader_transfer_receive_higher_term_vote() {
     assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
 
     nt.send(vec![
-        new_message_with_entries(2, 2, MessageType::MsgHup, vec![new_entry(1, 2, None)]),
+        new_message_with_entries(
+            2,
+            2,
+            MessageType::MsgHup,
+            vec![new_entry(1, 2, None, false)],
+        ),
     ]);
 
     check_leader_transfer_state(&nt.peers[&1], StateRole::Follower, 2);

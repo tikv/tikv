@@ -235,6 +235,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         if ctx.get_term() != 0 {
             header.set_term(ctx.get_term());
         }
+        header.set_sync_log(ctx.get_sync_log());
         header
     }
 
@@ -243,7 +244,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         let mut cmd = RaftCmdRequest::new();
         cmd.set_header(header);
         cmd.set_requests(RepeatedField::from_vec(reqs));
-        cmd.set_sync_log(ctx.get_sync_log());
         self.call_command(cmd, cb)
     }
 
