@@ -13,7 +13,6 @@
 
 use std::cmp::Ordering;
 use std::ascii::AsciiExt;
-use std::str;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, ScalarFuncSig};

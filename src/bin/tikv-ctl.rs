@@ -21,6 +21,7 @@ extern crate clap;
 extern crate protobuf;
 extern crate kvproto;
 extern crate rocksdb;
+#[cfg(test)]
 extern crate tempdir;
 extern crate rustc_serialize;
 
@@ -746,7 +747,6 @@ fn dump_range(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str;
     use rocksdb::Writable;
     use tikv::util::codec::bytes::encode_bytes;
     use tikv::util::codec::number::NumberEncoder;

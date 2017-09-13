@@ -79,6 +79,10 @@ impl ServerCluster {
             raft_client: RaftClient::new(env, Config::default()),
         }
     }
+
+    pub fn get_addr(&self, node_id: u64) -> SocketAddr {
+        self.addrs[&node_id]
+    }
 }
 
 impl Simulator for ServerCluster {
@@ -211,7 +215,7 @@ impl Simulator for ServerCluster {
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
         let store_id = raft_msg.get_to_peer().get_store_id();
-        let addr = self.addrs[&store_id];
+        let addr = self.get_addr(store_id);
         self.raft_client.send(store_id, addr, raft_msg).unwrap();
         self.raft_client.flush();
         Ok(())
