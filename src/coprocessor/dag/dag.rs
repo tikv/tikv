@@ -12,60 +12,49 @@
 // limitations under the License.
 
 use std::rc::Rc;
-use std::time::Instant;
 
 use tipb::executor::{ExecType, Executor};
 use tipb::schema::ColumnInfo;
 use tipb::select::{DAGRequest, RowMeta, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
-use kvproto::kvrpcpb::IsolationLevel;
 use protobuf::{Message as PbMsg, RepeatedField};
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{check_if_outdated, get_chunk, get_pk, to_pb_error};
+use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqCtx};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{AggregationExecutor, Executor as DAGExecutor, IndexScanExecutor,
                       LimitExecutor, Row, SelectionExecutor, TableScanExecutor, TopNExecutor};
 
 pub struct DAGContext<'s> {
-    deadline: Instant,
     columns: Rc<Vec<ColumnInfo>>,
     has_aggr: bool,
     req: DAGRequest,
     ranges: Vec<KeyRange>,
     snap: &'s Snapshot,
     eval_ctx: Rc<EvalContext>,
-    isolation_level: IsolationLevel,
-    fill_cache: bool,
-    table_scan: bool,
+    req_ctx: &'s ReqCtx,
 }
-
-// deadline, isolation_level, fill_cache, table_scan
-pub type ReqCtx = (Instant, IsolationLevel, bool, bool);
 
 impl<'s> DAGContext<'s> {
     pub fn new(
         req: DAGRequest,
-        ctx: ReqCtx,
         ranges: Vec<KeyRange>,
         snap: &'s Snapshot,
         eval_ctx: Rc<EvalContext>,
+        req_ctx: &'s ReqCtx,
     ) -> DAGContext<'s> {
         DAGContext {
             req: req,
-            deadline: ctx.0,
             columns: Rc::new(vec![]),
             ranges: ranges,
             snap: snap,
             has_aggr: false,
             eval_ctx: eval_ctx,
-            isolation_level: ctx.1,
-            fill_cache: ctx.2,
-            table_scan: ctx.3,
+            req_ctx: req_ctx,
         }
     }
 
@@ -76,7 +65,7 @@ impl<'s> DAGContext<'s> {
         loop {
             match exec.next() {
                 Ok(Some(row)) => {
-                    try!(check_if_outdated(self.deadline, self.table_scan));
+                    try!(self.req_ctx.check_if_outdated());
                     let chunk = get_chunk(&mut chunks);
                     let length = chunk.get_rows_data().len();
                     if self.has_aggr {
@@ -159,8 +148,8 @@ impl<'s> DAGContext<'s> {
         let store = SnapshotStore::new(
             self.snap,
             self.req.get_start_ts(),
-            self.isolation_level,
-            self.fill_cache,
+            self.req_ctx.isolation_level,
+            self.req_ctx.fill_cache,
         );
 
         match first.get_tp() {

@@ -22,14 +22,14 @@ use tipb::schema::ColumnInfo;
 use protobuf::Message as PbMsg;
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::CommandPri;
+use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 
 use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
+use storage::{self, engine, Engine, Snapshot, Statistics};
 use storage::engine::Error as EngineError;
 
 use super::codec::mysql;
@@ -161,7 +161,7 @@ impl Host {
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
-            let type_str = get_scan_tag(req.table_scan);
+            let type_str = req.ctx.get_scan_tag();
             COPR_PENDING_REQS
                 .with_label_values(&[type_str, pri_str])
                 .add(1.0);
@@ -207,18 +207,43 @@ enum CopRequest {
     DAG(DAGRequest),
 }
 
+pub struct ReqCtx {
+    // The deadline before which the task should be responded.
+    pub deadline: Instant,
+    pub isolation_level: IsolationLevel,
+    pub fill_cache: bool,
+    // whether is a table scan request.
+    pub table_scan: bool,
+}
+
+impl ReqCtx {
+    #[inline]
+    fn get_scan_tag(&self) -> &'static str {
+        if self.table_scan {
+            STR_REQ_TYPE_SELECT
+        } else {
+            STR_REQ_TYPE_INDEX
+        }
+    }
+
+    pub fn check_if_outdated(&self) -> Result<()> {
+        let now = Instant::now();
+        if self.deadline <= now {
+            return Err(Error::Outdated(self.deadline, now, self.get_scan_tag()));
+        }
+        Ok(())
+    }
+}
+
 pub struct RequestTask {
     req: Request,
-    // whether is a table scan request.
-    table_scan: bool,
     start_ts: Option<u64>,
     wait_time: Option<f64>,
     timer: Instant,
-    // The deadline before which the task should be responded.
-    deadline: Instant,
     statistics: Statistics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
+    ctx: ReqCtx,
 }
 
 impl RequestTask {
@@ -257,22 +282,27 @@ impl RequestTask {
             }
             _ => Err(box_err!("unsupported tp {}", tp)),
         };
+        let req_ctx = ReqCtx {
+            deadline: deadline,
+            isolation_level: req.get_context().get_isolation_level(),
+            fill_cache: !req.get_context().get_not_fill_cache(),
+            table_scan: table_scan,
+        };
         RequestTask {
             req: req,
-            table_scan: table_scan,
             start_ts: start_ts,
             wait_time: None,
             timer: timer,
-            deadline: deadline,
             statistics: Default::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
+            ctx: req_ctx,
         }
     }
 
     #[inline]
     fn check_outdated(&self) -> Result<()> {
-        check_if_outdated(self.deadline, self.table_scan)
+        self.ctx.check_if_outdated()
     }
 
     fn stop_record_waiting(&mut self) {
@@ -281,7 +311,7 @@ impl RequestTask {
         }
         let wait_time = duration_to_sec(self.timer.elapsed());
         COPR_REQ_WAIT_TIME
-            .with_label_values(&[get_scan_tag(self.table_scan)])
+            .with_label_values(&[self.ctx.get_scan_tag()])
             .observe(wait_time);
         self.wait_time = Some(wait_time);
     }
@@ -290,7 +320,7 @@ impl RequestTask {
         self.stop_record_waiting();
 
         let handle_time = duration_to_sec(self.timer.elapsed());
-        let type_str = get_scan_tag(self.table_scan);
+        let type_str = self.ctx.get_scan_tag();
         COPR_REQ_HISTOGRAM_VEC
             .with_label_values(&[type_str])
             .observe(handle_time);
@@ -459,13 +489,12 @@ fn err_resp(e: Error) -> Response {
             resp.set_locked(info);
             COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
         }
-        Error::Outdated(deadline, now, table_scan) => {
-            let t = get_scan_tag(table_scan);
+        Error::Outdated(deadline, now, scan_tag) => {
             let elapsed =
                 now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
             COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
             OUTDATED_REQ_WAIT_TIME
-                .with_label_values(&[t])
+                .with_label_values(&[scan_tag])
                 .observe(elapsed.as_secs() as f64);
 
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
@@ -498,14 +527,6 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     for t in reqs {
         respond(resp.clone(), t);
     }
-}
-
-pub fn check_if_outdated(deadline: Instant, table_scan: bool) -> Result<()> {
-    let now = Instant::now();
-    if deadline <= now {
-        return Err(Error::Outdated(deadline, now, table_scan));
-    }
-    Ok(())
 }
 
 fn respond(resp: Response, mut t: RequestTask) -> Statistics {
@@ -542,16 +563,14 @@ impl TiDbEndPoint {
     }
 
     fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let snap = SnapshotStore::new(
+        let ctx = try!(SelectContext::new(
+            sel,
             self.snap.as_ref(),
-            sel.get_start_ts(),
-            t.req.get_context().get_isolation_level(),
-            !t.req.get_context().get_not_fill_cache(),
-        );
-        let ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
+            &mut t.statistics,
+            &t.ctx
+        ));
         let range = t.req.get_ranges().to_vec();
-        debug!("scanning range: {:?}", range);
-        ctx.handle_request(t.req.get_tp(), range)
+        ctx.handle_request(range)
     }
 
     pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
@@ -560,13 +579,7 @@ impl TiDbEndPoint {
             dag.get_time_zone_offset(),
             dag.get_flags()
         )));
-        let req_ctx = (
-            t.deadline,
-            t.req.get_context().get_isolation_level(),
-            !t.req.get_context().get_not_fill_cache(),
-            t.table_scan,
-        );
-        let ctx = DAGContext::new(dag, req_ctx, ranges, self.snap.as_ref(), eval_ctx.clone());
+        let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
         ctx.handle_request(&mut t.statistics)
     }
 }
@@ -630,16 +643,6 @@ pub fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
 
 pub const STR_REQ_TYPE_SELECT: &'static str = "select";
 pub const STR_REQ_TYPE_INDEX: &'static str = "index";
-
-#[inline]
-pub fn get_scan_tag(table_scan: bool) -> &'static str {
-    if table_scan {
-        STR_REQ_TYPE_SELECT
-    } else {
-        STR_REQ_TYPE_INDEX
-    }
-}
-
 pub const STR_REQ_PRI_LOW: &'static str = "low";
 pub const STR_REQ_PRI_NORMAL: &'static str = "normal";
 pub const STR_REQ_PRI_HIGH: &'static str = "high";
@@ -675,7 +678,7 @@ mod tests {
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
-        task.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
+        task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());
