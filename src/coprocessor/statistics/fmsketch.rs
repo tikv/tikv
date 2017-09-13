@@ -10,6 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 // FIXME: remove following later
 #![allow(dead_code)]
 
@@ -22,6 +23,7 @@ use coprocessor::codec::datum;
 use coprocessor::codec::datum::Datum;
 use coprocessor::codec::Result;
 
+/// `FMSketch` is used to count the number of distinct elements in a set.
 pub struct FMSketch {
     mask: u64,
     max_size: usize,
@@ -45,13 +47,26 @@ impl FMSketch {
         Ok(s)
     }
 
-    fn merge(&mut self, rs: &FMSketch) {
+    pub fn merge(&mut self, rs: &FMSketch) {
         if self.mask < rs.mask {
             self.update_mask(rs.mask);
         }
         for key in &rs.hash_set {
             self.insert_hash_value(*key)
         }
+    }
+
+    // ndv returns the number of distinct elements
+    pub fn ndv(&self) -> i64 {
+        (self.mask + 1) as i64 * (self.hash_set.len() as i64)
+    }
+
+    pub fn convert_to_proto(self) -> analyze::FMSketch {
+        let mut proto = analyze::FMSketch::new();
+        proto.set_mask(self.mask);
+        let hash = self.hash_set.into_iter().collect();
+        proto.set_hashset(hash);
+        proto
     }
 
     fn update_mask(&mut self, mask: u64) {
@@ -66,11 +81,6 @@ impl FMSketch {
         }
     }
 
-    // returns the ndv of the sketch
-    pub fn ndv(&self) -> i64 {
-        (self.mask + 1) as i64 * (self.hash_set.len() as i64)
-    }
-
     fn insert_hash_value(&mut self, hash_val: u64) {
         if (hash_val & self.mask) != 0 {
             return;
@@ -82,7 +92,7 @@ impl FMSketch {
         }
     }
 
-    pub fn insert(&mut self, v: Datum) -> Result<()> {
+    fn insert(&mut self, v: Datum) -> Result<()> {
         let bytes = try!(datum::encode_value(&[v]));
         let hash = {
             let mut hasher = FnvHasher::default();
@@ -91,14 +101,6 @@ impl FMSketch {
         };
         self.insert_hash_value(hash);
         Ok(())
-    }
-
-    pub fn convert_to_proto(self) -> analyze::FMSketch {
-        let mut proto = analyze::FMSketch::new();
-        proto.set_mask(self.mask);
-        let hash = self.hash_set.into_iter().collect();
-        proto.set_hashset(hash);
-        proto
     }
 }
 
