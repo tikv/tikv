@@ -455,7 +455,7 @@ mod test {
             .map(|t| t.parse().unwrap())
             .collect();
         let mut buf = Vec::with_capacity(65536);
-        b.iter(|| for j in jsons.iter() {
+        b.iter(|| for j in &jsons {
             buf.clear();
             buf.encode_json(j).unwrap();
         });
@@ -468,7 +468,7 @@ mod test {
             .map(|t| t.parse().unwrap())
             .collect();
         let mut buf = Vec::with_capacity(65536);
-        b.iter(|| for j in jsons.iter() {
+        b.iter(|| for j in &jsons {
             buf.clear();
             serde_json::to_writer(&mut buf, j).unwrap();
         });
@@ -477,7 +477,7 @@ mod test {
     #[bench]
     fn bench_decode_text(b: &mut Bencher) {
         let texts = load_test_jsons();
-        b.iter(|| for text in texts.iter() {
+        b.iter(|| for text in &texts {
             text.parse::<Json>().unwrap();
         });
     }
@@ -493,7 +493,7 @@ mod test {
                 buf
             })
             .collect::<Vec<Vec<u8>>>();
-        b.iter(|| for binary in binaries.iter() {
+        b.iter(|| for binary in &binaries {
             binary.as_slice().decode_json().unwrap();
         });
     }
