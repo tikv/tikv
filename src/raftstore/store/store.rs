@@ -1169,6 +1169,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
         // Can we destroy it in another thread later?
+
+        // Suppose cluster removes peer a from store and then add a new
+        // peer b to the same store again, if peer a is applying snapshot,
+        // then it will be considered stale and removed immediately, and the
+        // apply meta will be removed asynchronously. So the `destroy_peer` will
+        // be called again when `poll_apply`. We need to check if the peer exists
+        // and is the very target.
         let mut p = match self.region_peers.remove(&region_id) {
             None => return,
             Some(p) => if p.peer_id() == peer.get_id() {
