@@ -22,6 +22,7 @@ use tipb::analyze;
 use coprocessor::codec::datum;
 use coprocessor::codec::datum::Datum;
 use coprocessor::codec::Result;
+use util::as_slice;
 
 /// `FMSketch` is used to count the number of distinct elements in a set.
 pub struct FMSketch {
@@ -39,7 +40,7 @@ impl FMSketch {
         }
     }
 
-    pub fn build(values: Vec<Datum>, max_size: usize) -> Result<FMSketch> {
+    pub fn build(values: &[Datum], max_size: usize) -> Result<FMSketch> {
         let mut s = FMSketch::new(max_size);
         for value in values {
             try!(s.insert(value));
@@ -92,8 +93,8 @@ impl FMSketch {
         }
     }
 
-    fn insert(&mut self, v: Datum) -> Result<()> {
-        let bytes = try!(datum::encode_value(&[v]));
+    fn insert(&mut self, v: &Datum) -> Result<()> {
+        let bytes = try!(datum::encode_value(as_slice(v)));
         let hash = {
             let mut hasher = FnvHasher::default();
             hasher.write(&bytes);
@@ -147,7 +148,6 @@ mod test {
             let count = 100000;
             let rc = generate_samples(count);
 
-
             let mut pk = Vec::with_capacity(count);
             pk.resize(count, Datum::Null);
             for (id, mut item) in pk.iter_mut().enumerate().take(count) {
@@ -166,11 +166,11 @@ mod test {
         // This test was ported from tidb.
         let max_size = 1000usize;
         let data = TestData::default();
-        let mut sample = FMSketch::build(data.samples, max_size).unwrap();
+        let mut sample = FMSketch::build(&data.samples, max_size).unwrap();
         assert_eq!(sample.ndv(), 6624);
-        let rc = FMSketch::build(data.rc, max_size).unwrap();
+        let rc = FMSketch::build(&data.rc, max_size).unwrap();
         assert_eq!(rc.ndv(), 74240);
-        let pk = FMSketch::build(data.pk, max_size).unwrap();
+        let pk = FMSketch::build(&data.pk, max_size).unwrap();
         assert_eq!(pk.ndv(), 99968);
         sample.merge(&pk);
         sample.merge(&rc);
