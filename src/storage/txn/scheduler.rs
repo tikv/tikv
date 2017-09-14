@@ -42,7 +42,7 @@ use prometheus::HistogramTimer;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-              Statistics, StorageCb};
+              Statistics, StatisticsSummary, StorageCb};
 use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, WriteType,
                     MAX_TXN_WRITE_SIZE};
 use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
@@ -297,10 +297,10 @@ pub struct Scheduler {
     sched_too_busy_threshold: usize,
 
     // worker pool
-    worker_pool: ThreadPool<SchContext>,
+    worker_pool: ThreadPool<ScheContext>,
 
     // high priority commands will be delivered to this pool
-    high_priority_pool: ThreadPool<SchContext>,
+    high_priority_pool: ThreadPool<ScheContext>,
 
     has_gc_command: bool,
 
@@ -964,25 +964,21 @@ fn process_write_impl(
 }
 
 #[derive(Default)]
-struct SchContext {
-    stats: HashMap<&'static str, Statistics>,
+struct ScheContext {
+    stats: HashMap<&'static str, StatisticsSummary>,
 }
 
-impl SchContext {
-    fn add_statistics(&mut self, cmd_tag: &'static str, stat: Statistics) {
-        if self.stats.contains_key(cmd_tag) {
-            let mut entry = self.stats.get_mut(cmd_tag).unwrap();
-            entry.add_statistics(&stat);
-        } else {
-            self.stats.insert(cmd_tag, stat);
-        }
+impl ScheContext {
+    fn add_statistics(&mut self, cmd_tag: &'static str, stat: &Statistics) {
+        let entry = self.stats.entry(cmd_tag).or_insert_with(Default::default);
+        entry.add_statistics(stat);
     }
 }
 
-impl ThreadContext for SchContext {
+impl ThreadContext for ScheContext {
     fn on_tick(&mut self) {
         for (cmd, stat) in &self.stats {
-            for (cf, details) in stat.details() {
+            for (cf, details) in stat.stat.details() {
                 for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
                         .with_label_values(&[cmd, cf, tag])
@@ -1033,7 +1029,7 @@ impl Scheduler {
         ctx.tag
     }
 
-    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool<SchContext> {
+    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool<ScheContext> {
         match priority {
             CommandPri::Low | CommandPri::Normal => &self.worker_pool,
             CommandPri::High => &self.high_priority_pool,
@@ -1063,14 +1059,14 @@ impl Scheduler {
         let worker_pool = self.fetch_worker_pool(cmd.priority());
         let tag = cmd.tag();
         if readcmd {
-            worker_pool.execute(move |ctx: &mut SchContext| {
+            worker_pool.execute(move |ctx: &mut ScheContext| {
                 let s = process_read(cid, cmd, ch, snapshot);
-                ctx.add_statistics(tag, s);
+                ctx.add_statistics(tag, &s);
             });
         } else {
-            worker_pool.execute(move |ctx: &mut SchContext| {
+            worker_pool.execute(move |ctx: &mut ScheContext| {
                 let s = process_write(cid, cmd, ch, snapshot);
-                ctx.add_statistics(tag, s);
+                ctx.add_statistics(tag, &s);
             });
         }
     }
