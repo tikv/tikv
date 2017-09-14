@@ -977,7 +977,7 @@ impl ScheContext {
 
 impl ThreadContext for ScheContext {
     fn on_tick(&mut self) {
-        for (cmd, stat) in &self.stats {
+        for (cmd, stat) in self.stats.drain() {
             for (cf, details) in stat.stat.details() {
                 for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
@@ -986,7 +986,6 @@ impl ThreadContext for ScheContext {
                 }
             }
         }
-        self.stats = HashMap::default();
     }
 }
 

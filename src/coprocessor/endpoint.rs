@@ -78,7 +78,7 @@ struct CopContext {
 
 impl CopContext {
     fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
-        self.get_statistics(type_str).add(stats);
+        self.get_statistics(type_str).add_statistics(stats);
     }
 
     fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
