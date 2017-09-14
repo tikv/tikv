@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::{char, str, i64};
-use std::str::Chars;
 use std::cmp::Ordering;
 use std::borrow::Cow;
 
@@ -20,6 +19,8 @@ use coprocessor::codec::{datum, mysql, Datum};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use coprocessor::dag::expr::Expression;
 use super::{Error, FnCall, Result, StatementContext};
+
+const MAX_RECURSE_LEVEL: usize = 1024;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum CmpOp {
@@ -167,7 +168,7 @@ impl FnCall {
             let c = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
             try!(char::from_u32(c).ok_or::<Error>(box_err!("invalid escape char: {}", c)))
         };
-        Ok(Some(like_match(&target, &pattern, escape) as i64))
+        Ok(Some(try!(like_match(&target, &pattern, escape, 0)) as i64))
     }
 }
 
@@ -242,36 +243,75 @@ where
     Ok(None)
 }
 
-#[inline]
-fn next_escaped(chars: &mut Chars, escape: char) -> Option<(char, bool)> {
-    chars.next().map(|c| if c == escape {
-        chars.next().map_or((c, false), |c| (c, true))
-    } else {
-        (c, false)
-    })
-}
-
-/// Document is [here](https://dev.mysql.com/doc/refman/5.7/en/string-comparison-functions.html)
-fn like_match(target: &str, pattern: &str, escape: char) -> bool {
-    let (mut tcs, mut pcs) = (target.chars(), pattern.chars());
-    while let Some((c, escaped)) = next_escaped(&mut pcs, escape) {
-        if c == '%' && (!escaped || escape == '%') {
-            while !like_match(tcs.as_str(), pcs.as_str(), escape) {
-                if tcs.next().is_none() {
-                    return false;
+fn like_match(target: &str, pattern: &str, escape: char, recurse_level: usize) -> Result<bool> {
+    let mut pcs = pattern.chars();
+    let mut tcs = target.chars();
+    loop {
+        loop {
+            match pcs.next() {
+                None => return Ok(tcs.next().is_none()),
+                Some('%') => break,
+                Some(c) => {
+                    let (npc, escape) = if c == escape {
+                        pcs.next().map_or((c, false), |c| (c, true))
+                    } else {
+                        (c, false)
+                    };
+                    let nsc = match tcs.next() {
+                        None => return Ok(false),
+                        Some(c) => c,
+                    };
+                    if nsc != npc && (npc != '_' || escape) {
+                        return Ok(false);
+                    }
                 }
             }
-            return true;
-        } else {
-            if let Some(t) = tcs.next() {
-                if t == c || (c == '_' && (!escaped || escape == '%')) {
-                    continue;
+        }
+        let mut skip_cnt = 0;
+        let next_char = loop {
+            match pcs.next() {
+                Some('%') => skip_cnt += 1,
+                Some('_') => {
+                    if tcs.next().is_none() {
+                        return Ok(false);
+                    }
+                    skip_cnt += 1;
+                }
+                // So the pattern should be some thing like 'xxx%'
+                None => return Ok(true),
+                Some(c) => {
+                    break if c == escape {
+                        pcs.next().unwrap_or(escape)
+                    } else {
+                        c
+                    };
                 }
             }
-            return false;
+        };
+        let next_pattern = pcs.as_str();
+        if recurse_level >= MAX_RECURSE_LEVEL {
+            // TODO: maybe we should test if stack is actually about to overflow.
+            return Err(box_err!(
+                "recurse level should not be larger than {}",
+                MAX_RECURSE_LEVEL
+            ));
+        }
+        loop {
+            let s = match tcs.next() {
+                None => return Ok(false),
+                Some(s) => s,
+            };
+            if s == next_char &&
+                try!(like_match(
+                    tcs.as_str(),
+                    pcs.as_str(),
+                    escape,
+                    recurse_level + 1
+                )) {
+                return Ok(true);
+            }
         }
     }
-    tcs.next().is_none()
 }
 
 #[cfg(test)]
@@ -395,6 +435,13 @@ mod test {
             (r#"Hello, World"#, r#"Hello, World"#, '\\', true),
             (r#"Hello, World"#, r#"Hello, %"#, '\\', true),
             (r#"Hello, World"#, r#"%, World"#, '\\', true),
+            (r#"test"#, r#"te%st"#, '\\', true),
+            (r#"test"#, r#"te%%st"#, '\\', true),
+            (r#"test"#, r#"test%"#, '\\', true),
+            (r#"test"#, r#"%test%"#, '\\', true),
+            (r#"test"#, r#"t%e%s%t"#, '\\', true),
+            (r#"test"#, r#"_%_%_%_"#, '\\', true),
+            (r#"test"#, r#"_%_%st"#, '\\', true),
             (r#"C:"#, r#"%\"#, '\\', false),
             (r#"C:\"#, r#"%\"#, '\\', true),
             (r#"C:\Programs"#, r#"%\"#, '\\', false),
@@ -416,15 +463,15 @@ mod test {
             (r#"3hello"#, r#"%_hello"#, '%', true),
         ];
         let ctx = StatementContext::default();
-        for (target, pattern, escape, exp) in cases {
-            let target = datum_expr(Datum::Bytes(target.as_bytes().to_vec()));
-            let pattern = datum_expr(Datum::Bytes(pattern.as_bytes().to_vec()));
+        for (target_str, pattern_str, escape, exp) in cases {
+            let target = datum_expr(Datum::Bytes(target_str.as_bytes().to_vec()));
+            let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let escape = datum_expr(Datum::I64(escape as i64));
             let op = fncall_expr(ScalarFuncSig::LikeSig, &[target, pattern, escape]);
             let op = Expression::build(op, &ctx).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
             let exp = Datum::from(exp);
-            assert_eq!(got, exp);
+            assert_eq!(got, exp, "{:?} like {:?}", target_str, pattern_str);
         }
     }
 }
