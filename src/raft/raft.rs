@@ -850,7 +850,7 @@ impl<T: Storage> Raft<T> {
         if m.get_term() == 0 {
             // local message
         } else if m.get_term() > self.term {
-            let leader_id = if m.get_msg_type() == MessageType::MsgRequestVote ||
+            if m.get_msg_type() == MessageType::MsgRequestVote ||
                 m.get_msg_type() == MessageType::MsgRequestPreVote
             {
                 let force = m.get_context() == CAMPAIGN_TRANSFER;
@@ -878,10 +878,7 @@ impl<T: Storage> Raft<T> {
 
                     return Ok(());
                 }
-                INVALID_ID
-            } else {
-                m.get_from()
-            };
+            }
 
             if m.get_msg_type() == MessageType::MsgRequestPreVote ||
                 (m.get_msg_type() == MessageType::MsgRequestPreVoteResponse && !m.get_reject())
@@ -904,7 +901,11 @@ impl<T: Storage> Raft<T> {
                     m.get_from(),
                     m.get_term()
                 );
-                self.become_follower(m.get_term(), leader_id);
+                // When we recv MsgApp, MsgHeartbeat, MsgSnap with higher term, will set leader to
+                // m.From in stepFollower.
+                // When we recv other messages with higher term (MsgAppResp, MsgVote,
+                // MsgPreVoteResp), set leader to None, because we don't know if it's leader or not.
+                self.become_follower(m.get_term(), INVALID_ID);
             }
         } else if m.get_term() < self.term {
             if self.check_quorum &&
