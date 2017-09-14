@@ -18,13 +18,16 @@ use std::str::FromStr;
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb_grpc::*;
+use kvproto::debugpb_grpc::create_debug;
+
 use util::worker::Worker;
 use storage::Storage;
-use raftstore::store::{SnapManager, SnapshotStatusMsg};
+use raftstore::store::{Engines, SnapManager, SnapshotStatusMsg};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
-use super::grpc_service::Service;
+use super::grpc_service::Service as KvService;
+use super::debug_service::{Request as DebugTask, Runner as DebugRunner, Service as DebugService};
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
@@ -48,6 +51,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
+    debugger: Option<Worker<DebugTask>>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -59,6 +63,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snapshot_status_sender: Sender<SnapshotStatusMsg>,
         resolver: S,
         snap_mgr: SnapManager,
+        engine: Option<Engines>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -70,12 +75,23 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
 
-        let h = Service::new(
+        let kv_service = KvService::new(
             storage.clone(),
             end_point_worker.scheduler(),
             raft_router.clone(),
             snap_worker.scheduler(),
         );
+        let (debug_service, debugger) = if let Some(engine) = engine {
+            let runner = DebugRunner::new(engine.kv_engine, engine.raft_engine);
+            let mut debugger = Worker::new(thd_name!("debugger"));
+            debugger.start(runner).unwrap();
+            (
+                Some(DebugService::new(debugger.scheduler())),
+                Some(debugger),
+            )
+        } else {
+            (None, None)
+        };
         let addr = try!(SocketAddr::from_str(&cfg.addr));
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
@@ -84,13 +100,17 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(region_split_size as usize * 4)
             .build_args();
-        let grpc_server = try!(
-            ServerBuilder::new(env.clone())
-                .register_service(create_tikv(h))
+        let grpc_server = {
+            let sb = ServerBuilder::new(env.clone())
+                .register_service(create_tikv(kv_service))
                 .bind(ip, addr.port())
-                .channel_args(channel_args)
-                .build()
-        );
+                .channel_args(channel_args);
+            if let Some(ds) = debug_service {
+                sb.register_service(create_debug(ds)).build()?
+            } else {
+                sb.build()?
+            }
+        };
 
         let addr = {
             let (ref host, port) = grpc_server.bind_addrs()[0];
@@ -115,6 +135,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
+            debugger: debugger,
         };
 
         Ok(svr)
@@ -152,6 +173,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             error!("failed to stop store: {:?}", e);
         }
         self.grpc_server.shutdown();
+        if let Some(ref mut d) = self.debugger {
+            d.stop();
+        }
         Ok(())
     }
 
@@ -249,6 +273,7 @@ mod tests {
             snapshot_status_sender,
             MockResolver { addr: addr.clone() },
             SnapManager::new("", None),
+            None,
         ).unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 
