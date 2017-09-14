@@ -206,7 +206,7 @@ impl CFStatistics {
         ]
     }
 
-    pub fn add_cf_statistics(&mut self, other: &Self) {
+    pub fn add(&mut self, other: &Self) {
         self.processed = self.processed.saturating_add(other.processed);
         self.get = self.get.saturating_add(other.get);
         self.next = self.next.saturating_add(other.next);
@@ -240,10 +240,23 @@ impl Statistics {
         ]
     }
 
-    pub fn add_statistics(&mut self, other: &Self) {
-        self.lock.add_cf_statistics(&other.lock);
-        self.write.add_cf_statistics(&other.write);
-        self.data.add_cf_statistics(&other.data);
+    pub fn add(&mut self, other: &Self) {
+        self.lock.add(&other.lock);
+        self.write.add(&other.write);
+        self.data.add(&other.data);
+    }
+}
+
+#[derive(Default)]
+pub struct StatisticsSummary {
+    pub stat: Statistics,
+    pub count: u64,
+}
+
+impl StatisticsSummary {
+    pub fn add_statistics(&mut self, v: &Statistics) {
+        self.stat.add(v);
+        self.count += 1;
     }
 }
 
