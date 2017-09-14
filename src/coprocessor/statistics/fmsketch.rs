@@ -138,7 +138,6 @@ mod test {
             samples[id] += 2;
             id += 5;
         }
-        samples.sort_by(|a, b| a.cmp(b));
         samples.into_iter().map(|v| Datum::I64(v as i64)).collect()
     }
 
