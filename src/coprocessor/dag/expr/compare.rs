@@ -267,15 +267,13 @@ fn like_match(target: &str, pattern: &str, escape: char, recurse_level: usize) -
                 }
             }
         }
-        let mut skip_cnt = 0;
         let next_char = loop {
             match pcs.next() {
-                Some('%') => skip_cnt += 1,
+                Some('%') => {},
                 Some('_') => {
                     if tcs.next().is_none() {
                         return Ok(false);
                     }
-                    skip_cnt += 1;
                 }
                 // So the pattern should be some thing like 'xxx%'
                 None => return Ok(true),
