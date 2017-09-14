@@ -35,16 +35,12 @@ extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate mio;
 extern crate kvproto;
 extern crate tipb;
-extern crate time;
-extern crate fnv;
 extern crate test;
 extern crate grpcio as grpc;
 extern crate futures;
 extern crate futures_cpupool;
-extern crate tokio_core;
 extern crate toml;
 
 mod raft;

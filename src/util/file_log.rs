@@ -143,14 +143,14 @@ impl Drop for RotatingFileLogger {
 
 #[cfg(test)]
 mod tests {
-    extern crate log;
-    extern crate rand;
-    extern crate utime;
     use time::{self, Timespec};
     use std::io::prelude::*;
     use std::fs::OpenOptions;
     use std::path::Path;
+
     use tempdir::TempDir;
+    use utime;
+
     use super::{RotatingFileLoggerCore, ONE_DAY_SECONDS};
 
     #[test]

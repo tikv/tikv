@@ -675,22 +675,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut has_peer = false;
         let mut async_remove = false;
         let mut stale_peer = None;
+        let mut initialized = false;
         if let Some(p) = self.region_peers.get_mut(&region_id) {
             has_peer = true;
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
-                if p.is_applying_snapshot() && !p.mut_store().cancel_applying_snap() {
-                    info!(
-                        "[region {}] Stale peer {} is applying snapshot, will destroy next \
-                         time.",
-                        region_id,
-                        p.peer_id()
-                    );
-                    return Ok(false);
+                initialized = p.get_store().is_initialized();
+                async_remove = initialized;
+                if p.is_applying_snapshot() {
+                    if !p.mut_store().cancel_applying_snap() {
+                        info!(
+                            "[region {}] Stale peer {} is applying snapshot, will destroy next \
+                             time.",
+                            region_id,
+                            p.peer_id()
+                        );
+                        return Ok(false);
+                    }
+                    // There is no tasks in apply worker.
+                    async_remove = false;
                 }
                 p.pending_remove = true;
                 stale_peer = Some(p.peer.clone());
-                async_remove = p.get_store().is_initialized();
             } else if p.peer_id() > target_peer_id {
                 info!(
                     "[region {}] target peer id {} is less than {}, msg maybe stale.",
@@ -702,15 +708,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         if let Some(p) = stale_peer {
+            if initialized {
+                self.apply_worker
+                    .schedule(ApplyTask::destroy(region_id))
+                    .unwrap();
+            }
             if async_remove {
                 info!(
                     "[region {}] asking destroying stale peer {:?}",
                     region_id,
                     p
                 );
-                self.apply_worker
-                    .schedule(ApplyTask::destroy(region_id))
-                    .unwrap();
                 return Ok(false);
             }
             info!("[region {}] destroying stale peer {:?}", region_id, p);
@@ -1163,10 +1171,27 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
-        info!("[region {}] destroy peer {:?}", region_id, peer);
-        // TODO: should we check None here?
         // Can we destroy it in another thread later?
-        let mut p = self.region_peers.remove(&region_id).unwrap();
+
+        // Suppose cluster removes peer a from store and then add a new
+        // peer b to the same store again, if peer a is applying snapshot,
+        // then it will be considered stale and removed immediately, and the
+        // apply meta will be removed asynchronously. So the `destroy_peer` will
+        // be called again when `poll_apply`. We need to check if the peer exists
+        // and is the very target.
+        let mut p = match self.region_peers.remove(&region_id) {
+            None => return,
+            Some(p) => if p.peer_id() == peer.get_id() {
+                p
+            } else {
+                assert!(p.peer_id() > peer.get_id());
+                // It has been destroyed.
+                self.region_peers.insert(region_id, p);
+                return;
+            },
+        };
+
+        info!("[region {}] destroy peer {:?}", region_id, peer);
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
 
