@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::{char, str, i64};
+use std::str::Chars;
 use std::cmp::Ordering;
 use std::borrow::Cow;
 
@@ -168,7 +169,7 @@ impl FnCall {
             let c = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
             try!(char::from_u32(c).ok_or::<Error>(box_err!("invalid escape char: {}", c)))
         };
-        Ok(Some(try!(like_match(&target, &pattern, escape, 0)) as i64))
+        Ok(Some(try!(like(&target, &pattern, escape, 0)) as i64))
     }
 }
 
@@ -243,38 +244,44 @@ where
     Ok(None)
 }
 
-fn like_match(target: &str, pattern: &str, escape: char, recurse_level: usize) -> Result<bool> {
-    let mut pcs = pattern.chars();
-    let mut tcs = target.chars();
+// Do match until '%' is found.
+#[inline]
+fn partial_like<'a>(tcs: &mut Chars<'a>, pcs: &mut Chars<'a>, escape: char) -> Option<bool> {
     loop {
-        loop {
-            match pcs.next() {
-                None => return Ok(tcs.next().is_none()),
-                Some('%') => break,
-                Some(c) => {
-                    let (npc, escape) = if c == escape {
-                        pcs.next().map_or((c, false), |c| (c, true))
-                    } else {
-                        (c, false)
-                    };
-                    let nsc = match tcs.next() {
-                        None => return Ok(false),
-                        Some(c) => c,
-                    };
-                    if nsc != npc && (npc != '_' || escape) {
-                        return Ok(false);
-                    }
+        match pcs.next() {
+            None => return Some(tcs.next().is_none()),
+            Some('%') => return None,
+            Some(c) => {
+                let (npc, escape) = if c == escape {
+                    pcs.next().map_or((c, false), |c| (c, true))
+                } else {
+                    (c, false)
+                };
+                let nsc = match tcs.next() {
+                    None => return Some(false),
+                    Some(c) => c,
+                };
+                if nsc != npc && (npc != '_' || escape) {
+                    return Some(false);
                 }
             }
         }
+    }
+}
+
+fn like(target: &str, pattern: &str, escape: char, recurse_level: usize) -> Result<bool> {
+    let mut tcs = target.chars();
+    let mut pcs = pattern.chars();
+    loop {
+        if let Some(res) = partial_like(&mut tcs, &mut pcs, escape) {
+            return Ok(res);
+        }
         let next_char = loop {
             match pcs.next() {
-                Some('%') => {},
-                Some('_') => {
-                    if tcs.next().is_none() {
-                        return Ok(false);
-                    }
-                }
+                Some('%') => {}
+                Some('_') => if tcs.next().is_none() {
+                    return Ok(false);
+                },
                 // So the pattern should be some thing like 'xxx%'
                 None => return Ok(true),
                 Some(c) => {
@@ -293,18 +300,13 @@ fn like_match(target: &str, pattern: &str, escape: char, recurse_level: usize) -
                 MAX_RECURSE_LEVEL
             ));
         }
+        // Pattern must be something like "%xxx".
         loop {
             let s = match tcs.next() {
                 None => return Ok(false),
                 Some(s) => s,
             };
-            if s == next_char &&
-                try!(like_match(
-                    tcs.as_str(),
-                    pcs.as_str(),
-                    escape,
-                    recurse_level + 1
-                )) {
+            if s == next_char && try!(like(tcs.as_str(), pcs.as_str(), escape, recurse_level + 1)) {
                 return Ok(true);
             }
         }
