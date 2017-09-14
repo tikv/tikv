@@ -298,6 +298,9 @@
 # during table initialization.
 # cache-index-and-filter-blocks = true
 
+# Pin level0 filter and index blocks in cache.
+# pin-l0-filter-and-index-blocks = true
+
 # Options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
@@ -311,11 +314,11 @@
 
 # in normal cases should tune to 10%-30% system's total memory.
 # block-cache-size = "256MB"
-# cache-index-and-filter-blocks = true
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# pin-l0-filter-and-index-blocks = true
 # compaction-pri = 3
 
 [rocksdb.lockcf]
@@ -331,6 +334,7 @@
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# pin-l0-filter-and-index-blocks = true
 # compaction-pri = 0
 
 [raftdb]
@@ -364,4 +368,5 @@
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# pin-l0-filter-and-index-blocks = true
 # compaction-pri = 0
