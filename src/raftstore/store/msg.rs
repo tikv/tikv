@@ -67,7 +67,14 @@ pub enum Msg {
     SplitCheckResult {
         region_id: u64,
         epoch: RegionEpoch,
+        // It's a data key, starts with `DATA_PREFIX_KEY`.
         split_key: Vec<u8>,
+    },
+
+    SplitRegion {
+        // It's an encoded key.
+        split_key: Vec<u8>,
+        callback: Callback,
     },
 
     ReportUnreachable { region_id: u64, to_peer_id: u64 },
@@ -80,11 +87,6 @@ pub enum Msg {
         region_id: u64,
         index: u64,
         hash: Vec<u8>,
-    },
-
-    SplitRegion {
-        split_key: Vec<u8>,
-        callback: Callback,
     },
 }
 

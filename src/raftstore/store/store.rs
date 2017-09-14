@@ -1853,12 +1853,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         epoch: metapb::RegionEpoch,
         split_key: Vec<u8>,
     ) {
-        self.on_prepare_split_region(split_key, Some(region_id), Some(epoch), None);
+        self.on_prepare_split_region(
+            keys::origin_key(split_key.as_slice()).to_vec(),
+            Some(region_id),
+            Some(epoch),
+            None,
+        );
     }
 
     fn on_prepare_split_region(
         &mut self,
-        split_key: Vec<u8>,
+        split_key: Vec<u8>, // `split_key` is a encoded key.
         region_id: Option<u64>,
         epoch: Option<metapb::RegionEpoch>,
         cb: Option<Callback>,
@@ -1966,10 +1971,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return;
             }
             HashMapEntry::Vacant(entry) => {
-                let key = keys::origin_key(&split_key);
                 let task = PdTask::AskSplit {
                     region: region.clone(),
-                    split_key: key.to_vec(),
+                    split_key: split_key.clone(),
                     peer: peer.peer.clone(),
                     right_derive: self.cfg.right_derive_when_split,
                 };
