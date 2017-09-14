@@ -100,7 +100,7 @@ mod test {
     use std::fs::File;
     use std::io::prelude::*;
     use std::io::BufReader;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use super::*;
 
     #[test]
@@ -167,8 +167,9 @@ mod test {
     }
 
     pub fn load_test_jsons() -> Vec<String> {
-        let base = Path::new("src/coprocessor/codec/mysql/json");
-        open_file_read_lines(base.join("world_bank.json"))
+        let mut file = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        file.push("src/coprocessor/codec/mysql/json/world_bank.json");
+        open_file_read_lines(file)
     }
 
     #[test]
