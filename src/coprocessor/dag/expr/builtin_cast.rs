@@ -64,9 +64,8 @@ impl FnCall {
             return self.children[0].eval_int(ctx, row);
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let negative_flag = b'-';
         let is_negative = match val.iter().skip_while(|x| x.is_ascii_whitespace()).next() {
-            Some(flag) => *flag == negative_flag,
+            Some(&b'-') => true,
             _ => false,
         };
         if is_negative {
