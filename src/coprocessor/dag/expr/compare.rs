@@ -288,7 +288,6 @@ fn like_match(target: &str, pattern: &str, escape: char, recurse_level: usize) -
                 }
             }
         };
-        let next_pattern = pcs.as_str();
         if recurse_level >= MAX_RECURSE_LEVEL {
             // TODO: maybe we should test if stack is actually about to overflow.
             return Err(box_err!(
