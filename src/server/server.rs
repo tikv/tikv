@@ -129,6 +129,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
             cfg,
+            self.raft_router.clone(),
         );
         box_try!(
             self.end_point_worker

@@ -27,10 +27,11 @@ use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 use util::time::duration_to_sec;
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
-use util::threadpool::{Context, ThreadPool, ThreadPoolBuilder};
+use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, Snapshot, Statistics, StatisticsSummary};
+use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
+use server::transport::RaftStoreRouter;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
@@ -59,24 +60,47 @@ const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
 
-pub struct Host {
+pub struct Host<R: RaftStoreRouter + 'static> {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<CopContext>,
-    low_priority_pool: ThreadPool<CopContext>,
-    high_priority_pool: ThreadPool<CopContext>,
+    pool: ThreadPool<CopContext<R>>,
+    low_priority_pool: ThreadPool<CopContext<R>>,
+    high_priority_pool: ThreadPool<CopContext<R>>,
     max_running_task_count: usize,
+    raft_router: R,
+}
+
+pub type RegionStatistics = HashMap<u64, FlowStatistics>;
+
+struct CopContextFactory<R: RaftStoreRouter + 'static> {
+    raft_router: R,
+}
+
+impl<R> ContextFactory<CopContext<R>> for CopContextFactory<R>
+where
+    R: RaftStoreRouter + 'static,
+{
+    fn create(&self) -> CopContext<R> {
+        CopContext {
+            raft_router: self.raft_router.clone(),
+            select_stats: Default::default(),
+            index_stats: Default::default(),
+            region_stats: HashMap::default(),
+        }
+    }
 }
 
 #[derive(Default)]
-struct CopContext {
+struct CopContext<R: RaftStoreRouter + 'static> {
     select_stats: StatisticsSummary,
     index_stats: StatisticsSummary,
+    region_stats: RegionStatistics,
+    raft_router: R,
 }
 
-impl CopContext {
+impl<R: RaftStoreRouter + 'static> CopContext<R> {
     fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
         self.get_statistics(type_str).add_statistics(stats);
     }
@@ -91,9 +115,16 @@ impl CopContext {
             }
         }
     }
+    fn add_statistics_by_region(&mut self, id: u64, stats: &Statistics) {
+        let flow_stats = self.region_stats
+            .entry(id)
+            .or_insert(FlowStatistics::default());
+        flow_stats.add(&stats.write.flow_stats);
+        flow_stats.add(&stats.data.flow_stats);
+    }
 }
 
-impl Context for CopContext {
+impl<R: RaftStoreRouter + 'static> Context for CopContext<R> {
     fn on_tick(&mut self) {
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
             let this_statistics = self.get_statistics(type_str);
@@ -112,25 +143,36 @@ impl Context for CopContext {
     }
 }
 
-impl Host {
-    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config) -> Host {
+impl<R: RaftStoreRouter + 'static> Host<R> {
+    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config, r: R) -> Host<R> {
         Host {
             engine: engine,
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
-            pool: ThreadPoolBuilder::with_default_factory(thd_name!("endpoint-normal-pool"))
-                .thread_count(cfg.end_point_concurrency)
+            pool: ThreadPoolBuilder::new(
+                thd_name!("endpoint-normal-pool"),
+                CopContextFactory {
+                    raft_router: r.clone(),
+                },
+            ).thread_count(cfg.end_point_concurrency)
                 .build(),
-            low_priority_pool: ThreadPoolBuilder::with_default_factory(
+            low_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-low-pool"),
+                CopContextFactory {
+                    raft_router: r.clone(),
+                },
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
-            high_priority_pool: ThreadPoolBuilder::with_default_factory(
+            high_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-high-pool"),
+                CopContextFactory {
+                    raft_router: r.clone(),
+                },
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
+            raft_router: r,
         }
     }
 
@@ -169,9 +211,11 @@ impl Host {
                 CommandPri::High => &mut self.high_priority_pool,
                 CommandPri::Normal => &mut self.pool,
             };
-            pool.execute(move |ctx: &mut CopContext| {
+            pool.execute(move |ctx: &mut CopContext<R>| {
+                let region_id = req.req.get_context().get_region_id();
                 let stats = end_point.handle_request(req);
                 ctx.add_statistics(type_str, &stats);
+                ctx.add_statistics_by_region(region_id, &stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
@@ -366,7 +410,7 @@ impl Display for RequestTask {
     }
 }
 
-impl BatchRunnable<Task> for Host {
+impl<R: RaftStoreRouter + 'static> BatchRunnable<Task> for Host<R> {
     // TODO: limit pending reqs
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
