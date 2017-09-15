@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::usize;
-use std::time::Instant;
 use std::rc::Rc;
 use tipb::select::{Chunk, RowMeta, SelectRequest, SelectResponse};
 use tipb::schema::ColumnInfo;
@@ -26,14 +25,13 @@ use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::codec::datum::Datum;
 use coprocessor::metrics::*;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{check_if_outdated, get_chunk, get_pk, is_point, prefix_next,
-                            to_pb_error, BATCH_ROW_COUNT, REQ_TYPE_INDEX, REQ_TYPE_SELECT,
-                            SINGLE_GROUP};
+use coprocessor::endpoint::{get_chunk, get_pk, is_point, prefix_next, to_pb_error, ReqContext,
+                            BATCH_ROW_COUNT, SINGLE_GROUP};
 use util::{escape, Either};
-use util::time::duration_to_ms;
+use util::time::{duration_to_ms, Instant};
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::codec::number::NumberDecoder;
-use storage::{Key, ScanMode, SnapshotStore, Statistics};
+use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics};
 
 use super::xeval::{EvalContext, Evaluator};
 use super::aggregate::{self, AggrFunc};
@@ -45,32 +43,38 @@ pub struct SelectContext<'a> {
     snap: SnapshotStore<'a>,
     statistics: &'a mut Statistics,
     core: SelectContextCore,
-    deadline: Instant,
+    req_ctx: &'a ReqContext,
 }
 
 impl<'a> SelectContext<'a> {
     pub fn new(
         sel: SelectRequest,
-        snap: SnapshotStore<'a>,
-        deadline: Instant,
+        snap: &'a Snapshot,
         statistics: &'a mut Statistics,
+        req_ctx: &'a ReqContext,
     ) -> Result<SelectContext<'a>> {
+        let snap = SnapshotStore::new(
+            snap,
+            sel.get_start_ts(),
+            req_ctx.isolation_level,
+            req_ctx.fill_cache,
+        );
         Ok(SelectContext {
             core: try!(SelectContextCore::new(sel)),
             snap: snap,
-            deadline: deadline,
             statistics: statistics,
+            req_ctx: req_ctx,
         })
     }
 
-    pub fn handle_request(mut self, tp: i64, mut ranges: Vec<KeyRange>) -> Result<Response> {
+    pub fn handle_request(mut self, mut ranges: Vec<KeyRange>) -> Result<Response> {
         if self.core.desc_scan {
             ranges.reverse();
         }
-        let res = match tp {
-            REQ_TYPE_SELECT => self.get_rows_from_sel(ranges),
-            REQ_TYPE_INDEX => self.get_rows_from_idx(ranges),
-            _ => unreachable!(),
+        let res = if self.req_ctx.table_scan {
+            self.get_rows_from_sel(ranges)
+        } else {
+            self.get_rows_from_idx(ranges)
         };
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
@@ -98,7 +102,7 @@ impl<'a> SelectContext<'a> {
             if collected >= self.core.limit {
                 break;
             }
-            let timer = Instant::now();
+            let timer = Instant::now_coarse();
             let row_cnt = try!(self.get_rows_from_range(ran));
             debug!(
                 "fetch {} rows takes {} ms",
@@ -106,7 +110,7 @@ impl<'a> SelectContext<'a> {
                 duration_to_ms(timer.elapsed())
             );
             collected += row_cnt;
-            try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
+            try!(self.req_ctx.check_if_outdated());
         }
         if self.core.topn {
             self.core.collect_topn_rows()
@@ -165,7 +169,7 @@ impl<'a> SelectContext<'a> {
             ));
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
-                    try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
+                    try!(self.req_ctx.check_if_outdated());
                 }
                 let kv = if self.core.desc_scan {
                     try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
@@ -208,7 +212,7 @@ impl<'a> SelectContext<'a> {
                 break;
             }
             collected += try!(self.get_idx_row_from_range(r));
-            try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
+            try!(self.req_ctx.check_if_outdated());
         }
         if self.core.topn {
             self.core.collect_topn_rows()
@@ -244,7 +248,7 @@ impl<'a> SelectContext<'a> {
         ));
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
-                try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
+                try!(self.req_ctx.check_if_outdated());
             }
             let nk = if self.core.desc_scan {
                 try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
