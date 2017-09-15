@@ -67,6 +67,10 @@ impl debugpb_grpc::Debug for Service {
                     resp.set_value(value);
                     sink.success(resp).map_err(on_error)
                 }
+                Ok(Err(Error::NotFound(msg))) => {
+                    let status = RpcStatus::new(RpcStatusCode::NotFound, Some(msg));
+                    sink.fail(status).map_err(on_error)
+                }
                 Ok(Err(Error::InvalidArgument(msg))) => {
                     let status = RpcStatus::new(RpcStatusCode::InvalidArgument, Some(msg));
                     sink.fail(status).map_err(on_error)
