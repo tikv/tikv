@@ -901,11 +901,14 @@ impl<T: Storage> Raft<T> {
                     m.get_from(),
                     m.get_term()
                 );
-                // When we recv MsgApp, MsgHeartbeat, MsgSnap with higher term, will set leader to
-                // m.From in stepFollower.
-                // When we recv other messages with higher term (MsgAppResp, MsgVote,
-                // MsgPreVoteResp), set leader to None, because we don't know if it's leader or not.
-                self.become_follower(m.get_term(), INVALID_ID);
+                if m.get_msg_type() == MessageType::MsgAppend ||
+                    m.get_msg_type() == MessageType::MsgHeartbeat ||
+                    m.get_msg_type() == MessageType::MsgSnapshot
+                {
+                    self.become_follower(m.get_term(), m.get_from());
+                } else {
+                    self.become_follower(m.get_term(), INVALID_ID);
+                }
             }
         } else if m.get_term() < self.term {
             if self.check_quorum &&
