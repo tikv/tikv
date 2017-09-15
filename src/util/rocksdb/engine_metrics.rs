@@ -22,6 +22,8 @@ pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &'static str = "rocksdb.cur-size-all-
 pub const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
 pub const ROCKSDB_PENDING_COMPACTION_BYTES: &'static str = "rocksdb.\
                                                             estimate-pending-compaction-bytes";
+pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &'static str = "rocksdb.compression-ratio-at-level";
+
 pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[
     TickerType::BlockCacheMiss,
     TickerType::BlockCacheHit,
@@ -850,6 +852,17 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
                 .with_label_values(&[name, cf])
                 .set(pending_compaction_bytes as f64);
         }
+
+        // Compression ratio at levels
+        let opts = engine.get_options_cf(handle);
+        for level in 0..opts.get_num_levels() {
+            if let Some(v) = rocksdb::get_engine_compression_ratio_at_level(engine, handle, level) {
+                let level_str = level.to_string();
+                STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
+                    .with_label_values(&[name, cf, &level_str])
+                    .set(v);
+            }
+        }
     }
 }
 
@@ -1168,5 +1181,12 @@ lazy_static!{
             "tikv_engine_event_total",
             "Number of engine events",
             &["db", "cf", "type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_COMPRESSION_RATIO_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_compression_ratio",
+            "Compression ratio at different levels",
+            &["db", "cf", "level"]
         ).unwrap();
 }
