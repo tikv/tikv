@@ -24,7 +24,8 @@ use coprocessor::codec::datum::Datum;
 use coprocessor::codec::Result;
 use util::as_slice;
 
-/// `FMSketch` is used to count the number of distinct elements in a `[Datum]`.
+/// `FMSketch` is used to count the approximate number
+/// of distinct elements in a `[Datum]`.
 pub struct FMSketch {
     mask: u64,
     max_size: usize,
@@ -40,26 +41,20 @@ impl FMSketch {
         }
     }
 
-    pub fn build(values: &[Datum], max_size: usize) -> Result<FMSketch> {
-        let mut s = FMSketch::new(max_size);
-        for value in values {
-            try!(s.insert(value));
-        }
-        Ok(s)
-    }
-
-    pub fn merge(&mut self, rs: &FMSketch) {
-        if self.mask < rs.mask {
-            self.update_mask(rs.mask);
-        }
-        for key in &rs.hash_set {
-            self.insert_hash_value(*key)
-        }
-    }
-
-    // ndv returns the number of distinct elements
+    // ndv returns the approximate number of distinct elements
     pub fn ndv(&self) -> u64 {
         (self.mask + 1) as u64 * (self.hash_set.len() as u64)
+    }
+
+    pub fn insert(&mut self, v: &Datum) -> Result<()> {
+        let bytes = try!(datum::encode_value(as_slice(v)));
+        let hash = {
+            let mut hasher = FnvHasher::default();
+            hasher.write(&bytes);
+            hasher.finish()
+        };
+        self.insert_hash_value(hash);
+        Ok(())
     }
 
     pub fn into_proto(self) -> analyze::FMSketch {
@@ -70,12 +65,6 @@ impl FMSketch {
         proto
     }
 
-    #[inline]
-    fn update_mask(&mut self, mask: u64) {
-        self.mask = mask;
-        self.hash_set.retain(|&x| x & mask == 0);
-    }
-
     fn insert_hash_value(&mut self, hash_val: u64) {
         if (hash_val & self.mask) != 0 {
             return;
@@ -83,19 +72,9 @@ impl FMSketch {
         self.hash_set.insert(hash_val);
         if self.hash_set.len() > self.max_size {
             let mask = (self.mask << 1) | 1;
-            self.update_mask(mask);
+            self.hash_set.retain(|&x| x & mask == 0);
+            self.mask = mask;
         }
-    }
-
-    fn insert(&mut self, v: &Datum) -> Result<()> {
-        let bytes = try!(datum::encode_value(as_slice(v)));
-        let hash = {
-            let mut hasher = FnvHasher::default();
-            hasher.write(&bytes);
-            hasher.finish()
-        };
-        self.insert_hash_value(hash);
-        Ok(())
     }
 }
 
@@ -154,20 +133,25 @@ mod test {
         }
     }
 
+    pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FMSketch> {
+        let mut s = FMSketch::new(max_size);
+        for value in values {
+            try!(s.insert(value));
+        }
+        Ok(s)
+    }
+
     // This test was ported from tidb.
     #[test]
     fn test_sketch() {
         let max_size = 1000usize;
         let data = TestData::default();
-        let mut sample = FMSketch::build(&data.samples, max_size).unwrap();
+        let sample = build_fmsketch(&data.samples, max_size).unwrap();
         assert_eq!(sample.ndv(), 6624);
-        let rc = FMSketch::build(&data.rc, max_size).unwrap();
+        let rc = build_fmsketch(&data.rc, max_size).unwrap();
         assert_eq!(rc.ndv(), 74240);
-        let pk = FMSketch::build(&data.pk, max_size).unwrap();
+        let pk = build_fmsketch(&data.pk, max_size).unwrap();
         assert_eq!(pk.ndv(), 99968);
-        sample.merge(&pk);
-        sample.merge(&rc);
-        assert_eq!(sample.ndv(), 99968);
 
         let max_size = 2;
         let mut sketch = FMSketch::new(max_size);
