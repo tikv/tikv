@@ -110,8 +110,7 @@ pub fn inflate_with_col_for_dag(
     offsets: &[usize],
     h: i64,
 ) -> Result<Vec<Datum>> {
-    let mut res = Vec::with_capacity(columns.len());
-    res.resize(columns.len(), Datum::Null);
+    let mut res = vec![Datum::Null; columns.len()];
     for offset in offsets {
         let col = columns.get(*offset).unwrap();
         if col.get_pk_handle() {
