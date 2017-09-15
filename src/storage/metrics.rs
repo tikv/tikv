@@ -83,7 +83,7 @@ lazy_static! {
         register_histogram_vec!(
             "tikv_scheudler_kv_scan_details",
             "Bucketed histogram of kv keys scan details for each cf",
-            &["cf","tag"],
+            &["req","cf","tag"],
               exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
