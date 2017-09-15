@@ -117,4 +117,38 @@ mod test {
             assert_eq!(json_array(d).unwrap(), ep_json);
         }
     }
+
+    #[test]
+    fn test_json_object() {
+        let cases = vec![
+            vec![Datum::I64(1)],
+            vec![
+                Datum::I64(1),
+                Datum::Bytes(b"sdf".to_vec()),
+                Datum::Null,
+                Datum::U64(2),
+            ],
+        ];
+        for d in cases {
+            assert!(json_object(d).is_err());
+        }
+
+        let cases = vec![
+            (
+                vec![
+                    Datum::I64(1),
+                    Datum::Bytes(b"sdf".to_vec()),
+                    Datum::Bytes(b"asd".to_vec()),
+                    Datum::Bytes(b"qwe".to_vec()),
+                    Datum::I64(2),
+                    Datum::Json(r#"{"3":4}"#.parse().unwrap()),
+                ],
+                r#"{"1":"sdf","2":{"3":4},"asd":"qwe"}"#.parse().unwrap(),
+            ),
+            (vec![], "{}".parse().unwrap()),
+        ];
+        for (d, ep_json) in cases {
+            assert_eq!(json_object(d).unwrap(), ep_json);
+        }
+    }
 }

@@ -64,9 +64,8 @@ impl FnCall {
             return self.children[0].eval_int(ctx, row);
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let negative_flag = b'-';
         let is_negative = match val.iter().skip_while(|x| x.is_ascii_whitespace()).next() {
-            Some(&negative_flag) => true,
+            Some(&b'-') => true,
             _ => false,
         };
         if is_negative {
@@ -696,6 +695,8 @@ impl FnCall {
 
 #[cfg(test)]
 mod test {
+    use std::u64;
+
     use tipb::expression::{Expr, FieldType, ScalarFuncSig};
 
     use chrono::{FixedOffset, Utc};
@@ -750,6 +751,13 @@ mod test {
                 None,
                 vec![Datum::Bytes(b"-123".to_vec())],
                 -123,
+            ),
+            (
+                ScalarFuncSig::CastStringAsInt,
+                types::STRING,
+                None,
+                vec![Datum::Bytes(b"18446744073709551615".to_vec())],
+                u64::MAX as i64,
             ),
             (
                 ScalarFuncSig::CastRealAsInt,
