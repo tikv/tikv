@@ -47,6 +47,7 @@ use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+use coprocessor::CopRequestStatistics;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, PdTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
@@ -94,9 +95,13 @@ pub struct StoreChannel {
 pub struct StoreStat {
     pub region_bytes_written: LocalHistogram,
     pub region_keys_written: LocalHistogram,
+    pub region_bytes_read: LocalHistogram,
+    pub region_keys_read: LocalHistogram,
     pub lock_cf_bytes_written: u64,
     pub engine_total_bytes_written: u64,
     pub engine_total_keys_written: u64,
+    pub engine_total_bytes_read: u64,
+    pub engine_total_keys_read: u64,
 }
 
 impl Default for StoreStat {
@@ -104,9 +109,13 @@ impl Default for StoreStat {
         StoreStat {
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
+            region_bytes_read: REGION_READ_BYTES_HISTOGRAM.local(),
+            region_keys_read: REGION_READ_KEYS_HISTOGRAM.local(),
             lock_cf_bytes_written: 0,
             engine_total_bytes_written: 0,
             engine_total_keys_written: 0,
+            engine_total_bytes_read: 0,
+            engine_total_keys_read: 0,
         }
     }
 }
@@ -1653,9 +1662,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for peer in self.region_peers.values_mut() {
             peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
             peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
+            peer.peer_stat.last_read_bytes = peer.peer_stat.read_bytes;
+            peer.peer_stat.last_read_keys = peer.peer_stat.read_keys;
             if !peer.is_leader() {
                 peer.peer_stat.written_bytes = 0;
                 peer.peer_stat.written_keys = 0;
+                peer.peer_stat.read_bytes = 0;
+                peer.peer_stat.read_keys = 0;
                 continue;
             }
 
@@ -1665,11 +1678,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.store_stat
                 .region_keys_written
                 .observe(peer.peer_stat.written_keys as f64);
+            self.store_stat
+                .region_bytes_read
+                .observe(peer.peer_stat.read_bytes as f64);
+            self.store_stat
+                .region_keys_read
+                .observe(peer.peer_stat.read_keys as f64);
             peer.peer_stat.written_bytes = 0;
             peer.peer_stat.written_keys = 0;
+            peer.peer_stat.read_bytes = 0;
+            peer.peer_stat.read_keys = 0;
         }
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
+        self.store_stat.region_bytes_read.flush();
+        self.store_stat.region_keys_read.flush();
 
         self.register_report_region_flow_tick(event_loop);
     }
@@ -1963,6 +1986,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.store_stat.engine_total_keys_written = engine_total_keys_written;
         stats.set_keys_written(delta);
 
+        let engine_total_bytes_read = self.kv_engine
+            .get_statistics_ticker_count(TickerType::BytesRead);
+        let delta = engine_total_bytes_read - self.store_stat.engine_total_bytes_read;
+        self.store_stat.engine_total_bytes_read = engine_total_bytes_read;
+        stats.set_bytes_read(delta);
+
+        let engine_total_keys_read = self.kv_engine
+            .get_statistics_ticker_count(TickerType::NumberKeysRead);
+        let delta = engine_total_keys_read - self.store_stat.engine_total_keys_read;
+        self.store_stat.engine_total_keys_read = engine_total_keys_read;
+        stats.set_keys_read(delta);
+
+
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
 
@@ -2109,6 +2145,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
             peer.raft_group.report_unreachable(to_peer_id);
+        }
+    }
+
+    fn handle_coprocessor_msg(&mut self, request_stats: CopRequestStatistics) {
+        for (region_id, stats) in &request_stats {
+            if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                if !peer.is_leader() {
+                    continue;
+                }
+                peer.peer_stat.read_bytes = stats.read_bytes as u64;
+                peer.peer_stat.read_keys = stats.read_keys as u64;
+            }
         }
     }
 }
@@ -2421,6 +2469,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_unreachable(region_id, to_peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
+            Msg::CoprocessorStats { request_stats } => self.handle_coprocessor_msg(request_stats),
             Msg::ComputeHashResult {
                 region_id,
                 index,

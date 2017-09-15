@@ -19,6 +19,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
+use coprocessor::CopRequestStatistics;
 
 use util::escape;
 
@@ -75,6 +76,8 @@ pub enum Msg {
     // For snapshot stats.
     SnapshotStats,
 
+    CoprocessorStats { request_stats: CopRequestStatistics },
+
     // For consistency check
     ComputeHashResult {
         region_id: u64,
@@ -101,6 +104,7 @@ impl fmt::Debug for Msg {
                 region_id
             ),
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
+            Msg::CoprocessorStats { .. } => write!(fmt, "Coperocessor stats"),
             Msg::ComputeHashResult {
                 region_id,
                 index,

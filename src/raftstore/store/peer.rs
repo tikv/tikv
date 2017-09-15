@@ -192,6 +192,10 @@ pub struct PeerStat {
     pub written_keys: u64,
     pub last_written_bytes: u64,
     pub last_written_keys: u64,
+    pub read_bytes: u64,
+    pub read_keys: u64,
+    pub last_read_bytes: u64,
+    pub last_read_keys: u64,
 }
 
 pub struct Peer {
@@ -1541,6 +1545,7 @@ impl Peer {
             return Some(peer.clone());
         }
 
+
         // Try to find in region, if found, set in cache.
         for peer in self.get_store().get_region().get_peers() {
             if peer.get_id() == peer_id {
@@ -1564,6 +1569,8 @@ impl Peer {
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.last_written_bytes,
             written_keys: self.peer_stat.last_written_keys,
+            read_bytes: self.peer_stat.last_read_bytes,
+            read_keys: self.peer_stat.last_read_keys,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

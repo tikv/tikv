@@ -32,6 +32,7 @@ use server::{Config, OnResponse};
 use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
 use server::transport::RaftStoreRouter;
+use raftstore::store::Msg;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
@@ -69,10 +70,9 @@ pub struct Host<R: RaftStoreRouter + 'static> {
     low_priority_pool: ThreadPool<CopContext<R>>,
     high_priority_pool: ThreadPool<CopContext<R>>,
     max_running_task_count: usize,
-    raft_router: R,
 }
 
-pub type RegionStatistics = HashMap<u64, FlowStatistics>;
+pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
 
 struct CopContextFactory<R: RaftStoreRouter + 'static> {
     raft_router: R,
@@ -87,7 +87,7 @@ where
             raft_router: self.raft_router.clone(),
             select_stats: Default::default(),
             index_stats: Default::default(),
-            region_stats: HashMap::default(),
+            request_stats: HashMap::default(),
         }
     }
 }
@@ -96,7 +96,7 @@ where
 struct CopContext<R: RaftStoreRouter + 'static> {
     select_stats: StatisticsSummary,
     index_stats: StatisticsSummary,
-    region_stats: RegionStatistics,
+    request_stats: CopRequestStatistics,
     raft_router: R,
 }
 
@@ -115,8 +115,9 @@ impl<R: RaftStoreRouter + 'static> CopContext<R> {
             }
         }
     }
-    fn add_statistics_by_region(&mut self, id: u64, stats: &Statistics) {
-        let flow_stats = self.region_stats
+
+    fn add_statistics_by_request(&mut self, id: u64, stats: &Statistics) {
+        let flow_stats = self.request_stats
             .entry(id)
             .or_insert(FlowStatistics::default());
         flow_stats.add(&stats.write.flow_stats);
@@ -140,6 +141,15 @@ impl<R: RaftStoreRouter + 'static> Context for CopContext<R> {
             }
             *this_statistics = Default::default();
         }
+        if self.request_stats.len() != 0 {
+            if let Err(e) = self.raft_router.send(Msg::CoprocessorStats {
+                request_stats: self.request_stats.clone(),
+            }) {
+                error!("send coprocessor statistics: {:?}", e);
+            };
+            self.request_stats = HashMap::default();
+        }
+
     }
 }
 
@@ -172,7 +182,6 @@ impl<R: RaftStoreRouter + 'static> Host<R> {
                 },
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
-            raft_router: r,
         }
     }
 
@@ -215,7 +224,7 @@ impl<R: RaftStoreRouter + 'static> Host<R> {
                 let region_id = req.req.get_context().get_region_id();
                 let stats = end_point.handle_request(req);
                 ctx.add_statistics(type_str, &stats);
-                ctx.add_statistics_by_region(region_id, &stats);
+                ctx.add_statistics_by_request(region_id, &stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();

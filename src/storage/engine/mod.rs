@@ -189,7 +189,7 @@ pub struct CFStatistics {
     pub flow_stats: FlowStatistics,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct FlowStatistics {
     pub read_keys: usize,
     pub read_bytes: usize,
