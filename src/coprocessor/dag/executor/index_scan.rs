@@ -49,7 +49,9 @@ impl<'a> IndexScanExecutor<'a> {
             key_ranges.reverse();
         }
         let cols = meta.mut_columns();
-        if cols.last().map_or(false, |c| c.get_pk_handle() || c.get_column_id() == EXTRA_HANDLE_COLUMN_ID) {
+        if cols.last().map_or(false, |c| {
+            c.get_pk_handle() || c.get_column_id() == EXTRA_HANDLE_COLUMN_ID
+        }) {
             pk_col = Some(cols.pop().unwrap());
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
