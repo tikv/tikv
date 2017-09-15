@@ -1009,15 +1009,14 @@ impl Peer {
         metrics.all += 1;
 
         let mut is_conf_change = false;
-        let mut sync_log = false;
 
-        let res = match self.get_handle_policy(&req, &mut sync_log) {
+        let res = match self.get_handle_policy(&req) {
             Ok(RequestPolicy::ReadLocal) => {
                 self.read_local(req, cb, metrics);
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(req, cb, metrics),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics, sync_log),
+            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(req, cb, metrics)
             }
@@ -1062,8 +1061,8 @@ impl Peer {
         metrics.all += 1;
 
         // TODO: deny non-snapshot request.
-        let mut sync_log = false;
-        match self.get_handle_policy(&req, &mut sync_log) {
+
+        match self.get_handle_policy(&req) {
             Ok(RequestPolicy::ReadLocal) => {
                 metrics.local_read += 1;
                 Some(self.handle_read(req))
@@ -1089,20 +1088,13 @@ impl Peer {
         self.proposals.push(meta);
     }
 
-    fn get_handle_policy(
-        &mut self,
-        req: &RaftCmdRequest,
-        sync_log: &mut bool,
-    ) -> Result<RequestPolicy> {
+    fn get_handle_policy(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         if req.has_admin_request() {
             if apply::get_change_peer_cmd(req).is_some() {
                 return Ok(RequestPolicy::ProposeConfChange);
             }
             if get_transfer_leader_cmd(req).is_some() {
                 return Ok(RequestPolicy::ProposeTransferLeader);
-            }
-            if req.get_admin_request().get_cmd_type() == AdminCmdType::Split {
-                *sync_log = true;
             }
             return Ok(RequestPolicy::ProposeNormal);
         }
@@ -1127,9 +1119,6 @@ impl Peer {
         }
 
         if is_write {
-            if req.has_header() && req.get_header().get_sync_log() {
-                *sync_log = true;
-            }
             return Ok(RequestPolicy::ProposeNormal);
         }
 
@@ -1339,7 +1328,7 @@ impl Peer {
         // update leader lease.
 
         let req = RaftCmdRequest::new();
-        if let Ok(index) = self.propose_normal(req, metrics, false) {
+        if let Ok(index) = self.propose_normal(req, metrics) {
             let meta = ProposalMeta {
                 index: index,
                 term: self.term(),
@@ -1355,7 +1344,6 @@ impl Peer {
         &mut self,
         mut req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
-        sync_log: bool,
     ) -> Result<u64> {
         metrics.normal += 1;
 
@@ -1371,6 +1359,7 @@ impl Peer {
             return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
         }
 
+        let sync_log = get_sync_log_from_request(&req);
         let propose_index = self.next_proposal_index();
         try!(self.raft_group.propose(data, sync_log));
         if self.next_proposal_index() == propose_index {
@@ -1707,6 +1696,23 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
     }
 
     Some(req.get_transfer_leader())
+}
+
+fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
+    if msg.has_admin_request() {
+        let req = msg.get_admin_request();
+        if req.get_cmd_type() == AdminCmdType::ChangePeer ||
+            req.get_cmd_type() == AdminCmdType::Split
+        {
+            return true;
+        }
+        return false;
+    }
+
+    if msg.has_header() && msg.get_header().has_sync_log() && msg.get_header().get_sync_log() {
+        return true;
+    }
+    false
 }
 
 fn make_transfer_leader_response() -> RaftCmdResponse {

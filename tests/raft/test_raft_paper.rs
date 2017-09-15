@@ -460,7 +460,7 @@ fn test_leader_start_replication() {
     assert_eq!(r.raft_log.committed, li);
     let mut msgs = r.read_messages();
     msgs.sort_by_key(|m| format!("{:?}", m));
-    let wents = vec![new_entry(1, li + 1, SOME_DATA, false)];
+    let wents = vec![new_entry(1, li + 1, SOME_DATA)];
     let new_message_ext = |f, to, ents| {
         let mut m = new_message(f, to, MessageType::MsgAppend, 0);
         m.set_term(1);
@@ -501,7 +501,7 @@ fn test_leader_commit_entry() {
     }
 
     assert_eq!(r.raft_log.committed, li + 1);
-    let wents = vec![new_entry(1, li + 1, SOME_DATA, false)];
+    let wents = vec![new_entry(1, li + 1, SOME_DATA)];
     assert_eq!(r.raft_log.next_entries(), Some(wents));
     let mut msgs = r.read_messages();
     msgs.sort_by_key(|m| format!("{:?}", m));
@@ -582,7 +582,7 @@ fn test_leader_commit_preceding_entries() {
         let li = tt.len() as u64;
         tt.append(&mut vec![
             empty_entry(3, li + 1),
-            new_entry(3, li + 2, SOME_DATA, false),
+            new_entry(3, li + 2, SOME_DATA),
         ]);
         let g = r.raft_log.next_entries();
         let wg = Some(tt);
@@ -598,25 +598,25 @@ fn test_leader_commit_preceding_entries() {
 #[test]
 fn test_follower_commit_entry() {
     let mut tests = vec![
-        (vec![new_entry(1, 1, SOME_DATA, false)], 1),
+        (vec![new_entry(1, 1, SOME_DATA)], 1),
         (
             vec![
-                new_entry(1, 1, SOME_DATA, false),
-                new_entry(1, 2, Some("somedata2"), false),
+                new_entry(1, 1, SOME_DATA),
+                new_entry(1, 2, Some("somedata2")),
             ],
             2,
         ),
         (
             vec![
-                new_entry(1, 1, Some("somedata2"), false),
-                new_entry(1, 2, SOME_DATA, false),
+                new_entry(1, 1, Some("somedata2")),
+                new_entry(1, 2, SOME_DATA),
             ],
             2,
         ),
         (
             vec![
-                new_entry(1, 1, SOME_DATA, false),
-                new_entry(1, 2, Some("somedata2"), false),
+                new_entry(1, 1, SOME_DATA),
+                new_entry(1, 2, Some("somedata2")),
             ],
             1,
         ),

@@ -345,8 +345,8 @@ fn test_raw_node_start() {
         new_ready(
             None,
             Some(hard_state(2, 3, 1)),
-            vec![new_entry(2, 3, Some("foo"), false)],
-            vec![new_entry(2, 3, Some("foo"), false)],
+            vec![new_entry(2, 3, Some("foo"))],
+            vec![new_entry(2, 3, Some("foo"))],
         ),
     ];
 
@@ -377,7 +377,7 @@ fn test_raw_node_start() {
 
 #[test]
 fn test_raw_node_restart() {
-    let entries = vec![empty_entry(1, 1), new_entry(1, 2, Some("foo"), false)];
+    let entries = vec![empty_entry(1, 1), new_entry(1, 2, Some("foo"))];
     let st = hard_state(1, 1, 0);
 
     let want = new_ready(None, None, vec![], entries[..1].to_vec());
@@ -395,7 +395,7 @@ fn test_raw_node_restart() {
 #[test]
 fn test_raw_node_restart_from_snapshot() {
     let snap = new_snapshot(2, 1, vec![1, 2]);
-    let entries = vec![new_entry(1, 3, Some("foo"), false)];
+    let entries = vec![new_entry(1, 3, Some("foo"))];
     let st = hard_state(1, 3, 0);
 
     let want = new_ready(None, None, vec![], entries.clone());
