@@ -55,6 +55,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
+    #[allow(too_many_arguments)]
     pub fn new(
         cfg: &Config,
         region_split_size: usize,
