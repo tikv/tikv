@@ -22,11 +22,14 @@ pub use self::metrics_flusher::MetricsFlusher;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::str::FromStr;
 
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK};
-use rocksdb::{ColumnFamilyOptions, DBCompressionType, DBOptions, ReadOptions, SliceTransform, DB};
+use rocksdb::{ColumnFamilyOptions, DBCompressionType, DBOptions, ReadOptions, SliceTransform,
+              Writable, WriteBatch, DB};
 use rocksdb::rocksdb::supported_compression;
-use util::rocksdb::engine_metrics::{ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
+use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
+                                    ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
 use util::rocksdb;
 
 pub use rocksdb::CFHandle;
@@ -220,6 +223,20 @@ pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
     used_size
 }
 
+pub fn get_engine_compression_ratio_at_level(
+    engine: &DB,
+    handle: &CFHandle,
+    level: usize,
+) -> Option<f64> {
+    let prop = format!("{}{}", ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, level);
+    if let Some(v) = engine.get_property_value_cf(handle, &prop) {
+        if let Ok(f) = f64::from_str(&v) {
+            return Some(f);
+        }
+    }
+    None
+}
+
 pub struct FixedSuffixSliceTransform {
     pub suffix_len: usize,
 }
@@ -290,10 +307,10 @@ impl SliceTransform for NoopSliceTransform {
     }
 }
 
-pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
+pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<(), String> {
     if start_key > end_key {
         return Err(format!(
-            "[delete_file_in_range] start_key({:?}) should't larger than end_key({:?}).",
+            "[roughly_cleanup_in_range] start_key({:?}) should't larger than end_key({:?}).",
             start_key,
             end_key
         ));
@@ -305,26 +322,20 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
 
     for cf in db.cf_names() {
         let handle = try!(get_cf_handle(db, cf));
-
-        // Keys in CF_LOCK not have ts tail, at the same time DeleteFilesInRange treat
-        // input range as closed interval, but we don't want to delete the end_key, so
-        // we treat CF_LOCK especially. For the others column families: 1) the data set
-        // in these column families usually are very large, so we don't want to trigger
-        // seek for these column families; 2) keys in these column families have ts tail,
-        // so end_key never exists in these column families.
         if cf == CF_LOCK {
+            // Todo: use delete_files_in_range after rocksdb support [start, end) semantics.
             let mut iter_opt = ReadOptions::new();
             iter_opt.fill_cache(false);
+            iter_opt.set_iterate_upper_bound(end_key);
             let mut iter = db.iter_cf_opt(handle, iter_opt);
-            iter.seek_for_prev(end_key.into());
-            if iter.valid() {
-                if iter.key() == end_key {
-                    iter.prev();
-                }
-
-                if iter.valid() && iter.key() > start_key {
-                    try!(db.delete_file_in_range_cf(handle, start_key, iter.key()));
-                }
+            iter.seek(start_key.into());
+            let wb = WriteBatch::new();
+            while iter.valid() {
+                try!(wb.delete_cf(handle, iter.key()));
+                iter.next();
+            }
+            if wb.count() > 0 {
+                try!(db.write(wb));
             }
         } else {
             try!(db.delete_file_in_range_cf(handle, start_key, end_key));
@@ -336,10 +347,10 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
 
 #[cfg(test)]
 mod tests {
-    use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
+    use super::*;
+    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use tempdir::TempDir;
     use storage::CF_DEFAULT;
-    use super::{check_and_open, CFOptions};
 
     #[test]
     fn test_check_and_open() {
@@ -379,5 +390,22 @@ mod tests {
         cfs_existed.sort();
         cfs_excepted.sort();
         assert_eq!(cfs_existed, cfs_excepted);
+    }
+
+    #[test]
+    fn test_compression_ratio() {
+        let path = TempDir::new("_util_rocksdb_test_compression_ratio").expect("");
+        let path_str = path.path().to_str().unwrap();
+
+        let opts = DBOptions::new();
+        let cf_opts = CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new());
+        let db = check_and_open(path_str, opts, vec![cf_opts]).unwrap();
+        let cf = db.cf_handle(CF_DEFAULT).unwrap();
+
+        // RocksDB returns -1.0 if level has no files.
+        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).unwrap() < 0.0);
+        db.put_cf(cf, b"a", b"a").unwrap();
+        db.flush_cf(cf, true).unwrap();
+        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).unwrap() > 0.0);
     }
 }

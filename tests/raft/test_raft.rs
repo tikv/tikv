@@ -2156,6 +2156,10 @@ fn test_free_stuck_candidate_with_check_quorum() {
     // Disrupt the leader so that the stuck peer is freed
     assert_eq!(nt.peers[&1].state, StateRole::Follower);
     assert_eq!(nt.peers[&3].term, nt.peers[&1].term);
+
+    // Vote again, should become leader this time
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+    assert_eq!(nt.peers[&3].state, StateRole::Leader);
 }
 
 #[test]
