@@ -20,6 +20,7 @@ pub struct SnapshotStore<'a> {
     snapshot: &'a Snapshot,
     start_ts: u64,
     isolation_level: IsolationLevel,
+    fill_cache: bool,
 }
 
 impl<'a> SnapshotStore<'a> {
@@ -27,11 +28,13 @@ impl<'a> SnapshotStore<'a> {
         snapshot: &'a Snapshot,
         start_ts: u64,
         isolation_level: IsolationLevel,
+        fill_cache: bool,
     ) -> SnapshotStore {
         SnapshotStore {
             snapshot: snapshot,
             start_ts: start_ts,
             isolation_level: isolation_level,
+            fill_cache: fill_cache,
         }
     }
 
@@ -40,7 +43,7 @@ impl<'a> SnapshotStore<'a> {
             self.snapshot,
             statistics,
             None,
-            true,
+            self.fill_cache,
             None,
             self.isolation_level,
         );
@@ -58,7 +61,7 @@ impl<'a> SnapshotStore<'a> {
             self.snapshot,
             statistics,
             None,
-            true,
+            self.fill_cache,
             None,
             self.isolation_level,
         );
@@ -82,7 +85,7 @@ impl<'a> SnapshotStore<'a> {
             self.snapshot,
             statistics,
             Some(mode),
-            true,
+            self.fill_cache,
             upper_bound,
             self.isolation_level,
         );
@@ -213,6 +216,7 @@ mod test {
                     START_TS,
                     None,
                     IsolationLevel::SI,
+                    true,
                 );
                 for key in &self.keys {
                     let key = key.as_bytes();
@@ -233,6 +237,7 @@ mod test {
                     START_TS,
                     None,
                     IsolationLevel::SI,
+                    true,
                 );
                 for key in &self.keys {
                     let key = key.as_bytes();
@@ -250,7 +255,12 @@ mod test {
         }
 
         fn store(&self) -> SnapshotStore {
-            SnapshotStore::new(self.snapshot.as_ref(), COMMIT_TS + 1, IsolationLevel::SI)
+            SnapshotStore::new(
+                self.snapshot.as_ref(),
+                COMMIT_TS + 1,
+                IsolationLevel::SI,
+                true,
+            )
         }
     }
 

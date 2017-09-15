@@ -12,23 +12,24 @@
 // limitations under the License.
 
 use std::usize;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
 
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
+use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
 use protobuf::Message as PbMsg;
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::CommandPri;
+use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 
-use util::time::duration_to_sec;
+use util::time::{duration_to_sec, Instant};
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, Snapshot, SnapshotStore, Statistics};
+use storage::{self, engine, Engine, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
 
 use super::codec::mysql;
@@ -71,10 +72,8 @@ pub struct Host {
 
 #[derive(Default)]
 struct CopContext {
-    task_count: u64,
-    select_stats: Statistics,
-    index_stats: Statistics,
-    dag_stats: Statistics,
+    select_stats: StatisticsSummary,
+    index_stats: StatisticsSummary,
 }
 
 impl CopContext {
@@ -82,11 +81,10 @@ impl CopContext {
         self.get_statistics(type_str).add_statistics(stats);
     }
 
-    fn get_statistics(&mut self, type_str: &str) -> &mut Statistics {
+    fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
         match type_str {
             STR_REQ_TYPE_SELECT => &mut self.select_stats,
             STR_REQ_TYPE_INDEX => &mut self.index_stats,
-            STR_REQ_TYPE_DAG => &mut self.dag_stats,
             _ => {
                 warn!("unknown STR_REQ_TYPE: {}", type_str);
                 &mut self.select_stats
@@ -97,22 +95,20 @@ impl CopContext {
 
 impl Context for CopContext {
     fn on_tick(&mut self) {
-        if self.task_count == 0 {
-            return;
-        }
-        let task_count = self.task_count;
-        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX, STR_REQ_TYPE_DAG] {
+        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
             let this_statistics = self.get_statistics(type_str);
-            for (cf, details) in this_statistics.details() {
+            if this_statistics.count == 0 {
+                continue;
+            }
+            for (cf, details) in this_statistics.stat.details() {
                 for (tag, count) in details {
                     COPR_SCAN_DETAILS
                         .with_label_values(&[type_str, cf, tag])
-                        .observe(count as f64 / task_count as f64);
+                        .observe(count as f64 / this_statistics.count as f64);
                 }
             }
             *this_statistics = Default::default();
         }
-        self.task_count = 0;
     }
 }
 
@@ -162,7 +158,7 @@ impl Host {
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
-            let type_str = get_req_type_str(req.req.get_tp());
+            let type_str = req.ctx.get_scan_tag();
             COPR_PENDING_REQS
                 .with_label_values(&[type_str, pri_str])
                 .add(1.0);
@@ -175,7 +171,6 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let stats = end_point.handle_request(req);
-                ctx.task_count += 1;
                 ctx.add_statistics(type_str, &stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
@@ -208,26 +203,57 @@ enum CopRequest {
     DAG(DAGRequest),
 }
 
+pub struct ReqContext {
+    // The deadline before which the task should be responded.
+    pub deadline: Instant,
+    pub isolation_level: IsolationLevel,
+    pub fill_cache: bool,
+    // whether is a table scan request.
+    pub table_scan: bool,
+}
+
+impl ReqContext {
+    #[inline]
+    fn get_scan_tag(&self) -> &'static str {
+        if self.table_scan {
+            STR_REQ_TYPE_SELECT
+        } else {
+            STR_REQ_TYPE_INDEX
+        }
+    }
+
+    pub fn check_if_outdated(&self) -> Result<()> {
+        let now = Instant::now_coarse();
+        if self.deadline <= now {
+            return Err(Error::Outdated(self.deadline, now, self.get_scan_tag()));
+        }
+        Ok(())
+    }
+}
+
 pub struct RequestTask {
     req: Request,
     start_ts: Option<u64>,
     wait_time: Option<f64>,
     timer: Instant,
-    // The deadline before which the task should be responded.
-    deadline: Instant,
     statistics: Statistics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
+    ctx: ReqContext,
 }
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;
         let tp = req.get_tp();
+        let mut table_scan = false;
         let cop_req = match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
+                if tp == REQ_TYPE_SELECT {
+                    table_scan = true;
+                }
                 let mut sel = SelectRequest::new();
                 if let Err(e) = sel.merge_from_bytes(req.get_data()) {
                     Err(box_err!(e))
@@ -242,26 +268,37 @@ impl RequestTask {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(dag.get_start_ts());
+                    if let Some(scan) = dag.get_executors().iter().next() {
+                        if scan.get_tp() == ExecType::TypeTableScan {
+                            table_scan = true;
+                        }
+                    }
                     Ok(CopRequest::DAG(dag))
                 }
             }
             _ => Err(box_err!("unsupported tp {}", tp)),
+        };
+        let req_ctx = ReqContext {
+            deadline: deadline,
+            isolation_level: req.get_context().get_isolation_level(),
+            fill_cache: !req.get_context().get_not_fill_cache(),
+            table_scan: table_scan,
         };
         RequestTask {
             req: req,
             start_ts: start_ts,
             wait_time: None,
             timer: timer,
-            deadline: deadline,
             statistics: Default::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
+            ctx: req_ctx,
         }
     }
 
     #[inline]
     fn check_outdated(&self) -> Result<()> {
-        check_if_outdated(self.deadline, self.req.get_tp())
+        self.ctx.check_if_outdated()
     }
 
     fn stop_record_waiting(&mut self) {
@@ -270,7 +307,7 @@ impl RequestTask {
         }
         let wait_time = duration_to_sec(self.timer.elapsed());
         COPR_REQ_WAIT_TIME
-            .with_label_values(&[get_req_type_str(self.req.get_tp())])
+            .with_label_values(&[self.ctx.get_scan_tag()])
             .observe(wait_time);
         self.wait_time = Some(wait_time);
     }
@@ -279,7 +316,7 @@ impl RequestTask {
         self.stop_record_waiting();
 
         let handle_time = duration_to_sec(self.timer.elapsed());
-        let type_str = get_req_type_str(self.req.get_tp());
+        let type_str = self.ctx.get_scan_tag();
         COPR_REQ_HISTOGRAM_VEC
             .with_label_values(&[type_str])
             .observe(handle_time);
@@ -448,13 +485,12 @@ fn err_resp(e: Error) -> Response {
             resp.set_locked(info);
             COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
         }
-        Error::Outdated(deadline, now, tp) => {
-            let t = get_req_type_str(tp);
+        Error::Outdated(deadline, now, scan_tag) => {
             let elapsed =
                 now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
             COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
             OUTDATED_REQ_WAIT_TIME
-                .with_label_values(&[t])
+                .with_label_values(&[scan_tag])
                 .observe(elapsed.as_secs() as f64);
 
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
@@ -487,14 +523,6 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     for t in reqs {
         respond(resp.clone(), t);
     }
-}
-
-pub fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
-    let now = Instant::now();
-    if deadline <= now {
-        return Err(Error::Outdated(deadline, now, tp));
-    }
-    Ok(())
 }
 
 fn respond(resp: Response, mut t: RequestTask) -> Statistics {
@@ -531,15 +559,14 @@ impl TiDbEndPoint {
     }
 
     fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let snap = SnapshotStore::new(
+        let ctx = try!(SelectContext::new(
+            sel,
             self.snap.as_ref(),
-            sel.get_start_ts(),
-            t.req.get_context().get_isolation_level(),
-        );
-        let ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
+            &mut t.statistics,
+            &t.ctx
+        ));
         let range = t.req.get_ranges().to_vec();
-        debug!("scanning range: {:?}", range);
-        ctx.handle_request(t.req.get_tp(), range)
+        ctx.handle_request(range)
     }
 
     pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
@@ -548,14 +575,7 @@ impl TiDbEndPoint {
             dag.get_time_zone_offset(),
             dag.get_flags()
         )));
-        let ctx = DAGContext::new(
-            dag,
-            t.deadline,
-            ranges,
-            self.snap.as_ref(),
-            eval_ctx.clone(),
-            t.req.get_context().get_isolation_level(),
-        );
+        let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
         ctx.handle_request(&mut t.statistics)
     }
 }
@@ -619,19 +639,6 @@ pub fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
 
 pub const STR_REQ_TYPE_SELECT: &'static str = "select";
 pub const STR_REQ_TYPE_INDEX: &'static str = "index";
-pub const STR_REQ_TYPE_DAG: &'static str = "dag";
-pub const STR_REQ_TYPE_UNKNOWN: &'static str = "unknown";
-
-#[inline]
-pub fn get_req_type_str(tp: i64) -> &'static str {
-    match tp {
-        REQ_TYPE_SELECT => STR_REQ_TYPE_SELECT,
-        REQ_TYPE_INDEX => STR_REQ_TYPE_INDEX,
-        REQ_TYPE_DAG => STR_REQ_TYPE_DAG,
-        _ => STR_REQ_TYPE_UNKNOWN,
-    }
-}
-
 pub const STR_REQ_PRI_LOW: &'static str = "low";
 pub const STR_REQ_PRI_NORMAL: &'static str = "normal";
 pub const STR_REQ_PRI_HIGH: &'static str = "high";
@@ -647,22 +654,29 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use util::worker::Worker;
-    use storage::engine::{self, TEMP_DIR};
-
-    use kvproto::coprocessor::Request;
-
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
 
+    use kvproto::coprocessor::Request;
+
+    use storage::engine::{self, TEMP_DIR};
+    use util::worker::Worker;
+    use util::time::Instant;
+
+    use super::*;
+
     #[test]
-    fn test_get_req_type_str() {
-        assert_eq!(get_req_type_str(REQ_TYPE_SELECT), STR_REQ_TYPE_SELECT);
-        assert_eq!(get_req_type_str(REQ_TYPE_INDEX), STR_REQ_TYPE_INDEX);
-        assert_eq!(get_req_type_str(REQ_TYPE_DAG), STR_REQ_TYPE_DAG);
-        assert_eq!(get_req_type_str(0), STR_REQ_TYPE_UNKNOWN);
+    fn test_get_reg_scan_tag() {
+        let mut ctx = ReqContext {
+            deadline: Instant::now_coarse(),
+            isolation_level: IsolationLevel::RC,
+            fill_cache: true,
+            table_scan: true,
+        };
+        assert_eq!(ctx.get_scan_tag(), STR_REQ_TYPE_SELECT);
+        ctx.table_scan = false;
+        assert_eq!(ctx.get_scan_tag(), STR_REQ_TYPE_INDEX);
     }
 
     #[test]
@@ -675,7 +689,7 @@ mod tests {
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
-        task.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
+        task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());

@@ -21,6 +21,8 @@ use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use coprocessor::dag::expr::Expression;
 use super::{Error, FnCall, Result, StatementContext};
 
+const MAX_RECURSE_LEVEL: usize = 1024;
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum CmpOp {
     LT,
@@ -167,7 +169,7 @@ impl FnCall {
             let c = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
             try!(char::from_u32(c).ok_or::<Error>(box_err!("invalid escape char: {}", c)))
         };
-        Ok(Some(like_match(&target, &pattern, escape) as i64))
+        Ok(Some(try!(like(&target, &pattern, escape, 0)) as i64))
     }
 }
 
@@ -242,36 +244,73 @@ where
     Ok(None)
 }
 
+// Do match until '%' is found.
 #[inline]
-fn next_escaped(chars: &mut Chars, escape: char) -> Option<(char, bool)> {
-    chars.next().map(|c| if c == escape {
-        chars.next().map_or((c, false), |c| (c, true))
-    } else {
-        (c, false)
-    })
-}
-
-/// Document is [here](https://dev.mysql.com/doc/refman/5.7/en/string-comparison-functions.html)
-fn like_match(target: &str, pattern: &str, escape: char) -> bool {
-    let (mut tcs, mut pcs) = (target.chars(), pattern.chars());
-    while let Some((c, escaped)) = next_escaped(&mut pcs, escape) {
-        if c == '%' && (!escaped || escape == '%') {
-            while !like_match(tcs.as_str(), pcs.as_str(), escape) {
-                if tcs.next().is_none() {
-                    return false;
+fn partial_like<'a>(tcs: &mut Chars<'a>, pcs: &mut Chars<'a>, escape: char) -> Option<bool> {
+    loop {
+        match pcs.next() {
+            None => return Some(tcs.next().is_none()),
+            Some('%') => return None,
+            Some(c) => {
+                let (npc, escape) = if c == escape {
+                    pcs.next().map_or((c, false), |c| (c, true))
+                } else {
+                    (c, false)
+                };
+                let nsc = match tcs.next() {
+                    None => return Some(false),
+                    Some(c) => c,
+                };
+                if nsc != npc && (npc != '_' || escape) {
+                    return Some(false);
                 }
             }
-            return true;
-        } else {
-            if let Some(t) = tcs.next() {
-                if t == c || (c == '_' && (!escaped || escape == '%')) {
-                    continue;
-                }
-            }
-            return false;
         }
     }
-    tcs.next().is_none()
+}
+
+fn like(target: &str, pattern: &str, escape: char, recurse_level: usize) -> Result<bool> {
+    let mut tcs = target.chars();
+    let mut pcs = pattern.chars();
+    loop {
+        if let Some(res) = partial_like(&mut tcs, &mut pcs, escape) {
+            return Ok(res);
+        }
+        let next_char = loop {
+            match pcs.next() {
+                Some('%') => {}
+                Some('_') => if tcs.next().is_none() {
+                    return Ok(false);
+                },
+                // So the pattern should be some thing like 'xxx%'
+                None => return Ok(true),
+                Some(c) => {
+                    break if c == escape {
+                        pcs.next().unwrap_or(escape)
+                    } else {
+                        c
+                    };
+                }
+            }
+        };
+        if recurse_level >= MAX_RECURSE_LEVEL {
+            // TODO: maybe we should test if stack is actually about to overflow.
+            return Err(box_err!(
+                "recurse level should not be larger than {}",
+                MAX_RECURSE_LEVEL
+            ));
+        }
+        // Pattern must be something like "%xxx".
+        loop {
+            let s = match tcs.next() {
+                None => return Ok(false),
+                Some(s) => s,
+            };
+            if s == next_char && try!(like(tcs.as_str(), pcs.as_str(), escape, recurse_level + 1)) {
+                return Ok(true);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -395,6 +434,13 @@ mod test {
             (r#"Hello, World"#, r#"Hello, World"#, '\\', true),
             (r#"Hello, World"#, r#"Hello, %"#, '\\', true),
             (r#"Hello, World"#, r#"%, World"#, '\\', true),
+            (r#"test"#, r#"te%st"#, '\\', true),
+            (r#"test"#, r#"te%%st"#, '\\', true),
+            (r#"test"#, r#"test%"#, '\\', true),
+            (r#"test"#, r#"%test%"#, '\\', true),
+            (r#"test"#, r#"t%e%s%t"#, '\\', true),
+            (r#"test"#, r#"_%_%_%_"#, '\\', true),
+            (r#"test"#, r#"_%_%st"#, '\\', true),
             (r#"C:"#, r#"%\"#, '\\', false),
             (r#"C:\"#, r#"%\"#, '\\', true),
             (r#"C:\Programs"#, r#"%\"#, '\\', false),
@@ -416,15 +462,15 @@ mod test {
             (r#"3hello"#, r#"%_hello"#, '%', true),
         ];
         let ctx = StatementContext::default();
-        for (target, pattern, escape, exp) in cases {
-            let target = datum_expr(Datum::Bytes(target.as_bytes().to_vec()));
-            let pattern = datum_expr(Datum::Bytes(pattern.as_bytes().to_vec()));
+        for (target_str, pattern_str, escape, exp) in cases {
+            let target = datum_expr(Datum::Bytes(target_str.as_bytes().to_vec()));
+            let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let escape = datum_expr(Datum::I64(escape as i64));
             let op = fncall_expr(ScalarFuncSig::LikeSig, &[target, pattern, escape]);
             let op = Expression::build(op, &ctx).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
             let exp = Datum::from(exp);
-            assert_eq!(got, exp);
+            assert_eq!(got, exp, "{:?} like {:?}", target_str, pattern_str);
         }
     }
 }
