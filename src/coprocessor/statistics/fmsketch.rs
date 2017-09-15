@@ -24,7 +24,7 @@ use coprocessor::codec::datum::Datum;
 use coprocessor::codec::Result;
 use util::as_slice;
 
-/// `FMSketch` is used to count the number of distinct elements in a set.
+/// `FMSketch` is used to count the number of distinct elements in a `[Datum]`.
 pub struct FMSketch {
     mask: u64,
     max_size: usize,
@@ -58,11 +58,11 @@ impl FMSketch {
     }
 
     // ndv returns the number of distinct elements
-    pub fn ndv(&self) -> i64 {
-        (self.mask + 1) as i64 * (self.hash_set.len() as i64)
+    pub fn ndv(&self) -> u64 {
+        (self.mask + 1) as u64 * (self.hash_set.len() as u64)
     }
 
-    pub fn convert_to_proto(self) -> analyze::FMSketch {
+    pub fn into_proto(self) -> analyze::FMSketch {
         let mut proto = analyze::FMSketch::new();
         proto.set_mask(self.mask);
         let hash = self.hash_set.into_iter().collect();
@@ -70,16 +70,10 @@ impl FMSketch {
         proto
     }
 
+    #[inline]
     fn update_mask(&mut self, mask: u64) {
         self.mask = mask;
-        let to_remove: Vec<u64> = self.hash_set
-            .iter()
-            .filter(|x| (*x & self.mask) != 0)
-            .cloned()
-            .collect();
-        for x in &to_remove {
-            self.hash_set.remove(x);
-        }
+        self.hash_set.retain(|&x| x & mask == 0);
     }
 
     fn insert_hash_value(&mut self, hash_val: u64) {
@@ -160,9 +154,9 @@ mod test {
         }
     }
 
+    // This test was ported from tidb.
     #[test]
     fn test_sketch() {
-        // This test was ported from tidb.
         let max_size = 1000usize;
         let data = TestData::default();
         let mut sample = FMSketch::build(&data.samples, max_size).unwrap();
