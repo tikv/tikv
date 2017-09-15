@@ -35,6 +35,8 @@ use raftstore::store::Config;
 use raftstore::store::worker::{apply, PdTask, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 
+use coprocessor::cache::DISTSQL_CACHE;
+
 use util::worker::{FutureWorker, Scheduler};
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
 use util::Either;
@@ -1249,8 +1251,10 @@ impl Peer {
 
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
         info!("{} transfer leader to {:?}", self.tag, peer);
-
         self.raft_group.transfer_leader(peer.get_id());
+
+        // DistSQL cache eviction region after transfer leader
+        DISTSQL_CACHE.lock().unwrap().evict_region(self.region_id);
     }
 
     fn is_transfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {

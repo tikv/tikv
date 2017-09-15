@@ -17,12 +17,14 @@ use tipb::executor::{ExecType, Executor};
 use tipb::schema::ColumnInfo;
 use tipb::select::{DAGRequest, RowMeta, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
+use kvproto::metapb::RegionEpoch;
 use protobuf::{Message as PbMsg, RepeatedField};
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
+use coprocessor::cache::*;
 use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
@@ -58,7 +60,15 @@ impl<'s> DAGContext<'s> {
         }
     }
 
-    pub fn handle_request(mut self, statistics: &'s mut Statistics) -> Result<Response> {
+    pub fn handle_request(mut self, region_id: u64, epoch: RegionEpoch, statistics: &'s mut Statistics) -> Result<Response> {
+        let key = format!("{:?}, {:?}", self.ranges, self.req.get_executors());
+        if let Some(data) = DISTSQL_CACHE.lock().unwrap().get(region_id, &epoch, &key) {
+            info!("Cache Hit: {}", &key);
+            let mut resp = Response::new();
+            resp.set_data(data.clone());
+            return Ok(resp);
+        };
+
         try!(self.validate_dag());
         let mut exec = try!(self.build_dag(statistics));
         let mut chunks = vec![];
@@ -88,6 +98,10 @@ impl<'s> DAGContext<'s> {
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                     let data = box_try!(sel_resp.write_to_bytes());
+                    if self.has_aggr {
+                        info!("Cache It: {}, region_id: {}, epoch: {:?}", &key, region_id, &epoch);
+                        DISTSQL_CACHE.lock().unwrap().put(region_id, epoch, key, data.clone());
+                    }
                     resp.set_data(data);
                     return Ok(resp);
                 }

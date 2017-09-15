@@ -16,6 +16,7 @@ mod metrics;
 mod dag;
 pub mod select;
 pub mod codec;
+pub mod cache;
 
 use std::result;
 use std::error;

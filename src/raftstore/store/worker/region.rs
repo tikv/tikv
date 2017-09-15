@@ -34,6 +34,8 @@ use raftstore::store::{self, check_abort, keys, ApplyOptions, Peekable, SnapEntr
 use raftstore::store::snap::{Error, Result};
 use storage::CF_RAFT;
 
+use coprocessor::cache::DISTSQL_CACHE;
+
 use super::metrics::*;
 use super::super::util;
 
@@ -222,6 +224,8 @@ impl SnapContext {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
+                // DistSQL cache should be eviction
+                DISTSQL_CACHE.lock().unwrap().evict_region(region_id);
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);
@@ -257,6 +261,9 @@ impl SnapContext {
                 escape(&end_key),
                 e
             );
+        } else {
+            // DistSQL cache should be eviction
+            DISTSQL_CACHE.lock().unwrap().evict_region(region_id);
         }
     }
 }

@@ -576,7 +576,14 @@ impl TiDbEndPoint {
             dag.get_flags()
         )));
         let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
-        ctx.handle_request(&mut t.statistics)
+        let (region_id, epoch) = {
+            let ctx = t.req.get_context();
+            (
+                ctx.get_region_id(),
+                ctx.get_region_epoch().clone(),
+            )
+        };
+        ctx.handle_request(region_id, epoch, &mut t.statistics)
     }
 }
 

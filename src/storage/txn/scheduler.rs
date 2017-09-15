@@ -53,6 +53,7 @@ use util::transport::{Error as TransportError, SyncSendCh};
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
+use coprocessor::cache::DISTSQL_CACHE;
 
 use super::Result;
 use super::Error;
@@ -1050,6 +1051,7 @@ impl Scheduler {
             assert_eq!(ctx.cid, cid);
             ctx.cmd.take().unwrap()
         };
+        let region_id = self.cmd_ctxs.get_mut(&cid).unwrap().region_id;
         if let Some(term) = cb_ctx.term {
             cmd.mut_context().set_term(term);
         }
@@ -1065,6 +1067,8 @@ impl Scheduler {
         } else {
             worker_pool.execute(move |ctx: &mut ScheContext| {
                 let s = process_write(cid, cmd, ch, snapshot);
+                // Eviction region for DistSQL cache
+                DISTSQL_CACHE.lock().unwrap().evict_region(region_id);
                 ctx.add_statistics(tag, &s);
             });
         }
