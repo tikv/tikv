@@ -11,8 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::boxed::FnBox;
+use std::fmt::Debug;
+use futures::sync::oneshot;
+
 mod kv;
 mod debug;
 
 pub use self::kv::Service as KvService;
 pub use self::debug::{Request as DebugTask, Runner as DebugRunner, Service as DebugService};
+
+fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot::Receiver<T>) {
+    let (tx, rx) = oneshot::channel();
+    let callback = move |resp| { tx.send(resp).unwrap(); };
+    (box callback, rx)
+}

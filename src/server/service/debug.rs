@@ -14,11 +14,10 @@
 use std::error;
 use std::boxed::FnBox;
 use std::sync::Arc;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Display};
 
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use futures::Future;
-use futures::sync::oneshot;
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
 use rocksdb::DB;
@@ -27,6 +26,8 @@ use util::worker::{Runnable, Scheduler};
 use raftstore::store::keys;
 use raftstore::store::engine::Peekable;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+
+use super::make_callback;
 
 pub type Callback = Box<FnBox(Result<Response, Error>) + Send>;
 
@@ -39,12 +40,6 @@ impl Service {
     pub fn new(scheduler: Scheduler<Request>) -> Service {
         Service { scheduler }
     }
-}
-
-fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot::Receiver<T>) {
-    let (tx, rx) = oneshot::channel();
-    let callback = move |resp| { tx.send(resp).unwrap(); };
-    (box callback, rx)
 }
 
 impl debugpb_grpc::Debug for Service {
