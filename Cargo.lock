@@ -406,7 +406,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=ov/region-split#fe4c076426ab8ba74365f2285ab1e63807d28556"
+source = "git+https://github.com/pingcap/kvproto.git?branch=ov/region-split#ea99f4408bdd7036c9947ce933435dde463fb480"
 dependencies = [
  "futures 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",

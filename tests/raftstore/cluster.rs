@@ -745,6 +745,8 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
         let split_key = split_key.to_vec();
         ch.try_send(Msg::SplitRegion {
+            region_id: region.get_id(),
+            region_epoch: region.get_region_epoch().clone(),
             split_key: split_key.clone(),
             callback: Box::new(move |mut resp: RaftCmdResponse| {
                 let admin_resp = resp.mut_admin_response();

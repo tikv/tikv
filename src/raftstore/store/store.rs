@@ -1843,54 +1843,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_check_tick(event_loop);
     }
 
-    fn on_split_check_result(
+    fn on_prepare_split_region(
         &mut self,
         region_id: u64,
         epoch: metapb::RegionEpoch,
-        split_key: Vec<u8>,
-    ) {
-        self.on_prepare_split_region(
-            keys::origin_key(split_key.as_slice()).to_vec(),
-            Some(region_id),
-            Some(epoch),
-            None,
-        );
-    }
-
-    fn on_prepare_split_region(
-        &mut self,
         split_key: Vec<u8>, // `split_key` is a encoded key.
-        region_id: Option<u64>,
-        epoch: Option<metapb::RegionEpoch>,
         cb: Option<Callback>,
     ) {
-        let region_id = match region_id {
-            Some(id) => id,
-            None => match self.region_ranges
-                .range((Included(split_key.clone()), Unbounded::<Key>))
-                .next()
-            {
-                Some((end_key, id)) => if end_key != &split_key {
-                    *id
-                } else {
-                    error!(
-                        "[region {}] split key {:?} is the same as end_key!!!",
-                        id,
-                        split_key
-                    );
-                    cb.map(|cb| {
-                        cb(new_error(box_err!(
-                            "split key {:?} is the same as region {} end_key",
-                            split_key,
-                            id
-                        )))
-                    });
-                    return;
-                },
-                None => *self.region_ranges.values().next_back().unwrap(),
-            },
-        };
-
         if split_key.is_empty() {
             error!("[region {}] split key should not be empty!!!", region_id);
             cb.map(|cb| {
@@ -1932,26 +1891,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let region = peer.region();
 
-        if let Some(epoch) = epoch {
-            if region.get_region_epoch().get_version() != epoch.get_version() {
-                error!(
+        if region.get_region_epoch().get_version() != epoch.get_version() {
+            error!(
+                "[region {}] {} epoch changed {:?} != {:?}, need re-check later",
+                region_id,
+                peer.tag,
+                region.get_region_epoch(),
+                epoch
+            );
+            cb.map(|cb| {
+                cb(new_error(box_err!(
                     "[region {}] {} epoch changed {:?} != {:?}, need re-check later",
                     region_id,
                     peer.tag,
                     region.get_region_epoch(),
                     epoch
-                );
-                cb.map(|cb| {
-                    cb(new_error(box_err!(
-                        "[region {}] {} epoch changed {:?} != {:?}, need re-check later",
-                        region_id,
-                        peer.tag,
-                        region.get_region_epoch(),
-                        epoch
-                    )))
-                });
-                return;
-            }
+                )))
+            });
+            return;
         }
 
         match self.split_callbacks.entry(split_key.clone()) {
@@ -2509,7 +2466,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 split_key,
             } => {
                 info!("[region {}] split check complete.", region_id);
-                self.on_split_check_result(region_id, epoch, split_key);
+                self.on_prepare_split_region(
+                    region_id,
+                    epoch,
+                    keys::origin_key(split_key.as_slice()).to_vec(),
+                    None,
+                );
             }
             Msg::ReportUnreachable {
                 region_id,
@@ -2526,10 +2488,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_hash_computed(region_id, index, hash);
             }
             Msg::SplitRegion {
+                region_id,
+                region_epoch,
                 split_key,
                 callback,
             } => {
-                self.on_prepare_split_region(split_key, None, None, Some(callback));
+                info!("[region {}] on split region at key {}.", region_id, split_key);
+                self.on_prepare_split_region(region_id, region_epoch, split_key, Some(callback));
             }
         }
     }

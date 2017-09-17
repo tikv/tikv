@@ -72,6 +72,8 @@ pub enum Msg {
     },
 
     SplitRegion {
+        region_id: u64,
+        region_epoch: RegionEpoch,
         // It's an encoded key.
         split_key: Vec<u8>,
         callback: Callback,
@@ -119,9 +121,11 @@ impl fmt::Debug for Msg {
                 index,
                 escape(hash)
             ),
-            Msg::SplitRegion { ref split_key, .. } => {
-                write!(fmt, "Split region at key {:?}", split_key)
-            }
+            Msg::SplitRegion {
+                ref region_id,
+                ref split_key,
+                ..
+            } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
         }
     }
 }
