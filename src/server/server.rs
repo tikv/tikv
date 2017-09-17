@@ -63,7 +63,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snapshot_status_sender: Sender<SnapshotStatusMsg>,
         resolver: S,
         snap_mgr: SnapManager,
-        engine: Option<Engines>,
+        debug_engines: Option<Engines>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -81,8 +81,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
         );
-        let (debug_service, debugger) = if let Some(engine) = engine {
-            let runner = DebugRunner::new(engine.kv_engine, engine.raft_engine);
+        let (debug_service, debugger) = if let Some(engines) = debug_engines {
+            let runner = DebugRunner::new(engines.kv_engine, engines.raft_engine);
             let mut debugger = Worker::new(thd_name!("debugger"));
             debugger.start(runner).unwrap();
             (
