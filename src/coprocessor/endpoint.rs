@@ -706,16 +706,36 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 }
 
 #[cfg(test)]
+#[allow(unused_variables)]
 mod tests {
     use super::*;
     use util::worker::Worker;
     use storage::engine::{self, TEMP_DIR};
+    use server::transport::ServerRaftStoreRouter;
+    use util::transport::SendCh;
+    use mio::{EventLoop, Handler};
+    use raftstore::store::Msg;
 
     use kvproto::coprocessor::Request;
 
     use std::sync::*;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    struct TestHandler;
+
+    impl Handler for TestHandler {
+        type Timeout = ();
+        type Message = Msg;
+
+        fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
+            match msg {
+                Msg::Quit => event_loop.shutdown(),
+                Msg::CoprocessorStats { request_stats } => assert!(request_stats.len() > 0),
+                _ => unreachable!(),
+            }
+        }
+    }
 
     #[test]
     fn test_get_reg_scan_tag() {
@@ -731,12 +751,16 @@ mod tests {
     }
 
     #[test]
-    fn test_req_outdated() {
+    fn test_req_outdate() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let end_point = Host::new(engine, worker.scheduler(), &cfg);
+        let mut event_loop = EventLoop::new().unwrap();
+        let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
+        let raft_router = ServerRaftStoreRouter::new(store_sendch);
+        thread::spawn(move || { event_loop.run(&mut TestHandler).unwrap(); });
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, raft_router);
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
@@ -753,7 +777,12 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg);
+        let mut event_loop = EventLoop::new().unwrap();
+        let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
+        let raft_router = ServerRaftStoreRouter::new(store_sendch);
+        thread::spawn(move || { event_loop.run(&mut TestHandler).unwrap(); });
+
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, raft_router);
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
