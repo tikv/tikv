@@ -34,6 +34,7 @@ use super::executor::{AggregationExecutor, Executor as DAGExecutor, IndexScanExe
 pub struct DAGContext<'s> {
     columns: Rc<Vec<ColumnInfo>>,
     has_aggr: bool,
+    has_topn: bool,
     req: DAGRequest,
     ranges: Vec<KeyRange>,
     snap: &'s Snapshot,
@@ -55,21 +56,25 @@ impl<'s> DAGContext<'s> {
             ranges: ranges,
             snap: snap,
             has_aggr: false,
+            has_topn: false,
             eval_ctx: eval_ctx,
             req_ctx: req_ctx,
         }
     }
 
     pub fn handle_request(mut self, region_id: u64, epoch: RegionEpoch, statistics: &'s mut Statistics) -> Result<Response> {
-        let key = format!("{:?}, {:?}", self.ranges, self.req.get_executors());
-        if let Some(data) = DISTSQL_CACHE.lock().unwrap().get(region_id, &epoch, &key) {
-            debug!("Cache Hit: {}, region_id: {}, epoch: {:?}", &key, region_id, &epoch);
-            let mut resp = Response::new();
-            resp.set_data(data.clone());
-            return Ok(resp);
-        };
-
         try!(self.validate_dag());
+        let key = format!("{:?}, {:?}", self.ranges, self.req.get_executors());
+        // debug!("Cache Key: {}", key);
+        if self.can_cache() {
+            if let Some(data) = DISTSQL_CACHE.lock().unwrap().get(region_id, &epoch, &key) {
+                debug!("Cache Hit: {}, region_id: {}, epoch: {:?}", &key, region_id, &epoch);
+                let mut resp = Response::new();
+                resp.set_data(data.clone());
+                return Ok(resp);
+            };
+        }
+
         let mut exec = try!(self.build_dag(statistics));
         let mut chunks = vec![];
         loop {
@@ -120,7 +125,7 @@ impl<'s> DAGContext<'s> {
     }
 
     fn can_cache(&'s self) -> bool {
-        self.has_aggr
+        self.has_aggr || self.has_topn
     }
 
     fn validate_dag(&mut self) -> Result<()> {
@@ -152,6 +157,13 @@ impl<'s> DAGContext<'s> {
             .any(|exec| exec.get_tp() == ExecType::TypeAggregation)
         {
             self.has_aggr = true;
+        }
+        if execs
+            .iter()
+            .rev()
+            .any(|exec| exec.get_tp() == ExecType::TypeTopN)
+        {
+            self.has_topn = true;
         }
         Ok(())
     }
