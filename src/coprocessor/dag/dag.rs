@@ -25,6 +25,7 @@ use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
 use coprocessor::cache::*;
+use coprocessor::metrics::*;
 use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
@@ -79,6 +80,7 @@ impl<'s> DAGContext<'s> {
                     region_id,
                     &epoch
                 );
+                CORP_DISTSQL_CACHE_COUNT.with_label_values(&["hit"]).inc();
                 let mut resp = Response::new();
                 resp.set_data(data.clone());
                 return Ok(resp);
@@ -124,6 +126,7 @@ impl<'s> DAGContext<'s> {
                             .lock()
                             .unwrap()
                             .put(region_id, epoch, key, data.clone());
+                        CORP_DISTSQL_CACHE_COUNT.with_label_values(&["miss"]).inc();
                     }
                     resp.set_data(data);
                     return Ok(resp);
