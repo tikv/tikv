@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{DBStatisticsTickerType as TickerType, WriteBatch, DB};
+use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -95,8 +95,6 @@ pub struct StoreStat {
     pub region_bytes_written: LocalHistogram,
     pub region_keys_written: LocalHistogram,
     pub lock_cf_bytes_written: u64,
-    pub engine_total_bytes_written: u64,
-    pub engine_total_keys_written: u64,
 }
 
 impl Default for StoreStat {
@@ -105,8 +103,6 @@ impl Default for StoreStat {
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
             lock_cf_bytes_written: 0,
-            engine_total_bytes_written: 0,
-            engine_total_keys_written: 0,
         }
     }
 }
@@ -1949,19 +1945,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .set(apply_snapshot_count as f64);
 
         stats.set_start_time(self.start_time.sec as u32);
-
-        // report store write flow to pd
-        let engine_total_bytes_written = self.kv_engine
-            .get_statistics_ticker_count(TickerType::BytesWritten);
-        let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
-        self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
-        stats.set_bytes_written(delta);
-
-        let engine_total_keys_written = self.kv_engine
-            .get_statistics_ticker_count(TickerType::NumberKeysWritten);
-        let delta = engine_total_keys_written - self.store_stat.engine_total_keys_written;
-        self.store_stat.engine_total_keys_written = engine_total_keys_written;
-        stats.set_keys_written(delta);
 
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
