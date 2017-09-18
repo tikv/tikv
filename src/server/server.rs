@@ -82,7 +82,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker.scheduler(),
         );
         let (debug_service, debugger) = if let Some(engines) = debug_engines {
-            let runner = DebugRunner::new(engines.kv_engine, engines.raft_engine);
+            let runner = DebugRunner::new(engines);
             let mut debugger = Worker::new(thd_name!("debugger"));
             debugger.start(runner).unwrap();
             (

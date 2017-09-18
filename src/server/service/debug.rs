@@ -13,7 +13,6 @@
 
 use std::error;
 use std::boxed::FnBox;
-use std::sync::Arc;
 use std::fmt::{self, Display};
 
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
@@ -21,12 +20,10 @@ use futures::Future;
 use futures::sync::oneshot;
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
-use rocksdb::DB;
 
 use util::worker::{Runnable, Scheduler};
-use raftstore::store::keys;
-use raftstore::store::engine::Peekable;
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use raftstore::store::Engines;
+use raftstore::store::debug::*;
 
 use super::make_callback;
 
@@ -130,33 +127,31 @@ impl debugpb_grpc::Debug for Service {
 }
 
 pub struct Runner {
-    kv_db: Arc<DB>,
-    raft_db: Arc<DB>,
+    engines: Engines,
 }
 
 impl Runner {
-    pub fn new(kv_db: Arc<DB>, raft_db: Arc<DB>) -> Runner {
-        Runner { kv_db, raft_db }
+    pub fn new(engines: Engines) -> Runner {
+        Runner { engines }
     }
 
     fn on_get(&self, cf: CF, key_encoded: Vec<u8>, cb: Callback) {
-        let (cf, db) = match cf {
-            CF::DEFAULT => (CF_DEFAULT, &self.kv_db),
-            CF::WRITE => (CF_WRITE, &self.kv_db),
-            CF::LOCK => (CF_LOCK, &self.kv_db),
-            CF::RAFT => (CF_RAFT, &self.raft_db),
-            _ => {
-                cb(Err(Error::InvalidArgument("invalid cf".to_owned())));
+        let cf = match cf_to_str(cf) {
+            Ok(cf) => cf,
+            Err(e) => {
+                cb(Err(Error::InvalidArgument(format!("{:?}", e))));
                 return;
             }
         };
-        cb(match db.get_value_cf(
-            cf,
-            &keys::data_key(key_encoded.as_slice()),
-        ) {
-            Ok(Some(v)) => Ok(Response::Get {
-                value: (&v).to_vec(),
-            }),
+        let db = match get_db(&self.engines, cf) {
+            Ok(db) => db,
+            Err(e) => {
+                cb(Err(Error::InvalidArgument(format!("{:?}", e))));
+                return;
+            }
+        };
+        cb(match get_value(db, cf, &key_encoded) {
+            Ok(Some(value)) => Ok(Response::Get { value }),
             Ok(None) => Err(Error::NotFound(
                 format!("get none value for encoded key {:?}", key_encoded,),
             )),
