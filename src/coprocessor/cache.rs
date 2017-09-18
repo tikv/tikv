@@ -94,7 +94,12 @@ impl DistSQLCache {
         }
     }
 
-    pub fn get(&mut self, region_id: u64, epoch: &RegionEpoch, k: &DistSQLCacheKey) -> Option<&Vec<u8>> {
+    pub fn get(
+        &mut self,
+        region_id: u64,
+        epoch: &RegionEpoch,
+        k: &DistSQLCacheKey
+    ) -> Option<&Vec<u8>> {
         self.check_evict_key(region_id, epoch, k);
         if let Some(entry) = self.map.get_refresh(k) {
             Some(&entry.result)
@@ -115,11 +120,7 @@ impl DistSQLCache {
                     Some(node) => {
                         // Delete from region cache entry list
                         node.remove(k);
-                        if node.len() > 0 {
-                            Some(1)
-                        } else {
-                            None
-                        }
+                        if node.len() > 0 { Some(1) } else { None }
                     }
                 };
                 if opt.is_some() {
@@ -281,7 +282,12 @@ mod tests {
         let key: DistSQLCacheKey = "test1".to_string();
         let epoch: RegionEpoch = create_epoch(1, 2);
         let result: Vec<u8> = vec![100, 101, 102];
-        DISTSQL_CACHE.lock().unwrap().put(10, epoch.clone(), key.clone(), result.clone());
+        DISTSQL_CACHE.lock().unwrap().put(
+            10,
+            epoch.clone(),
+            key.clone(),
+            result.clone(),
+        );
         match DISTSQL_CACHE.lock().unwrap().get(10, &epoch, &key) {
             None => (assert!(false)),
             Some(value) => {
