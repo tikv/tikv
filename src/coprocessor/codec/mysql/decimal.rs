@@ -1662,7 +1662,7 @@ enable_conv_for_int!(isize, i64);
 impl From<i64> for Decimal {
     fn from(i: i64) -> Decimal {
         let (neg, mut d) = if i < 0 {
-            (true, Decimal::from(opp_neg!(i)))
+            (true, Decimal::from(i.overflowing_neg().0 as u64))
         } else {
             (false, Decimal::from(i as u64))
         };

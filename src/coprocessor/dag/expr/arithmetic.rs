@@ -50,12 +50,16 @@ impl FnCall {
             (true, false) => if rhs >= 0 {
                 (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
             } else {
-                (lhs as u64).checked_sub(opp_neg!(rhs)).map(|t| t as i64)
+                (lhs as u64)
+                    .checked_sub(rhs.overflowing_neg().0 as u64)
+                    .map(|t| t as i64)
             },
             (false, true) => if lhs >= 0 {
                 (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
             } else {
-                (rhs as u64).checked_sub(opp_neg!(lhs)).map(|t| t as i64)
+                (rhs as u64)
+                    .checked_sub(lhs.overflowing_neg().0 as u64)
+                    .map(|t| t as i64)
             },
             (false, false) => lhs.checked_add(rhs),
         };
@@ -93,7 +97,9 @@ impl FnCall {
             (true, false) => if rhs >= 0 {
                 (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
             } else {
-                (lhs as u64).checked_add(opp_neg!(rhs)).map(|t| t as i64)
+                (lhs as u64)
+                    .checked_add(rhs.overflowing_neg().0 as u64)
+                    .map(|t| t as i64)
             },
             (false, true) => if lhs >= 0 {
                 (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
