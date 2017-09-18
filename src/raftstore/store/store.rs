@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{DBStatisticsTickerType as TickerType, WriteBatch, DB};
+use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -1973,6 +1973,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         stats.set_start_time(self.start_time.sec as u32);
 
+<<<<<<< HEAD
         // report store write flow to pd
         let engine_total_bytes_written = self.kv_engine
             .get_statistics_ticker_count(TickerType::BytesWritten);
@@ -1999,6 +2000,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_keys_read(delta);
 
 
+=======
+>>>>>>> master
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
 

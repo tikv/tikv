@@ -17,14 +17,14 @@ mod dag;
 pub mod select;
 pub mod codec;
 
+use std::result;
+use std::error;
+
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
 
-use std::result;
-use std::time::Instant;
-use std::error;
-
 use storage::{engine, mvcc, txn};
+use util::time::Instant;
 
 quick_error! {
     #[derive(Debug)]

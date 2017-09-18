@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::usize;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
 
@@ -24,7 +24,7 @@ use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 
-use util::time::duration_to_sec;
+use util::time::{duration_to_sec, Instant};
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
@@ -276,7 +276,7 @@ impl ReqContext {
     }
 
     pub fn check_if_outdated(&self) -> Result<()> {
-        let now = Instant::now();
+        let now = Instant::now_coarse();
         if self.deadline <= now {
             return Err(Error::Outdated(self.deadline, now, self.get_scan_tag()));
         }
@@ -297,7 +297,7 @@ pub struct RequestTask {
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;
         let tp = req.get_tp();
@@ -714,12 +714,17 @@ mod tests {
     use util::transport::SendCh;
     use mio::{EventLoop, Handler};
     use raftstore::store::Msg;
+    use std::sync::*;
+    use std::thread;
+    use std::time::Duration;
 
     use kvproto::coprocessor::Request;
 
-    use std::sync::*;
-    use std::thread;
-    use std::time::{Duration, Instant};
+    use storage::engine::{self, TEMP_DIR};
+    use util::worker::Worker;
+    use util::time::Instant;
+
+    use super::*;
 
     struct TestHandler;
 
@@ -739,7 +744,7 @@ mod tests {
     #[test]
     fn test_get_reg_scan_tag() {
         let mut ctx = ReqContext {
-            deadline: Instant::now(),
+            deadline: Instant::now_coarse(),
             isolation_level: IsolationLevel::RC,
             fill_cache: true,
             table_scan: true,

@@ -24,7 +24,7 @@ use raftstore::store::{SnapManager, SnapshotStatusMsg};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
-use super::grpc_service::Service;
+use super::service::KvService as Service;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};

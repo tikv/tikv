@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::usize;
-use std::time::Instant;
 use std::rc::Rc;
 use tipb::select::{Chunk, RowMeta, SelectRequest, SelectResponse};
 use tipb::schema::ColumnInfo;
@@ -29,7 +28,7 @@ use coprocessor::{Error, Result};
 use coprocessor::endpoint::{get_chunk, get_pk, is_point, prefix_next, to_pb_error, ReqContext,
                             BATCH_ROW_COUNT, SINGLE_GROUP};
 use util::{escape, Either};
-use util::time::duration_to_ms;
+use util::time::{duration_to_ms, Instant};
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::codec::number::NumberDecoder;
 use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics};
@@ -103,7 +102,7 @@ impl<'a> SelectContext<'a> {
             if collected >= self.core.limit {
                 break;
             }
-            let timer = Instant::now();
+            let timer = Instant::now_coarse();
             let row_cnt = try!(self.get_rows_from_range(ran));
             debug!(
                 "fetch {} rows takes {} ms",
