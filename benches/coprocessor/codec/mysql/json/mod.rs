@@ -13,35 +13,56 @@
 
 extern crate serde_json;
 
-use std::fs::File;
+use std::io;
 use std::io::prelude::*;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
 use test::Bencher;
 
 use tikv::coprocessor::codec::mysql::{Json, JsonDecoder, JsonEncoder};
 
+fn download_and_extract_file(url: &str) -> io::Result<String> {
+    let mut dl_child = Command::new("curl")
+        .arg(url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut tar_child = Command::new("tar")
+        .args(&["xjf", "-", "--to-stdout"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
 
-#[inline]
-fn open_file_read_lines<P: AsRef<Path>>(filename: P) -> Vec<String> {
-    File::open(filename)
-        .map(BufReader::new)
-        .and_then(|reader| {
-            reader.lines().collect::<::std::io::Result<Vec<_>>>()
-        })
-        .unwrap()
+    let mut dl_output = dl_child.stdout.take().unwrap();
+    let mut tar_input = tar_child.stdin.take().unwrap();
+    let th = thread::spawn(move || -> io::Result<()> {
+        let mut buf = vec![0; 4096];
+        loop {
+            let nbytes = try!(dl_output.read(&mut buf));
+            if nbytes > 0 {
+                try!(tar_input.write(&buf[0..nbytes]));
+                continue;
+            }
+            return Ok(());
+        }
+    });
+
+    try!(dl_child.wait());
+    let output = try!(tar_child.wait_with_output());
+    try!(th.join().unwrap());
+    assert_eq!(output.status.code(), Some(0));
+    return Ok(String::from_utf8(output.stdout).unwrap());
 }
 
 pub fn load_test_jsons() -> Vec<String> {
-    let mut file = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    file.push("tests/coprocessor/codec/mysql/json/world_bank.json");
-    open_file_read_lines(file)
-}
-
-#[test]
-fn test_load_test_jsons() {
-    let json_texts = load_test_jsons();
-    assert_eq!(json_texts.len(), 500);
+    let url = "https://download.pingcap.org/resources/world_bank.json.bz2";
+    download_and_extract_file(url)
+        .unwrap()
+        .split('\n')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned())
+        .collect::<Vec<_>>();
 }
 
 #[bench]
