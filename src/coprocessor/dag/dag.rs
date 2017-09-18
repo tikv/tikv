@@ -62,13 +62,23 @@ impl<'s> DAGContext<'s> {
         }
     }
 
-    pub fn handle_request(mut self, region_id: u64, epoch: RegionEpoch, statistics: &'s mut Statistics) -> Result<Response> {
+    pub fn handle_request(
+        mut self,
+        region_id: u64,
+        epoch: RegionEpoch,
+        statistics: &'s mut Statistics,
+    ) -> Result<Response> {
         try!(self.validate_dag());
         let key = format!("{:?}, {:?}", self.ranges, self.req.get_executors());
         // debug!("Cache Key: {}", key);
         if self.can_cache() {
             if let Some(data) = DISTSQL_CACHE.lock().unwrap().get(region_id, &epoch, &key) {
-                debug!("Cache Hit: {}, region_id: {}, epoch: {:?}", &key, region_id, &epoch);
+                debug!(
+                    "Cache Hit: {}, region_id: {}, epoch: {:?}",
+                    &key,
+                    region_id,
+                    &epoch
+                );
                 let mut resp = Response::new();
                 resp.set_data(data.clone());
                 return Ok(resp);
@@ -104,8 +114,16 @@ impl<'s> DAGContext<'s> {
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                     let data = box_try!(sel_resp.write_to_bytes());
                     if self.can_cache() {
-                        debug!("Cache It: {}, region_id: {}, epoch: {:?}", &key, region_id, &epoch);
-                        DISTSQL_CACHE.lock().unwrap().put(region_id, epoch, key, data.clone());
+                        debug!(
+                            "Cache It: {}, region_id: {}, epoch: {:?}",
+                            &key,
+                            region_id,
+                            &epoch
+                        );
+                        DISTSQL_CACHE
+                            .lock()
+                            .unwrap()
+                            .put(region_id, epoch, key, data.clone());
                     }
                     resp.set_data(data);
                     return Ok(resp);

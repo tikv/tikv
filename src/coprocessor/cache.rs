@@ -81,13 +81,11 @@ impl DistSQLCache {
     fn check_evict_key(&mut self, region_id: u64, epoch: &RegionEpoch, k: &DistSQLCacheKey) {
         let opt = match self.map.get(k) {
             None => None,
-            Some(entry) => {
-                if !validate_epoch(&entry, region_id, epoch) {
-                    Some(())
-                } else {
-                    None
-                }
-            }
+            Some(entry) => if !validate_epoch(&entry, region_id, epoch) {
+                Some(())
+            } else {
+                None
+            },
         };
         if opt.is_some() {
             self.remove(k);
@@ -98,7 +96,7 @@ impl DistSQLCache {
         &mut self,
         region_id: u64,
         epoch: &RegionEpoch,
-        k: &DistSQLCacheKey
+        k: &DistSQLCacheKey,
     ) -> Option<&Vec<u8>> {
         self.check_evict_key(region_id, epoch, k);
         if let Some(entry) = self.map.get_refresh(k) {
@@ -120,7 +118,11 @@ impl DistSQLCache {
                     Some(node) => {
                         // Delete from region cache entry list
                         node.remove(k);
-                        if node.len() > 0 { Some(1) } else { None }
+                        if node.len() > 0 {
+                            Some(1)
+                        } else {
+                            None
+                        }
                     }
                 };
                 if opt.is_some() {
@@ -144,11 +146,9 @@ impl DistSQLCache {
         };
         match keys {
             None => (),
-            Some(keys) => {
-                for i in keys.iter() {
-                    self.remove(&i);
-                }
-            }
+            Some(keys) => for i in keys.iter() {
+                self.remove(&i);
+            },
         }
 
     }
@@ -282,12 +282,10 @@ mod tests {
         let key: DistSQLCacheKey = "test1".to_string();
         let epoch: RegionEpoch = create_epoch(1, 2);
         let result: Vec<u8> = vec![100, 101, 102];
-        DISTSQL_CACHE.lock().unwrap().put(
-            10,
-            epoch.clone(),
-            key.clone(),
-            result.clone(),
-        );
+        DISTSQL_CACHE
+            .lock()
+            .unwrap()
+            .put(10, epoch.clone(), key.clone(), result.clone());
         match DISTSQL_CACHE.lock().unwrap().get(10, &epoch, &key) {
             None => (assert!(false)),
             Some(value) => {
