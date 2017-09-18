@@ -33,11 +33,11 @@ use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
 use storage::mvcc::{Error as MvccError, Write as MvccWrite, WriteType};
 use storage::engine::Error as EngineError;
-use super::transport::RaftStoreRouter;
+use server::transport::RaftStoreRouter;
+use server::snap::Task as SnapTask;
+use server::metrics::*;
+use server::Error;
 use coprocessor::{EndPointTask, RequestTask};
-use super::snap::Task as SnapTask;
-use super::metrics::*;
-use super::Error;
 
 const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
 

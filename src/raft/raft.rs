@@ -850,7 +850,7 @@ impl<T: Storage> Raft<T> {
         if m.get_term() == 0 {
             // local message
         } else if m.get_term() > self.term {
-            let leader_id = if m.get_msg_type() == MessageType::MsgRequestVote ||
+            if m.get_msg_type() == MessageType::MsgRequestVote ||
                 m.get_msg_type() == MessageType::MsgRequestPreVote
             {
                 let force = m.get_context() == CAMPAIGN_TRANSFER;
@@ -878,10 +878,7 @@ impl<T: Storage> Raft<T> {
 
                     return Ok(());
                 }
-                INVALID_ID
-            } else {
-                m.get_from()
-            };
+            }
 
             if m.get_msg_type() == MessageType::MsgRequestPreVote ||
                 (m.get_msg_type() == MessageType::MsgRequestPreVoteResponse && !m.get_reject())
@@ -904,7 +901,14 @@ impl<T: Storage> Raft<T> {
                     m.get_from(),
                     m.get_term()
                 );
-                self.become_follower(m.get_term(), leader_id);
+                if m.get_msg_type() == MessageType::MsgAppend ||
+                    m.get_msg_type() == MessageType::MsgHeartbeat ||
+                    m.get_msg_type() == MessageType::MsgSnapshot
+                {
+                    self.become_follower(m.get_term(), m.get_from());
+                } else {
+                    self.become_follower(m.get_term(), INVALID_ID);
+                }
             }
         } else if m.get_term() < self.term {
             if self.check_quorum &&
