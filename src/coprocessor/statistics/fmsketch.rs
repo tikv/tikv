@@ -15,14 +15,9 @@
 #![allow(dead_code)]
 
 use std::collections::HashSet;
-use std::hash::Hasher;
-
-use fnv::FnvHasher;
+use byteorder::{ByteOrder, LittleEndian};
+use murmur3::murmur3_x64_128;
 use tipb::analyze;
-use coprocessor::codec::datum;
-use coprocessor::codec::datum::Datum;
-use coprocessor::codec::Result;
-use util::as_slice;
 
 /// `FMSketch` is used to count the approximate number
 /// of distinct elements in a `[Datum]`.
@@ -46,15 +41,13 @@ impl FMSketch {
         (self.mask + 1) as u64 * (self.hash_set.len() as u64)
     }
 
-    pub fn insert(&mut self, v: &Datum) -> Result<()> {
-        let bytes = try!(datum::encode_value(as_slice(v)));
+    pub fn insert(&mut self, mut bytes: &[u8]) {
         let hash = {
-            let mut hasher = FnvHasher::default();
-            hasher.write(&bytes);
-            hasher.finish()
+            let mut out: [u8; 16] = [0; 16];
+            murmur3_x64_128(&mut bytes, 0, &mut out);
+            LittleEndian::read_u64(&out[0..8])
         };
         self.insert_hash_value(hash);
-        Ok(())
     }
 
     pub fn into_proto(self) -> analyze::FMSketch {
@@ -80,7 +73,12 @@ impl FMSketch {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::datum;
+    use coprocessor::codec::datum::Datum;
+    use coprocessor::codec::Result;
+    use util::as_slice;
     use super::*;
+
     struct TestData {
         samples: Vec<Datum>,
         rc: Vec<Datum>,
@@ -136,7 +134,8 @@ mod test {
     pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FMSketch> {
         let mut s = FMSketch::new(max_size);
         for value in values {
-            try!(s.insert(value));
+            let bytes = try!(datum::encode_value(as_slice(value)));
+            s.insert(&bytes);
         }
         Ok(s)
     }
@@ -147,11 +146,11 @@ mod test {
         let max_size = 1000usize;
         let data = TestData::default();
         let sample = build_fmsketch(&data.samples, max_size).unwrap();
-        assert_eq!(sample.ndv(), 6624);
+        assert_eq!(sample.ndv(), 6232);
         let rc = build_fmsketch(&data.rc, max_size).unwrap();
-        assert_eq!(rc.ndv(), 74240);
+        assert_eq!(rc.ndv(), 73344);
         let pk = build_fmsketch(&data.pk, max_size).unwrap();
-        assert_eq!(pk.ndv(), 99968);
+        assert_eq!(pk.ndv(), 100480);
 
         let max_size = 2;
         let mut sketch = FMSketch::new(max_size);
