@@ -78,10 +78,10 @@ impl DistSQLCache {
         }
     }
 
-    fn check_evict_key(&mut self, region_id: u64, epoch: &RegionEpoch, k: &DistSQLCacheKey) {
+    fn check_evict_key(&mut self, region_id: u64, epoch: &RegionEpoch, k: &str) {
         let opt = match self.map.get(k) {
             None => None,
-            Some(entry) => if !validate_epoch(&entry, region_id, epoch) {
+            Some(entry) => if !validate_epoch(entry, region_id, epoch) {
                 Some(())
             } else {
                 None
@@ -92,12 +92,7 @@ impl DistSQLCache {
         }
     }
 
-    pub fn get(
-        &mut self,
-        region_id: u64,
-        epoch: &RegionEpoch,
-        k: &DistSQLCacheKey,
-    ) -> Option<&Vec<u8>> {
+    pub fn get(&mut self, region_id: u64, epoch: &RegionEpoch, k: &str) -> Option<&Vec<u8>> {
         self.check_evict_key(region_id, epoch, k);
         if let Some(entry) = self.map.get_refresh(k) {
             Some(&entry.result)
@@ -106,7 +101,7 @@ impl DistSQLCache {
         }
     }
 
-    pub fn remove(&mut self, k: &DistSQLCacheKey) {
+    pub fn remove(&mut self, k: &str) {
         let regions = &mut self.regions;
         let option = self.map.remove(k);
         match option {
@@ -118,7 +113,7 @@ impl DistSQLCache {
                     Some(node) => {
                         // Delete from region cache entry list
                         node.remove(k);
-                        if node.len() > 0 {
+                        if !node.is_empty() {
                             Some(1)
                         } else {
                             None
@@ -146,7 +141,7 @@ impl DistSQLCache {
         };
         match keys {
             None => (),
-            Some(keys) => for i in keys.iter() {
+            Some(keys) => for i in keys {
                 self.remove(&i);
             },
         }
@@ -159,6 +154,10 @@ impl DistSQLCache {
 
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.len() == 0
     }
 
     fn update_regions(&mut self, region_id: u64, k: DistSQLCacheKey) {
@@ -194,7 +193,7 @@ fn validate_epoch(entry: &DistSQLCacheEntry, region_id: u64, epoch: &RegionEpoch
     if entry.region_epoch.get_version() != epoch.get_version() {
         return false;
     }
-    return true;
+    true
 }
 
 pub const DISTSQL_CACHE_SIZE: usize = 1000;
