@@ -126,7 +126,7 @@ impl<'a> AggregationExecutor<'a> {
         })
     }
 
-    fn get_group_key(&mut self, row: &[Datum]) -> Result<Vec<u8>> {
+    fn get_group_key(&self, row: &[Datum]) -> Result<Vec<u8>> {
         if self.group_by.is_empty() {
             let single_group = Datum::Bytes(SINGLE_GROUP.to_vec());
             return Ok(box_try!(datum::encode_value(&[single_group])));
