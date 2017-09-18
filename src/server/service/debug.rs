@@ -18,6 +18,7 @@ use std::fmt::{self, Display};
 
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use futures::Future;
+use futures::sync::oneshot;
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
 use rocksdb::DB;
@@ -40,6 +41,50 @@ impl Service {
     pub fn new(scheduler: Scheduler<Request>) -> Service {
         Service { scheduler }
     }
+
+    fn handle_response<F, M, Q>(
+        &self,
+        ctx: RpcContext,
+        sink: UnarySink<Q>,
+        req: Request,
+        resp: F,
+        map: M,
+        tag: &'static str,
+    ) where
+        Q: 'static,
+        M: FnOnce(Response) -> Q + Send + 'static,
+        F: Future<Item = Result<Response, Error>, Error = oneshot::Canceled> + Send + 'static,
+    {
+        let on_error = move |e| {
+            error!("{} failed: {:?}", tag, e);
+        };
+        if self.scheduler.schedule(req).is_ok() {
+            let future = resp.then(|v| match v {
+                Ok(Ok(resp)) => sink.success(map(resp)).map_err(on_error),
+                Ok(Err(Error::NotFound(msg))) => {
+                    let status = RpcStatus::new(RpcStatusCode::NotFound, Some(msg));
+                    sink.fail(status).map_err(on_error)
+                }
+                Ok(Err(Error::InvalidArgument(msg))) => {
+                    let status = RpcStatus::new(RpcStatusCode::InvalidArgument, Some(msg));
+                    sink.fail(status).map_err(on_error)
+                }
+                Ok(Err(Error::Other(e))) => {
+                    let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
+                    sink.fail(status).map_err(on_error)
+                }
+                Err(canceled) => {
+                    let status =
+                        RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", canceled)));
+                    sink.fail(status).map_err(on_error)
+                }
+            });
+            ctx.spawn(future);
+        } else {
+            let status = RpcStatus::new(RpcStatusCode::Unavailable, None);
+            ctx.spawn(sink.fail(status).map_err(on_error));
+        }
+    }
 }
 
 impl debugpb_grpc::Debug for Service {
@@ -52,38 +97,15 @@ impl debugpb_grpc::Debug for Service {
             key_encoded: req.take_key_encoded(),
             callback: cb,
         };
-        let on_error = |e| {
-            debug!("{} failed: {:?}", LABEL, e);
+
+        let map = |response| match response {
+            Response::Get { value } => {
+                let mut resp = GetResponse::new();
+                resp.set_value(value);
+                resp
+            }
         };
-        if self.scheduler.schedule(req).is_ok() {
-            let future = future.then(|v| match v {
-                Ok(Ok(Response::Get { value })) => {
-                    let mut resp = GetResponse::new();
-                    resp.set_value(value);
-                    sink.success(resp).map_err(on_error)
-                }
-                Ok(Err(Error::NotFound(msg))) => {
-                    let status = RpcStatus::new(RpcStatusCode::NotFound, Some(msg));
-                    sink.fail(status).map_err(on_error)
-                }
-                Ok(Err(Error::InvalidArgument(msg))) => {
-                    let status = RpcStatus::new(RpcStatusCode::InvalidArgument, Some(msg));
-                    sink.fail(status).map_err(on_error)
-                }
-                Err(canceled) => {
-                    let status =
-                        RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", canceled)));
-                    sink.fail(status).map_err(on_error)
-                }
-                _ => {
-                    unreachable!();
-                }
-            });
-            ctx.spawn(future);
-        } else {
-            let status = RpcStatus::new(RpcStatusCode::Unavailable, None);
-            ctx.spawn(sink.fail(status).map_err(on_error));
-        }
+        self.handle_response(ctx, sink, req, future, map, LABEL);
     }
 
     fn mvcc(&self, _: RpcContext, _: MvccRequest, _: UnarySink<MvccResponse>) {
