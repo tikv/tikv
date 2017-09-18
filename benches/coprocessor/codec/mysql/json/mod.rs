@@ -41,7 +41,7 @@ fn download_and_extract_file(url: &str) -> io::Result<String> {
         loop {
             let nbytes = try!(dl_output.read(&mut buf));
             if nbytes > 0 {
-                try!(tar_input.write(&buf[0..nbytes]));
+                try!(tar_input.write_all(&buf[0..nbytes]));
                 continue;
             }
             return Ok(());
