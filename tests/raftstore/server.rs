@@ -129,7 +129,7 @@ impl Simulator for ServerCluster {
             snap_status_sender,
             resolver,
             snap_mgr.clone(),
-            None,
+            Some(engines.clone()),
         ).unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
