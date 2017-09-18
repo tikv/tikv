@@ -46,7 +46,7 @@ pub struct DistSQLCache {
 
 impl DistSQLCache {
     pub fn new(capacity: usize) -> DistSQLCache {
-        DistSQLCache{
+        DistSQLCache {
             regions: HashMap::new(),
             map: LinkedHashMap::new(),
             max_size: capacity,
@@ -60,7 +60,7 @@ impl DistSQLCache {
                 entry.region_id = region_id;
                 entry.region_epoch = epoch;
                 None
-            },
+            }
             None => {
                 let entry = box DistSQLCacheEntry::new(region_id, epoch, res);
                 Some(entry)
