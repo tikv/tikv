@@ -858,7 +858,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
         for level in 0..opts.get_num_levels() {
             if let Some(v) = rocksdb::get_engine_compression_ratio_at_level(engine, handle, level) {
                 let level_str = level.to_string();
-                STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
+                STORE_ENGINE_COMPRESSION_RATIO_VEC
                     .with_label_values(&[name, cf, &level_str])
                     .set(v);
             }
@@ -1189,4 +1189,29 @@ lazy_static!{
             "Compression ratio at different levels",
             &["db", "cf", "level"]
         ).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempdir::TempDir;
+
+    use storage::ALL_CFS;
+    use util::rocksdb;
+
+    #[test]
+    fn test_flush() {
+        let dir = TempDir::new("test-flush").unwrap();
+        let db = rocksdb::new_engine(dir.path().to_str().unwrap(), ALL_CFS).unwrap();
+        for tp in ENGINE_TICKER_TYPES {
+            flush_engine_ticker_metrics(*tp, 2, "test-name");
+        }
+
+        for tp in ENGINE_HIST_TYPES {
+            flush_engine_histogram_metrics(*tp, HistogramData::default(), "test-name");
+        }
+
+        flush_engine_properties(&db, "test-name");
+    }
 }
