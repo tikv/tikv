@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME(shirly): remove following later
-#![allow(dead_code)]
-
 use std::{str, i64, u64};
 use std::ascii::AsciiExt;
 use std::borrow::Cow;
@@ -1107,7 +1104,6 @@ mod test {
         ctx.ignore_truncate = true;
         let t_str = "2012-12-12 12:00:23";
         let t = Time::parse_utc_datetime(t_str, 0).unwrap();
-        let int_t = 20121212120023u64;
         let dur_str = b"12:00:23";
         let duration_t = Duration::parse(dur_str, 0).unwrap();
         let s = "您好world";
@@ -1271,7 +1267,6 @@ mod test {
         let mut ctx = StatementContext::default();
         ctx.ignore_truncate = true;
         let today = Utc::now();
-        let t_dur_str = format!("{}", today.format("%H:%M:%S"));
         let t_date_str = format!("{}", today.format("%Y-%m-%d"));
         let t_time_str = format!("{}", today.format("%Y-%m-%d %H:%M:%S"));
         let t_time = Time::parse_utc_datetime(t_time_str.as_ref(), 0).unwrap();

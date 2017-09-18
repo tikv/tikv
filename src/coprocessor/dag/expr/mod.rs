@@ -10,8 +10,6 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-// FIXME(shirly): remove following later
-#![allow(dead_code, unused_variables)]
 
 mod column;
 mod constant;
@@ -275,13 +273,6 @@ impl Expression {
         // TODO:For a constant, the field type will be inferred as `VARCHAR`
         // when the kind of it is `HEX` or `BIT`.
         false
-    }
-}
-
-fn filter<T: Into<Datum>>(x: Result<T>) -> Option<Result<Datum>> {
-    match x {
-        Err(Error::UnknownSignature(_)) => None,
-        e => Some(e.map(|x| x.into())),
     }
 }
 
