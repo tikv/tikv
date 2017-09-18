@@ -955,16 +955,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|mut v| {
                 let mut resp = SplitRegionResponse::new();
-                if v.has_header() {
-                    let mut header = v.mut_header();
-                    if header.has_error() {
-                        resp.set_region_error(header.take_error());
-                    }
+                if v.has_header() && v.get_header().has_error() {
+                    resp.set_region_error(v.mut_header().take_error());
+                } else {
+                    let admin_resp = v.mut_admin_response();
+                    let split_resp = admin_resp.mut_split();
+                    resp.set_left(split_resp.take_left());
+                    resp.set_right(split_resp.take_right());
                 }
-                let admin_resp = v.mut_admin_response();
-                let split_resp = admin_resp.mut_split();
-                resp.set_left(split_resp.take_left());
-                resp.set_right(split_resp.take_right());
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))

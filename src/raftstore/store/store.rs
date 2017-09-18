@@ -34,16 +34,16 @@ use kvproto::pdpb::StoreStats;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
 use pd::PdClient;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest,
-                          RaftCmdResponse, SplitResponse, StatusCmdType, StatusResponse};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
+                          StatusCmdType, StatusResponse};
 use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Error, Result};
 use kvproto::metapb;
-use util::worker::{FutureWorker, Scheduler, Worker};
+use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
-use util::collections::{HashMap, HashMapEntry, HashSet};
+use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -127,8 +127,6 @@ pub struct Store<T, C: 'static> {
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
-    // region split key -> split callback
-    split_callbacks: HashMap<Key, Option<Callback>>,
     // the regions with pending snapshots between two mio ticks.
     pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
@@ -215,7 +213,6 @@ impl<T, C> Store<T, C> {
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
             region_ranges: BTreeMap::new(),
-            split_callbacks: HashMap::default(),
             pending_snapshot_regions: vec![],
             trans: trans,
             pd_client: pd_client,
@@ -1399,18 +1396,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 let _ = self.on_raft_message(msg);
             }
         }
-
-        if let Some(Some(cb)) = self.split_callbacks.remove(left.get_end_key()) {
-            let mut resp = RaftCmdResponse::new();
-            let mut admin_resp = AdminResponse::new();
-            admin_resp.set_cmd_type(AdminCmdType::Split);
-            let mut split_resp = SplitResponse::new();
-            split_resp.set_left(left);
-            split_resp.set_right(right);
-            admin_resp.set_split(split_resp);
-            resp.set_admin_response(admin_resp);
-            cb(resp)
-        }
     }
 
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
@@ -1911,42 +1896,30 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        match self.split_callbacks.entry(split_key.clone()) {
-            HashMapEntry::Occupied(_) => {
-                error!(
-                    "[region {}] is already splitting at {:?}",
-                    region_id,
-                    split_key
-                );
-                cb.map(|cb| {
-                    cb(new_error(box_err!("already splitting at {:?}", split_key)));
-                });
-                return;
-            }
-            HashMapEntry::Vacant(entry) => {
-                let task = PdTask::AskSplit {
-                    region: region.clone(),
-                    split_key: split_key.clone(),
-                    peer: peer.peer.clone(),
-                    right_derive: self.cfg.right_derive_when_split,
-                };
+        let task = PdTask::AskSplit {
+            region: region.clone(),
+            split_key: split_key.clone(),
+            peer: peer.peer.clone(),
+            right_derive: self.cfg.right_derive_when_split,
+            callback: if let Some(cb) = cb {
+                cb
+            } else {
+                Box::new(|_| {})
+            },
+        };
 
-                if let Err(e) = self.pd_worker.schedule(task) {
-                    error!(
-                        "[region {}] {} failed to notify pd to split at {:?}: {}",
-                        region_id,
-                        peer.tag,
-                        split_key,
-                        e
-                    );
-                    cb.map(|cb| {
-                        cb(new_error(
-                            box_err!("failed to split at {:?}: {}", split_key, e),
-                        ))
-                    });
-                } else {
-                    entry.insert(cb);
-                }
+        if let Err(Stopped(t)) = self.pd_worker.schedule(task) {
+            error!(
+                "[region {}] {} failed to notify pd to split at {:?}: Stopped",
+                region_id,
+                peer.tag,
+                split_key,
+            );
+            match t {
+                PdTask::AskSplit { callback, .. } => callback(new_error(
+                    box_err!("failed to split at {:?}: Stopped", split_key),
+                )),
+                _ => unreachable!(),
             }
         }
     }
@@ -2493,7 +2466,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 split_key,
                 callback,
             } => {
-                info!("[region {}] on split region at key {}.", region_id, split_key);
+                info!(
+                    "[region {}] on split region at key {:?}.",
+                    region_id,
+                    split_key
+                );
                 self.on_prepare_split_region(region_id, region_epoch, split_key, Some(callback));
             }
         }

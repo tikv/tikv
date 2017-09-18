@@ -473,11 +473,12 @@ fn test_coprocessor() {
 
 #[test]
 fn test_split_region() {
-    let (_cluster, client, _) = must_new_cluster_and_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_client();
 
     // Split region commands
     let key = b"b";
     let mut req = SplitRegionRequest::new();
+    req.set_context(ctx);
     req.set_split_key(key.to_vec());
     let resp = client.split_region(req).unwrap();
     assert_eq!(
