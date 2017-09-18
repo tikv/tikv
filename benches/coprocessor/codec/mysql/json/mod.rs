@@ -52,7 +52,7 @@ fn download_and_extract_file(url: &str) -> io::Result<String> {
     let output = try!(tar_child.wait_with_output());
     try!(th.join().unwrap());
     assert_eq!(output.status.code(), Some(0));
-    return Ok(String::from_utf8(output.stdout).unwrap());
+    Ok(String::from_utf8(output.stdout).unwrap())
 }
 
 pub fn load_test_jsons() -> Vec<String> {
@@ -62,7 +62,7 @@ pub fn load_test_jsons() -> Vec<String> {
         .split('\n')
         .filter(|s| !s.is_empty())
         .map(|s| s.to_owned())
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
 }
 
 #[bench]
