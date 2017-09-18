@@ -706,7 +706,6 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 }
 
 #[cfg(test)]
-#[allow(unused_variables)]
 mod tests {
     use super::*;
     use util::worker::Worker;
