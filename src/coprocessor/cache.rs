@@ -161,11 +161,11 @@ impl DistSQLCache {
     }
 
     fn update_regions(&mut self, region_id: u64, k: DistSQLCacheKey) {
-        let opt = match self.regions.get_mut(&region_id){
+        let opt = match self.regions.get_mut(&region_id) {
             Some(entry) => {
                 entry.insert(k, 1);
                 None
-            },
+            }
             None => {
                 let mut rmap = HashMap::new();
                 rmap.insert(k, 1);
@@ -185,15 +185,15 @@ impl DistSQLCache {
 
 fn validate_epoch(entry: &DistSQLCacheEntry, region_id: u64, epoch: &RegionEpoch) -> bool {
     if entry.region_id != region_id {
-            return false;
-        }
-        if entry.region_epoch.get_conf_ver() != epoch.get_conf_ver() {
-            return false;
-        }
-        if entry.region_epoch.get_version() != epoch.get_version() {
-            return false;
-        }
-        return true;
+        return false;
+    }
+    if entry.region_epoch.get_conf_ver() != epoch.get_conf_ver() {
+        return false;
+    }
+    if entry.region_epoch.get_version() != epoch.get_version() {
+        return false;
+    }
+    return true;
 }
 
 pub const DISTSQL_CACHE_SIZE: usize = 1000;
