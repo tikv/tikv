@@ -130,6 +130,7 @@ impl DistSQLCache {
     }
 
     pub fn evict_region(&mut self, region_id: u64) {
+        debug!("Evict Region: {}", region_id);
         let keys = match self.regions.get(&region_id) {
             None => (None),
             Some(region) => {
@@ -198,7 +199,8 @@ fn validate_epoch(entry: &DistSQLCacheEntry, region_id: u64, epoch: &RegionEpoch
 pub const DISTSQL_CACHE_SIZE: usize = 1000;
 
 lazy_static! {
-    pub static ref DISTSQL_CACHE: Arc<Mutex<DistSQLCache>> = Arc::new(Mutex::new(DistSQLCache::new(DISTSQL_CACHE_SIZE)));
+    pub static ref DISTSQL_CACHE: Arc<Mutex<DistSQLCache>> =
+        Arc::new(Mutex::new(DistSQLCache::new(DISTSQL_CACHE_SIZE)));
 }
 
 #[cfg(test)]
