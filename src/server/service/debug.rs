@@ -18,7 +18,7 @@ use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
 
 use raftstore::store::Engines;
-use raftstore::store::debug::{Error, Debug};
+use raftstore::store::debug::{Debug, Error};
 
 #[derive(Clone)]
 pub struct Service {
