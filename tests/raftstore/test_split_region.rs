@@ -13,6 +13,7 @@
 
 use std::time::Duration;
 use std::{fs, thread};
+use std::sync::mpsc::channel;
 use rand::{self, Rng};
 
 use kvproto::metapb;
@@ -175,6 +176,7 @@ fn test_server_manual_split_region_twice() {
     let region2 = pd_client.get_region(right_key).unwrap();
     assert_eq!(region.get_id(), region2.get_id());
 
+    let (tx, rx) = channel();
     let key = split_key.to_vec();
     let c = Box::new(move |mut resp: RaftCmdResponse| {
         let admin_resp = resp.mut_admin_response();
@@ -185,14 +187,18 @@ fn test_server_manual_split_region_twice() {
         assert_eq!(region2.get_start_key(), left.get_start_key());
         assert_eq!(left.get_end_key(), right.get_start_key());
         assert_eq!(region2.get_end_key(), right.get_end_key());
+        tx.send(right).unwrap();
     });
     cluster.split_region_by_key(&region, split_key, Some(c));
+
+    let region3 = rx.recv().unwrap();
+    cluster.must_put(split_key, b"v2");
     let c = Box::new(move |resp: RaftCmdResponse| {
         assert!(resp.has_header());
         assert!(resp.get_header().has_error());
         assert!(!resp.has_admin_response());
     });
-    cluster.split_region_by_key(&region, split_key, Some(c));
+    cluster.split_region_by_key(&region3, split_key, Some(c));
 }
 
 /// Keep puting random kvs until specified size limit is reached.
