@@ -42,7 +42,7 @@ use grpc::{ChannelBuilder, Environment};
 
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
-use tikv::raftstore::store::keys;
+use tikv::raftstore::store::{debug, keys};
 use tikv::raftstore::store::engine::{IterOption, Iterable, Peekable};
 use tikv::storage::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::storage::mvcc::{Lock, Write};
@@ -93,11 +93,9 @@ impl DebugExecutor {
                 let resp = client.get(req).unwrap();
                 escape(resp.get_value())
             }
-            DebugExecutor::Local(ref db, _) => {
-                let key = unescape(key);
-                // TODO: call same function with server side.
-                db.get_value_cf(cf, &key).unwrap()
-            }
+            DebugExecutor::Local(ref db, _) => debug::get_value(db, cf, &unescape(key))
+                .unwrap()
+                .map_or("None".to_owned(), |v| escape(&v)),
         };
         println!("value: {}", value);
     }
@@ -120,7 +118,7 @@ impl DebugExecutor {
         }
     }
 
-    fn size(&self, cf: &str, region: Option<u64>) {
+    fn size(&self, cf: Option<&str>, region: Option<u64>) {
         match *self {
             DebugExecutor::Remote(_) => unimplemented!(),
             DebugExecutor::Local(ref db, _) => if let Some(region) = region {
@@ -134,7 +132,7 @@ impl DebugExecutor {
     fn scan(
         &self,
         from: String,
-        to: String,
+        to: Option<String>,
         limit: Option<u64>,
         cf: &str,
         start_ts: Option<u64>,
@@ -143,7 +141,30 @@ impl DebugExecutor {
         match *self {
             DebugExecutor::Remote(_) => unimplemented!(),
             DebugExecutor::Local(ref db, _) => {
-                dump_range(db, from, to, limit, cf_name, start_ts, commit_ts);
+                dump_range(db, from, to, limit, cf, start_ts, commit_ts);
+            }
+        }
+    }
+
+    fn mvcc_default(&self, key: &str, encoded: bool, start_ts: Option<u64>) {
+        match *self {
+            DebugExecutor::Remote(_) => unimplemented!(),
+            DebugExecutor::Local(ref db, _) => dump_mvcc_default(db, key, encoded, start_ts),
+        }
+    }
+
+    fn mvcc_lock(&self, key: &str, encoded: bool, start_ts: Option<u64>) {
+        match *self {
+            DebugExecutor::Remote(_) => unimplemented!(),
+            DebugExecutor::Local(ref db, _) => dump_mvcc_lock(db, key, encoded, start_ts),
+        }
+    }
+
+    fn mvcc_write(&self, key: &str, encoded: bool, start_ts: Option<u64>, commit_ts: Option<u64>) {
+        match *self {
+            DebugExecutor::Remote(_) => unimplemented!(),
+            DebugExecutor::Local(ref db, _) => {
+                dump_mvcc_write(db, key, encoded, start_ts, commit_ts)
             }
         }
     }
@@ -306,6 +327,7 @@ fn main() {
                     Arg::with_name("cf")
                         .short("c")
                         .takes_value(true)
+                        .default_value(CF_DEFAULT)
                         .help("column family name, only can be default/lock/write"),
                 )
                 .arg(
@@ -411,8 +433,7 @@ fn main() {
         }
         debug_executor.scan(from, to, limit, cf_name, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
-        /*
-        let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
+        let cf_name = matches.value_of("cf").unwrap();
         let key = matches.value_of("key").unwrap();
         let key_encoded = matches.is_present("encoded");
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
@@ -420,32 +441,35 @@ fn main() {
         println!("You are searching Key {}: ", key);
         match cf_name {
             CF_DEFAULT => {
-                dump_mvcc_default(&db, key, key_encoded, start_ts);
+                debug_executor.mvcc_default(key, key_encoded, start_ts);
             }
             CF_LOCK => {
-                dump_mvcc_lock(&db, key, key_encoded, start_ts);
+                debug_executor.mvcc_lock(key, key_encoded, start_ts);
             }
             CF_WRITE => {
-                dump_mvcc_write(&db, key, key_encoded, start_ts, commit_ts);
+                debug_executor.mvcc_write(key, key_encoded, start_ts, commit_ts);
             }
             "all" => {
-                dump_mvcc_default(&db, key, key_encoded, start_ts);
-                dump_mvcc_lock(&db, key, key_encoded, start_ts);
-                dump_mvcc_write(&db, key, key_encoded, start_ts, commit_ts);
+                debug_executor.mvcc_default(key, key_encoded, start_ts);
+                debug_executor.mvcc_lock(key, key_encoded, start_ts);
+                debug_executor.mvcc_write(key, key_encoded, start_ts, commit_ts);
             }
             _ => {
                 println!("The cf: {} cannot be dumped", cf_name);
                 let _ = app.print_help();
             }
         }
-        */
     } else if let Some(matches) = matches.subcommand_matches("diff") {
-        /*
         let region_id: u64 = matches.value_of("region").unwrap().parse().unwrap();
         let db_path2 = matches.value_of("to").unwrap();
-        let db2 = util::rocksdb::open(db_path2, ALL_CFS).unwrap();
-        dump_diff(&db, &db2, region_id);
-        */
+        if let DebugExecutor::Local(ref db, _) = debug_executor {
+            let db2 = util::rocksdb::open(db_path2, ALL_CFS).unwrap();
+            dump_diff(&db, &db2, region_id);
+        } else {
+            // TODO: If the debug executor is for remote, we need to fetch
+            // the region from two TiKV and then diff them.
+            unimplemented!();
+        }
     } else {
         let _ = app.print_help();
     }
@@ -489,6 +513,16 @@ fn from_hex(key: &str) -> Vec<u8> {
         s.truncate(new_len);
     }
     s.as_str().from_hex().unwrap()
+}
+
+fn str_to_cf(cf: &str) -> CF {
+    match cf {
+        CF_DEFAULT => CF::DEFAULT,
+        CF_WRITE => CF::WRITE,
+        CF_LOCK => CF::LOCK,
+        CF_RAFT => CF::RAFT,
+        _ => panic!("invalid cf"),
+    }
 }
 
 pub fn gen_mvcc_iter<T: MvccDeserializable>(
@@ -575,13 +609,7 @@ fn dump_mvcc_write(
     }
 }
 
-fn dump_raw_value(db: DB, cf: &str, key: String) {
-    let key = unescape(&key);
-    let value = db.get_value_cf(cf, &key).unwrap();
-    println!("value: {}", value.map_or("None".to_owned(), |v| escape(&v)));
-}
-
-fn dump_raft_log_entry(raft_db: DB, idx_key: &[u8]) {
+fn dump_raft_log_entry(raft_db: &DB, idx_key: &[u8]) {
     let (region_id, idx) = keys::decode_raft_log_key(idx_key).unwrap();
     println!("idx_key: {}", escape(idx_key));
     println!("region: {}", region_id);
@@ -806,7 +834,7 @@ fn parse_ts_key_from_key(encode_key: Vec<u8>) -> (u64, Vec<u8>) {
 }
 
 fn dump_range(
-    db: DB,
+    db: &DB,
     from: String,
     to: Option<String>,
     limit: Option<u64>,
