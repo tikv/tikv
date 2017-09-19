@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use grpc::{ChannelBuilder, Environment};
+use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 use tikv::util::HandyRwLock;
 
 use kvproto::tikvpb_grpc::TikvClient;
@@ -507,4 +507,14 @@ fn test_debug_get() {
     req.set_cf(debugpb::CF::DEFAULT);
     let mut resp = debug_client.get(req).unwrap();
     assert_eq!(resp.take_value(), v);
+
+    let mut req = debugpb::GetRequest::new();
+    req.set_key_encoded(b"foo".to_vec());
+    req.set_cf(debugpb::CF::DEFAULT);
+    match debug_client.get(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
 }
