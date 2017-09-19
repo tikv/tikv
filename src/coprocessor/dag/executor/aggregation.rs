@@ -53,7 +53,7 @@ impl AggrFuncExpr {
         Ok(AggrFuncExpr { args: args, tp: tp })
     }
 
-    fn eval(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
+    fn eval_args(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
         let res: Vec<Datum> = box_try!(self.args.iter().map(|v| v.eval(ctx, row)).collect());
         Ok(res)
     }
@@ -66,7 +66,7 @@ impl AggrFunc {
         row: &[Datum],
     ) -> Result<Box<AggrFunc>> {
         let mut aggr = try!(aggregate::build_aggr_func(expr.tp));
-        let vals = try!(expr.eval(ctx, row));
+        let vals = try!(expr.eval_args(ctx, row));
         try!(aggr.update(ctx, vals));
         Ok(aggr)
     }
@@ -77,7 +77,7 @@ impl AggrFunc {
         expr: &AggrFuncExpr,
         row: &[Datum],
     ) -> Result<()> {
-        let vals = try!(expr.eval(ctx, row));
+        let vals = try!(expr.eval_args(ctx, row));
         try!(self.update(ctx, vals));
         Ok(())
     }
