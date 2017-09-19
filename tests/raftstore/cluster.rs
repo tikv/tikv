@@ -737,7 +737,12 @@ impl<T: Simulator> Cluster<T> {
     // It's similar to `ask_split`, the difference is the msg, it sends, is `Msg::SplitRegion`,
     // and `region` will not be embedded to that msg.
     // Caller must ensure that the `split_key` is in the `region`.
-    fn split_region_by_key(&mut self, region: &metapb::Region, split_key: &[u8], cb: Option<Callback>) {
+    pub fn split_region_by_key(
+        &mut self,
+        region: &metapb::Region,
+        split_key: &[u8],
+        cb: Option<Callback>,
+    ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let ch = self.sim
             .rl()
@@ -752,7 +757,12 @@ impl<T: Simulator> Cluster<T> {
         }).unwrap();
     }
 
-    fn split_region_by_split_check(&mut self, region: &metapb::Region, split_key: &[u8], _: Option<Callback>) {
+    fn split_region_by_split_check(
+        &mut self,
+        region: &metapb::Region,
+        split_key: &[u8],
+        _: Option<Callback>,
+    ) {
         // Now we can't control split easily in pd, so here we use store send channel
         // directly to send the AskSplit request.
         let leader = self.leader_of_region(region.get_id()).unwrap();
