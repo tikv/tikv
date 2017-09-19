@@ -1858,7 +1858,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(peer) => {
                 if !peer.is_leader() {
                     // region on this store is no longer leader, skipped.
-                    error!(
+                    info!(
                         "[region {}] region on {} is not leader, skip.",
                         region_id,
                         self.store_id()
@@ -1877,7 +1877,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region = peer.region();
 
         if region.get_region_epoch().get_version() != epoch.get_version() {
-            error!(
+            info!(
                 "[region {}] {} epoch changed {:?} != {:?}, need re-check later",
                 region_id,
                 peer.tag,
