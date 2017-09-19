@@ -73,16 +73,6 @@ impl Debug {
     }
 }
 
-pub fn str_to_cf(cf: &str) -> Result<CF> {
-    match cf {
-        CF_DEFAULT => Ok(CF::DEFAULT),
-        CF_WRITE => Ok(CF::WRITE),
-        CF_LOCK => Ok(CF::LOCK),
-        CF_RAFT => Ok(CF::RAFT),
-        _ => Err(Error::InvalidArgument("invalid cf".to_owned())),
-    }
-}
-
 pub fn cf_to_str(cf: CF) -> Result<&'static str> {
     match cf {
         CF::DEFAULT => Ok(CF_DEFAULT),

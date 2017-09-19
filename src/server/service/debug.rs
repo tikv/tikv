@@ -18,7 +18,7 @@ use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
 
 use raftstore::store::Engines;
-use raftstore::store::debug::*;
+use raftstore::store::debug::{Error, Debug};
 
 #[derive(Clone)]
 pub struct Service {
@@ -36,24 +36,16 @@ impl Service {
         Service { pool, debugger }
     }
 
-    fn handle_response<F, P, M, Q>(
-        &self,
-        ctx: RpcContext,
-        sink: UnarySink<Q>,
-        resp: F,
-        map: M,
-        tag: &'static str,
-    ) where
+    fn handle_response<F, P>(&self, ctx: RpcContext, sink: UnarySink<P>, resp: F, tag: &'static str)
+    where
         P: Send + 'static,
-        Q: 'static,
-        M: FnOnce(P) -> Q + Send + 'static,
         F: Future<Item = P, Error = Error> + Send + 'static,
     {
         let on_error = move |e| {
             error!("{} failed: {:?}", tag, e);
         };
-        let f = self.pool.spawn(resp).then(|v| match v {
-            Ok(resp) => sink.success(map(resp)).map_err(on_error),
+        let f = resp.then(|v| match v {
+            Ok(resp) => sink.success(resp).map_err(on_error),
             Err(Error::NotFound(msg)) => {
                 let status = RpcStatus::new(RpcStatusCode::NotFound, Some(msg));
                 sink.fail(status).map_err(on_error)
@@ -77,15 +69,19 @@ impl debugpb_grpc::Debug for Service {
 
         let cf = req.get_cf();
         let key_encoded = req.take_key_encoded();
-        let f = future::ok(self.debugger.clone())
-            .and_then(move |debugger| debugger.get(cf, key_encoded.as_slice()));
 
-        let map = |value| {
-            let mut resp = GetResponse::new();
-            resp.set_value(value);
-            resp
-        };
-        self.handle_response(ctx, sink, f, map, TAG);
+        let f = self.pool
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.get(cf, key_encoded.as_slice())),
+            )
+            .map(|value| {
+                let mut resp = GetResponse::new();
+                resp.set_value(value);
+                resp
+            });
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 
     fn mvcc(&self, _: RpcContext, _: MvccRequest, _: UnarySink<MvccResponse>) {
