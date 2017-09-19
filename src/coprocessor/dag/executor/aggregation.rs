@@ -46,8 +46,8 @@ impl AggrFuncExpr {
 
     fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggrFuncExpr> {
         let args = box_try!(Expression::batch_build(
-            expr.take_children().into_vec(),
-            ctx
+            ctx,
+            expr.take_children().into_vec()
         ));
         let tp = expr.get_tp();
         Ok(AggrFuncExpr { args: args, tp: tp })
@@ -60,17 +60,6 @@ impl AggrFuncExpr {
 }
 
 impl AggrFunc {
-    fn build_with_expr(
-        ctx: &EvalContext,
-        expr: &AggrFuncExpr,
-        row: &[Datum],
-    ) -> Result<Box<AggrFunc>> {
-        let mut aggr = try!(aggregate::build_aggr_func(expr.tp));
-        let vals = try!(expr.eval_args(ctx, row));
-        try!(aggr.update(ctx, vals));
-        Ok(aggr)
-    }
-
     fn update_with_expr(
         &mut self,
         ctx: &EvalContext,
@@ -113,7 +102,7 @@ impl<'a> AggregationExecutor<'a> {
             .with_label_values(&["aggregation"])
             .inc();
         Ok(AggregationExecutor {
-            group_by: box_try!(Expression::batch_build(group_by, ctx.as_ref())),
+            group_by: box_try!(Expression::batch_build(ctx.as_ref(), group_by)),
             aggr_func: try!(AggrFuncExpr::batch_build(ctx.as_ref(), aggr_func)),
             group_keys: vec![],
             group_key_aggrs: map![],
@@ -154,7 +143,8 @@ impl<'a> AggregationExecutor<'a> {
                 Entry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
                     for expr in &self.aggr_func {
-                        let aggr = try!(AggrFunc::build_with_expr(&self.ctx, expr, &cols));
+                        let mut aggr = try!(aggregate::build_aggr_func(expr.tp));
+                        try!(aggr.update_with_expr(&self.ctx, expr, &cols));
                         aggrs.push(aggr);
                     }
                     self.group_keys.push(group_key);

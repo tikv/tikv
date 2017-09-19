@@ -285,16 +285,16 @@ impl Expression {
         }
     }
 
-    pub fn batch_build(exprs: Vec<Expr>, ctx: &StatementContext) -> Result<Vec<Self>> {
+    pub fn batch_build(ctx: &StatementContext, exprs: Vec<Expr>) -> Result<Vec<Self>> {
         let mut data = Vec::with_capacity(exprs.len());
         for expr in exprs {
-            let ex = try!(Expression::build(expr, ctx));
+            let ex = try!(Expression::build(ctx, expr));
             data.push(ex);
         }
         Ok(data)
     }
 
-    pub fn build(mut expr: Expr, ctx: &StatementContext) -> Result<Self> {
+    pub fn build(ctx: &StatementContext, mut expr: Expr) -> Result<Self> {
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -348,7 +348,7 @@ impl Expression {
                 ));
                 expr.take_children()
                     .into_iter()
-                    .map(|child| Expression::build(child, ctx))
+                    .map(|child| Expression::build(ctx, child))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
@@ -452,7 +452,7 @@ mod test {
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
             ex.mut_field_type()
                 .set_flen(convert::UNSPECIFIED_LENGTH as i32);
-            let e = Expression::build(ex, &ctx).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval(&ctx, &cols).unwrap();
             if let Datum::F64(_) = exp {
                 assert_eq!(format!("{}", res), format!("{}", exp));
@@ -476,7 +476,7 @@ mod test {
             if flag.is_some() {
                 ex.mut_field_type().set_flag(flag.unwrap() as u32);
             }
-            let e = Expression::build(ex, &ctx).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval(&ctx, &cols).unwrap();
             assert_eq!(res, exp);
         }

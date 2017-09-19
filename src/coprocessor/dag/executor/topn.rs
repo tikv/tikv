@@ -38,7 +38,7 @@ impl OrderBy {
         let exprs: Vec<Expression> = box_try!(
             order_by
                 .iter_mut()
-                .map(|v| Expression::build(v.take_expr(), ctx))
+                .map(|v| Expression::build(ctx, v.take_expr()))
                 .collect()
         );
         Ok(OrderBy {

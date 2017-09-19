@@ -43,7 +43,7 @@ impl<'a> SelectionExecutor<'a> {
         try!(visitor.batch_visit(&conditions));
         COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
         Ok(SelectionExecutor {
-            conditions: box_try!(Expression::batch_build(conditions, ctx.as_ref())),
+            conditions: box_try!(Expression::batch_build(ctx.as_ref(), conditions)),
             cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
             ctx: ctx,
