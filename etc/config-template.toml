@@ -108,7 +108,7 @@
 # A threshold to gc stale raft log, must >= 1.
 # raft-log-gc-threshold = 50
 # When entry count exceed this value, gc will be forced trigger.
-# raft-log-gc-count-limit = 48000
+# raft-log-gc-count-limit = 72000
 # When the approximate size of raft log entries exceed this value, gc will be forced trigger.
 # It's recommanded to set it to 3/4 of region-split-size.
 # raft-log-gc-size-limit = "72MB"
