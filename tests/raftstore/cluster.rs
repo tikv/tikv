@@ -737,7 +737,7 @@ impl<T: Simulator> Cluster<T> {
     // It's similar to `ask_split`, the difference is the msg, it sends, is `Msg::SplitRegion`,
     // and `region` will not be embedded to that msg.
     // Caller must ensure that the `split_key` is in the `region`.
-    fn split_region_by_key(&mut self, region: &metapb::Region, split_key: &[u8]) {
+    fn split_region_by_key(&mut self, region: &metapb::Region, split_key: &[u8], cb: Option<Callback>) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let ch = self.sim
             .rl()
@@ -748,18 +748,11 @@ impl<T: Simulator> Cluster<T> {
             region_id: region.get_id(),
             region_epoch: region.get_region_epoch().clone(),
             split_key: split_key.clone(),
-            callback: Box::new(move |mut resp: RaftCmdResponse| {
-                let admin_resp = resp.mut_admin_response();
-                let split_resp = admin_resp.mut_split();
-                let mut left = split_resp.take_left();
-                let mut right = split_resp.take_right();
-                assert_eq!(left.get_end_key(), split_key.as_slice());
-                assert_eq!(left.take_end_key(), right.take_start_key());
-            }),
+            callback: cb.unwrap(),
         }).unwrap();
     }
 
-    fn split_region_by_split_check(&mut self, region: &metapb::Region, split_key: &[u8]) {
+    fn split_region_by_split_check(&mut self, region: &metapb::Region, split_key: &[u8], _: Option<Callback>) {
         // Now we can't control split easily in pd, so here we use store send channel
         // directly to send the AskSplit request.
         let leader = self.leader_of_region(region.get_id()).unwrap();
@@ -784,7 +777,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn must_split_by<F>(&mut self, split: F, region: &metapb::Region, split_key: &[u8])
     where
-        F: Fn(&mut Self, &metapb::Region, &[u8]),
+        F: Fn(&mut Self, &metapb::Region, &[u8], Option<Callback>),
     {
         let mut try_cnt = 0;
         let split_count = self.pd_client.get_split_count();
@@ -792,7 +785,16 @@ impl<T: Simulator> Cluster<T> {
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
                 self.reset_leader_of_region(region.get_id());
-                split(self, region, split_key);
+                let key = split_key.to_vec();
+                let check = Box::new(move |mut resp: RaftCmdResponse| {
+                    let admin_resp = resp.mut_admin_response();
+                    let split_resp = admin_resp.mut_split();
+                    let mut left = split_resp.take_left();
+                    let mut right = split_resp.take_right();
+                    assert_eq!(left.get_end_key(), key.as_slice());
+                    assert_eq!(left.take_end_key(), right.take_start_key());
+                });
+                split(self, region, split_key, Some(check));
             }
 
             if self.pd_client.check_split(region, split_key) &&

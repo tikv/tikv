@@ -158,6 +158,13 @@ fn test_server_manual_split_region_left_derive() {
     test_base_split_region(&mut cluster, Cluster::must_manual_split, true);
 }
 
+#[test]
+fn test_server_manual_split_region_twice() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_base_split_region(&mut cluster, Cluster::must_manual_split, false);
+}
+
 /// Keep puting random kvs until specified size limit is reached.
 fn put_till_size<T: Simulator>(
     cluster: &mut Cluster<T>,
