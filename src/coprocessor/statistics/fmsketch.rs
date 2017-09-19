@@ -20,7 +20,7 @@ use murmur3::murmur3_x64_128;
 use tipb::analyze;
 
 /// `FMSketch` is used to count the approximate number
-/// of distinct elements in a `[Datum]`.
+/// of distinct elements in multiset.
 pub struct FMSketch {
     mask: u64,
     max_size: usize,
@@ -38,7 +38,7 @@ impl FMSketch {
 
     // ndv returns the approximate number of distinct elements
     pub fn ndv(&self) -> u64 {
-        (self.mask + 1) as u64 * (self.hash_set.len() as u64)
+        (self.mask + 1) * (self.hash_set.len() as u64)
     }
 
     pub fn insert(&mut self, mut bytes: &[u8]) {
