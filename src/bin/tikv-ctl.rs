@@ -24,15 +24,22 @@ extern crate rocksdb;
 #[cfg(test)]
 extern crate tempdir;
 extern crate rustc_serialize;
+extern crate grpcio as grpc;
 
-use std::{str, u64};
-use clap::{App, Arg, SubCommand};
+use std::{process, str, u64};
+use std::sync::Arc;
+
+use clap::{App, Arg, ArgMatches, SubCommand};
 use rustc_serialize::hex::{FromHex, ToHex};
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState};
 use kvproto::eraftpb::Entry;
+use kvproto::debugpb_grpc::DebugClient;
+use kvproto::debugpb::*;
 use rocksdb::{ReadOptions, SeekKey, DB};
+use grpc::{ChannelBuilder, Environment};
+
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
@@ -40,6 +47,107 @@ use tikv::raftstore::store::engine::{IterOption, Iterable, Peekable};
 use tikv::storage::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::storage::mvcc::{Lock, Write};
 use tikv::storage::types::Key;
+
+enum DebugExecutor {
+    Remote(DebugClient),
+    Local(DB, DB),
+}
+
+impl DebugExecutor {
+    fn from_args(matches: &ArgMatches) -> Self {
+        let (remote, local) = (matches.value_of("host"), matches.value_of("db"));
+        match (remote, local) {
+            (Some(_), Some(_)) => {
+                eprintln!(r#""host" and "db" can not be passed together!"#);
+                process::exit(1);
+            }
+            (None, None) => {
+                eprintln!(r#"please pass "host" or "db""#);
+                process::exit(1);
+            }
+            (None, Some(path)) => {
+                let db = util::rocksdb::open(path, ALL_CFS).unwrap();
+                let raft_db = if let Some(raftdb_path) = matches.value_of("raftdb") {
+                    util::rocksdb::open(raftdb_path, &[CF_DEFAULT]).unwrap()
+                } else {
+                    let raftdb_path = path.to_string() + "../raft";
+                    util::rocksdb::open(&raftdb_path, &[CF_DEFAULT]).unwrap()
+                };
+                DebugExecutor::Local(db, raft_db)
+            }
+            (Some(remote), None) => {
+                let env = Arc::new(Environment::new(1));
+                let channel = ChannelBuilder::new(env).connect(remote);
+                let client = DebugClient::new(channel);
+                DebugExecutor::Remote(client)
+            }
+        }
+    }
+
+    fn print(&self, cf: &str, key: &str) {
+        let value = match *self {
+            DebugExecutor::Remote(ref client) => {
+                let mut req = GetRequest::new();
+                req.set_cf(str_to_cf(cf));
+                req.set_key_encoded(unescape(key));
+                let resp = client.get(req).unwrap();
+                escape(resp.get_value())
+            }
+            DebugExecutor::Local(ref db, _) => {
+                let key = unescape(key);
+                // TODO: call same function with server side.
+                db.get_value_cf(cf, &key).unwrap()
+            }
+        };
+        println!("value: {}", value);
+    }
+
+    fn raft_log(&self, idx_key: &[u8]) {
+        match *self {
+            DebugExecutor::Remote(_) => unimplemented!(),
+            DebugExecutor::Local(_, ref raft_db) => dump_raft_log_entry(raft_db, idx_key),
+        }
+    }
+
+    fn raft_region(&self, region: Option<u64>, skip_tombstone: bool) {
+        match *self {
+            DebugExecutor::Remote(_) => unimplemented!(),
+            DebugExecutor::Local(ref db, ref raft_db) => if let Some(region) = region {
+                dump_region_info(db, raft_db, region, skip_tombstone);
+            } else {
+                dump_all_region_info(db, raft_db, skip_tombstone);
+            },
+        }
+    }
+
+    fn size(&self, cf: &str, region: Option<u64>) {
+        match *self {
+            DebugExecutor::Remote(_) => unimplemented!(),
+            DebugExecutor::Local(ref db, _) => if let Some(region) = region {
+                dump_region_size(db, region, cf);
+            } else {
+                dump_all_region_size(db, cf);
+            },
+        }
+    }
+
+    fn scan(
+        &self,
+        from: String,
+        to: String,
+        limit: Option<u64>,
+        cf: &str,
+        start_ts: Option<u64>,
+        commit_ts: Option<u64>,
+    ) {
+        match *self {
+            DebugExecutor::Remote(_) => unimplemented!(),
+            DebugExecutor::Local(ref db, _) => {
+                dump_range(db, from, to, limit, cf_name, start_ts, commit_ts);
+            }
+        }
+    }
+}
 
 fn main() {
     let mut app = App::new("TiKV Ctl")
@@ -52,6 +160,12 @@ fn main() {
                 .short("d")
                 .takes_value(true)
                 .help("set rocksdb path"),
+        )
+        .arg(
+            Arg::with_name("host")
+                .short("H")
+                .takes_value(true)
+                .help("set TiKV url"),
         )
         .arg(
             Arg::with_name("raftdb")
@@ -175,6 +289,7 @@ fn main() {
                     Arg::with_name("cf")
                         .short("c")
                         .takes_value(true)
+                        .default_value(CF_DEFAULT)
                         .help("column family name"),
                 )
                 .arg(
@@ -249,19 +364,13 @@ fn main() {
             return;
         }
     };
-    let db_path = matches.value_of("db").unwrap();
-    let db = util::rocksdb::open(db_path, ALL_CFS).unwrap();
-    let raft_db = if let Some(raftdb_path) = matches.value_of("raftdb") {
-        util::rocksdb::open(raftdb_path, &[CF_DEFAULT]).unwrap()
-    } else {
-        let raftdb_path = db_path.to_owned() + "../raft";
-        util::rocksdb::open(&raftdb_path, &[CF_DEFAULT]).unwrap()
-    };
+
+    let debug_executor = DebugExecutor::from_args(&matches);
 
     if let Some(matches) = matches.subcommand_matches("print") {
-        let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
-        let key = String::from(matches.value_of("key").unwrap());
-        dump_raw_value(db, cf_name, key);
+        let cf_name = matches.value_of("cf").unwrap();
+        let key = matches.value_of("key").unwrap();
+        debug_executor.print(cf_name, key);
     } else if let Some(matches) = matches.subcommand_matches("raft") {
         if let Some(matches) = matches.subcommand_matches("log") {
             let key = match matches.value_of("key") {
@@ -272,28 +381,22 @@ fn main() {
                 }
                 Some(k) => unescape(k),
             };
-            dump_raft_log_entry(raft_db, &key);
+            debug_executor.raft_log(&key);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");
-            match matches.value_of("region") {
-                Some(id) => {
-                    dump_region_info(&db, &raft_db, id.parse().unwrap(), skip_tombstone);
-                }
-                None => {
-                    dump_all_region_info(&db, &raft_db, skip_tombstone);
-                }
-            }
+            let region = matches
+                .value_of("region")
+                .map(|id| id.parse::<u64>().unwrap());
+            debug_executor.raft_region(region, skip_tombstone);
         } else {
             panic!("Currently only support raft log entry and scan.")
         }
     } else if let Some(matches) = matches.subcommand_matches("size") {
         let cf_name = matches.value_of("cf");
-        match matches.value_of("region") {
-            Some(id) => {
-                dump_region_size(&db, id.parse().unwrap(), cf_name);
-            }
-            None => dump_all_region_size(&db, cf_name),
-        }
+        let region = matches
+            .value_of("region")
+            .map(|id| id.parse::<u64>().unwrap());
+        debug_executor.size(cf_name, region);
     } else if let Some(matches) = matches.subcommand_matches("scan") {
         let from = String::from(matches.value_of("from").unwrap());
         let to = matches.value_of("to").map(String::from);
@@ -306,8 +409,9 @@ fn main() {
                 panic!("The region's start pos must greater than the end pos.")
             }
         }
-        dump_range(db, from, to, limit, cf_name, start_ts, commit_ts);
+        debug_executor.scan(from, to, limit, cf_name, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
+        /*
         let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
         let key = matches.value_of("key").unwrap();
         let key_encoded = matches.is_present("encoded");
@@ -334,11 +438,14 @@ fn main() {
                 let _ = app.print_help();
             }
         }
+        */
     } else if let Some(matches) = matches.subcommand_matches("diff") {
+        /*
         let region_id: u64 = matches.value_of("region").unwrap().parse().unwrap();
         let db_path2 = matches.value_of("to").unwrap();
         let db2 = util::rocksdb::open(db_path2, ALL_CFS).unwrap();
         dump_diff(&db, &db2, region_id);
+        */
     } else {
         let _ = app.print_help();
     }
