@@ -89,18 +89,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .max_send_message_len(region_split_size as usize * 4)
             .build_args();
         let grpc_server = {
-            let sb = ServerBuilder::new(env.clone())
-                .register_service(create_tikv(kv_service))
+            let mut sb = ServerBuilder::new(env.clone())
                 .bind(ip, addr.port())
-                .channel_args(channel_args);
+                .channel_args(channel_args)
+                .register_service(create_tikv(kv_service));
             if let Some(engines) = debug_engines {
-                try!(
-                    sb.register_service(create_debug(DebugService::new(engines)))
-                        .build()
-                )
-            } else {
-                try!(sb.build())
+                sb = sb.register_service(create_debug(DebugService::new(engines)));
             }
+            try!(sb.build())
         };
 
         let addr = {
