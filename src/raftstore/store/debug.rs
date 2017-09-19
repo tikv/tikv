@@ -43,13 +43,13 @@ quick_error!{
 }
 
 #[derive(Clone)]
-pub struct Debug {
+pub struct Debugger {
     engines: Engines,
 }
 
-impl Debug {
-    pub fn new(engines: Engines) -> Debug {
-        Debug { engines }
+impl Debugger {
+    pub fn new(engines: Engines) -> Debugger {
+        Debugger { engines }
     }
 
     pub fn get(&self, cf: CF, key_encoded: &[u8]) -> Result<Vec<u8>> {
@@ -109,7 +109,7 @@ mod tests {
         cf_to_str(CF::INVALID).unwrap_err();
     }
 
-    fn new_debug() -> Debug {
+    fn new_debug() -> Debugger {
         let tmp = TempDir::new("test_debug").unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -126,7 +126,7 @@ mod tests {
         );
 
         let engines = Engines::new(engine.clone(), engine);
-        Debug::new(engines)
+        Debugger::new(engines)
     }
 
     #[test]

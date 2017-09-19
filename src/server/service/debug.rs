@@ -18,12 +18,12 @@ use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
 
 use raftstore::store::Engines;
-use raftstore::store::debug::{Debug, Error};
+use raftstore::store::debug::{Debugger, Error};
 
 #[derive(Clone)]
 pub struct Service {
     pool: CpuPool,
-    debugger: Debug,
+    debugger: Debugger,
 }
 
 impl Service {
@@ -32,7 +32,7 @@ impl Service {
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
-        let debugger = Debug::new(engines);
+        let debugger = Debugger::new(engines);
         Service { pool, debugger }
     }
 
