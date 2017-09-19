@@ -88,9 +88,13 @@ pub struct RaftMessageMetrics {
     pub heartbeat_resp: u64,
     pub transfer_leader: u64,
     pub timeout_now: u64,
-    pub drop_invalid_msg: u64,
-    pub drop_invalid_peer: u64,
-    pub drop_invalid_snapshot: u64,
+    pub drop_mismatch_store_id: u64,
+    pub drop_mismatch_region_epoch: u64,
+    pub drop_stale_msg: u64,
+    pub drop_stale_peer: u64,
+    pub drop_destroy_stale_peer: u64,
+    pub drop_region_overlap: u64,
+    pub drop_region_no_peer: u64,
 }
 
 impl RaftMessageMetrics {
@@ -160,26 +164,54 @@ impl RaftMessageMetrics {
                 .unwrap();
             self.timeout_now = 0;
         }
-        if self.drop_invalid_msg > 0 {
+        if self.drop_mismatch_store_id > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["drop_invalid"])
-                .inc_by(self.drop_invalid_msg as f64)
+                .with_label_values(&["drop_mismatch_store_id"])
+                .inc_by(self.drop_mismatch_store_id as f64)
                 .unwrap();
-            self.drop_invalid_msg = 0;
+            self.drop_mismatch_store_id = 0;
         }
-        if self.drop_invalid_peer > 0 {
+        if self.drop_mismatch_region_epoch > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["drop_invalid_peer"])
-                .inc_by(self.drop_invalid_peer as f64)
+                .with_label_values(&["drop_mismatch_region_epoch"])
+                .inc_by(self.drop_mismatch_region_epoch as f64)
                 .unwrap();
-            self.drop_invalid_peer = 0;
+            self.drop_mismatch_region_epoch = 0;
         }
-        if self.drop_invalid_snapshot > 0 {
+        if self.drop_stale_peer > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["drop_invalid_snapshot"])
-                .inc_by(self.drop_invalid_snapshot as f64)
+                .with_label_values(&["drop_stale_peer"])
+                .inc_by(self.drop_stale_peer as f64)
                 .unwrap();
-            self.drop_invalid_snapshot = 0;
+            self.drop_stale_peer = 0;
+        }
+        if self.drop_stale_msg > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["drop_stale_msg"])
+                .inc_by(self.drop_stale_msg as f64)
+                .unwrap();
+            self.drop_stale_msg = 0;
+        }
+        if self.drop_destroy_stale_peer > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["drop_destroy_stale_peer"])
+                .inc_by(self.drop_destroy_stale_peer as f64)
+                .unwrap();
+            self.drop_destroy_stale_peer = 0;
+        }
+        if self.drop_region_overlap > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["drop_region_overlap"])
+                .inc_by(self.drop_region_overlap as f64)
+                .unwrap();
+            self.drop_region_overlap = 0;
+        }
+        if self.drop_region_no_peer > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["drop_region_no_peer"])
+                .inc_by(self.drop_region_no_peer as f64)
+                .unwrap();
+            self.drop_region_no_peer = 0;
         }
     }
 }
