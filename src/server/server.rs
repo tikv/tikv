@@ -50,7 +50,6 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
-    debugger: Option<Worker<DebugTask>>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -81,17 +80,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
         );
-        let (debug_service, debugger) = if let Some(engines) = debug_engines {
-            let runner = DebugRunner::new(engines);
-            let mut debugger = Worker::new(thd_name!("debugger"));
-            debugger.start(runner).unwrap();
-            (
-                Some(DebugService::new(debugger.scheduler())),
-                Some(debugger),
-            )
-        } else {
-            (None, None)
-        };
         let addr = try!(SocketAddr::from_str(&cfg.addr));
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
@@ -105,10 +93,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .register_service(create_tikv(kv_service))
                 .bind(ip, addr.port())
                 .channel_args(channel_args);
-            if let Some(ds) = debug_service {
-                sb.register_service(create_debug(ds)).build()?
+            if let Some(engines) = debug_engines {
+                try!(
+                    sb.register_service(create_debug(DebugService::new(engines)))
+                        .build()
+                )
             } else {
-                sb.build()?
+                try!(sb.build())
             }
         };
 
@@ -135,7 +126,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
-            debugger: debugger,
         };
 
         Ok(svr)
@@ -173,9 +163,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             error!("failed to stop store: {:?}", e);
         }
         self.grpc_server.shutdown();
-        if let Some(ref mut d) = self.debugger {
-            d.stop();
-        }
         Ok(())
     }
 
