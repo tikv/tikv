@@ -770,6 +770,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         if !self.is_raft_msg_valid(&msg) {
+            self.raft_metrics.message.drop_invalid_msg += 1;
             return Ok(());
         }
 
@@ -784,10 +785,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if !try!(self.maybe_create_peer(region_id, &msg)) {
+            self.raft_metrics.message.drop_invalid_peer += 1;
             return Ok(());
         }
 
         if !try!(self.check_snapshot(&msg)) {
+            self.raft_metrics.message.drop_invalid_snapshot += 1;
             return Ok(());
         }
 

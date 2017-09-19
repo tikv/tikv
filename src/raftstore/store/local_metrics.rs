@@ -88,6 +88,9 @@ pub struct RaftMessageMetrics {
     pub heartbeat_resp: u64,
     pub transfer_leader: u64,
     pub timeout_now: u64,
+    pub drop_invalid_msg: u64,
+    pub drop_invalid_peer: u64,
+    pub drop_invalid_snapshot: u64,
 }
 
 impl RaftMessageMetrics {
@@ -156,6 +159,27 @@ impl RaftMessageMetrics {
                 .inc_by(self.timeout_now as f64)
                 .unwrap();
             self.timeout_now = 0;
+        }
+        if self.drop_invalid_msg > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["drop_invalid"])
+                .inc_by(self.drop_invalid_msg as f64)
+                .unwrap();
+            self.drop_invalid_msg = 0;
+        }
+        if self.drop_invalid_peer > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["drop_invalid_peer"])
+                .inc_by(self.drop_invalid_peer as f64)
+                .unwrap();
+            self.drop_invalid_peer = 0;
+        }
+        if self.drop_invalid_snapshot > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["drop_invalid_snapshot"])
+                .inc_by(self.drop_invalid_snapshot as f64)
+                .unwrap();
+            self.drop_invalid_snapshot = 0;
         }
     }
 }
