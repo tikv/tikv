@@ -100,7 +100,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let split_size = ReadableSize::mb(256);
+        let split_size = ReadableSize::mb(96);
         Config {
             sync_log: true,
             raftdb_path: String::new(),

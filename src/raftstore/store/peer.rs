@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use time::Timespec;
 use rocksdb::{WriteBatch, DB};
+use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
@@ -402,8 +403,10 @@ impl Peer {
             PeerState::Tombstone
         ));
         // write kv rocksdb first in case of restart happen between two write
-        try!(self.kv_engine.write(kv_wb));
-        try!(self.raft_engine.write(raft_wb));
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(self.cfg.sync_log);
+        try!(self.kv_engine.write_opt(kv_wb, &write_opts));
+        try!(self.raft_engine.write_opt(raft_wb, &write_opts));
 
         if self.get_store().is_initialized() {
             // If we meet panic when deleting data and raft log, the dirty data
