@@ -292,7 +292,6 @@ pub struct ApplyDelegate {
     applied_index_term: u64,
     term: u64,
     pending_cmds: PendingCmdQueue,
-    flush_wal: bool,
     metrics: ApplyMetrics,
 }
 
@@ -321,7 +320,6 @@ impl ApplyDelegate {
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             pending_cmds: Default::default(),
-            flush_wal: false,
             metrics: Default::default(),
         }
     }
@@ -372,11 +370,6 @@ impl ApplyDelegate {
 
         self.update_metrics(apply_ctx);
         apply_ctx.mark_last_bytes_and_keys();
-
-        if self.flush_wal {
-            apply_ctx.flush_wal = true;
-            self.flush_wal = false;
-        }
 
         slow_log!(
             t,
@@ -434,10 +427,6 @@ impl ApplyDelegate {
                     .unwrap_or_else(|e| {
                         panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                     });
-
-                self.engine.flush_wal(false).unwrap_or_else(|e| {
-                    panic!("{} failed to flush wal, error: {:?}", self.tag, e)
-                });
 
                 // call callback
                 for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -534,6 +523,10 @@ impl ApplyDelegate {
                 "{} processing raft command needs a none zero index",
                 self.tag
             );
+        }
+
+        if cmd.has_admin_request() {
+            apply_ctx.flush_wal = true;
         }
 
         let cmd_cb = self.find_cb(index, term, &cmd);
@@ -709,7 +702,6 @@ impl ApplyDelegate {
             ctx.term,
             ctx.index
         );
-        self.flush_wal = true;
 
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
@@ -1440,10 +1432,11 @@ pub struct Runner {
     host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
+    sync_log: bool,
 }
 
 impl Runner {
-    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>) -> Runner {
+    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>, sync_log: bool) -> Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
@@ -1454,6 +1447,7 @@ impl Runner {
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
+            sync_log: sync_log,
         }
     }
 
@@ -1497,13 +1491,17 @@ impl Runner {
         }
 
         // Write to engine
+        // raftsotre.sync-log = true means we need prevent data loss when power failure.
+        // take raft log gc for example, we write kv WAL first, then write raft WAL,
+        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
+        // so we use sync-log flag here.
         self.db
             .write(apply_ctx.wb.take().unwrap())
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
 
         if apply_ctx.flush_wal {
             self.db
-                .flush_wal(false)
+                .flush_wal(self.sync_log)
                 .unwrap_or_else(|e| panic!("failed to flush wal, error: {:?}", e));
         }
 
@@ -1628,6 +1626,7 @@ mod tests {
             host: host,
             delegates: HashMap::default(),
             notifier: tx,
+            sync_log: false,
         }
     }
 

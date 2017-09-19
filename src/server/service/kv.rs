@@ -33,11 +33,11 @@ use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
 use storage::mvcc::{Error as MvccError, Write as MvccWrite, WriteType};
 use storage::engine::Error as EngineError;
-use super::transport::RaftStoreRouter;
+use server::transport::RaftStoreRouter;
+use server::snap::Task as SnapTask;
+use server::metrics::*;
+use server::Error;
 use coprocessor::{EndPointTask, RequestTask};
-use super::snap::Task as SnapTask;
-use super::metrics::*;
-use super::Error;
 
 const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
 
@@ -777,14 +777,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             stream
                 .map_err(Error::from)
                 .for_each(move |msg| {
-                    let res = match msg.get_region_id() {
-                        0 => Ok(()),
-                        _ => {
-                            RAFT_MESSAGE_RECV_COUNTER.inc();
-                            ch.send_raft_msg(msg)
-                        }
-                    };
-                    future::result(res).map_err(Error::from)
+                    RAFT_MESSAGE_RECV_COUNTER.inc();
+                    future::result(ch.send_raft_msg(msg)).map_err(Error::from)
                 })
                 .map_err(|e| error!("send raft msg to raft store fail: {}", e))
                 .then(|_| future::ok::<_, ()>(())),

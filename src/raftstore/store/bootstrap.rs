@@ -100,16 +100,15 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
 
 // Clear first region meta and prepare state.
 pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> {
-    let wb = WriteBatch::new();
+    try!(engines.raft_engine.delete(&keys::raft_state_key(region_id)));
+    try!(engines.raft_engine.sync_wal());
 
+    let wb = WriteBatch::new();
     try!(wb.delete(&keys::prepare_bootstrap_key()));
     // should clear raft initial state too.
     let handle = try!(rocksdb::get_cf_handle(&engines.kv_engine, CF_RAFT));
     try!(wb.delete_cf(handle, &keys::region_state_key(region_id)));
     try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
-
-    try!(engines.raft_engine.delete(&keys::raft_state_key(region_id)));
-    try!(engines.raft_engine.sync_wal());
     try!(engines.kv_engine.write(wb));
     try!(engines.kv_engine.flush_wal(true));
     Ok(())

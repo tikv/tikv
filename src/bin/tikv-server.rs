@@ -28,7 +28,6 @@ extern crate tikv;
 #[macro_use]
 extern crate log;
 extern crate rocksdb;
-extern crate mio;
 extern crate toml;
 extern crate libc;
 extern crate fs2;
@@ -37,13 +36,7 @@ extern crate signal;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
-extern crate sys_info;
-extern crate futures;
 extern crate serde_json;
-extern crate tokio_core;
-#[cfg(test)]
-extern crate tempdir;
-extern crate grpcio as grpc;
 
 mod signal_handler;
 #[cfg(unix)]

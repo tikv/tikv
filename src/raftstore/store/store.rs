@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{DBStatisticsTickerType as TickerType, WriteBatch, DB};
+use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -95,8 +95,6 @@ pub struct StoreStat {
     pub region_bytes_written: LocalHistogram,
     pub region_keys_written: LocalHistogram,
     pub lock_cf_bytes_written: u64,
-    pub engine_total_bytes_written: u64,
-    pub engine_total_keys_written: u64,
 }
 
 impl Default for StoreStat {
@@ -105,8 +103,6 @@ impl Default for StoreStat {
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
             lock_cf_bytes_written: 0,
-            engine_total_bytes_written: 0,
-            engine_total_keys_written: 0,
         }
     }
 }
@@ -367,7 +363,7 @@ impl<T, C> Store<T, C> {
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            try!(rocksdb::delete_file_in_range(
+            try!(rocksdb::roughly_cleanup_range(
                 &self.kv_engine,
                 &last_start_key,
                 &start_key
@@ -375,7 +371,7 @@ impl<T, C> Store<T, C> {
             last_start_key = keys::enc_end_key(region);
         }
 
-        try!(rocksdb::delete_file_in_range(
+        try!(rocksdb::roughly_cleanup_range(
             &self.kv_engine,
             &last_start_key,
             keys::DATA_MAX_KEY
@@ -537,7 +533,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
 
         let (tx, rx) = mpsc::channel();
-        let apply_runner = ApplyRunner::new(self, tx);
+        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log);
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
@@ -680,22 +676,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut has_peer = false;
         let mut async_remove = false;
         let mut stale_peer = None;
+        let mut initialized = false;
         if let Some(p) = self.region_peers.get_mut(&region_id) {
             has_peer = true;
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
-                if p.is_applying_snapshot() && !p.mut_store().cancel_applying_snap() {
-                    info!(
-                        "[region {}] Stale peer {} is applying snapshot, will destroy next \
-                         time.",
-                        region_id,
-                        p.peer_id()
-                    );
-                    return Ok(false);
+                initialized = p.get_store().is_initialized();
+                async_remove = initialized;
+                if p.is_applying_snapshot() {
+                    if !p.mut_store().cancel_applying_snap() {
+                        info!(
+                            "[region {}] Stale peer {} is applying snapshot, will destroy next \
+                             time.",
+                            region_id,
+                            p.peer_id()
+                        );
+                        return Ok(false);
+                    }
+                    // There is no tasks in apply worker.
+                    async_remove = false;
                 }
                 p.pending_remove = true;
                 stale_peer = Some(p.peer.clone());
-                async_remove = p.get_store().is_initialized();
             } else if p.peer_id() > target_peer_id {
                 info!(
                     "[region {}] target peer id {} is less than {}, msg maybe stale.",
@@ -707,15 +709,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         if let Some(p) = stale_peer {
+            if initialized {
+                self.apply_worker
+                    .schedule(ApplyTask::destroy(region_id))
+                    .unwrap();
+            }
             if async_remove {
                 info!(
                     "[region {}] asking destroying stale peer {:?}",
                     region_id,
                     p
                 );
-                self.apply_worker
-                    .schedule(ApplyTask::destroy(region_id))
-                    .unwrap();
                 return Ok(false);
             }
             info!("[region {}] destroying stale peer {:?}", region_id, p);
@@ -1169,10 +1173,27 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
-        info!("[region {}] destroy peer {:?}", region_id, peer);
-        // TODO: should we check None here?
         // Can we destroy it in another thread later?
-        let mut p = self.region_peers.remove(&region_id).unwrap();
+
+        // Suppose cluster removes peer a from store and then add a new
+        // peer b to the same store again, if peer a is applying snapshot,
+        // then it will be considered stale and removed immediately, and the
+        // apply meta will be removed asynchronously. So the `destroy_peer` will
+        // be called again when `poll_apply`. We need to check if the peer exists
+        // and is the very target.
+        let mut p = match self.region_peers.remove(&region_id) {
+            None => return,
+            Some(p) => if p.peer_id() == peer.get_id() {
+                p
+            } else {
+                assert!(p.peer_id() > peer.get_id());
+                // It has been destroyed.
+                self.region_peers.insert(region_id, p);
+                return;
+            },
+        };
+
+        info!("[region {}] destroy peer {:?}", region_id, peer);
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
 
@@ -1933,19 +1954,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .set(apply_snapshot_count as f64);
 
         stats.set_start_time(self.start_time.sec as u32);
-
-        // report store write flow to pd
-        let engine_total_bytes_written = self.kv_engine
-            .get_statistics_ticker_count(TickerType::BytesWritten);
-        let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
-        self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
-        stats.set_bytes_written(delta);
-
-        let engine_total_keys_written = self.kv_engine
-            .get_statistics_ticker_count(TickerType::NumberKeysWritten);
-        let delta = engine_total_keys_written - self.store_stat.engine_total_keys_written;
-        self.store_stat.engine_total_keys_written = engine_total_keys_written;
-        stats.set_keys_written(delta);
 
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
