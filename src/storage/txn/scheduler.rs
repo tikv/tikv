@@ -982,7 +982,8 @@ impl ThreadContext for ScheContext {
                 for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
                         .with_label_values(&[cmd, cf, tag])
-                        .observe(count as f64 / stat.count as f64);
+                        .inc_by(count as f64)
+                        .unwrap();
                 }
             }
         }
