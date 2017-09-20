@@ -1701,15 +1701,11 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
 fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
-        if req.get_cmd_type() == AdminCmdType::ChangePeer ||
-            req.get_cmd_type() == AdminCmdType::Split
-        {
-            return true;
-        }
-        return false;
+        return req.get_cmd_type() == AdminCmdType::ChangePeer ||
+            req.get_cmd_type() == AdminCmdType::Split;
     }
 
-    if msg.has_header() && msg.get_header().has_sync_log() && msg.get_header().get_sync_log() {
+    if msg.has_header() && msg.get_header().get_sync_log() {
         return true;
     }
     false

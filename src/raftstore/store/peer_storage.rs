@@ -844,7 +844,7 @@ impl PeerStorage {
         };
 
         for entry in entries {
-            if entry.has_sync_log() && entry.get_sync_log() {
+            if entry.get_sync_log() {
                 ready_ctx.sync_log = true;
             }
             try!(ready_ctx.raft_wb.put_msg(

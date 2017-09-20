@@ -251,7 +251,9 @@ impl<T: Storage> RawNode<T> {
         m.set_from(self.raft.id);
         let mut e = Entry::new();
         e.set_data(data);
-        e.set_sync_log(sync_log);
+        if sync_log {
+            e.set_sync_log(true);
+        }
         m.set_entries(RepeatedField::from_vec(vec![e]));
         self.raft.step(m)
     }
