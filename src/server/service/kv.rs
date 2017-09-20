@@ -955,7 +955,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|mut v| {
                 let mut resp = SplitRegionResponse::new();
-                if v.has_header() && v.get_header().has_error() {
+                if v.get_header().has_error() {
                     resp.set_region_error(v.mut_header().take_error());
                 } else {
                     let admin_resp = v.mut_admin_response();

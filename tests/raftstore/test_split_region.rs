@@ -133,13 +133,6 @@ fn test_server_base_split_region_right_derive() {
 }
 
 #[test]
-fn test_node_manual_split_region_right_derive() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_base_split_region(&mut cluster, Cluster::must_manual_split, false);
-}
-
-#[test]
 fn test_server_manual_split_region_right_derive() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);

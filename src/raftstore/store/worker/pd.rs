@@ -491,11 +491,7 @@ fn send_admin_request(
 
     if let Err(e) = ch.try_send(Msg::new_raft_cmd(
         req,
-        if let Some(cb) = callback {
-            cb
-        } else {
-            Box::new(|_| {})
-        },
+        callback.unwrap_or_else(|| Box::new(|_| {})),
     )) {
         error!(
             "[region {}] send {:?} request err {:?}",
