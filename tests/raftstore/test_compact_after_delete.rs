@@ -14,6 +14,7 @@
 
 use tikv::storage::{CF_DEFAULT, CF_WRITE};
 use tikv::util::rocksdb::get_cf_handle;
+use tikv::util::config::*;
 use rocksdb::Range;
 
 use super::util::*;
@@ -21,7 +22,7 @@ use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 
 fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.region_compact_check_interval = 500_000;
+    cluster.cfg.raft_store.region_compact_check_interval = ReadableDuration::secs(500);
     cluster.cfg.raft_store.region_compact_delete_keys_count = 5;
     cluster.run();
 
@@ -36,15 +37,16 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     // wait for compaction.
     sleep_ms(1000);
 
-    for engine in cluster.engines.values() {
-        let cf_handle = get_cf_handle(engine, CF_DEFAULT).unwrap();
-        let approximate_size =
-            engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
+    for engines in cluster.engines.values() {
+        let approximate_size = engines
+            .kv_engine
+            .get_approximate_sizes(&[Range::new(b"", b"k9")])[0];
         assert_eq!(approximate_size, 0);
 
-        let cf_handle = get_cf_handle(engine, CF_WRITE).unwrap();
-        let approximate_size =
-            engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
+        let cf_handle = get_cf_handle(&engines.kv_engine, CF_WRITE).unwrap();
+        let approximate_size = engines
+            .kv_engine
+            .get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
         assert_eq!(approximate_size, 0);
     }
 }

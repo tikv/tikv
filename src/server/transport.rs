@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
 use std::net::SocketAddr;
 use kvproto::raft_serverpb::RaftMessage;
@@ -19,10 +19,10 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 
 use util::transport::SendCh;
 use util::HandyRwLock;
-use util::worker::{Stopped, Scheduler};
+use util::worker::{Scheduler, Stopped};
 use util::collections::HashSet;
 use raft::SnapshotStatus;
-use raftstore::store::{Msg as StoreMsg, SnapshotStatusMsg, Transport, Callback};
+use raftstore::store::{BatchCallback, Callback, Msg as StoreMsg, SnapshotStatusMsg, Transport};
 use raftstore::Result as RaftStoreResult;
 use server::raft_client::RaftClient;
 use server::Result;
@@ -45,6 +45,15 @@ pub trait RaftStoreRouter: Send + Clone {
     // Send RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
+    }
+
+    // Send a batch of RaftCmdRequests to local store.
+    fn send_batch_commands(
+        &self,
+        batch: Vec<RaftCmdRequest>,
+        on_finished: BatchCallback,
+    ) -> RaftStoreResult<()> {
+        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64, _: u64) -> RaftStoreResult<()> {
@@ -85,13 +94,24 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
 
-    fn report_unreachable(&self,
-                          region_id: u64,
-                          to_peer_id: u64,
-                          to_store_id: u64)
-                          -> RaftStoreResult<()> {
+    fn send_batch_commands(
+        &self,
+        batch: Vec<RaftCmdRequest>,
+        on_finished: BatchCallback,
+    ) -> RaftStoreResult<()> {
+        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
+    }
+
+    fn report_unreachable(
+        &self,
+        region_id: u64,
+        to_peer_id: u64,
+        to_store_id: u64,
+    ) -> RaftStoreResult<()> {
         let store = to_store_id.to_string();
-        REPORT_FAILURE_MSG_COUNTER.with_label_values(&["unreachable", &*store]).inc();
+        REPORT_FAILURE_MSG_COUNTER
+            .with_label_values(&["unreachable", &*store])
+            .inc();
         self.try_send(StoreMsg::ReportUnreachable {
             region_id: region_id,
             to_peer_id: to_peer_id,
@@ -100,20 +120,22 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 }
 
 pub struct ServerTransport<T, S>
-    where T: RaftStoreRouter + 'static,
-          S: StoreAddrResolver + Send + 'static
+where
+    T: RaftStoreRouter + 'static,
+    S: StoreAddrResolver + 'static,
 {
     raft_client: Arc<RwLock<RaftClient>>,
     snap_scheduler: Scheduler<SnapTask>,
     raft_router: T,
     snapshot_status_sender: Sender<SnapshotStatusMsg>,
     resolving: Arc<RwLock<HashSet<u64>>>,
-    resolver: Arc<Mutex<S>>,
+    resolver: S,
 }
 
 impl<T, S> Clone for ServerTransport<T, S>
-    where T: RaftStoreRouter + 'static,
-          S: StoreAddrResolver + Send + 'static
+where
+    T: RaftStoreRouter + 'static,
+    S: StoreAddrResolver + 'static,
 {
     fn clone(&self) -> Self {
         ServerTransport {
@@ -127,20 +149,21 @@ impl<T, S> Clone for ServerTransport<T, S>
     }
 }
 
-impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> ServerTransport<T, S> {
-    pub fn new(raft_client: Arc<RwLock<RaftClient>>,
-               snap_scheduler: Scheduler<SnapTask>,
-               raft_router: T,
-               snapshot_status_sender: Sender<SnapshotStatusMsg>,
-               resolver: S)
-               -> ServerTransport<T, S> {
+impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTransport<T, S> {
+    pub fn new(
+        raft_client: Arc<RwLock<RaftClient>>,
+        snap_scheduler: Scheduler<SnapTask>,
+        raft_router: T,
+        snapshot_status_sender: Sender<SnapshotStatusMsg>,
+        resolver: S,
+    ) -> ServerTransport<T, S> {
         ServerTransport {
             raft_client: raft_client,
             snap_scheduler: snap_scheduler,
             raft_router: raft_router,
             snapshot_status_sender: snapshot_status_sender,
             resolving: Arc::new(RwLock::new(Default::default())),
-            resolver: Arc::new(Mutex::new(resolver)),
+            resolver: resolver,
         }
     }
 
@@ -154,11 +177,15 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
 
         // No connection, try to resolve it.
         if self.resolving.rl().contains(&store_id) {
-            RESOLVE_STORE_COUNTER.with_label_values(&["resolving"]).inc();
+            RESOLVE_STORE_COUNTER
+                .with_label_values(&["resolving"])
+                .inc();
             // If we are resolving the address, drop the message here.
-            debug!("store {} address is being resolved, drop msg {:?}",
-                   store_id,
-                   msg);
+            debug!(
+                "store {} address is being resolved, drop msg {:?}",
+                store_id,
+                msg
+            );
             self.report_unreachable(msg);
             return;
         }
@@ -191,7 +218,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
             // There may be no messages in the near future, so flush it immediately.
             trans.raft_client.wl().flush();
         };
-        if let Err(e) = self.resolver.lock().unwrap().resolve(store_id, cb) {
+        if let Err(e) = self.resolver.resolve(store_id, cb) {
             error!("try to resolve err {:?}", e);
         }
     }
@@ -207,21 +234,21 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
 
     fn send_snapshot_sock(&self, sock_addr: SocketAddr, msg: RaftMessage) {
         let rep = self.new_snapshot_reporter(&msg);
-        let cb = box move |res: Result<()>| {
-            if res.is_err() {
-                rep.report(SnapshotStatus::Failure);
-            } else {
-                rep.report(SnapshotStatus::Finish);
-            }
+        let cb = box move |res: Result<()>| if res.is_err() {
+            rep.report(SnapshotStatus::Failure);
+        } else {
+            rep.report(SnapshotStatus::Finish);
         };
-        if let Err(Stopped(SnapTask::SendTo { cb, .. })) = self.snap_scheduler
-            .schedule(SnapTask::SendTo {
+        if let Err(Stopped(SnapTask::SendTo { cb, .. })) =
+            self.snap_scheduler.schedule(SnapTask::SendTo {
                 addr: sock_addr,
                 msg: msg,
                 cb: cb,
             }) {
-            error!("channel is closed, failed to schedule snapshot to {}",
-                   sock_addr);
+            error!(
+                "channel is closed, failed to schedule snapshot to {}",
+                sock_addr
+            );
             cb(Err(box_err!("failed to schedule snapshot")));
         }
     }
@@ -244,11 +271,15 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
 
-        if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id, to_store_id) {
-            error!("report peer {} unreachable for region {} failed {:?}",
-                   to_peer_id,
-                   region_id,
-                   e);
+        if let Err(e) = self.raft_router
+            .report_unreachable(region_id, to_peer_id, to_store_id)
+        {
+            error!(
+                "report peer {} unreachable for region {} failed {:?}",
+                to_peer_id,
+                region_id,
+                e
+            );
         }
     }
 
@@ -258,8 +289,9 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
 }
 
 impl<T, S> Transport for ServerTransport<T, S>
-    where T: RaftStoreRouter + 'static,
-          S: StoreAddrResolver + Send + 'static
+where
+    T: RaftStoreRouter + 'static,
+    S: StoreAddrResolver + 'static,
 {
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
@@ -281,14 +313,18 @@ struct SnapshotReporter {
 
 impl SnapshotReporter {
     pub fn report(&self, status: SnapshotStatus) {
-        debug!("send snapshot to {} for {} {:?}",
-               self.to_peer_id,
-               self.region_id,
-               status);
+        debug!(
+            "send snapshot to {} for {} {:?}",
+            self.to_peer_id,
+            self.region_id,
+            status
+        );
 
         if status == SnapshotStatus::Failure {
             let store = self.to_store_id.to_string();
-            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["snapshot", &*store]).inc();
+            REPORT_FAILURE_MSG_COUNTER
+                .with_label_values(&["snapshot", &*store])
+                .inc();
         };
 
         if let Err(e) = self.snapshot_status_sender.send(SnapshotStatusMsg {
@@ -296,11 +332,13 @@ impl SnapshotReporter {
             to_peer_id: self.to_peer_id,
             status: status,
         }) {
-            error!("report snapshot to peer {} in store {} with region {} err {:?}",
-                   self.to_peer_id,
-                   self.to_store_id,
-                   self.region_id,
-                   e);
+            error!(
+                "report snapshot to peer {} in store {} with region {} err {:?}",
+                self.to_peer_id,
+                self.to_store_id,
+                self.region_id,
+                e
+            );
         }
     }
 }

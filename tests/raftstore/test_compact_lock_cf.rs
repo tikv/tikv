@@ -13,6 +13,7 @@
 
 
 use tikv::storage::CF_LOCK;
+use tikv::util::config::*;
 use rocksdb::DBStatisticsTickerType;
 
 use super::util::*;
@@ -20,9 +21,9 @@ use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
-    for engine in cluster.engines.values() {
-        let lock_handle = engine.cf_handle(CF_LOCK).unwrap();
-        engine.flush_cf(lock_handle, true).unwrap();
+    for engines in cluster.engines.values() {
+        let lock_handle = engines.kv_engine.cf_handle(CF_LOCK).unwrap();
+        engines.kv_engine.flush_cf(lock_handle, true).unwrap();
     }
 }
 
@@ -30,9 +31,10 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
     flush(cluster);
     // Wait for compaction.
     sleep_ms(interval * 2);
-    for engine in cluster.engines.values() {
-        let compact_write_bytes =
-            engine.get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
+    for engines in cluster.engines.values() {
+        let compact_write_bytes = engines
+            .kv_engine
+            .get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
         if written {
             assert!(compact_write_bytes > 0);
         } else {
@@ -44,9 +46,9 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
 fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     let interval = 500;
     // Set lock_cf_compact_interval.
-    cluster.cfg.raft_store.lock_cf_compact_interval = interval;
+    cluster.cfg.raft_store.lock_cf_compact_interval = ReadableDuration::millis(interval);
     // Set lock_cf_compact_bytes_threshold.
-    cluster.cfg.raft_store.lock_cf_compact_bytes_threshold = 100;
+    cluster.cfg.raft_store.lock_cf_compact_bytes_threshold = ReadableSize(100);
     cluster.run();
 
     // Write 40 bytes, not reach lock_cf_compact_bytes_threshold, so there is no compaction.

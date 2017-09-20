@@ -14,13 +14,14 @@
 
 use std::fs;
 use std::time::{Duration, Instant};
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::mpsc::{self, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tikv::raftstore::Result;
 use tikv::raftstore::store::Msg;
 use tikv::util::HandyRwLock;
+use tikv::util::config::*;
 use kvproto::eraftpb::{Message, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 
@@ -32,8 +33,8 @@ use super::util::*;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 10;
-    cluster.cfg.raft_store.snap_apply_batch_size = 500;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
@@ -62,7 +63,10 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let value = format!("{:01024}", 0);
     must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
     let stale = Arc::new(AtomicBool::new(false));
-    cluster.sim.wl().add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(stale.clone()));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(stale.clone()));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
     loop {
@@ -100,10 +104,10 @@ fn test_server_huge_snapshot() {
 
 fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
-    cluster.cfg.raft_store.snap_gc_timeout = 2;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -115,7 +119,10 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let (tx, rx) = mpsc::channel();
     // drop all the snapshot so we can detect stale snapfile.
-    cluster.sim.wl().add_recv_filter(3, box DropSnapshotFilter::new(tx));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, box DropSnapshotFilter::new(tx));
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let first_snap_idx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -151,7 +158,10 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let snap_dir = cluster.get_snap_dir(3);
     // it must have more than 2 snaps.
-    let snapfiles: Vec<_> = fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
+    let snapfiles: Vec<_> = fs::read_dir(snap_dir)
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .collect();
     assert!(snapfiles.len() >= 2);
 
     cluster.sim.wl().clear_recv_filters(3);
@@ -198,7 +208,7 @@ fn test_server_snap_gc() {
 /// arrive at the same raftstore.
 fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable raft log gc in this test case.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 60000;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -208,14 +218,19 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
     // Force peer 2 to be followers all the way.
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(r1, 2)
-        .msg_type(MessageType::MsgRequestVote)
-        .direction(Direction::Send)));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 2)
+            .msg_type(MessageType::MsgRequestVote)
+            .direction(Direction::Send),
+    ));
     cluster.must_transfer_leader(r1, new_peer(1, 1));
     cluster.must_put(b"k3", b"v3");
     // Pile up snapshots of overlapped region ranges and deliver them all at once.
     let (tx, rx) = mpsc::channel();
-    cluster.sim.wl().add_recv_filter(3, box CollectSnapshotFilter::new(tx));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, box CollectSnapshotFilter::new(tx));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let region = cluster.get_region(b"k1");
     // Ensure the snapshot of range ("", "") is sent and piled in filter.
@@ -246,10 +261,9 @@ fn test_server_concurrent_snap() {
 
 fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
-    cluster.cfg.raft_store.snap_gc_timeout = 2;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 
     cluster.run();
     let cf = "lock";
@@ -309,7 +323,8 @@ impl Filter<RaftMessage> for Arc<StaleSnap> {
         let mut res = Vec::with_capacity(msgs.len());
         for mut m in msgs.drain(..) {
             if m.get_message().get_msg_type() == MessageType::MsgSnapshot &&
-               m.get_to_peer().get_store_id() == 3 {
+                m.get_to_peer().get_store_id() == 3
+            {
                 if self.first_snap.rl().is_none() {
                     *self.first_snap.wl() = Some(m.take_message());
                     continue;
@@ -396,10 +411,10 @@ impl Filter<Msg> for SnapshotAppendFilter {
         for m in msgs.drain(..) {
             let mut should_collect = false;
             if let Msg::RaftMessage(ref msg) = m {
-                should_collect = !stale &&
-                                 msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
+                should_collect =
+                    !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
                 stale = !pending_msg.is_empty() &&
-                        msg.get_message().get_msg_type() == MessageType::MsgAppend;
+                    msg.get_message().get_msg_type() == MessageType::MsgAppend;
             }
             if should_collect {
                 pending_msg.push(m);
@@ -419,21 +434,23 @@ impl Filter<Msg> for SnapshotAppendFilter {
 
 fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
-    cluster.cfg.raft_store.snap_gc_timeout = 2;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
-    let r1 = cluster.run_conf_change();
-    pd_client.must_add_peer(r1, new_peer(2, 2));
-    pd_client.must_add_peer(r1, new_peer(3, 3));
+    cluster.run();
+
+    pd_client.must_remove_peer(1, new_peer(4, 4));
 
     let (tx, rx) = mpsc::channel();
-    cluster.sim.wl().add_recv_filter(4, box SnapshotAppendFilter::new(tx));
-    pd_client.add_peer(r1, new_peer(4, 4));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(4, box SnapshotAppendFilter::new(tx));
+    pd_client.add_peer(1, new_peer(4, 5));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");

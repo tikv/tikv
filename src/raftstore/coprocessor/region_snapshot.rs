@@ -11,15 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::u64;
 use std::sync::Arc;
-use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator};
+use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use kvproto::metapb::Region;
-use util::properties::{UserProperties, GetPropertiesOptions};
 
-use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
+use raftstore::store::engine::{IterOption, Iterable, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
-use raftstore::{Error, Result};
+use raftstore::Result;
 
 
 /// Snapshot of a region.
@@ -32,15 +30,16 @@ pub struct RegionSnapshot {
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
-        RegionSnapshot {
-            snap: ps.raw_snapshot().into_sync(),
-            region: Arc::new(ps.get_region().clone()),
-        }
+        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.get_region().clone())
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
+        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region)
+    }
+
+    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> RegionSnapshot {
         RegionSnapshot {
-            snap: Snapshot::new(db).into_sync(),
+            snap: snap,
             region: Arc::new(region),
         }
     }
@@ -61,39 +60,49 @@ impl RegionSnapshot {
     }
 
     pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator> {
-        Ok(RegionIterator::new_cf(&self.snap, self.region.clone(), iter_opt, cf))
+        Ok(RegionIterator::new_cf(
+            &self.snap,
+            self.region.clone(),
+            iter_opt,
+            cf,
+        ))
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
-    pub fn scan<F>(&self,
-                   start_key: &[u8],
-                   end_key: &[u8],
-                   fill_cache: bool,
-                   f: &mut F)
-                   -> Result<()>
-        where F: FnMut(&[u8], &[u8]) -> Result<bool>
+    pub fn scan<F>(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        f: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
         let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
-    pub fn scan_cf<F>(&self,
-                      cf: &str,
-                      start_key: &[u8],
-                      end_key: &[u8],
-                      fill_cache: bool,
-                      f: &mut F)
-                      -> Result<()>
-        where F: FnMut(&[u8], &[u8]) -> Result<bool>
+    pub fn scan_cf<F>(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        f: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
         let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
         self.scan_impl(try!(self.iter_cf(cf, iter_opt)), start_key, f)
     }
 
     fn scan_impl<F>(&self, mut it: RegionIterator, start_key: &[u8], f: &mut F) -> Result<()>
-        where F: FnMut(&[u8], &[u8]) -> Result<bool>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
         if !try!(it.seek(start_key)) {
             return Ok(());
@@ -109,35 +118,8 @@ impl RegionSnapshot {
         Ok(())
     }
 
-    pub fn get_properties_cf(&self,
-                             cf: &str,
-                             opts: &GetPropertiesOptions)
-                             -> Result<UserProperties> {
-        let db = self.snap.get_db();
-        let cf = try!(db.cf_handle(cf)
-            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
-
-        let start = keys::enc_start_key(self.get_region());
-        let end = keys::enc_end_key(self.get_region());
-        let range = Range::new(&start, &end);
-        let collection = try!(db.get_properties_of_tables_in_range(cf, &[range]));
-        if collection.is_empty() {
-            return Err(Error::RocksDb("no user properties".to_owned()));
-        }
-
-        let max_ts = opts.max_ts.unwrap_or(u64::MAX);
-
-        // Aggregates properties from multiple tables.
-        let mut res = UserProperties::new();
-        for (_, v) in &*collection {
-            let props = v.user_collected_properties();
-            let other = try!(UserProperties::decode(props));
-            if other.min_ts > max_ts {
-                continue;
-            }
-            res.add(&other);
-        }
-        Ok(res)
+    pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
+        util::get_region_properties_cf(&self.snap.get_db(), cf, self.get_region())
     }
 
     pub fn get_start_key(&self) -> &[u8] {
@@ -184,10 +166,11 @@ fn set_upper_bound(iter_opt: IterOption, region: &Region) -> IterOption {
 
 // we use rocksdb's style iterator, doesn't need to impl std iterator.
 impl<'a> RegionIterator<'a> {
-    pub fn new(snap: &'a Snapshot,
-               region: Arc<Region>,
-               mut iter_opt: IterOption)
-               -> RegionIterator<'a> {
+    pub fn new(
+        snap: &'a Snapshot,
+        region: Arc<Region>,
+        mut iter_opt: IterOption,
+    ) -> RegionIterator<'a> {
         iter_opt = set_upper_bound(iter_opt, &region);
         let iter = snap.new_iterator(iter_opt);
         RegionIterator {
@@ -199,11 +182,12 @@ impl<'a> RegionIterator<'a> {
         }
     }
 
-    pub fn new_cf(snap: &'a Snapshot,
-                  region: Arc<Region>,
-                  mut iter_opt: IterOption,
-                  cf: &str)
-                  -> RegionIterator<'a> {
+    pub fn new_cf(
+        snap: &'a Snapshot,
+        region: Arc<Region>,
+        mut iter_opt: IterOption,
+        cf: &str,
+    ) -> RegionIterator<'a> {
         iter_opt = set_upper_bound(iter_opt, &region);
         let iter = snap.new_iterator_cf(cf, iter_opt).unwrap();
         RegionIterator {
@@ -240,8 +224,7 @@ impl<'a> RegionIterator<'a> {
             return self.valid;
         }
 
-        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {
-        }
+        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {}
 
         self.valid = self.iter.valid();
         self.update_valid(false)
@@ -315,32 +298,48 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
+    use std::path::Path;
 
     use tempdir::TempDir;
     use rocksdb::{Writable, DB};
-    use kvproto::metapb::{Region, Peer};
+    use kvproto::metapb::{Peer, Region};
 
     use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
-    use raftstore::store::{PeerStorage, CacheQueryStats};
-    use storage::{Cursor, Key, ALL_CFS, ScanMode, CFStatistics};
-    use util::{worker, rocksdb, escape};
+    use raftstore::store::{CacheQueryStats, PeerStorage};
+    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
+    use util::{escape, rocksdb, worker};
 
     use super::*;
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_temp_engine(path: &TempDir) -> Arc<DB> {
-        Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap())
+    fn new_temp_engine(path: &TempDir) -> (Arc<DB>, Arc<DB>) {
+        let raft_path = path.path().join(Path::new("raft"));
+        (
+            Arc::new(
+                rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
+            ),
+            Arc::new(
+                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
+            ),
+        )
     }
 
-    fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
+    fn new_peer_storage(engine: Arc<DB>, raft_engine: Arc<DB>, r: &Region) -> PeerStorage {
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
-        PeerStorage::new(engine, r, worker::dummy_scheduler(), "".to_owned(), metrics).unwrap()
+        PeerStorage::new(
+            engine,
+            raft_engine,
+            r,
+            worker::dummy_scheduler(),
+            "".to_owned(),
+            metrics,
+        ).unwrap()
     }
 
-    fn load_default_dataset(engine: Arc<DB>) -> (PeerStorage, DataSet) {
+    fn load_default_dataset(engine: Arc<DB>, raft_engine: Arc<DB>) -> (PeerStorage, DataSet) {
         let mut r = Region::new();
         r.mut_peers().push(Peer::new());
         r.set_id(10);
@@ -357,19 +356,19 @@ mod tests {
         for &(ref k, ref v) in &base_data {
             engine.put(&data_key(k), v).expect("");
         }
-        let store = new_peer_storage(engine.clone(), &r);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &r);
         (store, base_data)
     }
 
     #[test]
     fn test_peekable() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = new_temp_engine(&path);
+        let (engine, raft_engine) = new_temp_engine(&path);
         let mut r = Region::new();
         r.set_id(10);
         r.set_start_key(b"key0".to_vec());
         r.set_end_key(b"key4".to_vec());
-        let store = new_peer_storage(engine.clone(), &r);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &r);
 
         let (key1, value1) = (b"key1", 2u64);
         engine.put_u64(&data_key(key1), value1).expect("");
@@ -397,19 +396,15 @@ mod tests {
     #[test]
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = new_temp_engine(&path);
-        let (store, base_data) = load_default_dataset(engine.clone());
+        let (engine, raft_engine) = new_temp_engine(&path);
+        let (store, base_data) = load_default_dataset(engine.clone(), raft_engine.clone());
 
         let snap = RegionSnapshot::new(&store);
         let mut data = vec![];
-        snap.scan(b"a2",
-                  &[0xFF, 0xFF],
-                  false,
-                  &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(true)
-                  })
-            .unwrap();
+        snap.scan(b"a2", &[0xFF, 0xFF], false, &mut |key, value| {
+            data.push((key.to_vec(), value.to_vec()));
+            Ok(true)
+        }).unwrap();
 
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
@@ -452,14 +447,10 @@ mod tests {
         }
 
         data.clear();
-        snap.scan(b"a2",
-                  &[0xFF, 0xFF],
-                  false,
-                  &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(false)
-                  })
-            .unwrap();
+        snap.scan(b"a2", &[0xFF, 0xFF], false, &mut |key, value| {
+            data.push((key.to_vec(), value.to_vec()));
+            Ok(false)
+        }).unwrap();
 
         assert_eq!(data.len(), 1);
 
@@ -477,17 +468,13 @@ mod tests {
         // test last region
         let mut region = Region::new();
         region.mut_peers().push(Peer::new());
-        let store = new_peer_storage(engine.clone(), &region);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         data.clear();
-        snap.scan(b"",
-                  &[0xFF, 0xFF],
-                  false,
-                  &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(true)
-                  })
-            .unwrap();
+        snap.scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            data.push((key.to_vec(), value.to_vec()));
+            Ok(true)
+        }).unwrap();
 
         assert_eq!(data.len(), 4);
         assert_eq!(data, base_data);
@@ -506,7 +493,7 @@ mod tests {
         assert_eq!(res, base_data);
 
         // test iterator with upper bound
-        let store = new_peer_storage(engine.clone(), &region);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter(IterOption::new(Some(b"a5".to_vec()), true));
         assert!(iter.seek_to_first());
@@ -523,22 +510,40 @@ mod tests {
     #[test]
     fn test_reverse_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = new_temp_engine(&path);
-        let (store, test_data) = load_default_dataset(engine.clone());
+        let (engine, raft_engine) = new_temp_engine(&path);
+        let (store, test_data) = load_default_dataset(engine.clone(), raft_engine.clone());
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics).unwrap());
+        assert!(!iter.reverse_seek(
+            &Key::from_encoded(b"a2".to_vec()),
+            &mut statistics
+        ).unwrap());
+        assert!(
+            iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics)
+                .unwrap()
+        );
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics).unwrap());
+        assert!(
+            iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics)
+                .unwrap()
+        );
         pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics).is_err());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics).is_err());
+        assert!(!iter.reverse_seek(
+            &Key::from_encoded(b"a3".to_vec()),
+            &mut statistics
+        ).unwrap());
+        assert!(
+            iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+                .is_err()
+        );
+        assert!(
+            iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics)
+                .is_err()
+        );
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
@@ -555,18 +560,26 @@ mod tests {
         // test last region
         let mut region = Region::new();
         region.mut_peers().push(Peer::new());
-        let store = new_peer_storage(engine.clone(), &region);
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
+        assert!(!iter.reverse_seek(
+            &Key::from_encoded(b"a1".to_vec()),
+            &mut statistics
+        ).unwrap());
+        assert!(
+            iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+                .unwrap()
+        );
         let pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         for kv_pairs in test_data.windows(2) {
             let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
-            assert!(iter.reverse_seek(&seek_key, &mut statistics).unwrap(),
-                    "{}",
-                    seek_key);
+            assert!(
+                iter.reverse_seek(&seek_key, &mut statistics).unwrap(),
+                "{}",
+                seek_key
+            );
             let pair = (iter.key().to_vec(), iter.value().to_vec());
             assert_eq!(pair, kv_pairs[0]);
         }

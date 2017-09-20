@@ -12,7 +12,7 @@
 // limitations under the License.
 
 #![crate_type = "lib"]
-#![feature(test)]
+#![cfg_attr(test, feature(test))]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
@@ -20,18 +20,21 @@
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![recursion_limit="100"]
+#![recursion_limit = "100"]
 #![feature(ascii_ctype)]
-
 #![allow(module_inception)]
 #![allow(should_implement_trait)]
 #![allow(large_enum_variant)]
 #![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
+#![allow(new_without_default_derive)]
+#![allow(verbose_bit_mask)]
 
 #[macro_use]
 extern crate log;
 #[macro_use]
 extern crate quick_error;
+#[cfg(test)]
 extern crate test;
 extern crate protobuf;
 extern crate byteorder;
@@ -42,12 +45,8 @@ extern crate rocksdb;
 extern crate kvproto;
 extern crate time;
 extern crate tipb;
-extern crate threadpool;
-extern crate num;
 extern crate libc;
 extern crate crc;
-#[cfg(unix)]
-extern crate nix;
 extern crate alloc;
 extern crate chrono;
 #[macro_use]
@@ -60,7 +59,6 @@ extern crate fs2;
 extern crate regex;
 extern crate grpcio as grpc;
 extern crate fnv;
-extern crate ordermap;
 extern crate flat_map;
 extern crate futures;
 extern crate tokio_core;
@@ -69,15 +67,20 @@ extern crate serde_json;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
+#[cfg(test)]
 extern crate toml;
+extern crate sys_info;
+#[cfg(test)]
+extern crate utime;
 
 #[macro_use]
 pub mod util;
+pub mod config;
 pub mod raft;
 pub mod storage;
-
-pub use storage::Storage;
 pub mod raftstore;
 pub mod pd;
 pub mod server;
 pub mod coprocessor;
+
+pub use storage::Storage;

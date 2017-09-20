@@ -11,17 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ascii::AsciiExt;
 use std::fmt::{self, Display, Formatter};
 use std::str::{self, FromStr};
 use std::io::Write;
-use std::ops::{Deref, DerefMut, Add, Sub, Mul, Div, Rem};
-use std::{cmp, i64, u64, i32, u32, mem};
+use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
+use std::{cmp, mem, i32, i64, u32, u64};
 use std::cmp::Ordering;
 
 use byteorder::ReadBytesExt;
 
+use coprocessor::select::xeval::EvalContext;
 use util::codec::bytes::BytesDecoder;
-use super::super::{Result, Error, TEN_POW, convert};
+use util::escape;
+use coprocessor::codec::{convert, Error, Result, TEN_POW};
+
+// TODO: We should use same Error in mod `coprocessor`.
+use coprocessor::dag::expr::Error as ExprError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -41,9 +47,7 @@ impl<T> Res<T> {
 
     pub fn unwrap(self) -> T {
         match self {
-            Res::Ok(t) |
-            Res::Truncated(t) |
-            Res::Overflow(t) => t,
+            Res::Ok(t) | Res::Truncated(t) | Res::Overflow(t) => t,
         }
     }
 
@@ -57,6 +61,13 @@ impl<T> Res<T> {
     pub fn is_overflow(&self) -> bool {
         match *self {
             Res::Overflow(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_truncated(&self) -> bool {
+        match *self {
+            Res::Truncated(_) => true,
             _ => false,
         }
     }
@@ -77,9 +88,7 @@ impl<T> Deref for Res<T> {
 
     fn deref(&self) -> &T {
         match *self {
-            Res::Ok(ref t) |
-            Res::Overflow(ref t) |
-            Res::Truncated(ref t) => t,
+            Res::Ok(ref t) | Res::Overflow(ref t) | Res::Truncated(ref t) => t,
         }
     }
 }
@@ -87,9 +96,7 @@ impl<T> Deref for Res<T> {
 impl<T> DerefMut for Res<T> {
     fn deref_mut(&mut self) -> &mut T {
         match *self {
-            Res::Ok(ref mut t) |
-            Res::Overflow(ref mut t) |
-            Res::Truncated(ref mut t) => t,
+            Res::Ok(ref mut t) | Res::Overflow(ref mut t) | Res::Truncated(ref mut t) => t,
         }
     }
 }
@@ -106,8 +113,16 @@ const WORD_MAX: u32 = WORD_BASE - 1;
 const MAX_FRACTION: u8 = 30;
 const DEFAULT_DIV_FRAC_INCR: u8 = 4;
 const DIG_2_BYTES: &'static [u8] = &[0, 1, 1, 2, 2, 3, 3, 4, 4, 4];
-const FRAC_MAX: &'static [u32] = &[900000000, 990000000, 999000000, 999900000, 999990000,
-                                   999999000, 999999900, 999999990];
+const FRAC_MAX: &'static [u32] = &[
+    900000000,
+    990000000,
+    999000000,
+    999900000,
+    999990000,
+    999999000,
+    999999900,
+    999999990,
+];
 const NOT_FIXED_DEC: u8 = 31;
 
 macro_rules! word_cnt {
@@ -126,9 +141,11 @@ pub fn dec_encoded_len(encoded: &[u8]) -> Result<usize> {
     let precision = encoded[0];
     let frac_cnt = encoded[1];
     if precision < frac_cnt {
-        return Err(box_err!("invalid decimal, precision {} < frac_cnt {}",
-                            precision,
-                            frac_cnt));
+        return Err(box_err!(
+            "invalid decimal, precision {} < frac_cnt {}",
+            precision,
+            frac_cnt
+        ));
     }
     let int_cnt = precision - frac_cnt;
     let int_word_cnt = int_cnt / DIGITS_PER_WORD;
@@ -251,7 +268,8 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
         l_frac_word_cnt = (l_end + 1 - l_stop as isize) as u8;
         r_frac_word_cnt = (r_end + 1 - r_stop as isize) as u8;
         while l_idx as isize <= l_end && r_idx as isize <= r_end &&
-              lhs.word_buf[l_idx] == rhs.word_buf[r_idx] {
+            lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
+        {
             l_idx += 1;
             r_idx += 1;
         }
@@ -329,10 +347,12 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
         while r_idx > r_stop {
             idx_to -= 1;
             r_idx -= 1;
-            sub(0,
+            sub(
+                0,
                 rhs.word_buf[r_idx],
                 &mut carry,
-                &mut res.word_buf[idx_to]);
+                &mut res.word_buf[idx_to],
+            );
         }
     }
 
@@ -340,19 +360,23 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
         idx_to -= 1;
         l_idx -= 1;
         r_idx -= 1;
-        sub(lhs.word_buf[l_idx],
+        sub(
+            lhs.word_buf[l_idx],
             rhs.word_buf[r_idx],
             &mut carry,
-            &mut res.word_buf[idx_to]);
+            &mut res.word_buf[idx_to],
+        );
     }
 
     while carry > 0 && l_idx > l_start {
         idx_to -= 1;
         l_idx -= 1;
-        sub(lhs.word_buf[l_idx],
+        sub(
+            lhs.word_buf[l_idx],
             0,
             &mut carry,
-            &mut res.word_buf[idx_to]);
+            &mut res.word_buf[idx_to],
+        );
     }
     while l_idx > l_start {
         idx_to -= 1;
@@ -391,14 +415,24 @@ fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
     res
 }
 
+/// `max_or_min_dec`(`NewMaxOrMinDec` in tidb) returns the max or min
+/// value decimal for given precision and fraction.
+pub fn max_or_min_dec(negative: bool, prec: u8, frac: u8) -> Decimal {
+    let mut ret = max_decimal(prec, frac);
+    ret.negative = negative;
+    ret
+}
+
 /// add lhs to rhs.
 fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
-    let (mut l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt),
-                                                     word_cnt!(lhs.frac_cnt));
-    let (mut r_int_word_cnt, mut r_frac_word_cnt) = (word_cnt!(rhs.int_cnt),
-                                                     word_cnt!(rhs.frac_cnt));
-    let (mut int_word_to, frac_word_to) = (cmp::max(l_int_word_cnt, r_int_word_cnt),
-                                           cmp::max(l_frac_word_cnt, r_frac_word_cnt));
+    let (mut l_int_word_cnt, mut l_frac_word_cnt) =
+        (word_cnt!(lhs.int_cnt), word_cnt!(lhs.frac_cnt));
+    let (mut r_int_word_cnt, mut r_frac_word_cnt) =
+        (word_cnt!(rhs.int_cnt), word_cnt!(rhs.frac_cnt));
+    let (mut int_word_to, frac_word_to) = (
+        cmp::max(l_int_word_cnt, r_int_word_cnt),
+        cmp::max(l_frac_word_cnt, r_frac_word_cnt),
+    );
     let x = if l_int_word_cnt > r_int_word_cnt {
         lhs.word_buf[0]
     } else if l_int_word_cnt < r_int_word_cnt {
@@ -416,9 +450,11 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let (int_word_to, frac_word_to) = res.clone().unwrap();
     let mut idx_to = (int_word_to + frac_word_to) as usize;
     let mut res = res.map(|_| {
-        Decimal::new(int_word_to * DIGITS_PER_WORD,
-                     cmp::max(lhs.frac_cnt, rhs.frac_cnt),
-                     lhs.negative)
+        Decimal::new(
+            int_word_to * DIGITS_PER_WORD,
+            cmp::max(lhs.frac_cnt, rhs.frac_cnt),
+            lhs.negative,
+        )
     });
     res.word_buf[0] = 0;
     if !res.is_ok() {
@@ -453,10 +489,12 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
         l_idx -= 1;
         r_idx -= 1;
         idx_to -= 1;
-        add(lhs.word_buf[l_idx],
+        add(
+            lhs.word_buf[l_idx],
             rhs.word_buf[r_idx],
             &mut carry,
-            &mut res.word_buf[idx_to]);
+            &mut res.word_buf[idx_to],
+        );
     }
     let l_stop = 0;
     if l_int_word_cnt > r_int_word_cnt {
@@ -473,10 +511,12 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     while l_idx > l_stop {
         idx_to -= 1;
         l_idx -= 1;
-        add(lhs.word_buf[l_idx],
+        add(
+            lhs.word_buf[l_idx],
             0,
             &mut carry,
-            &mut res.word_buf[idx_to]);
+            &mut res.word_buf[idx_to],
+        );
     }
     if carry > 0 {
         idx_to -= 1;
@@ -488,11 +528,12 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 // TODO: remove following attribute
 #[allow(cyclomatic_complexity)]
 #[allow(needless_range_loop)]
-fn do_div_mod(mut lhs: Decimal,
-              rhs: Decimal,
-              mut frac_incr: u8,
-              do_mod: bool)
-              -> Option<Res<Decimal>> {
+fn do_div_mod(
+    mut lhs: Decimal,
+    rhs: Decimal,
+    mut frac_incr: u8,
+    do_mod: bool,
+) -> Option<Res<Decimal>> {
     let r_frac_cnt = word_cnt!(rhs.frac_cnt) * DIGITS_PER_WORD;
     let (r_idx, mut r_prec) = rhs.remove_leading_zeroes();
     r_prec += r_frac_cnt;
@@ -530,9 +571,11 @@ fn do_div_mod(mut lhs: Decimal,
         let int_word_to = res.0;
         frac_word_to = res.1;
         res.map(|_| {
-            Decimal::new(int_word_to * DIGITS_PER_WORD,
-                         frac_word_to * DIGITS_PER_WORD,
-                         lhs.negative != rhs.negative)
+            Decimal::new(
+                int_word_to * DIGITS_PER_WORD,
+                frac_word_to * DIGITS_PER_WORD,
+                lhs.negative != rhs.negative,
+            )
         })
     };
     let mut idx_to = if !do_mod && int_cnt_to < 0 {
@@ -541,8 +584,10 @@ fn do_div_mod(mut lhs: Decimal,
         0
     };
     let i = word_cnt!(l_prec as usize, usize);
-    let l_len = cmp::max(3,
-                         i + word_cnt!(2 * r_frac_cnt + frac_incr + 1) as usize + 1);
+    let l_len = cmp::max(
+        3,
+        i + word_cnt!(2 * r_frac_cnt + frac_incr + 1) as usize + 1,
+    );
     let mut buf = vec![0; l_len];
     (&mut buf[0..i]).copy_from_slice(&lhs.word_buf[l_idx..l_idx + i]);
     let mut l_idx = 0;
@@ -576,11 +621,13 @@ fn do_div_mod(mut lhs: Decimal,
             }
             if r_len > 0 {
                 if rhs.word_buf[r_start + 1] as i64 * guess >
-                   (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y {
+                    (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y
+                {
                     guess -= 1;
                 }
                 if rhs.word_buf[r_start + 1] as i64 * guess >
-                   (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y {
+                    (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y
+                {
                     guess -= 1;
                 }
             }
@@ -662,12 +709,18 @@ fn do_div_mod(mut lhs: Decimal,
 
 /// `do_mul` multiplies two decimals.
 fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
-    let (l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt) as usize,
-                                                 word_cnt!(lhs.frac_cnt) as usize);
-    let (mut r_int_word_cnt, mut r_frac_word_cnt) = (word_cnt!(rhs.int_cnt) as usize,
-                                                     word_cnt!(rhs.frac_cnt) as usize);
-    let (int_word_to, frac_word_to) = (word_cnt!(lhs.int_cnt + rhs.int_cnt) as usize,
-                                       l_frac_word_cnt + r_frac_word_cnt);
+    let (l_int_word_cnt, mut l_frac_word_cnt) = (
+        word_cnt!(lhs.int_cnt) as usize,
+        word_cnt!(lhs.frac_cnt) as usize,
+    );
+    let (mut r_int_word_cnt, mut r_frac_word_cnt) = (
+        word_cnt!(rhs.int_cnt) as usize,
+        word_cnt!(rhs.frac_cnt) as usize,
+    );
+    let (int_word_to, frac_word_to) = (
+        word_cnt!(lhs.int_cnt + rhs.int_cnt) as usize,
+        l_frac_word_cnt + r_frac_word_cnt,
+    );
     let (mut old_int_word_to, mut old_frac_word_to) = (int_word_to, frac_word_to);
     let res = fix_word_cnt_err(int_word_to as u8, frac_word_to as u8, WORD_BUF_LEN);
     let (int_word_to, frac_word_to) = (res.0 as usize, res.1 as usize);
@@ -712,10 +765,12 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
             let p = lhs.word_buf[l_idx] as u64 * rhs.word_buf[r_idx] as u64;
             let hi = p / WORD_BASE as u64;
             let lo = p - hi * WORD_BASE as u64;
-            add(dec.word_buf[idx_to],
+            add(
+                dec.word_buf[idx_to],
                 lo as u32,
                 &mut carry,
-                &mut dec.word_buf[idx_to]);
+                &mut dec.word_buf[idx_to],
+            );
             carry += hi as u32;
         }
         while carry > 0 {
@@ -723,10 +778,12 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
                 return Res::Overflow(dec);
             }
             idx_to -= 1;
-            add(dec.word_buf[idx_to],
+            add(
+                dec.word_buf[idx_to],
                 0,
                 &mut carry,
-                &mut dec.word_buf[idx_to]);
+                &mut dec.word_buf[idx_to],
+            );
         }
     }
 
@@ -779,7 +836,42 @@ pub struct Decimal {
     word_buf: Box<[u32]>,
 }
 
+#[derive(Debug)]
+pub enum RoundMode {
+    // HalfEven rounds normally.
+    HalfEven,
+    // Truncate just truncates the decimal.
+    Truncate,
+    // Ceiling is not supported now.
+    Ceiling,
+}
+
 impl Decimal {
+    /// abs the Decimal into a new Decimal.
+    #[inline]
+    pub fn abs(mut self) -> Res<Decimal> {
+        self.negative = false;
+        Res::Ok(self)
+    }
+
+    /// ceil the Decimal into a new Decimal.
+    pub fn ceil(&self) -> Res<Decimal> {
+        if !self.negative {
+            self.clone().round(0, RoundMode::Ceiling)
+        } else {
+            self.clone().round(0, RoundMode::Truncate)
+        }
+    }
+
+    /// floor the Decimal into a new Decimal.
+    pub fn floor(&self) -> Res<Decimal> {
+        if !self.negative {
+            self.clone().round(0, RoundMode::Truncate)
+        } else {
+            self.clone().round(0, RoundMode::Ceiling)
+        }
+    }
+
     /// create a new decimal for internal usage.
     fn new(int_cnt: u8, frac_cnt: u8, negative: bool) -> Decimal {
         Decimal {
@@ -812,8 +904,8 @@ impl Decimal {
             word_idx += 1;
         }
         if int_cnt > 0 {
-            int_cnt -= count_leading_zeroes((int_cnt - 1) % DIGITS_PER_WORD,
-                                            self.word_buf[word_idx])
+            int_cnt -=
+                count_leading_zeroes((int_cnt - 1) % DIGITS_PER_WORD, self.word_buf[word_idx])
         }
         (word_idx, int_cnt)
     }
@@ -951,8 +1043,8 @@ impl Decimal {
         }
         while buf_from < buf_end {
             self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) *
-                                      TEN_POW[shift] +
-                                      self.word_buf[buf_from + 1] / TEN_POW[c_shift];
+                TEN_POW[shift] +
+                self.word_buf[buf_from + 1] / TEN_POW[c_shift];
             buf_from += 1;
         }
         self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) * TEN_POW[shift];
@@ -968,16 +1060,38 @@ impl Decimal {
         let buf_end = (beg / DIGITS_PER_WORD) as usize;
         let c_shift = DIGITS_PER_WORD as usize - shift;
         if DIGITS_PER_WORD - ((end - 1) % DIGITS_PER_WORD + 1) < shift as u8 {
-            self.word_buf[buf_from + 1] = (self.word_buf[buf_from] % TEN_POW[shift]) *
-                                          TEN_POW[c_shift];
+            self.word_buf[buf_from + 1] =
+                (self.word_buf[buf_from] % TEN_POW[shift]) * TEN_POW[c_shift];
         }
         while buf_from > buf_end {
             self.word_buf[buf_from] = self.word_buf[buf_from] / TEN_POW[shift] +
-                                      (self.word_buf[buf_from - 1] % TEN_POW[shift]) *
-                                      TEN_POW[c_shift];
+                (self.word_buf[buf_from - 1] % TEN_POW[shift]) * TEN_POW[c_shift];
             buf_from -= 1;
         }
         self.word_buf[buf_from] /= TEN_POW[shift];
+    }
+
+    /// convert_to(ProduceDecWithSpecifiedTp in tidb)
+    /// produces a new decimal according to `flen` and `decimal`.
+    pub fn convert_to(self, ctx: &EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
+        let (prec, frac) = self.prec_and_frac();
+        if !self.is_zero() && prec - frac > flen - decimal {
+            return Ok(max_or_min_dec(self.negative, flen, decimal));
+            // TODO:select (cast 111 as decimal(1)) causes a warning in MySQL.
+        }
+
+        if frac == decimal {
+            return Ok(self);
+        }
+
+        let tmp = self.clone();
+        let ret = self.round(decimal as i8, RoundMode::HalfEven).unwrap();
+        // TODO: process over_flow
+        if !ret.is_zero() && frac > decimal && ret != tmp {
+            // TODO handle InInsertStmt in ctx
+            try!(convert::handle_truncate(ctx, true));
+        }
+        Ok(ret)
     }
 
     /// Round rounds the decimal to "frac" digits.
@@ -985,11 +1099,16 @@ impl Decimal {
     /// NOTES
     ///  scale can be negative !
     ///  one TRUNCATED error (line XXX below) isn't treated very logical :(
-    pub fn round(self, frac: i8) -> Res<Decimal> {
-        self.round_with_word_buf_len(frac, WORD_BUF_LEN)
+    pub fn round(self, frac: i8, round_mode: RoundMode) -> Res<Decimal> {
+        self.round_with_word_buf_len(frac, WORD_BUF_LEN, round_mode)
     }
 
-    pub fn round_with_word_buf_len(mut self, mut frac: i8, word_buf_len: u8) -> Res<Decimal> {
+    pub fn round_with_word_buf_len(
+        mut self,
+        mut frac: i8,
+        word_buf_len: u8,
+        round_mode: RoundMode,
+    ) -> Res<Decimal> {
         if frac > MAX_FRACTION as i8 {
             frac = MAX_FRACTION as i8;
         }
@@ -1023,26 +1142,51 @@ impl Decimal {
             return res;
         }
 
-        Decimal::handle_incr(res,
-                             int_word_cnt,
-                             frac_words_to,
-                             frac,
-                             frac_word_cnt,
-                             word_buf_len)
+        Decimal::handle_incr(
+            res,
+            int_word_cnt,
+            frac_words_to,
+            frac,
+            frac_word_cnt,
+            word_buf_len,
+            round_mode,
+        )
     }
 
-    fn handle_incr(mut res: Res<Decimal>,
-                   int_word_cnt: u8,
-                   frac_words_to: i8,
-                   frac: i8,
-                   frac_word_cnt: u8,
-                   word_buf_len: u8)
-                   -> Res<Decimal> {
+    fn handle_incr(
+        mut res: Res<Decimal>,
+        int_word_cnt: u8,
+        frac_words_to: i8,
+        frac: i8,
+        frac_word_cnt: u8,
+        word_buf_len: u8,
+        round_mode: RoundMode,
+    ) -> Res<Decimal> {
         // Do increment
         let mut to_idx = int_word_cnt as i8 + frac_words_to - 1;
         if frac == frac_words_to * DIGITS_PER_WORD as i8 {
-            // only support haftup currently
-            if res.word_buf[(to_idx + 1) as usize] / DIG_MASK >= 5 {
+            let do_inc = match round_mode {
+                // Notice: No support for ceiling mode now.
+                RoundMode::Ceiling => {
+                    // If any word after scale is not zero, do increment.
+                    // e.g ceiling 3.0001 to scale 1, gets 3.1
+                    let idx = to_idx + frac_word_cnt as i8 - frac_words_to;
+                    if idx > to_idx {
+                        res.word_buf[(to_idx + 1) as usize..(idx as usize + 1)]
+                            .iter()
+                            .any(|c| *c != 0)
+                    } else {
+                        false
+                    }
+                }
+                RoundMode::HalfEven => {
+                    // If first digit after scale is 5 and round even,
+                    // do increment if digit at scale is odd.
+                    res.word_buf[(to_idx + 1) as usize] / DIG_MASK >= 5
+                }
+                RoundMode::Truncate => false,
+            };
+            if do_inc {
                 if to_idx >= 0 {
                     res.word_buf[to_idx as usize] += 1;
                 } else {
@@ -1058,7 +1202,12 @@ impl Decimal {
             let pos = (frac_words_to * DIGITS_PER_WORD as i8 - frac - 1) as usize;
             let mut shifted_number = res.word_buf[to_idx as usize] / TEN_POW[pos];
             let dig_after_scale = shifted_number % 10;
-            if dig_after_scale >= 5 {
+            let round_digit = match round_mode {
+                RoundMode::Ceiling => 0,
+                RoundMode::HalfEven => 5,
+                RoundMode::Truncate => 10,
+            };
+            if dig_after_scale > round_digit || (round_digit == 5 && dig_after_scale == 5) {
                 shifted_number += 10;
             }
             res.word_buf[to_idx as usize] = TEN_POW[pos] * (shifted_number - dig_after_scale);
@@ -1075,30 +1224,35 @@ impl Decimal {
             }
         }
 
-        Decimal::handle_carry(res,
-                              to_idx as usize,
-                              frac,
-                              frac_words_to,
-                              int_word_cnt,
-                              word_buf_len)
+        Decimal::handle_carry(
+            res,
+            to_idx as usize,
+            frac,
+            frac_words_to,
+            int_word_cnt,
+            word_buf_len,
+        )
     }
 
-    fn handle_carry(mut dec: Res<Decimal>,
-                    mut to_idx: usize,
-                    mut frac: i8,
-                    mut frac_word_to: i8,
-                    int_word_cnt: u8,
-                    word_buf_len: u8)
-                    -> Res<Decimal> {
+    fn handle_carry(
+        mut dec: Res<Decimal>,
+        mut to_idx: usize,
+        mut frac: i8,
+        mut frac_word_to: i8,
+        int_word_cnt: u8,
+        word_buf_len: u8,
+    ) -> Res<Decimal> {
         if dec.word_buf[to_idx] >= WORD_BASE {
             let mut carry = 1;
             dec.word_buf[to_idx] -= WORD_BASE;
             while carry == 1 && to_idx > 0 {
                 to_idx -= 1;
-                add(dec.word_buf[to_idx],
+                add(
+                    dec.word_buf[to_idx],
                     0,
                     &mut carry,
-                    &mut dec.word_buf[to_idx]);
+                    &mut dec.word_buf[to_idx],
+                );
             }
             if carry > 0 {
                 if int_word_cnt as i8 + frac_word_to >= word_buf_len as i8 {
@@ -1190,8 +1344,13 @@ impl Decimal {
                 return Res::Truncated(self);
             }
             end = (end as isize - diff) as u8;
-            Res::Truncated(self.round_with_word_buf_len(end as i8 - point as i8, word_buf_len)
-                .unwrap())
+            Res::Truncated(
+                self.round_with_word_buf_len(
+                    end as i8 - point as i8,
+                    word_buf_len,
+                    RoundMode::HalfEven,
+                ).unwrap(),
+            )
         } else {
             Res::Ok(self)
         };
@@ -1216,7 +1375,8 @@ impl Decimal {
             }
             new_point += mini_shift as isize;
             if shift + mini_shift as isize == 0 &&
-               (new_point - int_cnt) < DIGITS_PER_WORD as isize {
+                (new_point - int_cnt) < DIGITS_PER_WORD as isize
+            {
                 res.int_cnt = int_cnt as u8;
                 res.frac_cnt = frac_cnt as u8;
                 return res;
@@ -1282,7 +1442,8 @@ impl Decimal {
         let int_word_cnt = word_cnt!(self.int_cnt) as usize;
         for word_idx in 0..int_word_cnt {
             let y = x;
-            x = x.wrapping_mul(WORD_BASE as i64).wrapping_sub(self.word_buf[word_idx] as i64);
+            x = x.wrapping_mul(WORD_BASE as i64)
+                .wrapping_sub(self.word_buf[word_idx] as i64);
             if y < i64::MIN / WORD_BASE as i64 || x > y {
                 if self.negative {
                     return Res::Overflow(i64::MIN);
@@ -1304,6 +1465,13 @@ impl Decimal {
         Res::Ok(x)
     }
 
+    /// `as_i64_with_ctx` returns int part of the decimal.
+    pub fn as_i64_with_ctx(&self, ctx: &EvalContext) -> ::std::result::Result<i64, ExprError> {
+        let res = self.as_i64();
+        try!(convert::handle_truncate(ctx, res.is_truncated()));
+        res.into()
+    }
+
     /// `as_u64` returns int part of the decimal
     pub fn as_u64(&self) -> Res<u64> {
         if self.negative {
@@ -1314,12 +1482,10 @@ impl Decimal {
         for word_idx in 0..int_cnt {
             x = match x.overflowing_mul(WORD_BASE as u64) {
                 (_, true) => return Res::Overflow(u64::MAX),
-                (x, _) => {
-                    match x.overflowing_add(self.word_buf[word_idx] as u64) {
-                        (_, true) => return Res::Overflow(u64::MAX),
-                        (x, _) => x,
-                    }
-                }
+                (x, _) => match x.overflowing_add(self.word_buf[word_idx] as u64) {
+                    (_, true) => return Res::Overflow(u64::MAX),
+                    (x, _) => x,
+                },
             };
         }
         for word_idx in int_cnt..int_cnt + word_cnt!(self.frac_cnt) as usize {
@@ -1353,11 +1519,15 @@ impl Decimal {
         Ok(f)
     }
 
-    fn from_str(s: &str, word_buf_len: u8) -> Result<Res<Decimal>> {
-        let mut bs = s.trim_left().as_bytes();
-        if bs.is_empty() {
-            return Err(box_err!("{} is empty", s));
-        }
+    pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
+        Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
+    }
+
+    fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
+        let mut bs = match s.iter().position(|c| !c.is_ascii_whitespace()) {
+            None => return Err(box_err!("\"{}\" is empty", escape(s))),
+            Some(pos) => &s[pos..],
+        };
         let mut negative = false;
         match bs[0] {
             b'-' => {
@@ -1377,7 +1547,7 @@ impl Decimal {
             0
         };
         if int_cnt + frac_cnt == 0 {
-            return Err(box_err!("{} is invalid number", s));
+            return Err(box_err!("\"{}\" is invalid number", escape(s)));
         }
         let int_word_cnt = word_cnt!(int_cnt);
         let frac_word_cnt = word_cnt!(frac_cnt);
@@ -1455,13 +1625,18 @@ impl Decimal {
     }
 
     pub fn div(self, rhs: Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
-        let result_frac_cnt = cmp::min(self.result_frac_cnt.saturating_add(frac_incr),
-                                       MAX_FRACTION);
+        let result_frac_cnt =
+            cmp::min(self.result_frac_cnt.saturating_add(frac_incr), MAX_FRACTION);
         let mut res = do_div_mod(self, rhs, frac_incr, false);
         if let Some(ref mut dec) = res {
             dec.result_frac_cnt = result_frac_cnt;
         }
         res
+    }
+
+    pub fn is_zero(&self) -> bool {
+        let len = word_cnt!(self.int_cnt) + word_cnt!(self.frac_cnt);
+        self.word_buf[0..len as usize].iter().all(|&x| x == 0)
     }
 }
 
@@ -1526,7 +1701,7 @@ impl FromStr for Decimal {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Decimal> {
-        match try!(Decimal::from_str(s, WORD_BUF_LEN)) {
+        match try!(Decimal::from_bytes(s.as_bytes())) {
             Res::Ok(d) => Ok(d),
             Res::Overflow(_) => Err(box_err!("parsing {} will overflow", s)),
             Res::Truncated(_) => Err(box_err!("parsing {} will truncated", s)),
@@ -1537,7 +1712,8 @@ impl FromStr for Decimal {
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
         let mut dec = self.clone();
-        dec = dec.round(self.result_frac_cnt as i8).unwrap();
+        dec = dec.round(self.result_frac_cnt as i8, RoundMode::HalfEven)
+            .unwrap();
         fmt.write_str(&dec.to_string())
     }
 }
@@ -1644,10 +1820,12 @@ pub trait DecimalEncoder: Write {
             src_int_word_cnt = int_word_cnt;
             src_leading_digits = leading_digits;
             res = Res::Overflow(());
-            error!("encode {} with prec {} and frac {} overflow",
-                   d.to_string(),
-                   prec,
-                   frac);
+            error!(
+                "encode {} with prec {} and frac {} overflow",
+                d.to_string(),
+                prec,
+                frac
+            );
         } else if int_size > src_int_size {
             for _ in src_int_size..int_size {
                 write_u8!(self, mask as u8, written);
@@ -1658,10 +1836,12 @@ pub trait DecimalEncoder: Write {
             src_frac_word_cnt = frac_word_cnt;
             src_trailing_digits = trailing_digits;
             res = Res::Truncated(());
-            warn!("encode {} with prec {} and frac {} truncated",
-                  d.to_string(),
-                  prec,
-                  frac);
+            warn!(
+                "encode {} with prec {} and frac {} truncated",
+                d.to_string(),
+                prec,
+                frac
+            );
         } else if frac_size > src_frac_size && src_trailing_digits > 0 {
             if frac_word_cnt == src_frac_word_cnt {
                 src_trailing_digits = trailing_digits;
@@ -1696,8 +1876,7 @@ pub trait DecimalEncoder: Write {
                 src_trailing_digits += 1;
             }
             let x = (d.word_buf[src_word_start_idx] /
-                     TEN_POW[DIGITS_PER_WORD as usize - src_trailing_digits]) ^
-                    mask;
+                TEN_POW[DIGITS_PER_WORD as usize - src_trailing_digits]) ^ mask;
             write_word!(self, x, i as usize, written);
         }
 
@@ -1722,9 +1901,11 @@ pub trait DecimalDecoder: BytesDecoder {
         let frac_cnt = try!(self.read_u8());
 
         if prec < frac_cnt {
-            return Err(box_err!("invalid decimal, precision {} < frac_cnt {}",
-                                prec,
-                                frac_cnt));
+            return Err(box_err!(
+                "invalid decimal, precision {} < frac_cnt {}",
+                prec,
+                frac_cnt
+            ));
         }
 
         let int_cnt = prec - frac_cnt;
@@ -1819,12 +2000,10 @@ impl Ord for Decimal {
     fn cmp(&self, right: &Decimal) -> Ordering {
         if self.negative == right.negative {
             let (carry, _, _, _) = calc_sub_carry(self, right);
-            carry.map_or(Ordering::Equal, |carry| {
-                if (carry > 0) == self.negative {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
+            carry.map_or(Ordering::Equal, |carry| if (carry > 0) == self.negative {
+                Ordering::Greater
+            } else {
+                Ordering::Less
             })
         } else if self.negative {
             Ordering::Less
@@ -1834,7 +2013,7 @@ impl Ord for Decimal {
     }
 }
 
-impl<'a> Add<&'a Decimal> for &'a Decimal {
+impl<'a, 'b> Add<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -1849,7 +2028,7 @@ impl<'a> Add<&'a Decimal> for &'a Decimal {
     }
 }
 
-impl<'a> Sub<&'a Decimal> for &'a Decimal {
+impl<'a, 'b> Sub<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn sub(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -1864,7 +2043,7 @@ impl<'a> Sub<&'a Decimal> for &'a Decimal {
     }
 }
 
-impl<'a> Mul for &'a Decimal {
+impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     type Output = Res<Decimal>;
 
     fn mul(self, rhs: &'a Decimal) -> Res<Decimal> {
@@ -1893,10 +2072,21 @@ impl Rem for Decimal {
     }
 }
 
+impl Neg for Decimal {
+    type Output = Decimal;
+
+    fn neg(mut self) -> Decimal {
+        if !self.is_zero() {
+            self.negative = !self.negative;
+        }
+        self
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::{WORD_BUF_LEN, DEFAULT_DIV_FRAC_INCR};
+    use super::{DEFAULT_DIV_FRAC_INCR, WORD_BUF_LEN};
 
     use std::f64;
     use std::iter::repeat;
@@ -1942,7 +2132,10 @@ mod test {
     #[test]
     fn test_to_i64() {
         let cases = vec![
-            ("18446744073709551615", Res::Overflow(9223372036854775807i64)),
+            (
+                "18446744073709551615",
+                Res::Overflow(9223372036854775807i64),
+            ),
             ("-1", Res::Ok(-1)),
             ("1", Res::Ok(1)),
             ("-1.23", Res::Truncated(-1)),
@@ -1969,7 +2162,10 @@ mod test {
             ("18446744073709551616", Res::Overflow(18446744073709551615)),
             ("-1", Res::Overflow(0)),
             ("1.23", Res::Truncated(1)),
-            ("9999999999999999999999999.000", Res::Overflow(18446744073709551615)),
+            (
+                "9999999999999999999999999.000",
+                Res::Overflow(18446744073709551615),
+            ),
         ];
 
         for (dec_str, exp) in cases {
@@ -2023,102 +2219,286 @@ mod test {
     #[test]
     fn test_shift() {
         let cases = vec![
-            (WORD_BUF_LEN, "123.123", 1, Res::Ok("1231.23")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 1, Res::Ok("1234571891.23123456789")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 8, Res::Ok("12345718912312345.6789")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 9, Res::Ok("123457189123123456.789")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 10, Res::Ok("1234571891231234567.89")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 17, Res::Ok("12345718912312345678900000")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 18, Res::Ok("123457189123123456789000000")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 19,
-             Res::Ok("1234571891231234567890000000")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 26,
-             Res::Ok("12345718912312345678900000000000000")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 27,
-             Res::Ok("123457189123123456789000000000000000")),
-            (WORD_BUF_LEN, "123457189.123123456789000", 28,
-             Res::Ok("1234571891231234567890000000000000000")),
-            (WORD_BUF_LEN, "000000000000000000000000123457189.123123456789000", 26,
-             Res::Ok("12345718912312345678900000000000000")),
-            (WORD_BUF_LEN, "00000000123457189.123123456789000", 27,
-             Res::Ok("123457189123123456789000000000000000")),
-            (WORD_BUF_LEN, "00000000000000000123457189.123123456789000", 28,
-             Res::Ok("1234571891231234567890000000000000000")),
-            (WORD_BUF_LEN, "123", 1, Res::Ok("1230")),
-            (WORD_BUF_LEN, "123", 10, Res::Ok("1230000000000")),
-            (WORD_BUF_LEN, ".123", 1, Res::Ok("1.23")),
-            (WORD_BUF_LEN, ".123", 10, Res::Ok("1230000000")),
-            (WORD_BUF_LEN, ".123", 14, Res::Ok("12300000000000")),
-            (WORD_BUF_LEN, "000.000", 1000, Res::Ok("0")),
-            (WORD_BUF_LEN, "000.", 1000, Res::Ok("0")),
-            (WORD_BUF_LEN, ".000", 1000, Res::Ok("0")),
-            (WORD_BUF_LEN, "1", 1000, Res::Overflow("1")),
-            (WORD_BUF_LEN, "123.123", -1, Res::Ok("12.3123")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -1, Res::Ok("12398765432.1123456789")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -2, Res::Ok("1239876543.21123456789")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -3, Res::Ok("123987654.321123456789")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -8, Res::Ok("1239.87654321123456789")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -9, Res::Ok("123.987654321123456789")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -10, Res::Ok("12.3987654321123456789")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -11, Res::Ok("1.23987654321123456789")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -12, Res::Ok("0.123987654321123456789")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -13, Res::Ok("0.0123987654321123456789")),
-            (WORD_BUF_LEN, "123987654321.123456789000", -14, Res::Ok("0.00123987654321123456789")),
-            (WORD_BUF_LEN, "00000087654321.123456789000", -14,
-             Res::Ok("0.00000087654321123456789")),
-            (2, "123.123", -2, Res::Ok("1.23123")),
-            (2, "123.123", -3, Res::Ok("0.123123")),
-            (2, "123.123", -6, Res::Ok("0.000123123")),
-            (2, "123.123", -7, Res::Ok("0.0000123123")),
-            (2, "123.123", -15, Res::Ok("0.000000000000123123")),
-            (2, "123.123", -16, Res::Truncated("0.000000000000012312")),
-            (2, "123.123", -17, Res::Truncated("0.000000000000001231")),
-            (2, "123.123", -18, Res::Truncated("0.000000000000000123")),
-            (2, "123.123", -19, Res::Truncated("0.000000000000000012")),
-            (2, "123.123", -20, Res::Truncated("0.000000000000000001")),
-            (2, "123.123", -21, Res::Truncated("0")),
-            (2, ".000000000123", -1, Res::Ok("0.0000000000123")),
-            (2, ".000000000123", -6, Res::Ok("0.000000000000000123")),
-            (2, ".000000000123", -7, Res::Truncated("0.000000000000000012")),
-            (2, ".000000000123", -8, Res::Truncated("0.000000000000000001")),
-            (2, ".000000000123", -9, Res::Truncated("0")),
-            (2, ".000000000123", 1, Res::Ok("0.00000000123")),
-            (2, ".000000000123", 8, Res::Ok("0.0123")),
-            (2, ".000000000123", 9, Res::Ok("0.123")),
-            (2, ".000000000123", 10, Res::Ok("1.23")),
-            (2, ".000000000123", 17, Res::Ok("12300000")),
-            (2, ".000000000123", 18, Res::Ok("123000000")),
-            (2, ".000000000123", 19, Res::Ok("1230000000")),
-            (2, ".000000000123", 20, Res::Ok("12300000000")),
-            (2, ".000000000123", 21, Res::Ok("123000000000")),
-            (2, ".000000000123", 22, Res::Ok("1230000000000")),
-            (2, ".000000000123", 23, Res::Ok("12300000000000")),
-            (2, ".000000000123", 24, Res::Ok("123000000000000")),
-            (2, ".000000000123", 25, Res::Ok("1230000000000000")),
-            (2, ".000000000123", 26, Res::Ok("12300000000000000")),
-            (2, ".000000000123", 27, Res::Ok("123000000000000000")),
-            (2, ".000000000123", 28, Res::Overflow("0.000000000123")),
-            (2, "123456789.987654321", -1, Res::Truncated("12345678.998765432")),
-            (2, "123456789.987654321", -2, Res::Truncated("1234567.899876543")),
-            (2, "123456789.987654321", -8, Res::Truncated("1.234567900")),
-            (2, "123456789.987654321", -9, Res::Ok("0.123456789987654321")),
-            (2, "123456789.987654321", -10, Res::Truncated("0.012345678998765432")),
-            (2, "123456789.987654321", -17, Res::Truncated("0.000000001234567900")),
-            (2, "123456789.987654321", -18, Res::Truncated("0.000000000123456790")),
-            (2, "123456789.987654321", -19, Res::Truncated("0.000000000012345679")),
-            (2, "123456789.987654321", -26, Res::Truncated("0.000000000000000001")),
-            (2, "123456789.987654321", -27, Res::Truncated("0")),
-            (2, "123456789.987654321", 1, Res::Truncated("1234567900")),
-            (2, "123456789.987654321", 2, Res::Truncated("12345678999")),
-            (2, "123456789.987654321", 4, Res::Truncated("1234567899877")),
-            (2, "123456789.987654321", 8, Res::Truncated("12345678998765432")),
-            (2, "123456789.987654321", 9, Res::Ok("123456789987654321")),
-            (2, "123456789.987654321", 10, Res::Overflow("123456789.987654321")),
-            (2, "123456789.987654321", 0, Res::Ok("123456789.987654321")),
+            (
+                WORD_BUF_LEN,
+                b"123.123" as &'static [u8],
+                1,
+                Res::Ok("1231.23"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                1,
+                Res::Ok("1234571891.23123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                8,
+                Res::Ok("12345718912312345.6789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                9,
+                Res::Ok("123457189123123456.789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                10,
+                Res::Ok("1234571891231234567.89"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                17,
+                Res::Ok("12345718912312345678900000"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                18,
+                Res::Ok("123457189123123456789000000"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                19,
+                Res::Ok("1234571891231234567890000000"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                26,
+                Res::Ok("12345718912312345678900000000000000"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                27,
+                Res::Ok("123457189123123456789000000000000000"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123457189.123123456789000",
+                28,
+                Res::Ok("1234571891231234567890000000000000000"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"000000000000000000000000123457189.123123456789000",
+                26,
+                Res::Ok("12345718912312345678900000000000000"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"00000000123457189.123123456789000",
+                27,
+                Res::Ok("123457189123123456789000000000000000"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"00000000000000000123457189.123123456789000",
+                28,
+                Res::Ok("1234571891231234567890000000000000000"),
+            ),
+            (WORD_BUF_LEN, b"123", 1, Res::Ok("1230")),
+            (WORD_BUF_LEN, b"123", 10, Res::Ok("1230000000000")),
+            (WORD_BUF_LEN, b".123", 1, Res::Ok("1.23")),
+            (WORD_BUF_LEN, b".123", 10, Res::Ok("1230000000")),
+            (WORD_BUF_LEN, b".123", 14, Res::Ok("12300000000000")),
+            (WORD_BUF_LEN, b"000.000", 1000, Res::Ok("0")),
+            (WORD_BUF_LEN, b"000.", 1000, Res::Ok("0")),
+            (WORD_BUF_LEN, b".000", 1000, Res::Ok("0")),
+            (WORD_BUF_LEN, b"1", 1000, Res::Overflow("1")),
+            (WORD_BUF_LEN, b"123.123", -1, Res::Ok("12.3123")),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -1,
+                Res::Ok("12398765432.1123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -2,
+                Res::Ok("1239876543.21123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -3,
+                Res::Ok("123987654.321123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -8,
+                Res::Ok("1239.87654321123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -9,
+                Res::Ok("123.987654321123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -10,
+                Res::Ok("12.3987654321123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -11,
+                Res::Ok("1.23987654321123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -12,
+                Res::Ok("0.123987654321123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -13,
+                Res::Ok("0.0123987654321123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"123987654321.123456789000",
+                -14,
+                Res::Ok("0.00123987654321123456789"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"00000087654321.123456789000",
+                -14,
+                Res::Ok("0.00000087654321123456789"),
+            ),
+            (2, b"123.123", -2, Res::Ok("1.23123")),
+            (2, b"123.123", -3, Res::Ok("0.123123")),
+            (2, b"123.123", -6, Res::Ok("0.000123123")),
+            (2, b"123.123", -7, Res::Ok("0.0000123123")),
+            (2, b"123.123", -15, Res::Ok("0.000000000000123123")),
+            (2, b"123.123", -16, Res::Truncated("0.000000000000012312")),
+            (2, b"123.123", -17, Res::Truncated("0.000000000000001231")),
+            (2, b"123.123", -18, Res::Truncated("0.000000000000000123")),
+            (2, b"123.123", -19, Res::Truncated("0.000000000000000012")),
+            (2, b"123.123", -20, Res::Truncated("0.000000000000000001")),
+            (2, b"123.123", -21, Res::Truncated("0")),
+            (2, b".000000000123", -1, Res::Ok("0.0000000000123")),
+            (2, b".000000000123", -6, Res::Ok("0.000000000000000123")),
+            (
+                2,
+                b".000000000123",
+                -7,
+                Res::Truncated("0.000000000000000012"),
+            ),
+            (
+                2,
+                b".000000000123",
+                -8,
+                Res::Truncated("0.000000000000000001"),
+            ),
+            (2, b".000000000123", -9, Res::Truncated("0")),
+            (2, b".000000000123", 1, Res::Ok("0.00000000123")),
+            (2, b".000000000123", 8, Res::Ok("0.0123")),
+            (2, b".000000000123", 9, Res::Ok("0.123")),
+            (2, b".000000000123", 10, Res::Ok("1.23")),
+            (2, b".000000000123", 17, Res::Ok("12300000")),
+            (2, b".000000000123", 18, Res::Ok("123000000")),
+            (2, b".000000000123", 19, Res::Ok("1230000000")),
+            (2, b".000000000123", 20, Res::Ok("12300000000")),
+            (2, b".000000000123", 21, Res::Ok("123000000000")),
+            (2, b".000000000123", 22, Res::Ok("1230000000000")),
+            (2, b".000000000123", 23, Res::Ok("12300000000000")),
+            (2, b".000000000123", 24, Res::Ok("123000000000000")),
+            (2, b".000000000123", 25, Res::Ok("1230000000000000")),
+            (2, b".000000000123", 26, Res::Ok("12300000000000000")),
+            (2, b".000000000123", 27, Res::Ok("123000000000000000")),
+            (2, b".000000000123", 28, Res::Overflow("0.000000000123")),
+            (
+                2,
+                b"123456789.987654321",
+                -1,
+                Res::Truncated("12345678.998765432"),
+            ),
+            (
+                2,
+                b"123456789.987654321",
+                -2,
+                Res::Truncated("1234567.899876543"),
+            ),
+            (2, b"123456789.987654321", -8, Res::Truncated("1.234567900")),
+            (
+                2,
+                b"123456789.987654321",
+                -9,
+                Res::Ok("0.123456789987654321"),
+            ),
+            (
+                2,
+                b"123456789.987654321",
+                -10,
+                Res::Truncated("0.012345678998765432"),
+            ),
+            (
+                2,
+                b"123456789.987654321",
+                -17,
+                Res::Truncated("0.000000001234567900"),
+            ),
+            (
+                2,
+                b"123456789.987654321",
+                -18,
+                Res::Truncated("0.000000000123456790"),
+            ),
+            (
+                2,
+                b"123456789.987654321",
+                -19,
+                Res::Truncated("0.000000000012345679"),
+            ),
+            (
+                2,
+                b"123456789.987654321",
+                -26,
+                Res::Truncated("0.000000000000000001"),
+            ),
+            (2, b"123456789.987654321", -27, Res::Truncated("0")),
+            (2, b"123456789.987654321", 1, Res::Truncated("1234567900")),
+            (2, b"123456789.987654321", 2, Res::Truncated("12345678999")),
+            (
+                2,
+                b"123456789.987654321",
+                4,
+                Res::Truncated("1234567899877"),
+            ),
+            (
+                2,
+                b"123456789.987654321",
+                8,
+                Res::Truncated("12345678998765432"),
+            ),
+            (2, b"123456789.987654321", 9, Res::Ok("123456789987654321")),
+            (
+                2,
+                b"123456789.987654321",
+                10,
+                Res::Overflow("123456789.987654321"),
+            ),
+            (2, b"123456789.987654321", 0, Res::Ok("123456789.987654321")),
         ];
 
-        for (word_buf_len, dec_str, shift, exp) in cases {
-            let dec = Decimal::from_str(dec_str, word_buf_len).unwrap().unwrap();
+        for (word_buf_len, dec, shift, exp) in cases {
+            let dec = Decimal::from_bytes_with_word_buf(dec, word_buf_len)
+                .unwrap()
+                .unwrap();
             let shifted = dec.shift_with_word_buf_len(shift, word_buf_len);
             let res = shifted.map(|d| d.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
@@ -2128,75 +2508,122 @@ mod test {
     #[test]
     fn test_round() {
         let cases = vec![
-            ("123456789.987654321", 1, Res::Ok("123456790.0")),
-            ("15.1", 0, Res::Ok("15")),
-            ("15.5", 0, Res::Ok("16")),
-            ("15.9", 0, Res::Ok("16")),
-            ("-15.1", 0, Res::Ok("-15")),
-            ("-15.5", 0, Res::Ok("-16")),
-            ("-15.9", 0, Res::Ok("-16")),
-            ("15.1", 1, Res::Ok("15.1")),
-            ("-15.1", 1, Res::Ok("-15.1")),
-            ("15.17", 1, Res::Ok("15.2")),
-            ("15.4", -1, Res::Ok("20")),
-            ("-15.4", -1, Res::Ok("-20")),
-            ("5.4", -1, Res::Ok("10")),
-            (".999", 0, Res::Ok("1")),
-            ("999999999", -9, Res::Ok("1000000000")),
+            (
+                "123456789.987654321",
+                1,
+                Res::Ok("123456790.0"),
+                Res::Ok("123456789.9"),
+                Res::Ok("123456790.0"),
+            ),
+            ("15.1", 0, Res::Ok("15"), Res::Ok("15"), Res::Ok("16")),
+            ("15.5", 0, Res::Ok("16"), Res::Ok("15"), Res::Ok("16")),
+            ("15.9", 0, Res::Ok("16"), Res::Ok("15"), Res::Ok("16")),
+            ("-15.1", 0, Res::Ok("-15"), Res::Ok("-15"), Res::Ok("-16")),
+            ("-15.5", 0, Res::Ok("-16"), Res::Ok("-15"), Res::Ok("-16")),
+            ("-15.9", 0, Res::Ok("-16"), Res::Ok("-15"), Res::Ok("-16")),
+            ("15.1", 1, Res::Ok("15.1"), Res::Ok("15.1"), Res::Ok("15.1")),
+            (
+                "-15.1",
+                1,
+                Res::Ok("-15.1"),
+                Res::Ok("-15.1"),
+                Res::Ok("-15.1"),
+            ),
+            (
+                "15.17",
+                1,
+                Res::Ok("15.2"),
+                Res::Ok("15.1"),
+                Res::Ok("15.2"),
+            ),
+            ("15.4", -1, Res::Ok("20"), Res::Ok("10"), Res::Ok("20")),
+            ("-15.4", -1, Res::Ok("-20"), Res::Ok("-10"), Res::Ok("-20")),
+            ("5.4", -1, Res::Ok("10"), Res::Ok("0"), Res::Ok("10")),
+            (".999", 0, Res::Ok("1"), Res::Ok("0"), Res::Ok("1")),
+            (
+                "999999999",
+                -9,
+                Res::Ok("1000000000"),
+                Res::Ok("0"),
+                Res::Ok("1000000000"),
+            ),
         ];
 
-        for (dec_str, scale, exp) in cases {
+        for (dec_str, scale, half_exp, trunc_exp, ceil_exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec.round(scale).map(|d| d.to_string());
-            assert_eq!(res, exp.map(|s| s.to_owned()));
+            let res = dec.clone()
+                .round(scale, RoundMode::HalfEven)
+                .map(|d| d.to_string());
+            assert_eq!(res, half_exp.map(|s| s.to_owned()));
+            let res = dec.clone()
+                .round(scale, RoundMode::Truncate)
+                .map(|d| d.to_string());
+            assert_eq!(res, trunc_exp.map(|s| s.to_owned()));
+            let res = dec.round(scale, RoundMode::Ceiling).map(|d| d.to_string());
+            assert_eq!(res, ceil_exp.map(|s| s.to_owned()));
         }
     }
 
     #[test]
     fn test_string() {
         let cases = vec![
-            (WORD_BUF_LEN, "12345", Res::Ok("12345")),
-            (WORD_BUF_LEN, "12345.", Res::Ok("12345")),
-            (WORD_BUF_LEN, "123.45.", Res::Ok("123.45")),
-            (WORD_BUF_LEN, "-123.45.", Res::Ok("-123.45")),
-            (WORD_BUF_LEN, ".00012345000098765", Res::Ok("0.00012345000098765")),
-            (WORD_BUF_LEN, ".12345000098765", Res::Ok("0.12345000098765")),
-            (WORD_BUF_LEN, "-.000000012345000098765", Res::Ok("-0.000000012345000098765")),
-            (WORD_BUF_LEN, "1234500009876.5", Res::Ok("1234500009876.5")),
-            (WORD_BUF_LEN, "123E5", Res::Ok("12300000")),
-            (WORD_BUF_LEN, "123E-2", Res::Ok("1.23")),
-            (1, "123450000098765", Res::Overflow("98765")),
-            (1, "123450.000098765", Res::Truncated("123450")),
-            (WORD_BUF_LEN, "123.123", Res::Ok("123.123")),
-            (WORD_BUF_LEN, "123.1230", Res::Ok("123.1230")),
-            (WORD_BUF_LEN, "00123.123", Res::Ok("123.123")),
-            (WORD_BUF_LEN, "1.21", Res::Ok("1.21")),
-            (WORD_BUF_LEN, ".21", Res::Ok("0.21")),
-            (WORD_BUF_LEN, "1.00", Res::Ok("1.00")),
-            (WORD_BUF_LEN, "100", Res::Ok("100")),
-            (WORD_BUF_LEN, "-100", Res::Ok("-100")),
-            (WORD_BUF_LEN, "100.00", Res::Ok("100.00")),
-            (WORD_BUF_LEN, "00100.00", Res::Ok("100.00")),
-            (WORD_BUF_LEN, "-100.00", Res::Ok("-100.00")),
-            (WORD_BUF_LEN, "-0.00", Res::Ok("0.00")),
-            (WORD_BUF_LEN, "00.00", Res::Ok("0.00")),
-            (WORD_BUF_LEN, "0.00", Res::Ok("0.00")),
-            (WORD_BUF_LEN, "-2.010", Res::Ok("-2.010")),
-            (WORD_BUF_LEN, "12345", Res::Ok("12345")),
-            (WORD_BUF_LEN, "-12345", Res::Ok("-12345")),
-            (WORD_BUF_LEN, "-3.", Res::Ok("-3")),
-            (WORD_BUF_LEN, "1.456e3", Res::Ok("1456")),
-            (WORD_BUF_LEN, "3.", Res::Ok("3")),
-            (WORD_BUF_LEN, "314e-2", Res::Ok("3.14")),
-            (WORD_BUF_LEN, "1e2", Res::Ok("100")),
-            (WORD_BUF_LEN, "2E-1", Res::Ok("0.2")),
-            (WORD_BUF_LEN, "2E0", Res::Ok("2")),
-            (WORD_BUF_LEN, "2.2E-1", Res::Ok("0.22")),
-            (WORD_BUF_LEN, "2.23E2", Res::Ok("223")),
+            (WORD_BUF_LEN, b"12345" as &'static [u8], Res::Ok("12345")),
+            (WORD_BUF_LEN, b"12345.", Res::Ok("12345")),
+            (WORD_BUF_LEN, b"123.45.", Res::Ok("123.45")),
+            (WORD_BUF_LEN, b"-123.45.", Res::Ok("-123.45")),
+            (
+                WORD_BUF_LEN,
+                b".00012345000098765",
+                Res::Ok("0.00012345000098765"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b".12345000098765",
+                Res::Ok("0.12345000098765"),
+            ),
+            (
+                WORD_BUF_LEN,
+                b"-.000000012345000098765",
+                Res::Ok("-0.000000012345000098765"),
+            ),
+            (WORD_BUF_LEN, b"1234500009876.5", Res::Ok("1234500009876.5")),
+            (WORD_BUF_LEN, b"123E5", Res::Ok("12300000")),
+            (WORD_BUF_LEN, b"123E-2", Res::Ok("1.23")),
+            (1, b"123450000098765", Res::Overflow("98765")),
+            (1, b"123450.000098765", Res::Truncated("123450")),
+            (WORD_BUF_LEN, b"123.123", Res::Ok("123.123")),
+            (WORD_BUF_LEN, b"123.1230", Res::Ok("123.1230")),
+            (WORD_BUF_LEN, b"00123.123", Res::Ok("123.123")),
+            (WORD_BUF_LEN, b"1.21", Res::Ok("1.21")),
+            (WORD_BUF_LEN, b".21", Res::Ok("0.21")),
+            (WORD_BUF_LEN, b"1.00", Res::Ok("1.00")),
+            (WORD_BUF_LEN, b"100", Res::Ok("100")),
+            (WORD_BUF_LEN, b"-100", Res::Ok("-100")),
+            (WORD_BUF_LEN, b"100.00", Res::Ok("100.00")),
+            (WORD_BUF_LEN, b"00100.00", Res::Ok("100.00")),
+            (WORD_BUF_LEN, b"-100.00", Res::Ok("-100.00")),
+            (WORD_BUF_LEN, b"-0.00", Res::Ok("0.00")),
+            (WORD_BUF_LEN, b"00.00", Res::Ok("0.00")),
+            (WORD_BUF_LEN, b"0.00", Res::Ok("0.00")),
+            (WORD_BUF_LEN, b"-2.010", Res::Ok("-2.010")),
+            (WORD_BUF_LEN, b"12345", Res::Ok("12345")),
+            (WORD_BUF_LEN, b"-12345", Res::Ok("-12345")),
+            (WORD_BUF_LEN, b"-3.", Res::Ok("-3")),
+            (WORD_BUF_LEN, b"1.456e3", Res::Ok("1456")),
+            (WORD_BUF_LEN, b"3.", Res::Ok("3")),
+            (WORD_BUF_LEN, b"314e-2", Res::Ok("3.14")),
+            (WORD_BUF_LEN, b"1e2", Res::Ok("100")),
+            (WORD_BUF_LEN, b"2E-1", Res::Ok("0.2")),
+            (WORD_BUF_LEN, b"2E0", Res::Ok("2")),
+            (WORD_BUF_LEN, b"2.2E-1", Res::Ok("0.22")),
+            (WORD_BUF_LEN, b"2.23E2", Res::Ok("223")),
+            (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
+            (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
+            (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
         ];
 
-        for (word_buf_len, dec_str, exp) in cases {
-            let d = Decimal::from_str(dec_str, word_buf_len).unwrap();
+        for (word_buf_len, dec, exp) in cases {
+            let d = Decimal::from_bytes_with_word_buf(dec, word_buf_len).unwrap();
             let res = d.map(|d| d.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
@@ -2206,15 +2633,35 @@ mod test {
     fn test_codec() {
         let cases = vec![
             ("-10.55", 4, 2, Res::Ok("-10.55")),
-            ("0.0123456789012345678912345", 30, 25, Res::Ok("0.0123456789012345678912345")),
+            (
+                "0.0123456789012345678912345",
+                30,
+                25,
+                Res::Ok("0.0123456789012345678912345"),
+            ),
             ("12345", 5, 0, Res::Ok("12345")),
             ("12345", 10, 3, Res::Ok("12345.000")),
             ("123.45", 10, 3, Res::Ok("123.450")),
             ("-123.45", 20, 10, Res::Ok("-123.4500000000")),
-            (".00012345000098765", 15, 14, Res::Truncated("0.00012345000098")),
-            (".00012345000098765", 22, 20, Res::Ok("0.00012345000098765000")),
+            (
+                ".00012345000098765",
+                15,
+                14,
+                Res::Truncated("0.00012345000098"),
+            ),
+            (
+                ".00012345000098765",
+                22,
+                20,
+                Res::Ok("0.00012345000098765000"),
+            ),
             (".12345000098765", 30, 20, Res::Ok("0.12345000098765000000")),
-            ("-.000000012345000098765", 30, 20, Res::Truncated("-0.00000001234500009876")),
+            (
+                "-.000000012345000098765",
+                30,
+                20,
+                Res::Truncated("-0.00000001234500009876"),
+            ),
             ("1234500009876.5", 30, 5, Res::Ok("1234500009876.50000")),
             ("111111111.11", 10, 2, Res::Overflow("11111111.11")),
             ("000000000.01", 7, 3, Res::Ok("0.010")),
@@ -2289,9 +2736,17 @@ mod test {
         let b: String = repeat('8').take(81).collect();
         let c = "8888888890".to_owned() + &repeat('9').take(71).collect::<String>();
         let cases = vec![
-            (".00012345000098765", "123.45", Res::Ok("123.45012345000098765")),
+            (
+                ".00012345000098765",
+                "123.45",
+                Res::Ok("123.45012345000098765"),
+            ),
             (".1", ".45", Res::Ok("0.55")),
-            ("1234500009876.5", ".00012345000098765", Res::Ok("1234500009876.50012345000098765")),
+            (
+                "1234500009876.5",
+                ".00012345000098765",
+                Res::Ok("1234500009876.50012345000098765"),
+            ),
             ("9999909999999.5", ".555", Res::Ok("9999910000000.055")),
             ("99999999", "1", Res::Ok("100000000")),
             ("989999999", "1", Res::Ok("990000000")),
@@ -2330,8 +2785,16 @@ mod test {
     #[test]
     fn test_sub() {
         let cases = vec![
-            (".00012345000098765", "123.45", Res::Ok("-123.44987654999901235")),
-            ("1234500009876.5", ".00012345000098765", Res::Ok("1234500009876.49987654999901235")),
+            (
+                ".00012345000098765",
+                "123.45",
+                Res::Ok("-123.44987654999901235"),
+            ),
+            (
+                "1234500009876.5",
+                ".00012345000098765",
+                Res::Ok("1234500009876.49987654999901235"),
+            ),
             ("9999900000000.5", ".555", Res::Ok("9999899999999.945")),
             ("1111.5551", "1111.555", Res::Ok("0.0001")),
             (".555", ".555", Res::Ok("0")),
@@ -2363,7 +2826,11 @@ mod test {
             ("12", "10", Res::Ok("120")),
             ("0", "-1.1", Res::Ok("0")),
             ("-123.456", "98765.4321", Res::Ok("-12193185.1853376")),
-            ("-123456000000", "98765432100000", Res::Ok("-12193185185337600000000000")),
+            (
+                "-123456000000",
+                "98765432100000",
+                Res::Ok("-12193185185337600000000000"),
+            ),
             ("123456", "987654321", Res::Ok("121931851853376")),
             ("123456", "9876543210", Res::Ok("1219318518533760")),
             ("123", "0.01", Res::Ok("1.23")),
@@ -2388,31 +2855,117 @@ mod test {
         let cases = vec![
             (5, "120", "10", Some("12.000000000"), Some("0")),
             (5, "123", "0.01", Some("12300.000000000"), Some("0.00")),
-            (5, "120", "100000000000.00000", Some("0.000000001200000000"), Some("120.00000")),
+            (
+                5,
+                "120",
+                "100000000000.00000",
+                Some("0.000000001200000000"),
+                Some("120.00000"),
+            ),
             (5, "123", "0", None, None),
             (5, "0", "0", None, None),
-            (5, "-12193185.1853376", "98765.4321", Some("-123.456000000000000000"),
-             Some("-45037.0370376")),
-            (5, "121931851853376", "987654321", Some("123456.000000000"), Some("0")),
+            (
+                5,
+                "-12193185.1853376",
+                "98765.4321",
+                Some("-123.456000000000000000"),
+                Some("-45037.0370376"),
+            ),
+            (
+                5,
+                "121931851853376",
+                "987654321",
+                Some("123456.000000000"),
+                Some("0"),
+            ),
             (5, "0", "987", Some("0"), Some("0")),
             (5, "1", "3", Some("0.333333333"), Some("1")),
-            (5, "1.000000000000", "3", Some("0.333333333333333333"), Some("1.000000000000")),
+            (
+                5,
+                "1.000000000000",
+                "3",
+                Some("0.333333333333333333"),
+                Some("1.000000000000"),
+            ),
             (5, "1", "1", Some("1.000000000"), Some("0")),
-            (5, "0.0123456789012345678912345", "9999999999",
-             Some("0.000000000001234567890246913578148141"), Some("0.0123456789012345678912345")),
-            (5, "10.333000000", "12.34500", Some("0.837019036046982584042122316"),
-             Some("10.333000000")),
-            (5, "10.000000000060", "2", Some("5.000000000030000000"), Some("0.000000000060")),
+            (
+                5,
+                "0.0123456789012345678912345",
+                "9999999999",
+                Some("0.000000000001234567890246913578148141"),
+                Some("0.0123456789012345678912345"),
+            ),
+            (
+                5,
+                "10.333000000",
+                "12.34500",
+                Some("0.837019036046982584042122316"),
+                Some("10.333000000"),
+            ),
+            (
+                5,
+                "10.000000000060",
+                "2",
+                Some("5.000000000030000000"),
+                Some("0.000000000060"),
+            ),
             (0, "234", "10", Some("23"), Some("4")),
-            (0, "234.567", "10.555", Some("22.223306489815253434"), Some("2.357")),
-            (0, "-234.567", "10.555", Some("-22.223306489815253434"), Some("-2.357")),
-            (0, "234.567", "-10.555", Some("-22.223306489815253434"), Some("2.357")),
-            (0, "99999999999999999999999999999999999999", "3",
-             Some("33333333333333333333333333333333333333"), Some("0")),
-            (DEFAULT_DIV_FRAC_INCR, "1", "1", Some("1.000000000"), Some("0")),
-            (DEFAULT_DIV_FRAC_INCR, "1.00", "1", Some("1.000000000"), Some("0.00")),
-            (DEFAULT_DIV_FRAC_INCR, "1", "1.000", Some("1.000000000"), Some("0.000")),
-            (DEFAULT_DIV_FRAC_INCR, "2", "3", Some("0.666666666"), Some("2")),
+            (
+                0,
+                "234.567",
+                "10.555",
+                Some("22.223306489815253434"),
+                Some("2.357"),
+            ),
+            (
+                0,
+                "-234.567",
+                "10.555",
+                Some("-22.223306489815253434"),
+                Some("-2.357"),
+            ),
+            (
+                0,
+                "234.567",
+                "-10.555",
+                Some("-22.223306489815253434"),
+                Some("2.357"),
+            ),
+            (
+                0,
+                "99999999999999999999999999999999999999",
+                "3",
+                Some("33333333333333333333333333333333333333"),
+                Some("0"),
+            ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "1",
+                "1",
+                Some("1.000000000"),
+                Some("0"),
+            ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "1.00",
+                "1",
+                Some("1.000000000"),
+                Some("0.00"),
+            ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "1",
+                "1.000",
+                Some("1.000000000"),
+                Some("0.000"),
+            ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "2",
+                "3",
+                Some("0.666666666"),
+                Some("2"),
+            ),
             (0, "1", "2.0", Some("0.500000000"), Some("1.0")),
             (0, "1.0", "2", Some("0.500000000"), Some("1.0")),
             (0, "2.23", "3", Some("0.743333333"), Some("2.23")),
@@ -2427,6 +2980,142 @@ mod test {
 
             let res = super::do_div_mod(lhs, rhs, frac_incr, true).map(|d| d.unwrap().to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()));
+        }
+    }
+
+    #[test]
+    fn test_neg() {
+        let cases = vec![
+            ("123.45", "-123.45"),
+            ("1", "-1"),
+            ("1234500009876.5", "-1234500009876.5"),
+            ("1111.5551", "-1111.5551"),
+            ("0.555", "-0.555"),
+            ("0", "0"),
+            ("0.0", "0.0"),
+            ("0.00", "0.00"),
+        ];
+
+        for (pos, neg) in cases {
+            let pos_dec: Decimal = pos.parse().unwrap();
+            let res = -pos_dec.clone();
+            assert_eq!(format!("{}", res), neg);
+            assert!((&pos_dec + &res).is_zero());
+
+            let neg_dec: Decimal = neg.parse().unwrap();
+            let res = -neg_dec.clone();
+            assert_eq!(format!("{}", res), pos);
+            assert!((&neg_dec + &res).is_zero());
+        }
+
+        let max_dec = super::max_or_min_dec(false, 40, 20);
+        let min_dec = super::max_or_min_dec(true, 40, 20);
+        assert_eq!(min_dec, -max_dec.clone());
+        assert_eq!(max_dec, -min_dec.clone());
+    }
+
+    #[test]
+    fn test_max_or_min_decimal() {
+        let cases = vec![
+            (1, 1, "0.9"),
+            (1, 0, "9"),
+            (2, 1, "9.9"),
+            (4, 2, "99.99"),
+            (6, 3, "999.999"),
+            (8, 4, "9999.9999"),
+            (10, 5, "99999.99999"),
+            (12, 6, "999999.999999"),
+            (14, 7, "9999999.9999999"),
+            (16, 8, "99999999.99999999"),
+            (18, 9, "999999999.999999999"),
+            (20, 10, "9999999999.9999999999"),
+            (20, 20, "0.99999999999999999999"),
+            (20, 0, "99999999999999999999"),
+            (40, 20, "99999999999999999999.99999999999999999999"),
+        ];
+
+        for (prec, frac, exp) in cases {
+            let positive = super::max_or_min_dec(false, prec, frac);
+            let res = positive.to_string();
+            assert_eq!(&res, exp);
+            let negative = super::max_or_min_dec(true, prec, frac);
+            let mut negative_exp = String::from("-");
+            negative_exp.push_str(exp);
+            let res = negative.to_string();
+            assert_eq!(res, negative_exp);
+        }
+    }
+
+    #[test]
+    fn test_reset_to_zero() {
+        let cases = vec![
+            "12345",
+            "0.99999",
+            "18446744073709551615",
+            "18446744073709551616",
+            "-1",
+            "1.23",
+            "9999999999999999999999999.000",
+        ];
+
+        for case in cases {
+            let mut dec: Decimal = case.parse().unwrap();
+            assert!(!dec.is_zero());
+            dec.reset_to_zero();
+            assert!(dec.is_zero());
+        }
+    }
+
+    #[test]
+    fn test_ceil() {
+        let cases = vec![
+            ("12345", "12345"),
+            ("0.99999", "1"),
+            ("-0.99999", "0"),
+            ("18446744073709551615", "18446744073709551615"),
+            ("18446744073709551616", "18446744073709551616"),
+            ("-18446744073709551615", "-18446744073709551615"),
+            ("-18446744073709551616", "-18446744073709551616"),
+            ("-1", "-1"),
+            ("1.23", "2"),
+            ("-1.23", "-1"),
+            ("1.00000", "1"),
+            ("-1.00000", "-1"),
+            (
+                "9999999999999999999999999.001",
+                "10000000000000000000000000",
+            ),
+        ];
+        for (input, exp) in cases {
+            let dec: Decimal = input.parse().unwrap();
+            let exp: Decimal = exp.parse().unwrap();
+            let got = dec.ceil().unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_floor() {
+        let cases = vec![
+            ("12345", "12345"),
+            ("0.99999", "0"),
+            ("-0.99999", "-1"),
+            ("18446744073709551615", "18446744073709551615"),
+            ("18446744073709551616", "18446744073709551616"),
+            ("-18446744073709551615", "-18446744073709551615"),
+            ("-18446744073709551616", "-18446744073709551616"),
+            ("-1", "-1"),
+            ("1.23", "1"),
+            ("-1.23", "-2"),
+            ("00001.00000", "1"),
+            ("-00001.00000", "-1"),
+            ("9999999999999999999999999.001", "9999999999999999999999999"),
+        ];
+        for (input, exp) in cases {
+            let dec: Decimal = input.parse().unwrap();
+            let exp: Decimal = exp.parse().unwrap();
+            let got = dec.floor().unwrap();
+            assert_eq!(got, exp);
         }
     }
 }

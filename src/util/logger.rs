@@ -19,14 +19,32 @@ use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 pub use log::LogLevelFilter;
 
-pub fn init_log<W: LogWriter + Sync + Send + 'static>(writer: W,
-                                                      level: LogLevelFilter)
-                                                      -> Result<(), SetLoggerError> {
+const ENABLED_TARGETS: &[&'static str] = &["tikv::", "tests::", "benches::"];
+
+pub fn init_log<W: LogWriter + Sync + Send + 'static>(
+    writer: W,
+    level: LogLevelFilter,
+) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
         filter.set(level);
         Box::new(Logger {
             level: level,
             writer: writer,
+            tikv_only: false,
+        })
+    })
+}
+
+pub fn init_log_for_tikv_only<W: LogWriter + Sync + Send + 'static>(
+    writer: W,
+    level: LogLevelFilter,
+) -> Result<(), SetLoggerError> {
+    log::set_logger(|filter| {
+        filter.set(level);
+        Box::new(Logger {
+            level: level,
+            writer: writer,
+            tikv_only: true,
         })
     })
 }
@@ -38,6 +56,7 @@ pub trait LogWriter {
 struct Logger<W: LogWriter> {
     level: LogLevelFilter,
     writer: W,
+    tikv_only: bool,
 }
 
 impl<W: LogWriter + Sync + Send> Log for Logger<W> {
@@ -46,16 +65,25 @@ impl<W: LogWriter + Sync + Send> Log for Logger<W> {
     }
 
     fn log(&self, record: &LogRecord) {
+        if self.tikv_only &&
+            ENABLED_TARGETS
+                .iter()
+                .all(|target| !record.target().starts_with(target))
+        {
+            return;
+        }
         if self.enabled(record.metadata()) {
             let t = time::now();
             let time_str = time::strftime("%Y/%m/%d %H:%M:%S.%f", &t).unwrap();
             // TODO allow formatter to be configurable.
-            self.writer.write(format_args!("{} {}:{}: [{}] {}\n",
-                                           &time_str[..time_str.len() - 6],
-                                           record.location().file().rsplit('/').nth(0).unwrap(),
-                                           record.location().line(),
-                                           record.level(),
-                                           record.args()));
+            self.writer.write(format_args!(
+                "{} {}:{}: [{}] {}\n",
+                &time_str[..time_str.len() - 6],
+                record.location().file().rsplit('/').nth(0).unwrap(),
+                record.location().line(),
+                record.level(),
+                record.args()
+            ));
         }
     }
 }

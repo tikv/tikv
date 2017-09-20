@@ -81,33 +81,43 @@ impl Error {
         match *self {
             Error::Engine(ref e) => e.maybe_clone().map(Error::Engine),
             Error::Codec(ref e) => e.maybe_clone().map(Error::Codec),
-            Error::KeyIsLocked { ref key, ref primary, ts, ttl } => {
-                Some(Error::KeyIsLocked {
-                    key: key.clone(),
-                    primary: primary.clone(),
-                    ts: ts,
-                    ttl: ttl,
-                })
-            }
+            Error::KeyIsLocked {
+                ref key,
+                ref primary,
+                ts,
+                ttl,
+            } => Some(Error::KeyIsLocked {
+                key: key.clone(),
+                primary: primary.clone(),
+                ts: ts,
+                ttl: ttl,
+            }),
             Error::BadFormatLock => Some(Error::BadFormatLock),
             Error::BadFormatWrite => Some(Error::BadFormatWrite),
-            Error::TxnLockNotFound { start_ts, commit_ts, ref key } => {
-                Some(Error::TxnLockNotFound {
-                    start_ts: start_ts,
-                    commit_ts: commit_ts,
-                    key: key.to_owned(),
-                })
-            }
-            Error::WriteConflict { start_ts, conflict_ts, ref key, ref primary } => {
-                Some(Error::WriteConflict {
-                    start_ts: start_ts,
-                    conflict_ts: conflict_ts,
-                    key: key.to_owned(),
-                    primary: primary.to_owned(),
-                })
-            }
+            Error::TxnLockNotFound {
+                start_ts,
+                commit_ts,
+                ref key,
+            } => Some(Error::TxnLockNotFound {
+                start_ts: start_ts,
+                commit_ts: commit_ts,
+                key: key.to_owned(),
+            }),
+            Error::WriteConflict {
+                start_ts,
+                conflict_ts,
+                ref key,
+                ref primary,
+            } => Some(Error::WriteConflict {
+                start_ts: start_ts,
+                conflict_ts: conflict_ts,
+                key: key.to_owned(),
+                primary: primary.to_owned(),
+            }),
             Error::KeyVersion => Some(Error::KeyVersion),
-            Error::Committed { commit_ts } => Some(Error::Committed { commit_ts: commit_ts }),
+            Error::Committed { commit_ts } => Some(Error::Committed {
+                commit_ts: commit_ts,
+            }),
             Error::Io(_) | Error::Other(_) => None,
         }
     }

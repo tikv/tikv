@@ -22,8 +22,8 @@
 #![feature(fnbox)]
 #![allow(new_without_default)]
 #![feature(const_fn)]
-
 #![allow(needless_pass_by_value)]
+#![allow(unreadable_literal)]
 
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
@@ -35,16 +35,13 @@ extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate mio;
 extern crate kvproto;
 extern crate tipb;
-extern crate time;
-extern crate fnv;
 extern crate test;
 extern crate grpcio as grpc;
 extern crate futures;
 extern crate futures_cpupool;
-extern crate tokio_core;
+extern crate toml;
 
 mod raft;
 mod raftstore;
@@ -52,6 +49,7 @@ mod coprocessor;
 mod storage;
 mod util;
 mod pd;
+mod config;
 
 use std::env;
 
@@ -67,8 +65,10 @@ fn _0_ci_setup() {
 #[test]
 fn _1_check_system_requirement() {
     if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
-        panic!("To run test, please make sure the maximum number of open file descriptors not \
-                less than 2000: {:?}",
-               e);
+        panic!(
+            "To run test, please make sure the maximum number of open file descriptors not \
+             less than 2000: {:?}",
+            e
+        );
     }
 }

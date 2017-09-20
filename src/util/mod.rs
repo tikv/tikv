@@ -15,8 +15,8 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io;
 use std::{slice, thread};
-use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
-use std::time::{Duration, Instant};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::time::Duration;
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::vec_deque::{Iter, VecDeque};
@@ -35,25 +35,25 @@ pub mod codec;
 pub mod rocksdb;
 pub mod config;
 pub mod buf;
-pub mod sockopt;
 pub mod transport;
-pub mod time_monitor;
 pub mod file;
 pub mod file_log;
-pub mod clocktime;
 pub mod metrics;
 pub mod threadpool;
 pub mod collections;
-pub mod properties;
+pub mod time;
 
-#[cfg(target_os="linux")]
+pub use self::rocksdb::properties;
+
+#[cfg(target_os = "linux")]
 mod thread_metrics;
 
 pub const NO_LIMIT: u64 = u64::MAX;
 
 pub fn get_limit_at_size<'a, T, I>(entries: I, max: u64) -> usize
-    where T: Message + Clone,
-          I: IntoIterator<Item = &'a T>
+where
+    T: Message + Clone,
+    I: IntoIterator<Item = &'a T>,
 {
     let mut iter = entries.into_iter();
     // If max is NO_LIMIT, we can return directly.
@@ -103,7 +103,9 @@ pub struct DefaultRng {
 
 impl DefaultRng {
     fn new() -> DefaultRng {
-        DefaultRng { rng: rand::thread_rng() }
+        DefaultRng {
+            rng: rand::thread_rng(),
+        }
     }
 }
 
@@ -257,48 +259,6 @@ pub fn as_slice<T>(t: &T) -> &[T] {
     }
 }
 
-pub struct SlowTimer {
-    slow_time: Duration,
-    t: Instant,
-}
-
-impl SlowTimer {
-    pub fn new() -> SlowTimer {
-        SlowTimer::default()
-    }
-
-    pub fn from(slow_time: Duration) -> SlowTimer {
-        SlowTimer {
-            slow_time: slow_time,
-            t: Instant::now(),
-        }
-    }
-
-    pub fn from_secs(secs: u64) -> SlowTimer {
-        SlowTimer::from(Duration::from_secs(secs))
-    }
-
-    pub fn from_millis(millis: u64) -> SlowTimer {
-        SlowTimer::from(Duration::from_millis(millis))
-    }
-
-    pub fn elapsed(&self) -> Duration {
-        self.t.elapsed()
-    }
-
-    pub fn is_slow(&self) -> bool {
-        self.elapsed() >= self.slow_time
-    }
-}
-
-const DEFAULT_SLOW_SECS: u64 = 1;
-
-impl Default for SlowTimer {
-    fn default() -> SlowTimer {
-        SlowTimer::from_secs(DEFAULT_SLOW_SECS)
-    }
-}
-
 /// `TryInsertWith` is a helper trait for `Entry` to accept a failable closure.
 pub trait TryInsertWith<'a, V, E> {
     fn or_try_insert_with<F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>;
@@ -316,32 +276,11 @@ impl<'a, T: 'a, V: 'a, E> TryInsertWith<'a, V, E> for Entry<'a, T, V> {
     }
 }
 
-/// Convert Duration to milliseconds.
-#[inline]
-pub fn duration_to_ms(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() * 1_000 + (nanos / 1_000_000)
-}
-
-/// Convert Duration to seconds.
-#[inline]
-pub fn duration_to_sec(d: Duration) -> f64 {
-    let nanos = d.subsec_nanos() as f64;
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() as f64 + (nanos / 1_000_000_000.0)
-}
-
-/// Convert Duration to nanoseconds.
-#[inline]
-pub fn duration_to_nanos(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() * 1_000_000_000 + nanos
-}
-
 pub fn get_tag_from_thread_name() -> Option<String> {
-    thread::current().name().and_then(|name| name.split("::").skip(1).last()).map(From::from)
+    thread::current()
+        .name()
+        .and_then(|name| name.split("::").skip(1).last())
+        .map(From::from)
 }
 
 /// `DeferContext` will invoke the wrapped closure when dropped.
@@ -395,30 +334,35 @@ impl<L, R> Either<L, R> {
 }
 
 /// `build_info` returns a tuple of Strings that contains build utc time and commit hash.
-pub fn build_info() -> (String, String, String) {
+pub fn build_info() -> (String, String, String, String) {
     let raw = include_str!(concat!(env!("OUT_DIR"), "/build-info.txt"));
     let mut parts = raw.split('\n');
 
-    (parts.next().unwrap_or("None").to_owned(),
-     parts.next().unwrap_or("None").to_owned(),
-     parts.next().unwrap_or("None").to_owned())
+    (
+        parts.next().unwrap_or("None").to_owned(),
+        parts.next().unwrap_or("None").to_owned(),
+        parts.next().unwrap_or("None").to_owned(),
+        parts.next().unwrap_or("None").to_owned(),
+    )
 }
 
 /// `print_tikv_info` prints the tikv version information to the standard output.
 pub fn print_tikv_info() {
-    let (hash, date, rustc) = build_info();
+    let (hash, branch, date, rustc) = build_info();
     info!("Welcome to TiKV.");
-    info!("Version:");
-    info!("Git Commit Hash: {}", hash);
-    info!("UTC Build Time:  {}", date);
-    info!("Rustc Version:   {}", rustc);
+    info!("Release Version:   {}", env!("CARGO_PKG_VERSION"));
+    info!("Git Commit Hash:   {}", hash);
+    info!("Git Commit Branch: {}", branch);
+    info!("UTC Build Time:    {}", date);
+    info!("Rustc Version:     {}", rustc);
 }
 
 /// `run_prometheus` runs a background prometheus client.
-pub fn run_prometheus(interval: Duration,
-                      address: &str,
-                      job: &str)
-                      -> Option<thread::JoinHandle<()>> {
+pub fn run_prometheus(
+    interval: Duration,
+    address: &str,
+    job: &str,
+) -> Option<thread::JoinHandle<()>> {
     if interval == Duration::from_secs(0) {
         return None;
     }
@@ -427,30 +371,30 @@ pub fn run_prometheus(interval: Duration,
     let address = address.to_owned();
     let handler = thread::Builder::new()
         .name("promepusher".to_owned())
-        .spawn(move || {
-            loop {
-                let metric_familys = prometheus::gather();
+        .spawn(move || loop {
+            let metric_familys = prometheus::gather();
 
-                let res = prometheus::push_metrics(&job,
-                                                   prometheus::hostname_grouping_key(),
-                                                   &address,
-                                                   metric_familys);
-                if let Err(e) = res {
-                    error!("fail to push metrics: {}", e);
-                }
-
-                thread::sleep(interval);
+            let res = prometheus::push_metrics(
+                &job,
+                prometheus::hostname_grouping_key(),
+                &address,
+                metric_familys,
+            );
+            if let Err(e) = res {
+                error!("fail to push metrics: {}", e);
             }
+
+            thread::sleep(interval);
         })
         .unwrap();
 
     Some(handler)
 }
 
-#[cfg(target_os="linux")]
+#[cfg(target_os = "linux")]
 pub use self::thread_metrics::monitor_threads;
 
-#[cfg(not(target_os="linux"))]
+#[cfg(not(target_os = "linux"))]
 pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
     Ok(())
 }
@@ -486,7 +430,8 @@ impl<T> RingQueue<T> {
     }
 
     pub fn swap_remove_front<F>(&mut self, f: F) -> Option<T>
-        where F: FnMut(&T) -> bool
+    where
+        F: FnMut(&T) -> bool,
     {
         if let Some(pos) = self.buf.iter().position(f) {
             self.buf.swap_remove_front(pos)
@@ -498,7 +443,10 @@ impl<T> RingQueue<T> {
 
 // `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
 pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
-    a.iter().filter(|x| b.iter().find(|y| y == x).is_none()).map(|x| *x).collect()
+    a.iter()
+        .filter(|x| b.iter().find(|y| y == x).is_none())
+        .map(|x| *x)
+        .collect()
 }
 
 #[inline]
@@ -509,10 +457,9 @@ pub fn is_even(n: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::*;
-    use std::net::{SocketAddr, AddrParseError};
-    use std::time::Duration;
+    use std::net::{AddrParseError, SocketAddr};
     use std::rc::Rc;
-    use std::{f64, cmp};
+    use std::cmp;
     use std::sync::atomic::{AtomicBool, Ordering};
     use kvproto::eraftpb::Entry;
     use protobuf::Message;
@@ -532,10 +479,7 @@ mod tests {
             assert_eq!(to_socket_addr(addr).is_ok(), ok);
         }
 
-        let tbls = vec![
-            ("localhost:80", false),
-            ("127.0.0.1:80", true),
-        ];
+        let tbls = vec![("localhost:80", false), ("127.0.0.1:80", true)];
 
         for (addr, ok) in tbls {
             let ret: Result<SocketAddr, AddrParseError> = addr.parse();
@@ -562,19 +506,6 @@ mod tests {
             queue.swap_remove_front(|_| true).unwrap();
         }
         assert_eq!(None, queue.swap_remove_front(|_| true));
-    }
-
-    #[test]
-    fn test_duration_to() {
-        let tbl = vec![0, 100, 1_000, 5_000, 9999, 1_000_000, 1_000_000_000];
-        for ms in tbl {
-            let d = Duration::from_millis(ms);
-            assert_eq!(ms, duration_to_ms(d));
-            let exp_sec = ms as f64 / 1000.0;
-            let act_sec = duration_to_sec(d);
-            assert!((act_sec - exp_sec).abs() < f64::EPSILON);
-            assert_eq!(ms * 1_000_000, duration_to_nanos(d));
-        }
     }
 
     #[test]
@@ -624,7 +555,7 @@ mod tests {
             (vec![e.clone(); 10], NO_LIMIT, 10),
             (vec![e.clone(); 10], size, 1),
             (vec![e.clone(); 10], size + 1, 1),
-            (vec![e.clone(); 10], 2 * size , 2),
+            (vec![e.clone(); 10], 2 * size, 2),
             (vec![e.clone(); 10], 10 * size - 1, 9),
             (vec![e.clone(); 10], 10 * size, 10),
             (vec![e.clone(); 10], 10 * size + 1, 10),
@@ -658,13 +589,15 @@ mod tests {
                         res.extend_from_slice(p1);
                         res.extend_from_slice(p2);
                         let exp: Vec<_> = (low..high).collect();
-                        assert_eq!(res,
-                                   exp,
-                                   "[{}, {}) in {:?} with first: {}",
-                                   low,
-                                   high,
-                                   v,
-                                   first);
+                        assert_eq!(
+                            res,
+                            exp,
+                            "[{}, {}) in {:?} with first: {}",
+                            low,
+                            high,
+                            v,
+                            first
+                        );
                     }
                 }
             }

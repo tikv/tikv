@@ -12,21 +12,19 @@
 // limitations under the License.
 
 mod endpoint;
-mod aggregate;
 mod metrics;
-mod executor;
 mod dag;
+pub mod select;
 pub mod codec;
-pub mod xeval;
+
+use std::result;
+use std::error;
 
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
 
-use std::result;
-use std::time::Instant;
-use std::error;
-
-use storage::{txn, engine, mvcc};
+use storage::{engine, mvcc, txn};
+use util::time::Instant;
 
 quick_error! {
     #[derive(Debug)]
@@ -39,7 +37,7 @@ quick_error! {
             description("key is locked")
             display("locked {:?}", l)
         }
-        Outdated(deadline: Instant, now: Instant, tp: i64) {
+        Outdated(deadline: Instant, now: Instant, tag: &'static str) {
             description("request is outdated")
         }
         Full(allow: usize) {
@@ -68,7 +66,12 @@ impl From<engine::Error> for Error {
 impl From<txn::Error> for Error {
     fn from(e: txn::Error) -> Error {
         match e {
-            txn::Error::Mvcc(mvcc::Error::KeyIsLocked { primary, ts, key, ttl }) => {
+            txn::Error::Mvcc(mvcc::Error::KeyIsLocked {
+                primary,
+                ts,
+                key,
+                ttl,
+            }) => {
                 let mut info = LockInfo::new();
                 info.set_primary_lock(primary);
                 info.set_lock_version(ts);
@@ -81,5 +84,5 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{Host as EndPointHost, RequestTask, SelectContext, SINGLE_GROUP,
-                         REQ_TYPE_SELECT, REQ_TYPE_INDEX, REQ_TYPE_DAG, Task as EndPointTask};
+pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask, REQ_TYPE_DAG,
+                         REQ_TYPE_INDEX, REQ_TYPE_SELECT, SINGLE_GROUP};

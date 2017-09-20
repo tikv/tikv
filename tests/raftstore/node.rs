@@ -13,29 +13,27 @@
 
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
 
-use rocksdb::DB;
 use tempdir::TempDir;
 
-use super::cluster::{Simulator, Cluster};
+use super::cluster::{Cluster, Simulator};
 use tikv::server::Node;
 use tikv::raftstore::store::*;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::eraftpb::MessageType;
-use tikv::raftstore::{Result, Error};
+use tikv::config::TiKvConfig;
+use tikv::raftstore::{Error, Result};
 use tikv::util::HandyRwLock;
 use tikv::util::transport::SendCh;
-use tikv::server::Config as ServerConfig;
-use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
+use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
-use tikv::storage::ALL_CFS;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 
@@ -99,8 +97,12 @@ impl Channel<RaftMessage> for ChannelTransport {
 
             defer!({
                 let core = self.rl();
-                core.snap_paths[&from_store].0.deregister(&key, &SnapEntry::Sending);
-                core.snap_paths[&to_store].0.deregister(&key, &SnapEntry::Receiving);
+                core.snap_paths[&from_store]
+                    .0
+                    .deregister(&key, &SnapEntry::Sending);
+                core.snap_paths[&to_store]
+                    .0
+                    .deregister(&key, &SnapEntry::Receiving);
             });
 
             try!(copy_snapshot(from, to));
@@ -157,21 +159,25 @@ impl NodeCluster {
 }
 
 impl Simulator for NodeCluster {
-    fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
+    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engines: Engines) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
-        let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
+        let mut node = Node::new(
+            &mut event_loop,
+            &cfg.server,
+            &cfg.raft_store,
+            self.pd_client.clone(),
+        );
 
         let (snap_mgr, tmp) = if node_id == 0 ||
-                                 !self.trans.rl().snap_paths.contains_key(&node_id) {
+            !self.trans.rl().snap_paths.contains_key(&node_id)
+        {
             let tmp = TempDir::new("test_cluster").unwrap();
-            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(),
-                                            Some(node.get_sendch()),
-                                            cfg.raft_store.use_sst_file_snapshot);
+            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), Some(node.get_sendch()));
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.rl();
@@ -179,26 +185,40 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        node.start(event_loop,
-                   engine.clone(),
-                   simulate_trans.clone(),
-                   snap_mgr.clone(),
-                   snap_status_receiver)
-            .unwrap();
-        assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
-            .unwrap()
-            .is_none());
+        node.start(
+            event_loop,
+            engines.clone(),
+            simulate_trans.clone(),
+            snap_mgr.clone(),
+            snap_status_receiver,
+        ).unwrap();
+        assert!(
+            engines
+                .kv_engine
+                .clone()
+                .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+                .unwrap()
+                .is_none()
+        );
         assert!(node_id == 0 || node_id == node.id());
-        debug!("node_id: {} tmp: {:?}",
-               node_id,
-               tmp.as_ref().map(|p| p.path().to_str().unwrap().to_owned()));
+        debug!(
+            "node_id: {} tmp: {:?}",
+            node_id,
+            tmp.as_ref().map(|p| p.path().to_str().unwrap().to_owned())
+        );
         if let Some(tmp) = tmp {
-            self.trans.wl().snap_paths.insert(node.id(), (snap_mgr, tmp));
+            self.trans
+                .wl()
+                .snap_paths
+                .insert(node.id(), (snap_mgr, tmp));
         }
 
         let node_id = node.id();
         let router = ServerRaftStoreRouter::new(node.get_sendch());
-        self.trans.wl().routers.insert(node_id, SimulateTransport::new(router));
+        self.trans
+            .wl()
+            .routers
+            .insert(node_id, SimulateTransport::new(router));
         self.trans
             .wl()
             .snapshot_status_senders
@@ -210,11 +230,18 @@ impl Simulator for NodeCluster {
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
-        self.trans.wl().snap_paths[&node_id].1.path().to_str().unwrap().to_owned()
+        self.trans.wl().snap_paths[&node_id]
+            .1
+            .path()
+            .to_str()
+            .unwrap()
+            .to_owned()
     }
 
     fn stop_node(&mut self, node_id: u64) {
-        self.nodes.remove(&node_id);
+        if let Some(mut node) = self.nodes.remove(&node_id) {
+            node.stop().unwrap();
+        }
         self.trans.wl().routers.remove(&node_id).unwrap();
     }
 
@@ -222,21 +249,25 @@ impl Simulator for NodeCluster {
         self.nodes.keys().cloned().collect()
     }
 
-    fn call_command_on_node(&self,
-                            node_id: u64,
-                            request: RaftCmdRequest,
-                            timeout: Duration)
-                            -> Result<RaftCmdResponse> {
+    fn call_command_on_node(
+        &self,
+        node_id: u64,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
         if !self.trans.rl().routers.contains_key(&node_id) {
             return Err(box_err!("missing sender for store {}", node_id));
         }
 
         let router = self.trans.rl().routers.get(&node_id).cloned().unwrap();
-        wait_op!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                     router.send_command(request, cb).unwrap()
-                 },
-                 timeout)
-            .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
+        wait_op!(
+            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
+                router.send_command(request, cb).unwrap()
+            },
+            timeout
+        ).ok_or_else(|| {
+            Error::Timeout(format!("request timeout for {:?}", timeout))
+        })
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {
@@ -244,11 +275,17 @@ impl Simulator for NodeCluster {
     }
 
     fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {
-        self.simulate_trans.get_mut(&node_id).unwrap().add_filter(filter);
+        self.simulate_trans
+            .get_mut(&node_id)
+            .unwrap()
+            .add_filter(filter);
     }
 
     fn clear_send_filters(&mut self, node_id: u64) {
-        self.simulate_trans.get_mut(&node_id).unwrap().clear_filters();
+        self.simulate_trans
+            .get_mut(&node_id)
+            .unwrap()
+            .clear_filters();
     }
 
     fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter) {
@@ -269,5 +306,5 @@ impl Simulator for NodeCluster {
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    Cluster::new(id, count, ALL_CFS, sim, pd_client)
+    Cluster::new(id, count, &[], sim, pd_client)
 }

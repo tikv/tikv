@@ -17,11 +17,11 @@ use std::cmp::Ordering;
 use std::boxed::FnBox;
 use std::time::Duration;
 
-use self::rocksdb::EngineRocksdb;
-use storage::{Key, Value, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+pub use self::rocksdb::EngineRocksdb;
+use rocksdb::TablePropertiesCollection;
+use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
-use util::properties::{UserProperties, GetPropertiesOptions};
 
 mod rocksdb;
 pub mod raftkv;
@@ -44,7 +44,10 @@ const STAT_SEEK: &'static str = "seek";
 const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
+pub type BatchResults<T> = Vec<Option<(CbContext, Result<T>)>>;
+pub type BatchCallback<T> = Box<FnBox(BatchResults<T>) + Send>;
 
+#[derive(Clone, Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
 }
@@ -59,11 +62,24 @@ impl CbContext {
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
+    DeleteRange(CfName, Key, Key),
 }
 
 pub trait Engine: Send + Debug {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
+    /// Snapshots are token by `Context`s, the results are send to the `on_finished` callback,
+    /// with the same order. If a read-index is occurred, a `None` is placed in the corresponding
+    /// slot, and the caller is responsible for reissuing it again, in `async_snapshot`.
+    // TODO:
+    //   - replace Option with Result and define an Error for requiring read-index.
+    //   - add a new method for force read-index, that may be done
+    //     by renaming the `async_snapshot`.
+    fn async_batch_snapshot(
+        &self,
+        batch: Vec<Context>,
+        on_finished: BatchCallback<Box<Snapshot>>,
+    ) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -107,15 +123,16 @@ pub trait Snapshot: Send {
     #[allow(needless_lifetimes)]
     fn iter<'a>(&'a self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<'a>>;
     #[allow(needless_lifetimes)]
-    fn iter_cf<'a>(&'a self,
-                   cf: CfName,
-                   iter_opt: IterOption,
-                   mode: ScanMode)
-                   -> Result<Cursor<'a>>;
-    fn get_properties(&self, opts: &GetPropertiesOptions) -> Result<UserProperties> {
-        self.get_properties_cf(CF_DEFAULT, opts)
+    fn iter_cf<'a>(
+        &'a self,
+        cf: CfName,
+        iter_opt: IterOption,
+        mode: ScanMode,
+    ) -> Result<Cursor<'a>>;
+    fn get_properties(&self) -> Result<TablePropertiesCollection> {
+        self.get_properties_cf(CF_DEFAULT)
     }
-    fn get_properties_cf(&self, _: CfName, _: &GetPropertiesOptions) -> Result<UserProperties> {
+    fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
         Err(Error::RocksDb("no user properties".to_owned()))
     }
     fn clone(&self) -> Box<Snapshot>;
@@ -178,13 +195,24 @@ impl CFStatistics {
     }
 
     pub fn details(&self) -> Vec<(&str, usize)> {
-        vec![(STAT_TOTAL, self.total_op_count()),
-             (STAT_PROCESSED, self.processed),
-             (STAT_GET, self.get),
-             (STAT_NEXT, self.next),
-             (STAT_PREV, self.prev),
-             (STAT_SEEK, self.seek),
-             (STAT_SEEK_FOR_PREV, self.seek_for_prev)]
+        vec![
+            (STAT_TOTAL, self.total_op_count()),
+            (STAT_PROCESSED, self.processed),
+            (STAT_GET, self.get),
+            (STAT_NEXT, self.next),
+            (STAT_PREV, self.prev),
+            (STAT_SEEK, self.seek),
+            (STAT_SEEK_FOR_PREV, self.seek_for_prev),
+        ]
+    }
+
+    pub fn add(&mut self, other: &Self) {
+        self.processed = self.processed.saturating_add(other.processed);
+        self.get = self.get.saturating_add(other.get);
+        self.next = self.next.saturating_add(other.next);
+        self.prev = self.prev.saturating_add(other.prev);
+        self.seek = self.seek.saturating_add(other.seek);
+        self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
     }
 }
 
@@ -205,9 +233,30 @@ impl Statistics {
     }
 
     pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {
-        vec![(CF_DEFAULT, self.data.details()),
-             (CF_LOCK, self.lock.details()),
-             (CF_WRITE, self.write.details())]
+        vec![
+            (CF_DEFAULT, self.data.details()),
+            (CF_LOCK, self.lock.details()),
+            (CF_WRITE, self.write.details()),
+        ]
+    }
+
+    pub fn add(&mut self, other: &Self) {
+        self.lock.add(&other.lock);
+        self.write.add(&other.write);
+        self.data.add(&other.data);
+    }
+}
+
+#[derive(Default)]
+pub struct StatisticsSummary {
+    pub stat: Statistics,
+    pub count: u64,
+}
+
+impl StatisticsSummary {
+    pub fn add_statistics(&mut self, v: &Statistics) {
+        self.stat.add(v);
+        self.count += 1;
     }
 }
 
@@ -237,7 +286,8 @@ impl<'a> Cursor<'a> {
         }
 
         if self.scan_mode == ScanMode::Forward && self.valid() &&
-           self.iter.key() >= key.encoded().as_slice() {
+            self.iter.key() >= key.encoded().as_slice()
+        {
             return Ok(true);
         }
 
@@ -261,7 +311,8 @@ impl<'a> Cursor<'a> {
         }
         let ord = self.iter.key().cmp(key.encoded());
         if ord == Ordering::Equal ||
-           (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater) {
+            (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
+        {
             return Ok(true);
         }
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
@@ -269,8 +320,10 @@ impl<'a> Cursor<'a> {
             return Ok(false);
         }
         if ord == Ordering::Greater {
-            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
-                       self.seek(key, statistics));
+            near_loop!(
+                self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
+                self.seek(key, statistics)
+            );
             if self.iter.valid() {
                 if self.iter.key() < key.encoded().as_slice() {
                     self.next(statistics);
@@ -281,8 +334,10 @@ impl<'a> Cursor<'a> {
             }
         } else {
             // ord == Less
-            near_loop!(self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
-                       self.seek(key, statistics));
+            near_loop!(
+                self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
+                self.seek(key, statistics)
+            );
         }
         if !self.iter.valid() {
             self.max_key = Some(key.encoded().to_owned());
@@ -316,7 +371,8 @@ impl<'a> Cursor<'a> {
         }
 
         if self.scan_mode == ScanMode::Backward && self.valid() &&
-           self.iter.key() <= key.encoded().as_slice() {
+            self.iter.key() <= key.encoded().as_slice()
+        {
             return Ok(true);
         }
 
@@ -336,7 +392,8 @@ impl<'a> Cursor<'a> {
         }
         let ord = self.iter.key().cmp(key.encoded());
         if ord == Ordering::Equal ||
-           (self.scan_mode == ScanMode::Backward && ord == Ordering::Less) {
+            (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
+        {
             return Ok(true);
         }
 
@@ -346,8 +403,10 @@ impl<'a> Cursor<'a> {
         }
 
         if ord == Ordering::Less {
-            near_loop!(self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
-                       self.seek_for_prev(key, statistics));
+            near_loop!(
+                self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
+                self.seek_for_prev(key, statistics)
+            );
             if self.iter.valid() {
                 if self.iter.key() > key.encoded().as_slice() {
                     self.prev(statistics);
@@ -357,8 +416,10 @@ impl<'a> Cursor<'a> {
                 return Ok(true);
             }
         } else {
-            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
-                       self.seek_for_prev(key, statistics));
+            near_loop!(
+                self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
+                self.seek_for_prev(key, statistics)
+            );
         }
 
         if !self.iter.valid() {
@@ -487,7 +548,7 @@ mod tests {
     use super::*;
     use super::SEEK_BOUND;
     use tempdir::TempDir;
-    use storage::{CfName, CF_DEFAULT, make_key};
+    use storage::{make_key, CfName, CF_DEFAULT};
     use util::codec::bytes;
     use util::escape;
     use kvproto::kvrpcpb::Context;
@@ -523,11 +584,15 @@ mod tests {
     }
 
     fn must_put(engine: &Engine, key: &[u8], value: &[u8]) {
-        engine.put(&Context::new(), make_key(key), value.to_vec()).unwrap();
+        engine
+            .put(&Context::new(), make_key(key), value.to_vec())
+            .unwrap();
     }
 
     fn must_put_cf(engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
-        engine.put_cf(&Context::new(), cf, make_key(key), value.to_vec()).unwrap();
+        engine
+            .put_cf(&Context::new(), cf, make_key(key), value.to_vec())
+            .unwrap();
     }
 
     fn must_delete(engine: &Engine, key: &[u8]) {
@@ -535,7 +600,9 @@ mod tests {
     }
 
     fn muest_delete_cf(engine: &Engine, cf: CfName, key: &[u8]) {
-        engine.delete_cf(&Context::new(), cf, make_key(key)).unwrap();
+        engine
+            .delete_cf(&Context::new(), cf, make_key(key))
+            .unwrap();
     }
 
     fn assert_has(engine: &Engine, key: &[u8], value: &[u8]) {
@@ -560,38 +627,54 @@ mod tests {
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
         iter.seek(&make_key(key), &mut statistics).unwrap();
-        assert_eq!((iter.key(), iter.value()),
-                   (&*bytes::encode_bytes(pair.0), pair.1));
+        assert_eq!(
+            (iter.key(), iter.value()),
+            (&*bytes::encode_bytes(pair.0), pair.1)
+        );
     }
 
     fn assert_reverse_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
         iter.reverse_seek(&make_key(key), &mut statistics).unwrap();
-        assert_eq!((iter.key(), iter.value()),
-                   (&*bytes::encode_bytes(pair.0), pair.1));
+        assert_eq!(
+            (iter.key(), iter.value()),
+            (&*bytes::encode_bytes(pair.0), pair.1)
+        );
     }
 
     fn assert_near_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
         let mut statistics = CFStatistics::default();
-        assert!(cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
-                escape(key));
-        assert_eq!((cursor.key(), cursor.value()),
-                   (&*bytes::encode_bytes(pair.0), pair.1));
+        assert!(
+            cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
+            escape(key)
+        );
+        assert_eq!(
+            (cursor.key(), cursor.value()),
+            (&*bytes::encode_bytes(pair.0), pair.1)
+        );
     }
 
     fn assert_near_reverse_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
         let mut statistics = CFStatistics::default();
-        assert!(cursor.near_reverse_seek(&make_key(key), &mut statistics).unwrap(),
-                escape(key));
-        assert_eq!((cursor.key(), cursor.value()),
-                   (&*bytes::encode_bytes(pair.0), pair.1));
+        assert!(
+            cursor
+                .near_reverse_seek(&make_key(key), &mut statistics)
+                .unwrap(),
+            escape(key)
+        );
+        assert_eq!(
+            (cursor.key(), cursor.value()),
+            (&*bytes::encode_bytes(pair.0), pair.1)
+        );
     }
 
     fn test_get_put(engine: &Engine) {
@@ -603,16 +686,26 @@ mod tests {
     }
 
     fn test_batch(engine: &Engine) {
-        engine.write(&Context::new(),
-                   vec![Modify::Put(CF_DEFAULT, make_key(b"x"), b"1".to_vec()),
-                        Modify::Put(CF_DEFAULT, make_key(b"y"), b"2".to_vec())])
+        engine
+            .write(
+                &Context::new(),
+                vec![
+                    Modify::Put(CF_DEFAULT, make_key(b"x"), b"1".to_vec()),
+                    Modify::Put(CF_DEFAULT, make_key(b"y"), b"2".to_vec()),
+                ],
+            )
             .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
-        engine.write(&Context::new(),
-                   vec![Modify::Delete(CF_DEFAULT, make_key(b"x")),
-                        Modify::Delete(CF_DEFAULT, make_key(b"y"))])
+        engine
+            .write(
+                &Context::new(),
+                vec![
+                    Modify::Delete(CF_DEFAULT, make_key(b"x")),
+                    Modify::Delete(CF_DEFAULT, make_key(b"y")),
+                ],
+            )
             .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
@@ -629,11 +722,13 @@ mod tests {
         assert_reverse_seek(engine, b"y", (b"x", b"1"));
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
         assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
-        assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
+        assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics)
+            .unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
@@ -642,7 +737,8 @@ mod tests {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+        let mut cursor = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
@@ -651,14 +747,18 @@ mod tests {
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
         let mut statistics = CFStatistics::default();
-        assert!(!cursor.near_seek(&make_key(b"z\x00"), &mut statistics).unwrap());
+        assert!(!cursor
+            .near_seek(&make_key(b"z\x00"), &mut statistics)
+            .unwrap());
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
             must_put(engine, key.as_bytes(), b"3");
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
 
@@ -672,12 +772,19 @@ mod tests {
 
     fn test_empty_seek(engine: &Engine) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+        let mut cursor = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(!cursor.near_reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
-        assert!(!cursor.near_reverse_seek(&make_key(b"z"), &mut statistics).unwrap());
-        assert!(!cursor.near_reverse_seek(&make_key(b"w"), &mut statistics).unwrap());
+        assert!(!cursor
+            .near_reverse_seek(&make_key(b"x"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_reverse_seek(&make_key(b"z"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_reverse_seek(&make_key(b"w"), &mut statistics)
+            .unwrap());
         assert!(!cursor.near_seek(&make_key(b"x"), &mut statistics).unwrap());
         assert!(!cursor.near_seek(&make_key(b"z"), &mut statistics).unwrap());
         assert!(!cursor.near_seek(&make_key(b"w"), &mut statistics).unwrap());
@@ -704,17 +811,21 @@ mod tests {
 
     #[allow(cyclomatic_complexity)]
     // use step to controll the distance between target key and current key in cursor.
-    fn test_linear_seek(snapshot: &Snapshot,
-                        mode: ScanMode,
-                        seek_mode: SeekMode,
-                        start: usize,
-                        step: usize) {
-        let mut cursor = snapshot.iter(IterOption::default(), mode)
-            .unwrap();
+    fn test_linear_seek(
+        snapshot: &Snapshot,
+        mode: ScanMode,
+        seek_mode: SeekMode,
+        start: usize,
+        step: usize,
+    ) {
+        let mut cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
 
-        for (_, mut i) in (start..SEEK_BOUND * 30).enumerate().filter(|&(i, _)| i % step == 0) {
+        for (_, mut i) in (start..SEEK_BOUND * 30)
+            .enumerate()
+            .filter(|&(i, _)| i % step == 0)
+        {
             if seek_mode != SeekMode::Normal {
                 i = SEEK_BOUND * 30 - 1 - i;
             }
@@ -730,14 +841,23 @@ mod tests {
                 }
             } else if i <= limit {
                 if seek_mode == SeekMode::Reverse {
-                    Some((format!("key_{}", (i - 1) / 2 * 2), format!("value_{}", (i - 1) / 2)))
+                    Some((
+                        format!("key_{}", (i - 1) / 2 * 2),
+                        format!("value_{}", (i - 1) / 2),
+                    ))
                 } else if seek_mode == SeekMode::ForPrev {
                     Some((format!("key_{}", i / 2 * 2), format!("value_{}", i / 2)))
                 } else {
-                    Some((format!("key_{}", (i + 1) / 2 * 2), format!("value_{}", (i + 1) / 2)))
+                    Some((
+                        format!("key_{}", (i + 1) / 2 * 2),
+                        format!("value_{}", (i + 1) / 2),
+                    ))
                 }
             } else if seek_mode != SeekMode::Normal {
-                Some((format!("key_{:03}", limit), format!("value_{:03}", limit / 2)))
+                Some((
+                    format!("key_{:03}", limit),
+                    format!("value_{:03}", limit / 2),
+                ))
             } else {
                 None
             };
@@ -773,31 +893,39 @@ mod tests {
 
         for step in 1..SEEK_BOUND * 3 {
             for start in 0..10 {
-                test_linear_seek(snapshot.as_ref(),
-                                 ScanMode::Forward,
-                                 SeekMode::Normal,
-                                 start * SEEK_BOUND,
-                                 step);
-                test_linear_seek(snapshot.as_ref(),
-                                 ScanMode::Backward,
-                                 SeekMode::Reverse,
-                                 start * SEEK_BOUND,
-                                 step);
-                test_linear_seek(snapshot.as_ref(),
-                                 ScanMode::Backward,
-                                 SeekMode::ForPrev,
-                                 start * SEEK_BOUND,
-                                 step);
+                test_linear_seek(
+                    snapshot.as_ref(),
+                    ScanMode::Forward,
+                    SeekMode::Normal,
+                    start * SEEK_BOUND,
+                    step,
+                );
+                test_linear_seek(
+                    snapshot.as_ref(),
+                    ScanMode::Backward,
+                    SeekMode::Reverse,
+                    start * SEEK_BOUND,
+                    step,
+                );
+                test_linear_seek(
+                    snapshot.as_ref(),
+                    ScanMode::Backward,
+                    SeekMode::ForPrev,
+                    start * SEEK_BOUND,
+                    step,
+                );
             }
         }
         for &seek_mode in &[SeekMode::Reverse, SeekMode::Normal, SeekMode::ForPrev] {
             for step in 1..SEEK_BOUND * 3 {
                 for start in 0..10 {
-                    test_linear_seek(snapshot.as_ref(),
-                                     ScanMode::Mixed,
-                                     seek_mode,
-                                     start * SEEK_BOUND,
-                                     step);
+                    test_linear_seek(
+                        snapshot.as_ref(),
+                        ScanMode::Mixed,
+                        seek_mode,
+                        start * SEEK_BOUND,
+                        step,
+                    );
                 }
             }
         }

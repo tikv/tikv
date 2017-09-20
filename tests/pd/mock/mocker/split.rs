@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use protobuf::RepeatedField;
 
-use kvproto::pdpb::{Member, GetMembersRequest, GetMembersResponse, ResponseHeader};
+use kvproto::pdpb::{GetMembersRequest, GetMembersResponse, Member, ResponseHeader};
 
 use super::*;
 
@@ -32,17 +32,21 @@ pub struct Split {
 
 impl Split {
     pub fn new() -> Split {
-        Split { inner: Mutex::new(None) }
+        Split {
+            inner: Mutex::new(None),
+        }
     }
 }
 
 impl PdMocker for Split {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut holder = self.inner.lock().unwrap();
-        let mut inner = holder.as_mut().unwrap();
+        let inner = holder.as_mut().unwrap();
         inner.idx += 1;
-        info!("[Split] get_member: {:?}",
-              inner.resps[inner.idx % inner.resps.len()]);
+        info!(
+            "[Split] get_member: {:?}",
+            inner.resps[inner.idx % inner.resps.len()]
+        );
         Some(Ok(inner.resps[inner.idx % inner.resps.len()].clone()))
     }
 

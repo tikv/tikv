@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use grpc::EnvBuilder;
@@ -21,7 +21,7 @@ use futures_cpupool::Builder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError, RegionStat};
+use tikv::pd::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -31,14 +31,15 @@ fn test_rpc_client() {
     let eps_count = 1;
     let se = Arc::new(Service::new());
     let server = MockServer::run::<Service>(eps_count, se.clone(), None);
-    let eps: Vec<String> = server.bind_addrs()
+    let eps: Vec<String> = server
+        .bind_addrs()
         .into_iter()
-        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .map(|addr| format!("{}:{}", addr.0, addr.1))
         .collect();
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps[0]).unwrap();
+    let client = RpcClient::new(&eps).unwrap();
     assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
@@ -57,7 +58,9 @@ fn test_rpc_client() {
     region.mut_peers().push(peer.clone());
     debug!("bootstrap region {:?}", region);
 
-    client.bootstrap_cluster(store.clone(), region.clone()).unwrap();
+    client
+        .bootstrap_cluster(store.clone(), region.clone())
+        .unwrap();
     assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
 
     let tmp_store = client.get_store(store_id).unwrap();
@@ -68,27 +71,37 @@ fn test_rpc_client() {
 
     let mut prev_id = 0;
     for _ in 0..100 {
-        let client = RpcClient::new(&eps[0]).unwrap();
+        let client = RpcClient::new(&eps).unwrap();
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
     }
 
-    let poller = Builder::new().pool_size(1).name_prefix(thd_name!("poller")).create();
+    let poller = Builder::new()
+        .pool_size(1)
+        .name_prefix(thd_name!("poller"))
+        .create();
     let (tx, rx) = mpsc::channel();
-    let f = client.handle_region_heartbeat_response(1, move |resp| {
-        let _ = tx.send(resp);
-    });
+    let f = client.handle_region_heartbeat_response(1, move |resp| { let _ = tx.send(resp); });
     poller.spawn(f).forget();
     // Only check if it works.
-    poller.spawn(client.region_heartbeat(metapb::Region::new(),
-                                       metapb::Peer::new(),
-                                       RegionStat::default()))
+    poller
+        .spawn(client.region_heartbeat(
+            metapb::Region::new(),
+            metapb::Peer::new(),
+            RegionStat::default(),
+        ))
         .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
-    client.store_heartbeat(pdpb::StoreStats::new()).wait().unwrap();
+    client
+        .store_heartbeat(pdpb::StoreStats::new())
+        .wait()
+        .unwrap();
     client.ask_split(metapb::Region::new()).wait().unwrap();
-    client.report_split(metapb::Region::new(), metapb::Region::new()).wait().unwrap();
+    client
+        .report_split(metapb::Region::new(), metapb::Region::new())
+        .wait()
+        .unwrap();
 }
 
 #[test]
@@ -97,14 +110,15 @@ fn test_reboot() {
     let se = Arc::new(Service::new());
     let al = Arc::new(AlreadyBootstrapped);
     let server = MockServer::run(eps_count, se.clone(), Some(al));
-    let eps: Vec<String> = server.bind_addrs()
+    let eps: Vec<String> = server
+        .bind_addrs()
         .into_iter()
-        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .map(|addr| format!("{}:{}", addr.0, addr.1))
         .collect();
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps[0]).unwrap();
+    let client = RpcClient::new(&eps).unwrap();
 
     assert!(!client.is_cluster_bootstrapped().unwrap());
 
@@ -122,10 +136,16 @@ fn test_validate_endpoints() {
     let se = Arc::new(Service::new());
     let sp = Arc::new(Split::new());
     let server = MockServer::run(eps_count, se, Some(sp));
-    let env = Arc::new(EnvBuilder::new().cq_count(1).name_prefix("test_pd").build());
-    let eps: Vec<String> = server.bind_addrs()
+    let env = Arc::new(
+        EnvBuilder::new()
+            .cq_count(1)
+            .name_prefix(thd_name!("test_pd"))
+            .build(),
+    );
+    let eps: Vec<String> = server
+        .bind_addrs()
         .into_iter()
-        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .map(|addr| format!("{}:{}", addr.0, addr.1))
         .collect();
 
     thread::sleep(Duration::from_secs(1));
@@ -140,14 +160,15 @@ fn test_retry_async() {
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
     let retry = Arc::new(Retry::new(3));
     let server = MockServer::run(eps_count, se.clone(), Some(retry));
-    let eps: Vec<String> = server.bind_addrs()
+    let eps: Vec<String> = server
+        .bind_addrs()
         .into_iter()
-        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .map(|addr| format!("{}:{}", addr.0, addr.1))
         .collect();
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps[0]).unwrap();
+    let client = RpcClient::new(&eps).unwrap();
 
     for _ in 0..5 {
         let region = client.get_region_by_id(1);
@@ -162,14 +183,15 @@ fn test_restart_leader() {
     let se = Arc::new(Service::new());
     // Start mock servers.
     let server = MockServer::run::<Service>(eps_count, se.clone(), None);
-    let eps: Vec<String> = server.bind_addrs()
+    let eps: Vec<String> = server
+        .bind_addrs()
         .into_iter()
-        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .map(|addr| format!("{}:{}", addr.0, addr.1))
         .collect();
 
     thread::sleep(Duration::from_secs(2));
 
-    let client = RpcClient::new(&eps[0]).unwrap();
+    let client = RpcClient::new(&eps).unwrap();
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::new();
@@ -184,7 +206,9 @@ fn test_restart_leader() {
     let mut region = metapb::Region::new();
     region.set_id(region_id);
     region.mut_peers().push(peer);
-    client.bootstrap_cluster(store.clone(), region.clone()).unwrap();
+    client
+        .bootstrap_cluster(store.clone(), region.clone())
+        .unwrap();
 
     let region = client.get_region_by_id(1);
     region.wait().unwrap();
@@ -210,14 +234,15 @@ fn test_change_leader_async() {
     let se = Arc::new(Service::new());
     let lc = Arc::new(LeaderChange::new());
     let server = MockServer::run(eps_count, se.clone(), Some(lc.clone()));
-    let eps: Vec<String> = server.bind_addrs()
+    let eps: Vec<String> = server
+        .bind_addrs()
         .into_iter()
-        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .map(|addr| format!("{}:{}", addr.0, addr.1))
         .collect();
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps[0]).unwrap();
+    let client = RpcClient::new(&eps).unwrap();
     let leader = client.get_leader();
 
     for _ in 0..5 {

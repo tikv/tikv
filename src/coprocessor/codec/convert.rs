@@ -11,11 +11,88 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{self, str, i64};
+use std::{self, str, i64, u64};
 use std::borrow::Cow;
 
-use coprocessor::xeval::EvalContext;
+use coprocessor::select::xeval::EvalContext;
+use super::mysql::Res;
 use super::Result;
+// `UNSPECIFIED_LENGTH` is unspecified length from FieldType
+pub const UNSPECIFIED_LENGTH: i32 = -1;
+
+pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
+    if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
+        s.truncate(flen as usize);
+    }
+}
+
+/// `truncate_f64` (`TruncateFloat` in tidb) tries to truncate f.
+/// If the result exceeds the max/min float that flen/decimal
+/// allowed, returns the max/min float allowed.
+pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
+    if f.is_nan() {
+        return Res::Overflow(0f64);
+    }
+    let shift = 10u64.pow(decimal as u32) as f64;
+    let maxf = 10u64.pow((flen - decimal) as u32) as f64 - 1.0 / shift;
+    if f.is_finite() {
+        let tmp = f * shift;
+        if tmp.is_finite() {
+            f = tmp.round() / shift
+        }
+    };
+
+    if f > maxf {
+        return Res::Overflow(maxf);
+    }
+
+    if f < -maxf {
+        return Res::Overflow(-maxf);
+    }
+    Res::Ok(f)
+}
+
+// `overflow` returns an overflowed error.
+#[macro_export]
+macro_rules! overflow {
+    ($val:ident, $bound:ident) => ({
+        Err(box_err!("constant {} overflows {}", $val, $bound))
+    });
+}
+
+// `convert_uint_to_int` converts an uint value to an int value.
+pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: u8) -> Result<i64> {
+    if val > upper_bound as u64 {
+        return overflow!(val, tp);
+    }
+    Ok(val as i64)
+}
+
+pub fn convert_float_to_int(fval: f64, lower_bound: i64, upper_bound: i64, tp: u8) -> Result<i64> {
+    // TODO any performance problem to use round directly?
+    let val = fval.round();
+    if val < lower_bound as f64 {
+        return overflow!(val, tp);
+    }
+
+    if val > upper_bound as f64 {
+        return overflow!(val, tp);
+    }
+    Ok(val as i64)
+}
+
+pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64> {
+    // TODO any performance problem to use round directly?
+    let val = fval.round();
+    if val < 0f64 {
+        return overflow!(val, tp);
+    }
+
+    if val > upper_bound as f64 {
+        return overflow!(val, tp);
+    }
+    Ok(val as u64)
+}
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
@@ -34,11 +111,33 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
             return Ok(0);
         }
 
-        r = trimed.take_while(|&&c| c >= b'0' && c <= b'9')
+        r = trimed
+            .take_while(|&&c| c >= b'0' && c <= b'9')
             .fold(r, |l, &r| l * 10 + (r - b'0') as i64);
         if negative {
             r = -r;
         }
+    }
+    Ok(r)
+}
+
+/// `bytes_to_uint_without_context` converts a byte arrays to an iu64
+/// in best effort, but without context.
+/// Note that it does NOT handle overflow.
+pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
+    // trim
+    let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
+    let mut r = 0u64;
+    if let Some(&c) = trimed.next() {
+        if c >= b'0' && c <= b'9' {
+            r = c as u64 - b'0' as u64;
+        } else if c != b'+' {
+            return Ok(0);
+        }
+
+        r = trimed
+            .take_while(|&&c| c >= b'0' && c <= b'9')
+            .fold(r, |l, &r| l * 10 + (r - b'0') as u64);
     }
     Ok(r)
 }
@@ -48,21 +147,26 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
 pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = try!(str::from_utf8(bytes)).trim();
     let vs = try!(get_valid_int_prefix(ctx, s));
-
     bytes_to_int_without_context(vs.as_bytes())
+}
+
+/// `bytes_to_uint` converts a byte arrays to an u64 in best effort.
+/// TODO: handle overflow properly.
+pub fn bytes_to_uint(ctx: &EvalContext, bytes: &[u8]) -> Result<u64> {
+    let s = try!(str::from_utf8(bytes)).trim();
+    let vs = try!(get_valid_int_prefix(ctx, s));
+    bytes_to_uint_without_context(vs.as_bytes())
 }
 
 fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
     let f = match std::str::from_utf8(bytes) {
-        Ok(s) => {
-            match s.trim().parse::<f64>() {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("failed to parse float from {}: {}", s, e);
-                    0.0
-                }
+        Ok(s) => match s.trim().parse::<f64>() {
+            Ok(f) => f,
+            Err(e) => {
+                error!("failed to parse float from {}: {}", s, e);
+                0.0
             }
-        }
+        },
         Err(e) => {
             error!("failed to convert bytes to str: {:?}", e);
             0.0
@@ -80,8 +184,13 @@ pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
 }
 
 #[inline]
-fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
-    if is_truncated && !(ctx.ignore_truncate || ctx.truncate_as_warning) {
+pub fn handle_truncate_as_error(ctx: &EvalContext) -> bool {
+    !(ctx.ignore_truncate || ctx.truncate_as_warning)
+}
+
+#[inline]
+pub fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
+    if is_truncated && handle_truncate_as_error(ctx) {
         Err(box_err!("[1265] Data Truncated"))
     } else {
         Ok(())
@@ -153,14 +262,12 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
         match c {
             '.' => dot_idx = Some(i),
             'e' | 'E' => e_idx = Some(i),
-            '0'...'9' => {
-                if e_idx.is_none() {
-                    if dot_idx.is_none() {
-                        int_cnt += 1;
-                    }
-                    digits_cnt += 1;
+            '0'...'9' => if e_idx.is_none() {
+                if dot_idx.is_none() {
+                    int_cnt += 1;
                 }
-            }
+                digits_cnt += 1;
+            },
             _ => (),
         }
     }
@@ -216,10 +323,14 @@ const MAX_ZERO_COUNT: i64 = 20;
 #[cfg(test)]
 mod test {
     use std::f64::EPSILON;
+    use std::{isize, f64, i64, u64};
 
     use chrono::FixedOffset;
 
-    use coprocessor::xeval::EvalContext;
+    use coprocessor::select::xeval::EvalContext;
+    use coprocessor::codec::mysql::types;
+
+    use super::*;
 
     #[test]
     fn test_bytes_to_i64() {
@@ -240,6 +351,31 @@ mod test {
 
         for (bs, n) in tests {
             let t = super::bytes_to_int_without_context(bs).unwrap();
+            if t != n {
+                panic!("expect convert {:?} to {}, but got {}", bs, n, t);
+            }
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_u64() {
+        let tests: Vec<(&'static [u8], u64)> = vec![
+            (b"0", 0),
+            (b" 23a", 23),
+            (b"\t 23a", 23),
+            (b"\r23a", 0),
+            (b"1", 1),
+            (b"2.1", 2),
+            (b"23e10", 23),
+            (b"ab", 0),
+            (b"4a", 4),
+            (b"+1024", 1024),
+            (b"231", 231),
+            (b"18446744073709551615", u64::MAX),
+        ];
+
+        for (bs, n) in tests {
+            let t = super::bytes_to_uint_without_context(bs).unwrap();
             if t != n {
                 panic!("expect convert {:?} to {}, but got {}", bs, n, t);
             }
@@ -270,26 +406,28 @@ mod test {
 
     #[test]
     fn test_handle_truncate() {
-        let ctxs = vec![EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: true,
-                            truncate_as_warning: true,
-                        },
-                        EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: true,
-                            truncate_as_warning: false,
-                        },
-                        EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: false,
-                            truncate_as_warning: true,
-                        },
-                        EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: false,
-                            truncate_as_warning: false,
-                        }];
+        let ctxs = vec![
+            EvalContext {
+                tz: FixedOffset::east(0),
+                ignore_truncate: true,
+                truncate_as_warning: true,
+            },
+            EvalContext {
+                tz: FixedOffset::east(0),
+                ignore_truncate: true,
+                truncate_as_warning: false,
+            },
+            EvalContext {
+                tz: FixedOffset::east(0),
+                ignore_truncate: false,
+                truncate_as_warning: true,
+            },
+            EvalContext {
+                tz: FixedOffset::east(0),
+                ignore_truncate: false,
+                truncate_as_warning: false,
+            },
+        ];
 
         for ctx in &ctxs {
             assert!(super::handle_truncate(ctx, false).is_ok());
@@ -303,20 +441,22 @@ mod test {
 
     #[test]
     fn test_get_valid_float_prefix() {
-        let cases = vec![("-100", "-100"),
-                         ("1abc", "1"),
-                         ("-1-1", "-1"),
-                         ("+1+1", "+1"),
-                         ("123..34", "123."),
-                         ("123.23E-10", "123.23E-10"),
-                         ("1.1e1.3", "1.1e1"),
-                         ("11e1.3", "11e1"),
-                         ("1.1e-13a", "1.1e-13"),
-                         ("1.", "1."),
-                         (".1", ".1"),
-                         ("", "0"),
-                         ("123e+", "123"),
-                         ("123.e", "123.")];
+        let cases = vec![
+            ("-100", "-100"),
+            ("1abc", "1"),
+            ("-1-1", "-1"),
+            ("+1+1", "+1"),
+            ("123..34", "123."),
+            ("123.23E-10", "123.23E-10"),
+            ("1.1e1.3", "1.1e1"),
+            ("11e1.3", "11e1"),
+            ("1.1e-13a", "1.1e-13"),
+            ("1.", "1."),
+            (".1", ".1"),
+            ("", "0"),
+            ("123e+", "123"),
+            ("123.e", "123."),
+        ];
 
         let ctx = EvalContext {
             tz: FixedOffset::east(0),
@@ -340,20 +480,79 @@ mod test {
 
     #[test]
     fn test_valid_get_valid_int_prefix() {
-        let cases = vec![(".1", "0"),
-                         (".0", "0"),
-                         ("123", "123"),
-                         ("123e1", "1230"),
-                         ("123.1e2", "12310"),
-                         ("123.45e5", "12345000"),
-                         ("123.45678e5", "12345678"),
-                         ("123.456789e5", "12345678"),
-                         ("-123.45678e5", "-12345678"),
-                         ("+123.45678e5", "+12345678")];
+        let cases = vec![
+            (".1", "0"),
+            (".0", "0"),
+            ("123", "123"),
+            ("123e1", "1230"),
+            ("123.1e2", "12310"),
+            ("123.45e5", "12345000"),
+            ("123.45678e5", "12345678"),
+            ("123.456789e5", "12345678"),
+            ("-123.45678e5", "-12345678"),
+            ("+123.45678e5", "+12345678"),
+        ];
 
         for (i, e) in cases {
             let o = super::float_str_to_int_string(i);
             assert_eq!(o.unwrap(), *e);
+        }
+    }
+
+    #[test]
+    fn test_convert_uint_into_int() {
+        assert!(convert_uint_to_int(u64::MAX, i64::MAX, types::LONG_LONG).is_err());
+        let v = convert_uint_to_int(u64::MIN, i64::MAX, types::LONG_LONG).unwrap();
+        assert_eq!(v, u64::MIN as i64);
+        // TODO port tests from tidb(tidb haven't implemented now)
+    }
+
+    #[test]
+    fn test_convert_float_to_int() {
+        assert!(convert_float_to_int(f64::MIN, i64::MIN, i64::MAX, types::DOUBLE).is_err());
+        assert!(convert_float_to_int(f64::MAX, i64::MIN, i64::MAX, types::DOUBLE).is_err());
+        let v = convert_float_to_int(0.1, i64::MIN, i64::MAX, types::DOUBLE).unwrap();
+        assert_eq!(v, 0);
+        // TODO port tests from tidb(tidb haven't implemented now)
+    }
+
+    #[test]
+    fn test_convert_float_to_uint() {
+        assert!(convert_float_to_uint(f64::MIN, u64::MAX, types::DOUBLE).is_err());
+        assert!(convert_float_to_uint(f64::MAX, u64::MAX, types::DOUBLE).is_err());
+        let v = convert_float_to_uint(0.1, u64::MAX, types::DOUBLE).unwrap();
+        assert_eq!(v, 0);
+        // TODO port tests from tidb(tidb haven't implemented now)
+    }
+
+    #[test]
+    fn test_truncate_binary() {
+        let s = b"123456789".to_vec();
+        let mut s1 = s.clone();
+        truncate_binary(&mut s1, UNSPECIFIED_LENGTH as isize);
+        assert_eq!(s1, s);
+        let mut s2 = s.clone();
+        truncate_binary(&mut s2, isize::MAX);
+        assert_eq!(s2, s);
+        let mut s3 = s;
+        truncate_binary(&mut s3, 0);
+        assert!(s3.is_empty());
+        // TODO port tests from tidb(tidb haven't implemented now)
+    }
+
+    #[test]
+    fn test_truncate_f64() {
+        let cases = vec![
+            (100.114, 10, 2, Res::Ok(100.11)),
+            (100.115, 10, 2, Res::Ok(100.12)),
+            (100.1156, 10, 3, Res::Ok(100.116)),
+            (100.1156, 3, 1, Res::Overflow(99.9)),
+            (1.36, 10, 2, Res::Ok(1.36)),
+            (f64::NAN, 10, 1, Res::Overflow(0f64)),
+        ];
+        for (f, flen, decimal, exp) in cases {
+            let res = truncate_f64(f, flen, decimal);
+            assert_eq!(res, exp);
         }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "0.0.1"
+version = "0.9.0"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -9,7 +9,7 @@ time = "0.1"
 
 [features]
 default = []
-dev = ["clippy", "mem-profiling"]
+dev = ["clippy"]
 static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
@@ -38,9 +38,7 @@ rand = "0.3"
 quick-error = "0.2"
 tempdir = "0.3"
 time = "0.1"
-threadpool = "1.0.0"
 toml = "0.4"
-num = "0.1"
 libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
@@ -48,7 +46,7 @@ clippy = {version = "*", optional = true}
 protobuf = "1.4"
 nix = "0.6.0"
 utime = "0.1"
-chrono = "0.2"
+chrono = "0.4"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
 clap = "2"
@@ -56,7 +54,6 @@ url = "1.2"
 regex = "0.1"
 fnv = "1.0"
 sys-info = "0.4.1"
-ordermap = "0.2"
 flat_map = "0.0.4"
 mio = "0.5"
 futures = "0.1"
@@ -67,6 +64,7 @@ serde_json = "1.0"
 serde_derive = "1.0"
 grpcio = "0.1"
 crossbeam = "0.2"
+rustc-serialize = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
@@ -81,7 +79,7 @@ git = "https://github.com/pingcap/kvproto.git"
 git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus.git"
+version = "0.3"
 default-features = false
 features = ["nightly", "push", "process"]
 

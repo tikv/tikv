@@ -16,10 +16,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::fmt::{self, Debug, Formatter};
 
-use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions, CFHandle};
+use rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use protobuf;
-use byteorder::{ByteOrder, BigEndian};
+use byteorder::{BigEndian, ByteOrder};
 use util::rocksdb;
 
 use raftstore::Result;
@@ -35,7 +35,7 @@ pub struct Snapshot {
 unsafe impl Send for Snapshot {}
 unsafe impl Sync for Snapshot {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SyncSnapshot(Arc<Snapshot>);
 
 impl Deref for SyncSnapshot {
@@ -103,7 +103,8 @@ pub trait Peekable {
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>>;
 
     fn get_msg<M>(&self, key: &[u8]) -> Result<Option<M>>
-        where M: protobuf::Message + protobuf::MessageStatic
+    where
+        M: protobuf::Message + protobuf::MessageStatic,
     {
         let value = try!(self.get_value(key));
 
@@ -117,7 +118,8 @@ pub trait Peekable {
     }
 
     fn get_msg_cf<M>(&self, cf: &str, key: &[u8]) -> Result<Option<M>>
-        where M: protobuf::Message + protobuf::MessageStatic
+    where
+        M: protobuf::Message + protobuf::MessageStatic,
     {
         let value = try!(self.get_value_cf(cf, key));
 
@@ -240,21 +242,24 @@ pub trait Iterable {
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>
-        where F: FnMut(&[u8], &[u8]) -> Result<bool>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
         let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
         scan_impl(self.new_iterator(iter_opt), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
-    fn scan_cf<F>(&self,
-                  cf: &str,
-                  start_key: &[u8],
-                  end_key: &[u8],
-                  fill_cache: bool,
-                  f: &mut F)
-                  -> Result<()>
-        where F: FnMut(&[u8], &[u8]) -> Result<bool>
+    fn scan_cf<F>(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        f: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
         let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
         scan_impl(try!(self.new_iterator_cf(cf, iter_opt)), start_key, f)
@@ -276,7 +281,8 @@ pub trait Iterable {
 }
 
 fn scan_impl<F>(mut it: DBIterator, start_key: &[u8], f: &mut F) -> Result<()>
-    where F: FnMut(&[u8], &[u8]) -> Result<bool>
+where
+    F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
     it.seek(start_key.into());
     while it.valid() {
@@ -369,7 +375,7 @@ pub trait Mutable: Writable {
     }
 
     fn put_u64(&self, key: &[u8], n: u64) -> Result<()> {
-        let mut value = vec![0;8];
+        let mut value = vec![0; 8];
         BigEndian::write_u64(&mut value, n);
         try!(self.put(key, &value));
         Ok(())
@@ -388,70 +394,11 @@ pub trait Mutable: Writable {
 impl Mutable for DB {}
 impl Mutable for WriteBatch {}
 
-const MAX_DELETE_KEYS_COUNT: usize = 10000;
-
-/// `delete_all_in_range` fast deletes data of all cfs in range [`start_key`, `end_key`).
-/// It uses rocksdb `delete_file_in_range` first, then scans the left keys and
-/// uses `WriteBatch` to deletes them.
-/// Note: this function is dangerous and not guarantees consistence. If `delete_file_in_range`
-/// finishes successfully but commit following `WriteBatch` failed, some keys are really deleted
-/// and can't be recovered.
-pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-    if start_key >= end_key {
-        return Ok(());
-    }
-
-    for cf in db.cf_names() {
-        try!(delete_in_range_cf(db, cf, start_key, end_key));
-    }
-
-    Ok(())
-}
-
-pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-    let handle = try!(rocksdb::get_cf_handle(db, cf));
-    try!(db.delete_file_in_range_cf(handle, start_key, end_key));
-
-    let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
-    let mut it = try!(db.new_iterator_cf(cf, iter_opt));
-
-    let mut wb = WriteBatch::new();
-    it.seek(start_key.into());
-    while it.valid() {
-        {
-            let key = it.key();
-            if key >= end_key {
-                break;
-            }
-
-            try!(wb.delete_cf(handle, key));
-            if wb.count() == MAX_DELETE_KEYS_COUNT {
-                // Can't use write_without_wal here.
-                // Otherwise it may cause dirty data when applying snapshot.
-                try!(db.write(wb));
-                wb = WriteBatch::new();
-            }
-        };
-
-        if !it.next() {
-            break;
-        }
-    }
-
-    if wb.count() > 0 {
-        try!(db.write(wb));
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use tempdir::TempDir;
-    use rocksdb::{Writable, WriteBatch, DBOptions, ColumnFamilyOptions, DBCompressionType};
-    use storage::CF_DEFAULT;
-    use util::rocksdb::CFOptions;
+    use rocksdb::Writable;
     use super::*;
     use kvproto::metapb::Region;
 
@@ -459,7 +406,9 @@ mod tests {
     fn test_base() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap());
+        let engine = Arc::new(
+            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap(),
+        );
 
         let mut r = Region::new();
         r.set_id(10);
@@ -522,7 +471,9 @@ mod tests {
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap());
+        let engine = Arc::new(
+            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap(),
+        );
         let handle = engine.cf_handle(cf).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
@@ -531,29 +482,34 @@ mod tests {
         engine.put_cf(handle, b"a2", b"v22").unwrap();
 
         let mut data = vec![];
-        engine.scan(b"",
-                  &[0xFF, 0xFF],
-                  false,
-                  &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(true)
-                  })
+        engine
+            .scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+                data.push((key.to_vec(), value.to_vec()));
+                Ok(true)
+            })
             .unwrap();
-        assert_eq!(data,
-                   vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a2".to_vec(), b"v2".to_vec())]);
+        assert_eq!(
+            data,
+            vec![
+                (b"a1".to_vec(), b"v1".to_vec()),
+                (b"a2".to_vec(), b"v2".to_vec()),
+            ]
+        );
         data.clear();
 
-        engine.scan_cf(cf,
-                     b"",
-                     &[0xFF, 0xFF],
-                     false,
-                     &mut |key, value| {
-                         data.push((key.to_vec(), value.to_vec()));
-                         Ok(true)
-                     })
+        engine
+            .scan_cf(cf, b"", &[0xFF, 0xFF], false, &mut |key, value| {
+                data.push((key.to_vec(), value.to_vec()));
+                Ok(true)
+            })
             .unwrap();
-        assert_eq!(data,
-                   vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a2".to_vec(), b"v22".to_vec())]);
+        assert_eq!(
+            data,
+            vec![
+                (b"a1".to_vec(), b"v1".to_vec()),
+                (b"a2".to_vec(), b"v22".to_vec()),
+            ]
+        );
         data.clear();
 
         let pair = engine.seek(b"a1").unwrap().unwrap();
@@ -564,14 +520,12 @@ mod tests {
         assert!(engine.seek_cf(cf, b"a3").unwrap().is_none());
 
         let mut index = 0;
-        engine.scan(b"",
-                  &[0xFF, 0xFF],
-                  false,
-                  &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      index += 1;
-                      Ok(index != 1)
-                  })
+        engine
+            .scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+                data.push((key.to_vec(), value.to_vec()));
+                index += 1;
+                Ok(index != 1)
+            })
             .unwrap();
 
         assert_eq!(data.len(), 1);
@@ -587,48 +541,11 @@ mod tests {
 
         data.clear();
 
-        snap.scan(b"",
-                  &[0xFF, 0xFF],
-                  false,
-                  &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(true)
-                  })
-            .unwrap();
+        snap.scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            data.push((key.to_vec(), value.to_vec()));
+            Ok(true)
+        }).unwrap();
 
         assert_eq!(data.len(), 2);
-    }
-
-
-    #[test]
-    fn test_delete_all_in_range() {
-        let path = TempDir::new("var").unwrap();
-        let db_opt = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
-        cf_opts.set_target_file_size_base(1024 * 1024);
-        cf_opts.set_write_buffer_size(1024);
-        cf_opts.compression(DBCompressionType::No);
-
-        let engine = Arc::new(rocksdb::new_engine_opt(path.path().to_str().unwrap(),
-                                                      db_opt,
-                                                      vec![CFOptions::new(CF_DEFAULT, cf_opts)])
-            .unwrap());
-
-        let value = vec![0;1024];
-        for i in 0..10 {
-            let wb = WriteBatch::new();
-            // we should write a batch, then flush to
-            // generate multiply SST files.
-            for j in 0..1024 {
-                let key = format!("k_{}", i * 1024 + j);
-                wb.put(key.as_bytes(), &value).unwrap();
-            }
-
-            engine.write(wb).unwrap();
-            engine.flush(true).unwrap();
-        }
-
-        delete_all_in_range(&engine, b"\x00", b"\xFF").unwrap();
-        assert!(engine.get(b"k_0").unwrap().is_none());
     }
 }
