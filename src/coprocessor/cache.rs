@@ -167,7 +167,7 @@ impl DistSQLCache {
             Some(region) => {
                 region.version += 1;
                 let mut keys: Vec<DistSQLCacheKey> = Vec::new();
-                for (key, _) in region.cached_items.iter() {
+                for (key, _) in (&region.cached_items).iter() {
                     keys.push(key.to_string());
                 }
                 Some(keys)
