@@ -19,8 +19,9 @@ use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
 use tipb::analyze;
 
-/// `FMSketch` is used to count the approximate number
-/// of distinct elements in multiset.
+/// `FMSketch` is used to count the approximate number of distinct
+/// elements in multiset.
+/// Refer:[Flajolet-Martin](https://en.wikipedia.org/wiki/Flajolet%E2%80%93Martin_algorithm)
 pub struct FMSketch {
     mask: u64,
     max_size: usize,
@@ -32,7 +33,7 @@ impl FMSketch {
         FMSketch {
             mask: 0,
             max_size: max_size,
-            hash_set: HashSet::new(),
+            hash_set: HashSet::with_capacity(max_size + 1),
         }
     }
 
@@ -73,6 +74,7 @@ impl FMSketch {
 
 #[cfg(test)]
 mod test {
+    use std::iter::repeat;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;
     use coprocessor::codec::Result;
@@ -86,18 +88,11 @@ mod test {
     }
 
     fn generate_samples(count: usize) -> Vec<Datum> {
-        let mut samples = Vec::with_capacity(count);
-        samples.resize(count, 0);
         let start = 1000;
-
-        for mut item in samples.iter_mut().take(start).skip(1) {
-            *item = 2;
-        }
-
-        for (id, mut item) in samples.iter_mut().enumerate().take(count).skip(start) {
-            *item = id;
-        }
-
+        let mut samples: Vec<usize> = (0..1)
+            .chain(repeat(2).take(start - 1))
+            .chain(1000..count)
+            .collect();
         let mut id = start;
         while id < count {
             samples[id] += 1;
@@ -117,16 +112,10 @@ mod test {
             let samples = generate_samples(10000);
             let count = 100000;
             let rc = generate_samples(count);
-
-            let mut pk = Vec::with_capacity(count);
-            pk.resize(count, Datum::Null);
-            for (id, mut item) in pk.iter_mut().enumerate().take(count) {
-                *item = Datum::I64(id as i64);
-            }
             TestData {
                 samples: samples,
                 rc: rc,
-                pk: pk,
+                pk: (0..count as i64).map(Datum::I64).collect(),
             }
         }
     }
@@ -143,7 +132,7 @@ mod test {
     // This test was ported from tidb.
     #[test]
     fn test_sketch() {
-        let max_size = 1000usize;
+        let max_size = 1000;
         let data = TestData::default();
         let sample = build_fmsketch(&data.samples, max_size).unwrap();
         assert_eq!(sample.ndv(), 6232);
