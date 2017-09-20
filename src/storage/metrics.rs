@@ -79,12 +79,11 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 
-    pub static ref KV_COMMAND_SCAN_DETAILS: HistogramVec =
-        register_histogram_vec!(
+    pub static ref KV_COMMAND_SCAN_DETAILS: CounterVec =
+        register_counter_vec!(
             "tikv_scheudler_kv_scan_details",
-            "Bucketed histogram of kv keys scan details for each cf",
-            &["req","cf","tag"],
-              exponential_buckets(1.0, 2.0, 20).unwrap()
+            "Bucketed counter of kv keys scan details for each cf",
+            &["req","cf","tag"]
         ).unwrap();
 
     pub static ref RAWKV_COMMAND_COUNTER_VEC: CounterVec =
