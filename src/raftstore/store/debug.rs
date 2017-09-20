@@ -13,9 +13,8 @@
 
 use std::{error, result};
 use kvproto::debugpb::*;
-use rocksdb::DB;
+use rocksdb::DB as RocksDb;
 
-use raftstore::store::keys;
 use raftstore::store::Engines;
 use raftstore::store::engine::Peekable;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -52,32 +51,30 @@ impl Debugger {
         Debugger { engines }
     }
 
-    pub fn get(&self, cf: CF, key_encoded: &[u8]) -> Result<Vec<u8>> {
-        let db = try!(self.get_db(cf));
-        let cf = try!(cf_to_str(cf));
-        match db.get_value_cf(cf, &keys::data_key(key_encoded)) {
+    pub fn get(&self, db: DB, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
+        let db = try!(self.get_db(db));
+        let cf = try!(validate_cf(cf));
+        match db.get_value_cf(cf, key) {
             Ok(Some(v)) => Ok((&v).to_vec()),
             Ok(None) => Err(Error::NotFound(
-                format!("get none value for encoded key {:?}", key_encoded,),
+                format!("get none value for key {:?}", key,),
             )),
             Err(e) => Err(box_err!(e)),
         }
     }
 
-    fn get_db(&self, cf: CF) -> Result<&DB> {
-        match cf {
-            CF::DEFAULT | CF::WRITE | CF::LOCK | CF::RAFT => Ok(&self.engines.kv_engine),
-            _ => Err(Error::InvalidArgument("invalid cf".to_owned())),
+    fn get_db(&self, db: DB) -> Result<&RocksDb> {
+        match db {
+            DB::KV => Ok(&self.engines.kv_engine),
+            DB::RAFT => Ok(&self.engines.raft_engine),
+            _ => Err(Error::InvalidArgument("invalid db".to_owned())),
         }
     }
 }
 
-pub fn cf_to_str(cf: CF) -> Result<&'static str> {
+pub fn validate_cf(cf: &str) -> Result<&str> {
     match cf {
-        CF::DEFAULT => Ok(CF_DEFAULT),
-        CF::WRITE => Ok(CF_WRITE),
-        CF::LOCK => Ok(CF_LOCK),
-        CF::RAFT => Ok(CF_RAFT),
+        CF_DEFAULT | CF_WRITE | CF_LOCK | CF_RAFT => Ok(cf),
         _ => Err(Error::InvalidArgument("invalid cf".to_owned())),
     }
 }
@@ -95,21 +92,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cf_to_str() {
-        let cases = vec![
-            (CF::DEFAULT, CF_DEFAULT),
-            (CF::WRITE, CF_WRITE),
-            (CF::LOCK, CF_LOCK),
-            (CF::RAFT, CF_RAFT),
-        ];
-        for (cf, s) in cases {
-            assert_eq!(cf_to_str(cf).unwrap(), s);
+    fn test_validate_cf() {
+        let cases = vec![CF_DEFAULT, CF_WRITE, CF_LOCK, CF_RAFT];
+        for cf in cases {
+            assert_eq!(validate_cf(cf).unwrap(), cf);
         }
 
-        cf_to_str(CF::INVALID).unwrap_err();
+        validate_cf("foo").unwrap_err();
     }
 
-    fn new_debug() -> Debugger {
+    fn new_debugger() -> Debugger {
         let tmp = TempDir::new("test_debug").unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -131,27 +123,24 @@ mod tests {
 
     #[test]
     fn test_get_db() {
-        let debug = new_debug();
-        let cases = vec![CF::DEFAULT, CF::WRITE, CF::LOCK, CF::RAFT];
-        for cf in cases {
-            debug.get_db(cf).unwrap();
+        let debugger = new_debugger();
+        let cases = vec![DB::KV, DB::RAFT];
+        for db in cases {
+            debugger.get_db(db).unwrap();
         }
-        debug.get_db(CF::INVALID).unwrap_err();
+        debugger.get_db(DB::INVALID).unwrap_err();
     }
 
     #[test]
     fn test_get() {
-        let debug = new_debug();
-        let engine = &debug.engines.kv_engine;
+        let debugger = new_debugger();
+        let engine = &debugger.engines.kv_engine;
         let (k, v) = (b"k", b"v");
-        engine.put(keys::data_key(k).as_slice(), v).unwrap();
-        assert_eq!(
-            &*engine.get(keys::data_key(k).as_slice()).unwrap().unwrap(),
-            v
-        );
+        engine.put(k, v).unwrap();
+        assert_eq!(&*engine.get(k).unwrap().unwrap(), v);
 
-        assert_eq!(debug.get(CF::DEFAULT, k).unwrap().as_slice(), v);
-        match debug.get(CF::DEFAULT, keys::data_key(k).as_slice()) {
+        assert_eq!(debugger.get(DB::KV, CF_DEFAULT, k).unwrap().as_slice(), v);
+        match debugger.get(DB::KV, CF_DEFAULT, b"foo") {
             Err(Error::NotFound(_)) => (),
             _ => panic!("expect Error::NotFound(_)"),
         }

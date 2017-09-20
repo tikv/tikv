@@ -13,8 +13,9 @@
 
 use std::sync::Arc;
 
-use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 use tikv::util::HandyRwLock;
+use tikv::raftstore::store::keys;
+use tikv::storage::CF_DEFAULT;
 
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::metapb;
@@ -22,8 +23,9 @@ use kvproto::kvrpcpb::*;
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::debugpb;
 use kvproto::raft_serverpb::*;
-use futures::{Future, Sink};
 use kvproto::coprocessor::*;
+use futures::{Future, Sink};
+use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use super::server::*;
 use super::cluster::Cluster;
@@ -503,14 +505,16 @@ fn test_debug_get() {
 
     // Debug get
     let mut req = debugpb::GetRequest::new();
-    req.set_key_encoded(k.clone());
-    req.set_cf(debugpb::CF::DEFAULT);
+    req.set_cf(CF_DEFAULT.to_owned());
+    req.set_db(debugpb::DB::KV);
+    req.set_key(keys::data_key(k.as_slice()));
     let mut resp = debug_client.get(req).unwrap();
     assert_eq!(resp.take_value(), v);
 
     let mut req = debugpb::GetRequest::new();
-    req.set_key_encoded(b"foo".to_vec());
-    req.set_cf(debugpb::CF::DEFAULT);
+    req.set_cf(CF_DEFAULT.to_owned());
+    req.set_db(debugpb::DB::KV);
+    req.set_key(b"foo".to_vec());
     match debug_client.get(req).unwrap_err() {
         Error::RpcFailure(status) => {
             assert_eq!(status.status, RpcStatusCode::NotFound);

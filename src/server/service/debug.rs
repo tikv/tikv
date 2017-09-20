@@ -67,13 +67,14 @@ impl debugpb_grpc::Debug for Service {
     fn get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &'static str = "debug_get";
 
-        let cf = req.get_cf();
-        let key_encoded = req.take_key_encoded();
+        let db = req.get_db();
+        let cf = req.take_cf();
+        let key = req.take_key();
 
         let f = self.pool
             .spawn(
                 future::ok(self.debugger.clone())
-                    .and_then(move |debugger| debugger.get(cf, key_encoded.as_slice())),
+                    .and_then(move |debugger| debugger.get(db, &cf, key.as_slice())),
             )
             .map(|value| {
                 let mut resp = GetResponse::new();
