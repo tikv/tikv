@@ -365,7 +365,12 @@ impl InvokeContext {
     }
 }
 
-pub fn recover_from_applying_state(kv_engine: &DB, raft_engine: &DB, region_id: u64) -> Result<()> {
+pub fn recover_from_applying_state(
+    kv_engine: &DB,
+    raft_engine: &DB,
+    raft_wb: &WriteBatch,
+    region_id: u64,
+) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
     let snapshot_raft_state: RaftLocalState =
         match box_try!(kv_engine.get_msg_cf(CF_RAFT, &snapshot_raft_state_key)) {
@@ -392,7 +397,7 @@ pub fn recover_from_applying_state(kv_engine: &DB, raft_engine: &DB, region_id: 
     // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
     // after restart, we need check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
-        try!(raft_engine.put_msg(&raft_state_key, &snapshot_raft_state));
+        try!(raft_wb.put_msg(&raft_state_key, &snapshot_raft_state));
     }
     Ok(())
 }
