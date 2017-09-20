@@ -64,6 +64,7 @@ serde_json = "1.0"
 serde_derive = "1.0"
 grpcio = "0.1"
 rustc-serialize = "0.3"
+futures-cpupool = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
@@ -73,6 +74,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "ov/debugger"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
@@ -87,9 +89,6 @@ git = "https://github.com/busyjay/jemallocator.git"
 branch = "dev"
 features = ["profiling"]
 optional = true
-
-[dev-dependencies]
-futures-cpupool = "0.1"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
