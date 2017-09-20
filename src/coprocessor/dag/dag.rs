@@ -71,8 +71,9 @@ impl<'s> DAGContext<'s> {
     ) -> Result<Response> {
         try!(self.validate_dag());
         let key = format!("{:?}, {:?}", self.ranges, self.req.get_executors());
-        // debug!("Cache Key: {}", key);
+        let mut version: u64 = 0;
         if self.can_cache() {
+            version = DISTSQL_CACHE.lock().unwrap().get_region_version(region_id);
             if let Some(data) = DISTSQL_CACHE.lock().unwrap().get(region_id, &epoch, &key) {
                 debug!(
                     "Cache Hit: {}, region_id: {}, epoch: {:?}",
@@ -125,7 +126,7 @@ impl<'s> DAGContext<'s> {
                         DISTSQL_CACHE
                             .lock()
                             .unwrap()
-                            .put(region_id, epoch, key, data.clone());
+                            .put(region_id, epoch, key, version, data.clone());
                         CORP_DISTSQL_CACHE_COUNT.with_label_values(&["miss"]).inc();
                     }
                     resp.set_data(data);
