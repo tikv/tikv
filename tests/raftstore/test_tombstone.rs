@@ -15,8 +15,9 @@ use std::time::Duration;
 
 use rocksdb::Writable;
 use protobuf::Message;
+use fail;
 
-use kvproto::raft_serverpb::{self, PeerState, RegionLocalState, StoreIdent};
+use kvproto::raft_serverpb::{self, PeerState, RaftLocalState, RegionLocalState, StoreIdent};
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::transport_simulate::*;
@@ -270,4 +271,42 @@ fn test_server_stale_meta() {
 
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&engine_3, b"k1", b"v1");
+}
+
+// Simulate a case that tikv exit bewteen two write
+#[test]
+fn test_server_recover_stale_meta() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.disable_default_rule();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    fail::cfg("tikv::raftstore::store::store::raft_between_save", "off").unwrap();
+    pd_client.must_remove_peer(1, new_peer(3, 3));
+
+    fail::cfg("tikv::raftstore::store::store::raft_between_save", "off").unwrap();
+    cluster.shutdown();
+
+    let engine = cluster.get_raft_engine(3);
+    let state_key = keys::raft_state_key(3);
+    // assert!(
+    //     engine
+    //         .get_msg::<RaftLocalState>(&state_key)
+    //         .unwrap()
+    //         .is_some()
+    // );
+
+    // avoid TIMEWAIT
+    sleep_ms(500);
+    cluster.start();
+    assert!(
+        engine
+            .get_msg::<RaftLocalState>(&state_key)
+            .unwrap()
+            .is_none()
+    );
 }

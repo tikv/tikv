@@ -42,6 +42,7 @@ extern crate grpcio as grpc;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate toml;
+extern crate fail;
 
 mod raft;
 mod raftstore;

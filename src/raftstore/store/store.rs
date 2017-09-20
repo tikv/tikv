@@ -1093,6 +1093,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
         }
+        let f = || fail_point!("raft_between_save");
+        f();
 
         if !raft_wb.is_empty() {
             // RaftLocalState, Raft Log Entry

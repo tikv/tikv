@@ -24,6 +24,7 @@ use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
 use kvproto::kvrpcpb::*;
+use kvproto::tikvpb::*;
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
@@ -38,6 +39,7 @@ use server::snap::Task as SnapTask;
 use server::metrics::*;
 use server::Error;
 use coprocessor::{EndPointTask, RequestTask};
+use fail;
 
 const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
 
@@ -924,6 +926,25 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
             });
         ctx.spawn(future);
+    }
+
+    fn fail_point(
+        &self,
+        ctx: RpcContext,
+        req: FailPointRequest,
+        sink: UnarySink<FailPointResponse>,
+    ) {
+        let mut resp = FailPointResponse::new();
+        resp.set_success(true);
+
+        for fail_cfg in req.get_fail_cfgs() {
+            if let Err(e) = fail::cfg(fail_cfg.get_name(), fail_cfg.get_actions()) {
+                resp.set_success(false);
+                resp.set_error(e);
+                break;
+            }
+        }
+        ctx.spawn(sink.success(resp).map_err(|_| ()));
     }
 }
 
