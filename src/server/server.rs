@@ -18,13 +18,15 @@ use std::str::FromStr;
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb_grpc::*;
+use kvproto::debugpb_grpc::create_debug;
+
 use util::worker::Worker;
 use storage::Storage;
-use raftstore::store::{SnapManager, SnapshotStatusMsg};
+use raftstore::store::{Engines, SnapManager, SnapshotStatusMsg};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
-use super::service::KvService as Service;
+use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
@@ -51,6 +53,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
+    #[allow(too_many_arguments)]
     pub fn new(
         cfg: &Config,
         region_split_size: usize,
@@ -59,6 +62,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snapshot_status_sender: Sender<SnapshotStatusMsg>,
         resolver: S,
         snap_mgr: SnapManager,
+        debug_engines: Option<Engines>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -70,7 +74,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
 
-        let h = Service::new(
+        let kv_service = KvService::new(
             storage.clone(),
             end_point_worker.scheduler(),
             raft_router.clone(),
@@ -84,13 +88,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(region_split_size as usize * 4)
             .build_args();
-        let grpc_server = try!(
-            ServerBuilder::new(env.clone())
-                .register_service(create_tikv(h))
+        let grpc_server = {
+            let mut sb = ServerBuilder::new(env.clone())
                 .bind(ip, addr.port())
                 .channel_args(channel_args)
-                .build()
-        );
+                .register_service(create_tikv(kv_service));
+            if let Some(engines) = debug_engines {
+                sb = sb.register_service(create_debug(DebugService::new(engines)));
+            }
+            try!(sb.build())
+        };
 
         let addr = {
             let (ref host, port) = grpc_server.bind_addrs()[0];
@@ -249,6 +256,7 @@ mod tests {
             snapshot_status_sender,
             MockResolver { addr: addr.clone() },
             SnapManager::new("", None),
+            None,
         ).unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 
