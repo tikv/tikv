@@ -96,7 +96,7 @@ impl Tikv for BenchTikvHandler {
         ctx.spawn(sink.success(resp)
             .then(move |_| {
                 if inner.start.load(Ordering::Acquire) {
-                    inner.counter.fetch_add(1, Ordering::Release);
+                    inner.counter.fetch_add(1, Ordering::AcqRel);
                     inner.forwarder.push(());
                 }
                 future::ok::<_, ()>(())
