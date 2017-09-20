@@ -104,4 +104,11 @@ lazy_static! {
             "DistSQL cache hit/miss count",
             &["type"]
         ).unwrap();
+
+    pub static ref CORP_DISTSQL_CACHE_SIZE_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_coprocessor_distsql_cache_size",
+            "DistSQL cache size in bytes and count",
+            &["type"]
+        ).unwrap();
 }

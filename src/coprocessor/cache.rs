@@ -19,23 +19,35 @@ use std::boxed::Box;
 use std::sync::{Arc, Mutex};
 use kvproto::metapb::RegionEpoch;
 use self::linked_hash_map::LinkedHashMap;
+use super::metrics::*;
 
 type DistSQLCacheKey = String;
+
+const DISTSQL_CACHE_ENTRY_ADDITION_SIZE: usize = 40;
 
 pub struct DistSQLCacheEntry {
     region_id: u64,
     region_epoch: RegionEpoch,
     version: u64,
     result: Vec<u8>,
+    size: usize,
 }
 
 impl DistSQLCacheEntry {
-    pub fn new(region_id: u64, epoch: RegionEpoch, version: u64, r: Vec<u8>) -> DistSQLCacheEntry {
+    pub fn new(
+        region_id: u64,
+        epoch: RegionEpoch,
+        version: u64,
+        key_size: usize,
+        r: Vec<u8>,
+    ) -> DistSQLCacheEntry {
+        let size = r.len() + DISTSQL_CACHE_ENTRY_ADDITION_SIZE + 2 * key_size;
         DistSQLCacheEntry {
             region_id: region_id,
             region_epoch: epoch,
             version: version,
             result: r,
+            size: size,
         }
     }
 }
@@ -49,6 +61,7 @@ pub struct DistSQLCache {
     regions: HashMap<u64, RegionDistSQLCacheEntry>,
     max_size: usize,
     map: LinkedHashMap<DistSQLCacheKey, Box<DistSQLCacheEntry>>,
+    size: usize,
 }
 
 impl DistSQLCache {
@@ -57,6 +70,7 @@ impl DistSQLCache {
             regions: HashMap::new(),
             map: LinkedHashMap::new(),
             max_size: capacity,
+            size: 0,
         }
     }
 
@@ -75,16 +89,21 @@ impl DistSQLCache {
         version: u64,
         res: Vec<u8>,
     ) {
+        let key_size = k.len();
         let option = match self.map.get_mut(&k) {
             Some(entry) => {
+                let old_size = entry.size;
+                entry.size = res.len() + (key_size * 2) + DISTSQL_CACHE_ENTRY_ADDITION_SIZE;
                 entry.version = version;
                 entry.result = res;
                 entry.region_id = region_id;
                 entry.region_epoch = epoch;
+                self.size = self.size - old_size + entry.size;
                 None
             }
             None => {
-                let entry = box DistSQLCacheEntry::new(region_id, epoch, version, res);
+                let entry = box DistSQLCacheEntry::new(region_id, epoch, version, key_size, res);
+                self.size += entry.size;
                 Some(entry)
             }
         };
@@ -99,6 +118,13 @@ impl DistSQLCache {
                 }
             }
         }
+        CORP_DISTSQL_CACHE_SIZE_GAUGE_VEC
+            .with_label_values(&["size"])
+            .set(self.size() as f64);
+
+        CORP_DISTSQL_CACHE_SIZE_GAUGE_VEC
+            .with_label_values(&["count"])
+            .set(self.len() as f64);
     }
 
     fn check_evict_key(&mut self, region_id: u64, epoch: &RegionEpoch, k: &str) {
@@ -156,6 +182,7 @@ impl DistSQLCache {
                 if opt.is_some() {
                     regions.remove(&region_id);
                 };
+                self.size -= entry.size;
             }
         };
     }
@@ -184,8 +211,14 @@ impl DistSQLCache {
             Some(keys) => for i in keys {
                 self.remove(&i);
             },
-        }
+        };
+        CORP_DISTSQL_CACHE_SIZE_GAUGE_VEC
+            .with_label_values(&["size"])
+            .set(self.size() as f64);
 
+        CORP_DISTSQL_CACHE_SIZE_GAUGE_VEC
+            .with_label_values(&["count"])
+            .set(self.len() as f64);
     }
 
     pub fn capacity(&self) -> usize {
@@ -194,6 +227,10 @@ impl DistSQLCache {
 
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
     }
 
     pub fn is_empty(&self) -> bool {
@@ -223,7 +260,12 @@ impl DistSQLCache {
 
     #[inline]
     fn remove_lru(&mut self) {
-        self.map.pop_front();
+        match self.map.pop_front() {
+            None => (),
+            Some((_, entry)) => {
+                self.size -= entry.size;
+            }
+        };
     }
 }
 
