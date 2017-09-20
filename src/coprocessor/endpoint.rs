@@ -136,7 +136,8 @@ impl<R: RaftStoreRouter + 'static> Context for CopContext<R> {
                 for (tag, count) in details {
                     COPR_SCAN_DETAILS
                         .with_label_values(&[type_str, cf, tag])
-                        .observe(count as f64 / this_statistics.count as f64);
+                        .inc_by(count as f64)
+                        .unwrap();
                 }
             }
             *this_statistics = Default::default();
