@@ -1831,29 +1831,55 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_prepare_split_region(
         &mut self,
         region_id: u64,
-        epoch: metapb::RegionEpoch,
+        region_epoch: metapb::RegionEpoch,
         split_key: Vec<u8>, // `split_key` is a encoded key.
         cb: Option<Callback>,
     ) {
+        if let Err(e) = self.validate_split_region(region_id, &region_epoch, &split_key) {
+            cb.map(|cb| cb(new_error(e)));
+            return;
+        }
+        let peer = &self.region_peers[&region_id];
+        let region = peer.region();
+        let task = PdTask::AskSplit {
+            region: region.clone(),
+            split_key: split_key,
+            peer: peer.peer.clone(),
+            right_derive: self.cfg.right_derive_when_split,
+            callback: cb.unwrap_or_else(|| Box::new(|_| {})),
+        };
+        if let Err(Stopped(t)) = self.pd_worker.schedule(task) {
+            error!("{} failed to notify pd to split: Stopped", peer.tag,);
+            match t {
+                PdTask::AskSplit { callback, .. } => {
+                    callback(new_error(box_err!("failed to split: Stopped")))
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn validate_split_region(
+        &mut self,
+        region_id: u64,
+        epoch: &metapb::RegionEpoch,
+        split_key: &[u8], // `split_key` is a encoded key.
+    ) -> Result<()> {
         if split_key.is_empty() {
             error!("[region {}] split key should not be empty!!!", region_id);
-            cb.map(|cb| {
-                cb(new_error(box_err!(
-                    "[region {}] split key should not be empty",
-                    region_id
-                )))
-            });
-            return;
+            return Err(box_err!(
+                "[region {}] split key should not be empty",
+                region_id
+            ));
         }
         let peer = match self.region_peers.get(&region_id) {
             None => {
-                error!(
+                info!(
                     "[region {}] region on {} doesn't exist, skip.",
                     region_id,
                     self.store_id()
                 );
-                cb.map(|cb| cb(new_error(Error::RegionNotFound(region_id))));
-                return;
+                return Err(Error::RegionNotFound(region_id));
             }
             Some(peer) => {
                 if !peer.is_leader() {
@@ -1863,12 +1889,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         region_id,
                         self.store_id()
                     );
-                    cb.map(|cb| {
-                        cb(new_error(
-                            Error::NotLeader(region_id, Some(peer.peer.clone())),
-                        ))
-                    });
-                    return;
+                    return Err(Error::NotLeader(region_id, Some(peer.peer.clone())));
                 }
                 peer
             }
@@ -1878,50 +1899,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if region.get_region_epoch().get_version() != epoch.get_version() {
             info!(
-                "[region {}] {} epoch changed {:?} != {:?}, need re-check later",
-                region_id,
+                "{} epoch changed {:?} != {:?}, need re-check later",
                 peer.tag,
                 region.get_region_epoch(),
                 epoch
             );
-            cb.map(|cb| {
-                cb(new_error(box_err!(
-                    "[region {}] {} epoch changed {:?} != {:?}, need re-check later",
-                    region_id,
-                    peer.tag,
-                    region.get_region_epoch(),
-                    epoch
-                )))
-            });
-            return;
-        }
-
-        let task = PdTask::AskSplit {
-            region: region.clone(),
-            split_key: split_key.clone(),
-            peer: peer.peer.clone(),
-            right_derive: self.cfg.right_derive_when_split,
-            callback: if let Some(cb) = cb {
-                cb
-            } else {
-                Box::new(|_| {})
-            },
-        };
-
-        if let Err(Stopped(t)) = self.pd_worker.schedule(task) {
-            error!(
-                "[region {}] {} failed to notify pd to split at {:?}: Stopped",
-                region_id,
+            return Err(box_err!(
+                "{} epoch changed {:?} != {:?}, need re-check later",
                 peer.tag,
-                split_key,
-            );
-            match t {
-                PdTask::AskSplit { callback, .. } => callback(new_error(
-                    box_err!("failed to split at {:?}: Stopped", split_key),
-                )),
-                _ => unreachable!(),
-            }
+                region.get_region_epoch(),
+                epoch
+            ));
         }
+        Ok(())
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -2433,6 +2423,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();
             }
+            // TODO: Unified split region message.
             Msg::SplitCheckResult {
                 region_id,
                 epoch,
