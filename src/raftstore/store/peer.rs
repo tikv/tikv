@@ -1705,10 +1705,7 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
             req.get_cmd_type() == AdminCmdType::Split;
     }
 
-    if msg.has_header() && msg.get_header().get_sync_log() {
-        return true;
-    }
-    false
+    msg.get_header().get_sync_log()
 }
 
 fn make_transfer_leader_response() -> RaftCmdResponse {
