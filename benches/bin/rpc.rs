@@ -13,24 +13,24 @@
 
 use std::thread;
 use std::str::FromStr;
-use std::time::{Instant, Duration};
-use std::net::{SocketAddr, IpAddr};
+use std::time::{Duration, Instant};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use kvproto::tikvpb_grpc::*;
 use kvproto::coprocessor::{Request, Response};
-use kvproto::raft_serverpb::{RaftMessage, Done, SnapshotChunk};
+use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::*;
 
-use futures::{Future, Stream, future, stream};
+use futures::{future, stream, Future, Stream};
 use futures::sync::oneshot;
-use grpc::{Server as GrpcServer, ServerBuilder, Environment, ChannelBuilder, RpcContext,
-           UnarySink, RequestStream, ClientStreamingSink};
+use grpc::{ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcContext,
+           Server as GrpcServer, ServerBuilder, UnarySink};
 use crossbeam::sync::MsQueue;
 
-use tikv::server::{RaftClient, Config};
+use tikv::server::{Config, RaftClient};
 
 use super::print_result;
 
@@ -71,21 +71,26 @@ impl BenchTikvHandler {
 }
 
 impl Tikv for BenchTikvHandler {
-    fn raft(&self,
-            ctx: RpcContext,
-            stream: RequestStream<RaftMessage>,
-            _: ClientStreamingSink<Done>) {
+    fn raft(
+        &self,
+        ctx: RpcContext,
+        stream: RequestStream<RaftMessage>,
+        _: ClientStreamingSink<Done>,
+    ) {
         let inner = self.inner.clone();
 
-        ctx.spawn(stream.for_each(move |_| {
-                if inner.start.load(Ordering::Acquire) {
-                    inner.counter.fetch_add(1, Ordering::Release);
-                    inner.forwarder.push(());
-                }
-                future::ok(())
-            })
-            .map_err(|_| ())
-            .then(|_| future::ok::<_, ()>(())));
+        ctx.spawn(
+            stream
+                .for_each(move |_| {
+                    if inner.start.load(Ordering::Acquire) {
+                        inner.counter.fetch_add(1, Ordering::Release);
+                        inner.forwarder.push(());
+                    }
+                    future::ok(())
+                })
+                .map_err(|_| ())
+                .then(|_| future::ok::<_, ()>(())),
+        );
     }
 
     fn kv_get(&self, ctx: RpcContext, _: GetRequest, sink: UnarySink<GetResponse>) {
@@ -93,14 +98,13 @@ impl Tikv for BenchTikvHandler {
         let mut resp = GetResponse::new();
         resp.set_value(b"something".to_vec());
 
-        ctx.spawn(sink.success(resp)
-            .then(move |_| {
-                if inner.start.load(Ordering::Acquire) {
-                    inner.counter.fetch_add(1, Ordering::AcqRel);
-                    inner.forwarder.push(());
-                }
-                future::ok::<_, ()>(())
-            }));
+        ctx.spawn(sink.success(resp).then(move |_| {
+            if inner.start.load(Ordering::Acquire) {
+                inner.counter.fetch_add(1, Ordering::AcqRel);
+                inner.forwarder.push(());
+            }
+            future::ok::<_, ()>(())
+        }));
     }
 
     fn kv_scan(&self, _: RpcContext, _: ScanRequest, _: UnarySink<ScanResponse>) {
@@ -127,10 +131,12 @@ impl Tikv for BenchTikvHandler {
         unimplemented!()
     }
 
-    fn kv_batch_rollback(&self,
-                         _: RpcContext,
-                         _: BatchRollbackRequest,
-                         _: UnarySink<BatchRollbackResponse>) {
+    fn kv_batch_rollback(
+        &self,
+        _: RpcContext,
+        _: BatchRollbackRequest,
+        _: UnarySink<BatchRollbackResponse>,
+    ) {
         unimplemented!()
     }
 
@@ -138,10 +144,12 @@ impl Tikv for BenchTikvHandler {
         unimplemented!()
     }
 
-    fn kv_resolve_lock(&self,
-                       _: RpcContext,
-                       _: ResolveLockRequest,
-                       _: UnarySink<ResolveLockResponse>) {
+    fn kv_resolve_lock(
+        &self,
+        _: RpcContext,
+        _: ResolveLockRequest,
+        _: UnarySink<ResolveLockResponse>,
+    ) {
         unimplemented!()
     }
 
@@ -165,10 +173,12 @@ impl Tikv for BenchTikvHandler {
         unimplemented!()
     }
 
-    fn snapshot(&self,
-                _: RpcContext,
-                _: RequestStream<SnapshotChunk>,
-                _: ClientStreamingSink<Done>) {
+    fn snapshot(
+        &self,
+        _: RpcContext,
+        _: RequestStream<SnapshotChunk>,
+        _: ClientStreamingSink<Done>,
+    ) {
         unimplemented!()
     }
 
@@ -176,24 +186,30 @@ impl Tikv for BenchTikvHandler {
         unimplemented!()
     }
 
-    fn mvcc_get_by_key(&self,
-                       _: RpcContext,
-                       _: MvccGetByKeyRequest,
-                       _: UnarySink<MvccGetByKeyResponse>) {
+    fn mvcc_get_by_key(
+        &self,
+        _: RpcContext,
+        _: MvccGetByKeyRequest,
+        _: UnarySink<MvccGetByKeyResponse>,
+    ) {
         unimplemented!()
     }
 
-    fn mvcc_get_by_start_ts(&self,
-                            _: RpcContext,
-                            _: MvccGetByStartTsRequest,
-                            _: UnarySink<MvccGetByStartTsResponse>) {
+    fn mvcc_get_by_start_ts(
+        &self,
+        _: RpcContext,
+        _: MvccGetByStartTsRequest,
+        _: UnarySink<MvccGetByStartTsResponse>,
+    ) {
         unimplemented!()
     }
 
-    fn kv_delete_range(&self,
-                       _: RpcContext,
-                       _: DeleteRangeRequest,
-                       _: UnarySink<DeleteRangeResponse>) {
+    fn kv_delete_range(
+        &self,
+        _: RpcContext,
+        _: DeleteRangeRequest,
+        _: UnarySink<DeleteRangeResponse>,
+    ) {
         unimplemented!()
     }
 }
@@ -290,8 +306,9 @@ fn new_bench_server() -> (Arc<Environment>, BenchTikvServer) {
 }
 
 fn run_bench<F, C>(name: &'static str, run: F, clean: C)
-    where F: FnOnce(Arc<Environment>, &mut BenchTikvServer),
-          C: FnOnce()
+where
+    F: FnOnce(Arc<Environment>, &mut BenchTikvServer),
+    C: FnOnce(),
 {
     printf!("benching RPC on {}\t...", name);
 
@@ -311,7 +328,7 @@ fn run_bench<F, C>(name: &'static str, run: F, clean: C)
     let duration = start.elapsed();
 
     let qps = count as f64 /
-              (duration.as_secs() as f64 + duration.subsec_nanos() as f64 / NANOS_PER_SEC as f64);
+        (duration.as_secs() as f64 + duration.subsec_nanos() as f64 / NANOS_PER_SEC as f64);
     printf!("\tQPS: {:.1}", qps);
     print_result(result);
 
@@ -322,9 +339,7 @@ fn run_bench<F, C>(name: &'static str, run: F, clean: C)
 fn bench_kv_get_rpc() {
     let name = "kv_get_unary";
     let (tx_close, rx_close) = oneshot::channel();
-    let clean = move || {
-        drop(tx_close);
-    };
+    let clean = move || { drop(tx_close); };
     let run = move |env: Arc<Environment>, server: &mut BenchTikvServer| {
         let mut get = GetRequest::new();
         let mut ctx = Context::new();
@@ -358,7 +373,8 @@ fn bench_kv_get_rpc() {
             let relax = 1024;
             let relax_duration = 10;
 
-            let _ = rx_close.select(stream::iter(sample.into_iter().cycle()).for_each(|req| {
+            let _ = rx_close
+                .select(stream::iter(sample.into_iter().cycle()).for_each(|req| {
                     count += 1;
                     if count % relax == 0 {
                         thread::sleep(Duration::from_millis(relax_duration));
@@ -378,9 +394,7 @@ fn bench_raft_rpc() {
     let name = "raft_client_streaming";
     let quit = Arc::new(AtomicBool::new(false));
     let quit1 = quit.clone();
-    let clean = move || {
-        quit1.store(true, Ordering::Release);
-    };
+    let clean = move || { quit1.store(true, Ordering::Release); };
     let run = move |env: Arc<Environment>, server: &mut BenchTikvServer| {
         let mut sample = RaftMessage::new();
 
