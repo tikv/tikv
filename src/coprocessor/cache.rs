@@ -146,8 +146,8 @@ impl DistSQLCache {
                     Some(node) => {
                         // Delete from region cache entry list
                         node.cached_items.remove(k);
-                        if !node.cached_items.is_empty() {
-                            Some(1)
+                        if !node.cached_items.is_empty() && node.version != 1 {
+                            Some(())
                         } else {
                             None
                         }
