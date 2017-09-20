@@ -13,7 +13,6 @@
 
 use std::{error, result};
 use kvproto::debugpb::*;
-use rocksdb::DB as RocksDb;
 
 use raftstore::store::Engines;
 use raftstore::store::engine::Peekable;
@@ -52,30 +51,32 @@ impl Debugger {
     }
 
     pub fn get(&self, db: DB, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
-        let db = try!(self.get_db(db));
-        let cf = try!(validate_cf(cf));
+        try!(validate_db_and_cf(db, cf));
+        let db = match db {
+            DB::KV => &self.engines.kv_engine,
+            DB::RAFT => &self.engines.raft_engine,
+            _ => unreachable!(),
+        };
         match db.get_value_cf(cf, key) {
-            Ok(Some(v)) => Ok((&v).to_vec()),
+            Ok(Some(v)) => Ok(v.to_vec()),
             Ok(None) => Err(Error::NotFound(
                 format!("get none value for key {:?}", key,),
             )),
             Err(e) => Err(box_err!(e)),
         }
     }
-
-    fn get_db(&self, db: DB) -> Result<&RocksDb> {
-        match db {
-            DB::KV => Ok(&self.engines.kv_engine),
-            DB::RAFT => Ok(&self.engines.raft_engine),
-            _ => Err(Error::InvalidArgument("invalid db".to_owned())),
-        }
-    }
 }
 
-pub fn validate_cf(cf: &str) -> Result<&str> {
-    match cf {
-        CF_DEFAULT | CF_WRITE | CF_LOCK | CF_RAFT => Ok(cf),
-        _ => Err(Error::InvalidArgument("invalid cf".to_owned())),
+pub fn validate_db_and_cf(db: DB, cf: &str) -> Result<()> {
+    match (db, cf) {
+        (DB::KV, CF_DEFAULT) |
+        (DB::KV, CF_WRITE) |
+        (DB::KV, CF_LOCK) |
+        (DB::KV, CF_RAFT) |
+        (DB::RAFT, CF_DEFAULT) => Ok(()),
+        _ => Err(Error::InvalidArgument(
+            format!("invalid cf {:?} for db {:?}", db, cf),
+        )),
     }
 }
 
@@ -92,13 +93,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_cf() {
-        let cases = vec![CF_DEFAULT, CF_WRITE, CF_LOCK, CF_RAFT];
-        for cf in cases {
-            assert_eq!(validate_cf(cf).unwrap(), cf);
+    fn test_validate_db_and_cf() {
+        let valid_cases = vec![
+            (DB::KV, CF_DEFAULT),
+            (DB::KV, CF_WRITE),
+            (DB::KV, CF_LOCK),
+            (DB::KV, CF_RAFT),
+            (DB::RAFT, CF_DEFAULT),
+        ];
+        for (db, cf) in valid_cases {
+            validate_db_and_cf(db, cf).unwrap();
         }
 
-        validate_cf("foo").unwrap_err();
+        let invalid_cases = vec![
+            (DB::RAFT, CF_WRITE),
+            (DB::RAFT, CF_LOCK),
+            (DB::RAFT, CF_RAFT),
+            (DB::INVALID, CF_DEFAULT),
+            (DB::INVALID, "BAD_CF"),
+        ];
+        for (db, cf) in invalid_cases {
+            validate_db_and_cf(db, cf).unwrap_err();
+        }
     }
 
     fn new_debugger() -> Debugger {
@@ -119,16 +135,6 @@ mod tests {
 
         let engines = Engines::new(engine.clone(), engine);
         Debugger::new(engines)
-    }
-
-    #[test]
-    fn test_get_db() {
-        let debugger = new_debugger();
-        let cases = vec![DB::KV, DB::RAFT];
-        for db in cases {
-            debugger.get_db(db).unwrap();
-        }
-        debugger.get_db(DB::INVALID).unwrap_err();
     }
 
     #[test]
