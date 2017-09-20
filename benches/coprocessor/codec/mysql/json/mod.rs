@@ -28,7 +28,7 @@ fn download_and_extract_file(url: &str) -> io::Result<String> {
         .stderr(Stdio::null())
         .spawn()?;
     let mut tar_child = Command::new("tar")
-        .args(&["xjf", "-", "--to-stdout"])
+        .args(&["xzf", "-", "--to-stdout"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -48,15 +48,15 @@ fn download_and_extract_file(url: &str) -> io::Result<String> {
         }
     });
 
-    try!(dl_child.wait());
     let output = try!(tar_child.wait_with_output());
+    try!(dl_child.wait());
     try!(th.join().unwrap());
     assert_eq!(output.status.code(), Some(0));
     Ok(String::from_utf8(output.stdout).unwrap())
 }
 
 pub fn load_test_jsons() -> Vec<String> {
-    let url = "https://download.pingcap.org/resources/world_bank.json.bz2";
+    let url = "https://download.pingcap.org/resources/world_bank.json.tar.gz";
     download_and_extract_file(url)
         .unwrap()
         .split('\n')
