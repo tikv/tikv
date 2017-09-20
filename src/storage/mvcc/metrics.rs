@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, Histogram};
+use prometheus::{exponential_buckets, CounterVec, Histogram};
 
 lazy_static! {
     pub static ref MVCC_VERSIONS_HISTOGRAM: Histogram =
@@ -27,5 +27,12 @@ lazy_static! {
             "tikv_storage_mvcc_gc_delete_versions",
             "Histogram of versions deleted by gc for each key",
              exponential_buckets(1.0, 2.0, 10).unwrap()
+        ).unwrap();
+
+    pub static ref MVCC_CONFLICT_COUNTER: CounterVec =
+        register_counter_vec!(
+            "tikv_storage_mvcc_conflict_counter",
+            "Total number of conflict error",
+            &["type"]
         ).unwrap();
 }
