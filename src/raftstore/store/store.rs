@@ -692,7 +692,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             region_id,
                             p.peer_id()
                         );
-                        self.raft_metrics.message.drop_stale_peer += 1;
+                        self.raft_metrics.message_dropped.stale_peer += 1;
                         return Ok(false);
                     }
                     // There is no tasks in apply worker.
@@ -707,7 +707,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     target_peer_id,
                     p.peer_id()
                 );
-                self.raft_metrics.message.drop_stale_msg += 1;
+                self.raft_metrics.message_dropped.stale_msg += 1;
                 return Ok(false);
             }
         }
@@ -723,7 +723,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region_id,
                     p
                 );
-                self.raft_metrics.message.drop_destroy_stale_peer += 1;
+                self.raft_metrics.message_dropped.destroy_stale_peer += 1;
                 return Ok(false);
             }
             info!("[region {}] destroying stale peer {:?}", region_id, p);
@@ -745,7 +745,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 target,
                 msg_type
             );
-            self.raft_metrics.message.drop_stale_msg += 1;
+            self.raft_metrics.message_dropped.stale_msg += 1;
             return Ok(false);
         }
 
@@ -760,7 +760,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if util::is_first_vote_msg(msg) {
                     self.pending_votes.push(msg.to_owned());
                 }
-                self.raft_metrics.message.drop_region_overlap += 1;
+                self.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(false);
             }
         }
@@ -827,7 +827,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 to.get_store_id(),
                 self.store_id()
             );
-            self.raft_metrics.message.drop_mismatch_store_id += 1;
+            self.raft_metrics.message_dropped.mismatch_store_id += 1;
             return false;
         }
 
@@ -836,7 +836,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 "[region {}] missing epoch in raft message, ignore it",
                 region_id
             );
-            self.raft_metrics.message.drop_mismatch_region_epoch += 1;
+            self.raft_metrics.message_dropped.mismatch_region_epoch += 1;
             return false;
         }
 
@@ -1028,7 +1028,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 snap_region,
                 msg.get_to_peer()
             );
-            self.raft_metrics.message.drop_region_no_peer += 1;
+            self.raft_metrics.message_dropped.region_no_peer += 1;
             return Ok(false);
         }
         if let Some((_, &exist_region_id)) = self.region_ranges
@@ -1038,7 +1038,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < enc_end_key(&snap_region) {
                 info!("region overlapped {:?}, {:?}", exist_region, snap_region);
-                self.raft_metrics.message.drop_region_overlap += 1;
+                self.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(false);
             }
         }
@@ -1049,7 +1049,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                region.get_id() != snap_region.get_id()
             {
                 info!("pending region overlapped {:?}, {:?}", region, snap_region);
-                self.raft_metrics.message.drop_region_overlap += 1;
+                self.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(false);
             }
         }
