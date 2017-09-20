@@ -63,11 +63,18 @@ impl DistSQLCache {
     pub fn get_region_version(&self, region_id: u64) -> u64 {
         match self.regions.get(&region_id) {
             None => 0,
-            Some(item) => item.version
+            Some(item) => item.version,
         }
     }
 
-    pub fn put(&mut self, region_id: u64, epoch: RegionEpoch, k: DistSQLCacheKey, version: u64, res: Vec<u8>) {
+    pub fn put(
+        &mut self,
+        region_id: u64,
+        epoch: RegionEpoch,
+        k: DistSQLCacheKey,
+        version: u64,
+        res: Vec<u8>,
+    ) {
         let option = match self.map.get_mut(&k) {
             Some(entry) => {
                 entry.version = version;
@@ -168,12 +175,12 @@ impl DistSQLCache {
         };
         match keys {
             None => {
-                let entry = RegionDistSQLCacheEntry{
+                let entry = RegionDistSQLCacheEntry {
                     version: 1,
-                    cached_items: HashMap::new()
+                    cached_items: HashMap::new(),
                 };
                 self.regions.insert(region_id, entry);
-            },
+            }
             Some(keys) => for i in keys {
                 self.remove(&i);
             },
@@ -206,9 +213,9 @@ impl DistSQLCache {
             }
         };
         if let Some(rmap) = opt {
-            let entry = RegionDistSQLCacheEntry{
+            let entry = RegionDistSQLCacheEntry {
                 version: 0,
-                cached_items: rmap
+                cached_items: rmap,
             };
             self.regions.insert(region_id, entry);
         }
