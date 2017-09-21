@@ -37,14 +37,14 @@ const RAFT_MAX_MEM: usize = 2 * GB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
-    let (radio, min, max) = match (is_raft_db, cf) {
+    let (ratio, min, max) = match (is_raft_db, cf) {
         (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
         (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
         (false, CF_LOCK) => (0.02, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM),
         (false, CF_WRITE) => (0.15, 0, usize::MAX),
         _ => unreachable!(),
     };
-    let mut size = (total_mem as f64 * radio) as usize;
+    let mut size = (total_mem as f64 * ratio) as usize;
     if size < min {
         size = min;
     } else if size > max {
