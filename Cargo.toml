@@ -28,6 +28,9 @@ path = "benches/bin/bench-tikv.rs"
 [[bin]]
 name = "tikv-ctl"
 
+[[bin]]
+name = "tikv-fail"
+
 [[test]]
 name = "tests"
 

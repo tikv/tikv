@@ -934,6 +934,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         req: FailPointRequest,
         sink: UnarySink<FailPointResponse>,
     ) {
+        info!("receive fail point req: {:?}", req);
         let mut resp = FailPointResponse::new();
         resp.set_success(true);
 
