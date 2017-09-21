@@ -17,15 +17,12 @@ use tikv::util::HandyRwLock;
 use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::raftstore::store::{keys, Mutable, Peekable};
 
-use kvproto::tikvpb_grpc::TikvClient;
-use kvproto::metapb;
 use kvproto::kvrpcpb::*;
-use kvproto::debugpb_grpc::DebugClient;
-use kvproto::debugpb;
-use kvproto::eraftpb;
 use kvproto::raft_serverpb::*;
 use kvproto::coprocessor::*;
-use protobuf::repeated::RepeatedField;
+use kvproto::{debugpb, eraftpb, metapb};
+use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::debugpb_grpc::DebugClient;
 use rocksdb::Writable;
 use futures::{Future, Sink};
 use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
@@ -604,9 +601,7 @@ fn test_debug_size() {
 
     let mut req = debugpb::SizeRequest::new();
     req.set_region_id(region_id);
-    req.set_cfs(RepeatedField::from_vec(
-        cfs.iter().map(|s| s.to_string()).collect(),
-    ));
+    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
     let entries = debug_client.size(req.clone()).unwrap().take_entries();
     assert_eq!(entries.len(), 4);
     for e in entries.into_vec() {

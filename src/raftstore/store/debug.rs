@@ -13,9 +13,7 @@
 
 use std::{error, result};
 use kvproto::debugpb::*;
-use kvproto::raft_serverpb;
-
-use kvproto::eraftpb;
+use kvproto::{eraftpb, raft_serverpb};
 
 use raftstore::store::{keys, Engines, Iterable, Peekable};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
