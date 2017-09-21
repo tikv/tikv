@@ -1858,7 +1858,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             callback: cb.unwrap_or_else(|| Box::new(|_| {})),
         };
         if let Err(Stopped(t)) = self.pd_worker.schedule(task) {
-            error!("{} failed to notify pd to split: Stopped", peer.tag,);
+            error!("{} failed to notify pd to split: Stopped", peer.tag);
             match t {
                 PdTask::AskSplit { callback, .. } => {
                     callback(new_error(box_err!("failed to split: Stopped")))

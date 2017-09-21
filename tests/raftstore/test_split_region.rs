@@ -168,16 +168,20 @@ fn test_server_manual_split_region_twice() {
         assert_eq!(region2.get_end_key(), right.get_end_key());
         tx.send(right).unwrap();
     });
-    cluster.split_region_by_key(&region, split_key, Some(c));
+    cluster.split_region_by_key(&region, split_key, c);
+    let region3 = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    let region3 = rx.recv().unwrap();
     cluster.must_put(split_key, b"v2");
+
+    let (tx1, rx1) = channel();
     let c = Box::new(move |resp: RaftCmdResponse| {
         assert!(resp.has_header());
         assert!(resp.get_header().has_error());
         assert!(!resp.has_admin_response());
+        tx1.send(()).unwrap();
     });
-    cluster.split_region_by_key(&region3, split_key, Some(c));
+    cluster.split_region_by_key(&region3, split_key, c);
+    rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
 /// Keep puting random kvs until specified size limit is reached.
