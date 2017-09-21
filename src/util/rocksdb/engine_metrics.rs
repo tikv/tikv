@@ -1343,13 +1343,13 @@ lazy_static!{
 
     pub static ref STORE_ENGINE_NUM_SNAPSHOTS_GAUGE: Gauge =
         register_gauge!(
-            "tikv-engine-num-snapshots",
+            "tikv_engine_num_snapshots",
             "Number of unreleased snapshots"
         ).unwrap();
 
     pub static ref STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE: Gauge =
         register_gauge!(
-            "tikv-engine-oldest-snapshot-duration",
+            "tikv_engine_oldest_snapshot_duration",
             "Oldest unreleased snapshot duration in seconds"
         ).unwrap();
 }
