@@ -16,12 +16,14 @@ use std::sync::Arc;
 use tikv::util::HandyRwLock;
 use tikv::raftstore::store::keys;
 use tikv::storage::CF_DEFAULT;
+use tikv::raftstore::store::engine::{Mutable, Peekable};
 
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::metapb;
 use kvproto::kvrpcpb::*;
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::debugpb;
+use kvproto::eraftpb;
 use kvproto::raft_serverpb::*;
 use kvproto::coprocessor::*;
 use futures::{Future, Sink};
@@ -516,6 +518,51 @@ fn test_debug_get() {
     req.set_db(debugpb::DB::KV);
     req.set_key(b"foo".to_vec());
     match debug_client.get(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+#[test]
+fn test_debug_raft_log() {
+    let (cluster, leader, _) = must_new_cluster();
+
+    // Put some data.
+    let engine = cluster.get_raft_engine(leader.get_store_id());
+    let (region_id, log_index) = (200, 200);
+    let key = keys::raft_log_key(region_id, log_index);
+    let mut entry = eraftpb::Entry::new();
+    entry.set_term(1);
+    entry.set_index(1);
+    entry.set_entry_type(eraftpb::EntryType::EntryNormal);
+    entry.set_data(vec![42]);
+    engine.put_msg(key.as_slice(), &entry).unwrap();
+    assert_eq!(
+        engine
+            .get_msg::<eraftpb::Entry>(key.as_slice())
+            .unwrap()
+            .unwrap(),
+        entry
+    );
+
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
+    let debug_client = DebugClient::new(channel);
+
+    // Debug raft_log
+    let mut req = debugpb::RaftLogRequest::new();
+    req.set_region_id(region_id);
+    req.set_log_index(log_index);
+    let resp = debug_client.raft_log(req).unwrap();
+    assert_ne!(resp.get_entry(), &eraftpb::Entry::new());
+
+    let mut req = debugpb::RaftLogRequest::new();
+    req.set_region_id(region_id + 1);
+    req.set_log_index(region_id + 1);
+    match debug_client.raft_log(req).unwrap_err() {
         Error::RpcFailure(status) => {
             assert_eq!(status.status, RpcStatusCode::NotFound);
         }
