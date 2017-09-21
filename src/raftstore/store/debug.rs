@@ -13,8 +13,9 @@
 
 use std::{error, result};
 use kvproto::debugpb::*;
+use kvproto::raft_serverpb;
 
-use raftstore::store::Engines;
+use raftstore::store::{keys, Engines};
 use raftstore::store::engine::Peekable;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
@@ -63,6 +64,34 @@ impl Debugger {
                 format!("get none value for key {:?}", key,),
             )),
             Err(e) => Err(box_err!(e)),
+        }
+    }
+
+    pub fn region_info(
+        &self,
+        region_id: u64,
+    ) -> Result<
+        (
+            Option<raft_serverpb::RaftLocalState>,
+            Option<raft_serverpb::RaftApplyState>,
+        ),
+    > {
+        let raft_state_key = keys::raft_state_key(region_id);
+        let raft_state = self.engines
+            .raft_engine
+            .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key);
+
+        let apply_state_key = keys::apply_state_key(region_id);
+        let apply_state = self.engines
+            .kv_engine
+            .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key);
+
+        match (raft_state, apply_state) {
+            (Ok(None), Ok(None)) => Err(Error::NotFound(
+                format!("region log for region {}", region_id),
+            )),
+            (Ok(raft_state), Ok(apply_state)) => Ok((raft_state, apply_state)),
+            (Err(e), _) | (_, Err(e)) => Err(box_err!(e)),
         }
     }
 }
