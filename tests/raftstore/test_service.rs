@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use tikv::util::HandyRwLock;
-use tikv::raftstore::store::keys;
-use tikv::storage::CF_DEFAULT;
+use tikv::raftstore::store::{keys, Mutable};
+use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::metapb;
@@ -24,6 +24,8 @@ use kvproto::debugpb_grpc::DebugClient;
 use kvproto::debugpb;
 use kvproto::raft_serverpb::*;
 use kvproto::coprocessor::*;
+use protobuf::repeated::RepeatedField;
+use rocksdb::Writable;
 use futures::{Future, Sink};
 use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
@@ -516,6 +518,58 @@ fn test_debug_get() {
     req.set_db(debugpb::DB::KV);
     req.set_key(b"foo".to_vec());
     match debug_client.get(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+#[test]
+fn test_debug_size() {
+    let (cluster, leader, _) = must_new_cluster();
+    let engine = cluster.get_engine(leader.get_store_id());
+
+    // Put some data.
+    let region_id = 100;
+    let region_state_key = keys::region_state_key(region_id);
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.set_start_key(b"a".to_vec());
+    region.set_end_key(b"z".to_vec());
+    let mut state = RegionLocalState::new();
+    state.set_region(region);
+    let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+    engine
+        .put_msg_cf(cf_raft, &region_state_key, &state)
+        .unwrap();
+
+    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE];
+    let (k, v) = (keys::data_key(b"k"), b"v");
+    for cf in &cfs {
+        let cf_handle = engine.cf_handle(cf).unwrap();
+        engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+    }
+
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
+    let debug_client = DebugClient::new(channel);
+
+    let mut req = debugpb::SizeRequest::new();
+    req.set_region_id(region_id);
+    req.set_cfs(RepeatedField::from_vec(
+        cfs.iter().map(|s| s.to_string()).collect(),
+    ));
+    let entries = debug_client.size(req.clone()).unwrap().take_entries();
+    assert_eq!(entries.len(), 4);
+    for e in entries.into_vec() {
+        cfs.iter().find(|&&c| c == e.cf).unwrap();
+        assert!(e.size > 0);
+    }
+
+    req.set_region_id(region_id + 1);
+    match debug_client.size(req).unwrap_err() {
         Error::RpcFailure(status) => {
             assert_eq!(status.status, RpcStatusCode::NotFound);
         }
