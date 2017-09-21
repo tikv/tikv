@@ -23,7 +23,6 @@ use tikv::coprocessor;
 use kvproto::kvrpcpb::Context;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::util::codec::number::*;
-use tikv::util::transport::SendCh;
 use tikv::storage::{Key, Mutation, ALL_CFS};
 use tikv::server::Config;
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
@@ -39,9 +38,7 @@ use raftstore::util::MAX_LEADER_LEASE;
 use storage::sync_storage::SyncStorage;
 use storage::util::new_raft_engine;
 use tikv::coprocessor::select::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
-use mio::{EventLoop, Handler};
-use tikv::raftstore::store::Msg;
-use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::raftstore::Result as RaftStoreResult;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
@@ -61,18 +58,19 @@ struct Row {
     data: Vec<u8>,
 }
 
-struct TestHandler;
-
-impl Handler for TestHandler {
-    type Timeout = ();
-    type Message = Msg;
-
-    fn notify(&mut self, event_loop: &mut EventLoop<TestHandler>, msg: Msg) {
-        match msg {
-            Msg::Quit => event_loop.shutdown(),
-            Msg::CoprocessorStats { request_stats } => assert!(request_stats.len() > 0),
-            _ => unreachable!(),
-        }
+#[derive(Clone)]
+struct MockCopSender {}
+impl MockCopSender {
+    fn new() -> MockCopSender {
+        MockCopSender {}
+    }
+}
+impl CopSender for MockCopSender {
+    fn send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
+        Ok(())
+    }
+    fn try_send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
+        Ok(())
     }
 }
 
@@ -635,14 +633,15 @@ fn init_data_with_engine_and_commit(
     if commit {
         store.commit_with_ctx(ctx);
     }
-    let mut event_loop = EventLoop::new().unwrap();
-    let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
-    let raft_router = ServerRaftStoreRouter::new(store_sendch);
-    thread::spawn(move || { event_loop.run(&mut TestHandler).unwrap(); });
     let mut end_point = Worker::new("test select worker");
     let mut cfg = Config::default();
     cfg.end_point_concurrency = 1;
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg, raft_router);
+    let runner = EndPointHost::new(
+        store.get_engine(),
+        end_point.scheduler(),
+        &cfg,
+        MockCopSender::new(),
+    );
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)

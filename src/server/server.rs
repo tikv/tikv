@@ -20,10 +20,11 @@ use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, Server
 use kvproto::tikvpb_grpc::*;
 use util::worker::Worker;
 use storage::Storage;
-use raftstore::store::{SnapManager, SnapshotStatusMsg};
+use raftstore::store::{Msg, SnapManager, SnapshotStatusMsg};
+use raftstore::Result as RaftStoreResult;
 
 use super::{Config, Result};
-use coprocessor::{EndPointHost, EndPointTask};
+use coprocessor::{CopRequestStatistics, CopSender, EndPointHost, EndPointTask};
 use super::service::KvService as Service;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
@@ -48,6 +49,31 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
+}
+
+#[derive(Clone)]
+pub struct CopReport<R: RaftStoreRouter + 'static> {
+    router: R,
+}
+
+impl<R: RaftStoreRouter + 'static> CopReport<R> {
+    pub fn new(r: R) -> CopReport<R> {
+        CopReport { router: r.clone() }
+    }
+}
+
+impl<R: RaftStoreRouter + 'static> CopSender for CopReport<R> {
+    fn send(&self, stats: CopRequestStatistics) -> RaftStoreResult<()> {
+        self.router.send(Msg::CoprocessorStats {
+            request_stats: stats,
+        })
+    }
+
+    fn try_send(&self, stats: CopRequestStatistics) -> RaftStoreResult<()> {
+        self.router.send(Msg::CoprocessorStats {
+            request_stats: stats,
+        })
+    }
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -129,7 +155,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
             cfg,
-            self.raft_router.clone(),
+            CopReport::new(self.raft_router.clone()),
         );
         box_try!(
             self.end_point_worker

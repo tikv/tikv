@@ -31,8 +31,7 @@ use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
 use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
-use server::transport::RaftStoreRouter;
-use raftstore::store::Msg;
+use raftstore::Result as RaftStoreResult;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
@@ -61,7 +60,7 @@ const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
 
-pub struct Host<R: RaftStoreRouter + 'static> {
+pub struct Host<R: CopSender + 'static> {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
@@ -74,17 +73,22 @@ pub struct Host<R: RaftStoreRouter + 'static> {
 
 pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
 
-struct CopContextFactory<R: RaftStoreRouter + 'static> {
-    raft_router: R,
+pub trait CopSender: Send + Clone {
+    fn send(&self, CopRequestStatistics) -> RaftStoreResult<()>;
+    fn try_send(&self, CopRequestStatistics) -> RaftStoreResult<()>;
+}
+
+struct CopContextFactory<R: CopSender + 'static> {
+    sender: R,
 }
 
 impl<R> ContextFactory<CopContext<R>> for CopContextFactory<R>
 where
-    R: RaftStoreRouter + 'static,
+    R: CopSender + 'static,
 {
     fn create(&self) -> CopContext<R> {
         CopContext {
-            raft_router: self.raft_router.clone(),
+            sender: self.sender.clone(),
             select_stats: Default::default(),
             index_stats: Default::default(),
             request_stats: HashMap::default(),
@@ -93,14 +97,14 @@ where
 }
 
 #[derive(Default)]
-struct CopContext<R: RaftStoreRouter + 'static> {
+struct CopContext<R: CopSender + 'static> {
     select_stats: StatisticsSummary,
     index_stats: StatisticsSummary,
     request_stats: CopRequestStatistics,
-    raft_router: R,
+    sender: R,
 }
 
-impl<R: RaftStoreRouter + 'static> CopContext<R> {
+impl<R: CopSender + 'static> CopContext<R> {
     fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
         self.get_statistics(type_str).add_statistics(stats);
     }
@@ -125,7 +129,7 @@ impl<R: RaftStoreRouter + 'static> CopContext<R> {
     }
 }
 
-impl<R: RaftStoreRouter + 'static> Context for CopContext<R> {
+impl<R: CopSender + 'static> Context for CopContext<R> {
     fn on_tick(&mut self) {
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
             let this_statistics = self.get_statistics(type_str);
@@ -143,9 +147,7 @@ impl<R: RaftStoreRouter + 'static> Context for CopContext<R> {
             *this_statistics = Default::default();
         }
         if self.request_stats.len() != 0 {
-            if let Err(e) = self.raft_router.send(Msg::CoprocessorStats {
-                request_stats: self.request_stats.clone(),
-            }) {
+            if let Err(e) = self.sender.send(self.request_stats.clone()) {
                 error!("send coprocessor statistics: {:?}", e);
             };
             self.request_stats = HashMap::default();
@@ -154,7 +156,7 @@ impl<R: RaftStoreRouter + 'static> Context for CopContext<R> {
     }
 }
 
-impl<R: RaftStoreRouter + 'static> Host<R> {
+impl<R: CopSender + 'static> Host<R> {
     pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config, r: R) -> Host<R> {
         Host {
             engine: engine,
@@ -164,23 +166,17 @@ impl<R: RaftStoreRouter + 'static> Host<R> {
             max_running_task_count: cfg.end_point_max_tasks,
             pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-normal-pool"),
-                CopContextFactory {
-                    raft_router: r.clone(),
-                },
+                CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
             low_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-low-pool"),
-                CopContextFactory {
-                    raft_router: r.clone(),
-                },
+                CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
             high_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-high-pool"),
-                CopContextFactory {
-                    raft_router: r.clone(),
-                },
+                CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
         }
@@ -420,7 +416,7 @@ impl Display for RequestTask {
     }
 }
 
-impl<R: RaftStoreRouter + 'static> BatchRunnable<Task> for Host<R> {
+impl<R: CopSender + 'static> BatchRunnable<Task> for Host<R> {
     // TODO: limit pending reqs
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
@@ -709,36 +705,29 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use util::worker::Worker;
     use storage::engine::{self, TEMP_DIR};
-    use server::transport::ServerRaftStoreRouter;
-    use util::transport::SendCh;
-    use mio::{EventLoop, Handler};
-    use raftstore::store::Msg;
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
 
     use kvproto::coprocessor::Request;
 
-    use storage::engine::{self, TEMP_DIR};
     use util::worker::Worker;
     use util::time::Instant;
 
-    use super::*;
-
-    struct TestHandler;
-
-    impl Handler for TestHandler {
-        type Timeout = ();
-        type Message = Msg;
-
-        fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
-            match msg {
-                Msg::Quit => event_loop.shutdown(),
-                Msg::CoprocessorStats { request_stats } => assert!(request_stats.len() > 0),
-                _ => unreachable!(),
-            }
+    #[derive(Clone)]
+    struct MockCopSender {}
+    impl MockCopSender {
+        fn new() -> MockCopSender {
+            MockCopSender {}
+        }
+    }
+    impl CopSender for MockCopSender {
+        fn send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
+            Ok(())
+        }
+        fn try_send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
+            Ok(())
         }
     }
 
@@ -756,16 +745,12 @@ mod tests {
     }
 
     #[test]
-    fn test_req_outdate() {
+    fn test_req_outdated() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let mut event_loop = EventLoop::new().unwrap();
-        let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
-        let raft_router = ServerRaftStoreRouter::new(store_sendch);
-        thread::spawn(move || { event_loop.run(&mut TestHandler).unwrap(); });
-        let end_point = Host::new(engine, worker.scheduler(), &cfg, raft_router);
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, MockCopSender::new());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
@@ -782,12 +767,7 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let mut event_loop = EventLoop::new().unwrap();
-        let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
-        let raft_router = ServerRaftStoreRouter::new(store_sendch);
-        thread::spawn(move || { event_loop.run(&mut TestHandler).unwrap(); });
-
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, raft_router);
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, MockCopSender::new());
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
