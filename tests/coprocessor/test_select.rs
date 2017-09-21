@@ -69,9 +69,6 @@ impl CopSender for MockCopSender {
     fn send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
         Ok(())
     }
-    fn try_send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
-        Ok(())
-    }
 }
 
 #[derive(Debug)]

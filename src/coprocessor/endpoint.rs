@@ -75,7 +75,6 @@ pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
 
 pub trait CopSender: Send + Clone {
     fn send(&self, CopRequestStatistics) -> RaftStoreResult<()>;
-    fn try_send(&self, CopRequestStatistics) -> RaftStoreResult<()>;
 }
 
 struct CopContextFactory<R: CopSender + 'static> {
@@ -121,9 +120,8 @@ impl<R: CopSender + 'static> CopContext<R> {
     }
 
     fn add_statistics_by_request(&mut self, id: u64, stats: &Statistics) {
-        let flow_stats = self.request_stats
-            .entry(id)
-            .or_insert(FlowStatistics::default());
+        let empty_stat = FlowStatistics::default();
+        let flow_stats = self.request_stats.entry(id).or_insert(empty_stat);
         flow_stats.add(&stats.write.flow_stats);
         flow_stats.add(&stats.data.flow_stats);
     }
@@ -146,7 +144,7 @@ impl<R: CopSender + 'static> Context for CopContext<R> {
             }
             *this_statistics = Default::default();
         }
-        if self.request_stats.len() != 0 {
+        if !self.request_stats.is_empty() {
             if let Err(e) = self.sender.send(self.request_stats.clone()) {
                 error!("send coprocessor statistics: {:?}", e);
             };
@@ -724,9 +722,6 @@ mod tests {
     }
     impl CopSender for MockCopSender {
         fn send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
-            Ok(())
-        }
-        fn try_send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
             Ok(())
         }
     }

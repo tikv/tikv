@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{DBStatisticsTickerType as TickerType, WriteBatch, DB};
+use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -97,10 +97,16 @@ pub struct StoreStat {
     pub region_bytes_read: LocalHistogram,
     pub region_keys_read: LocalHistogram,
     pub lock_cf_bytes_written: u64,
+
     pub engine_total_bytes_written: u64,
     pub engine_total_keys_written: u64,
     pub engine_total_bytes_read: u64,
     pub engine_total_keys_read: u64,
+
+    pub engine_last_total_bytes_written: u64,
+    pub engine_last_total_keys_written: u64,
+    pub engine_last_total_bytes_read: u64,
+    pub engine_last_total_keys_read: u64,
 }
 
 impl Default for StoreStat {
@@ -115,6 +121,11 @@ impl Default for StoreStat {
             engine_total_keys_written: 0,
             engine_total_bytes_read: 0,
             engine_total_keys_read: 0,
+
+            engine_last_total_bytes_written: 0,
+            engine_last_total_keys_written: 0,
+            engine_last_total_bytes_read: 0,
+            engine_last_total_keys_read: 0,
         }
     }
 }
@@ -502,12 +513,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
         self.register_compact_check_tick(event_loop);
-        self.register_pd_heartbeat_tick(event_loop);
         self.register_pd_store_heartbeat_tick(event_loop);
+        self.register_pd_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
-        self.register_report_region_flow_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             self.kv_engine.clone(),
@@ -1656,17 +1666,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn register_report_region_flow_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(
-            event_loop,
-            Tick::ReportRegionFlow,
-            self.cfg.report_region_flow_interval.as_millis(),
-        ) {
-            error!("{} register raft gc log tick err: {:?}", self.tag, e);
-        };
-    }
-
-    fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
+    fn on_report_region_flow(&mut self) {
         for peer in self.region_peers.values_mut() {
             peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
             peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
@@ -1702,7 +1702,52 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.store_stat.region_bytes_read.flush();
         self.store_stat.region_keys_read.flush();
 
-        self.register_report_region_flow_tick(event_loop);
+        self.store_stat.engine_last_total_bytes_written = 0;
+        self.store_stat.engine_last_total_keys_written = 0;
+        self.store_stat.engine_last_total_bytes_read = 0;
+        self.store_stat.engine_last_total_bytes_read = 0;
+
+    }
+
+    fn on_report_store_flow(&mut self) {
+        let mut total_bytes_written: u64 = 0;
+        let mut total_keys_written: u64 = 0;
+        let mut total_bytes_read: u64 = 0;
+        let mut total_keys_read: u64 = 0;
+        for peer in self.region_peers.values_mut() {
+            total_bytes_written += peer.peer_stat.written_bytes;
+            total_keys_written += peer.peer_stat.written_keys;
+            total_bytes_read += peer.peer_stat.read_bytes;
+            total_keys_read += peer.peer_stat.read_keys;
+        }
+        self.store_stat.engine_total_bytes_written =
+            if total_bytes_written > self.store_stat.engine_last_total_bytes_written {
+                total_bytes_written - self.store_stat.engine_last_total_bytes_written
+            } else {
+                0
+            };
+        self.store_stat.engine_total_keys_written =
+            if total_keys_written > self.store_stat.engine_last_total_keys_written {
+                total_keys_written - self.store_stat.engine_last_total_keys_written
+            } else {
+                0
+            };
+        self.store_stat.engine_total_bytes_read =
+            if total_bytes_read > self.store_stat.engine_last_total_bytes_read {
+                total_bytes_read - self.store_stat.engine_last_total_bytes_read
+            } else {
+                0
+            };
+        self.store_stat.engine_total_keys_read =
+            if total_keys_read > self.store_stat.engine_last_total_keys_read {
+                total_keys_read - self.store_stat.engine_last_total_keys_read
+            } else {
+                0
+            };
+        self.store_stat.engine_last_total_bytes_written = total_bytes_written;
+        self.store_stat.engine_last_total_keys_written = total_keys_written;
+        self.store_stat.engine_last_total_bytes_read = total_bytes_read;
+        self.store_stat.engine_last_total_keys_read = total_keys_written;
     }
 
     #[allow(if_same_then_else)]
@@ -1919,7 +1964,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for peer in self.region_peers.values_mut() {
             peer.check_peers();
         }
-
+        self.on_report_region_flow();
         let mut leader_count = 0;
         for peer in self.region_peers.values() {
             if peer.is_leader() {
@@ -1982,29 +2027,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_start_time(self.start_time.sec as u32);
 
         // report store write flow to pd
-        let engine_total_bytes_written = self.kv_engine
-            .get_statistics_ticker_count(TickerType::BytesWritten);
-        let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
-        self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
-        stats.set_bytes_written(delta);
-
-        let engine_total_keys_written = self.kv_engine
-            .get_statistics_ticker_count(TickerType::NumberKeysWritten);
-        let delta = engine_total_keys_written - self.store_stat.engine_total_keys_written;
-        self.store_stat.engine_total_keys_written = engine_total_keys_written;
-        stats.set_keys_written(delta);
-
-        let engine_total_bytes_read = self.kv_engine
-            .get_statistics_ticker_count(TickerType::BytesRead);
-        let delta = engine_total_bytes_read - self.store_stat.engine_total_bytes_read;
-        self.store_stat.engine_total_bytes_read = engine_total_bytes_read;
-        stats.set_bytes_read(delta);
-
-        let engine_total_keys_read = self.kv_engine
-            .get_statistics_ticker_count(TickerType::NumberKeysRead);
-        let delta = engine_total_keys_read - self.store_stat.engine_total_keys_read;
-        self.store_stat.engine_total_keys_read = engine_total_keys_read;
-        stats.set_keys_read(delta);
+        stats.set_bytes_read(self.store_stat.engine_total_bytes_read);
+        stats.set_keys_read(self.store_stat.engine_total_keys_read);
+        stats.set_bytes_written(self.store_stat.engine_total_bytes_written);
+        stats.set_keys_written(self.store_stat.engine_total_keys_written);
 
 
         stats.set_is_busy(self.is_busy);
@@ -2025,6 +2051,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        self.on_report_store_flow();
         self.store_heartbeat_pd();
         self.register_pd_store_heartbeat_tick(event_loop);
     }
@@ -2158,7 +2185,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn handle_coprocessor_msg(&mut self, request_stats: CopFlowStatistics) {
         for (region_id, stats) in &request_stats {
-            if let Some(peer) = self.region_peers.get_mut(&region_id) {
+            if let Some(peer) = self.region_peers.get_mut(region_id) {
                 if !peer.is_leader() {
                     continue;
                 }
@@ -2500,7 +2527,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
-            Tick::ReportRegionFlow => self.on_report_region_flow(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

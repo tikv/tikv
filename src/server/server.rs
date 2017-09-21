@@ -68,12 +68,6 @@ impl<R: RaftStoreRouter + 'static> CopSender for CopReport<R> {
             request_stats: stats as CopFlowStatistics,
         })
     }
-
-    fn try_send(&self, stats: CopRequestStatistics) -> RaftStoreResult<()> {
-        self.router.send(Msg::CoprocessorStats {
-            request_stats: stats as CopFlowStatistics,
-        })
-    }
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
