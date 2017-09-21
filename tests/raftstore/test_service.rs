@@ -22,8 +22,10 @@ use kvproto::metapb;
 use kvproto::kvrpcpb::*;
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::debugpb;
+use kvproto::eraftpb;
 use kvproto::raft_serverpb::*;
 use kvproto::coprocessor::*;
+use protobuf::Message;
 use futures::{Future, Sink};
 use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
@@ -516,6 +518,37 @@ fn test_debug_get() {
     req.set_db(debugpb::DB::KV);
     req.set_key(b"foo".to_vec());
     match debug_client.get(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+#[test]
+fn test_debug_raft_log() {
+    let (cluster, leader, ctx) = must_new_cluster();
+
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
+    let kv_client = TikvClient::new(channel);
+    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
+    let debug_client = DebugClient::new(channel);
+
+    // Debug raft_log
+    let mut req = debugpb::RaftLogRequest::new();
+    req.set_region_id(1);
+    req.set_log_index(1);
+    let resp = debug_client.raft_log(req).unwrap();
+    let mut written = eraftpb::Entry::new();
+    written.merge_from_bytes(resp.get_entry().get_data()).unwrap();
+    assert_ne!(written, eraftpb::Entry::new());
+
+    let mut req = debugpb::RaftLogRequest::new();
+    req.set_region_id(100);
+    req.set_log_index(100);
+    match debug_client.raft_log(req).unwrap_err() {
         Error::RpcFailure(status) => {
             assert_eq!(status.status, RpcStatusCode::NotFound);
         }
