@@ -89,8 +89,24 @@ impl debugpb_grpc::Debug for Service {
         unimplemented!()
     }
 
-    fn raft_log(&self, _: RpcContext, _: RaftLogRequest, _: UnarySink<RaftLogResponse>) {
-        unimplemented!()
+    fn raft_log(&self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
+        const TAG: &'static str = "debug_raft_log";
+
+        let region_id = req.get_region_id();
+        let log_index = req.get_log_index();
+
+        let f = self.pool
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.raft_log(region_id, log_index)),
+            )
+            .map(|entry| {
+                let mut resp = RaftLogResponse::new();
+                resp.set_entry(entry);
+                resp
+            });
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 
     fn region_info(&self, _: RpcContext, _: RegionInfoRequest, _: UnarySink<RegionInfoResponse>) {
