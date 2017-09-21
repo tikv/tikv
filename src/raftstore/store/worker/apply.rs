@@ -18,6 +18,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::collections::VecDeque;
 
 use rocksdb::{Writable, WriteBatch, DB};
+use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
@@ -170,6 +171,7 @@ struct ApplyContext<'a> {
     pub cbs: Vec<(Callback, RaftCmdResponse)>,
     pub wb_last_bytes: u64,
     pub wb_last_keys: u64,
+    pub sync_log: bool,
 }
 
 impl<'a> ApplyContext<'a> {
@@ -180,6 +182,7 @@ impl<'a> ApplyContext<'a> {
             cbs: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
+            sync_log: false,
         }
     }
 
@@ -521,6 +524,10 @@ impl ApplyDelegate {
                 "{} processing raft command needs a none zero index",
                 self.tag
             );
+        }
+
+        if cmd.has_admin_request() {
+            apply_ctx.sync_log = true;
         }
 
         let cmd_cb = self.find_cb(index, term, &cmd);
@@ -1426,10 +1433,11 @@ pub struct Runner {
     host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
+    sync_log: bool,
 }
 
 impl Runner {
-    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>) -> Runner {
+    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>, sync_log: bool) -> Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
@@ -1440,6 +1448,7 @@ impl Runner {
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
+            sync_log: sync_log,
         }
     }
 
@@ -1483,8 +1492,14 @@ impl Runner {
         }
 
         // Write to engine
+        // raftsotre.sync-log = true means we need prevent data loss when power failure.
+        // take raft log gc for example, we write kv WAL first, then write raft WAL,
+        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
+        // so we use sync-log flag here.
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(self.sync_log && apply_ctx.sync_log);
         self.db
-            .write(apply_ctx.wb.take().unwrap())
+            .write_opt(apply_ctx.wb.take().unwrap(), &write_opts)
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
 
         // Call callbacks
@@ -1608,6 +1623,7 @@ mod tests {
             host: host,
             delegates: HashMap::default(),
             notifier: tx,
+            sync_log: false,
         }
     }
 

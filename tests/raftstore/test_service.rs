@@ -13,19 +13,24 @@
 
 use std::sync::Arc;
 
-use grpc::{ChannelBuilder, Environment};
 use tikv::util::HandyRwLock;
+use tikv::raftstore::store::keys;
+use tikv::storage::CF_DEFAULT;
 
 use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::metapb;
 use kvproto::kvrpcpb::*;
+use kvproto::debugpb_grpc::DebugClient;
+use kvproto::debugpb;
 use kvproto::raft_serverpb::*;
-use futures::{Future, Sink};
 use kvproto::coprocessor::*;
+use futures::{Future, Sink};
+use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use super::server::*;
 use super::cluster::Cluster;
 
-fn must_new_cluster_and_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
+fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
@@ -38,6 +43,12 @@ fn must_new_cluster_and_client() -> (Cluster<ServerCluster>, TikvClient, Context
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(epoch);
 
+    (cluster, leader, ctx)
+}
+
+fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
+    let (cluster, leader, ctx) = must_new_cluster();
+
     let addr = cluster.sim.rl().get_addr(leader.get_store_id());
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
@@ -48,7 +59,7 @@ fn must_new_cluster_and_client() -> (Cluster<ServerCluster>, TikvClient, Context
 
 #[test]
 fn test_rawkv() {
-    let (_cluster, client, ctx) = must_new_cluster_and_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     // Raw put
@@ -135,7 +146,7 @@ fn must_kv_commit(
 
 #[test]
 fn test_mvcc_basic() {
-    let (_cluster, client, ctx) = must_new_cluster_and_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -213,7 +224,7 @@ fn test_mvcc_basic() {
 
 #[test]
 fn test_mvcc_rollback_and_cleanup() {
-    let (_cluster, client, ctx) = must_new_cluster_and_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -320,7 +331,7 @@ fn test_mvcc_rollback_and_cleanup() {
 
 #[test]
 fn test_mvcc_resolve_lock_gc_and_delete() {
-    let (_cluster, client, ctx) = must_new_cluster_and_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -449,7 +460,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
 #[test]
 fn test_raft() {
-    let (_cluster, client, _) = must_new_cluster_and_client();
+    let (_cluster, client, _) = must_new_cluster_and_kv_client();
 
     // Raft commands
     let (sink, _) = client.raft();
@@ -465,8 +476,49 @@ fn test_raft() {
 
 #[test]
 fn test_coprocessor() {
-    let (_cluster, client, _) = must_new_cluster_and_client();
+    let (_cluster, client, _) = must_new_cluster_and_kv_client();
 
     // SQL push down commands
     client.coprocessor(Request::new()).unwrap();
+}
+
+#[test]
+fn test_debug_get() {
+    let (cluster, leader, ctx) = must_new_cluster();
+
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
+    let kv_client = TikvClient::new(channel);
+    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
+    let debug_client = DebugClient::new(channel);
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+
+    // Raw put
+    let mut put_req = RawPutRequest::new();
+    put_req.set_context(ctx.clone());
+    put_req.key = k.clone();
+    put_req.value = v.clone();
+    let put_resp = kv_client.raw_put(put_req).unwrap();
+    assert!(!put_resp.has_region_error());
+    assert!(put_resp.error.is_empty());
+
+    // Debug get
+    let mut req = debugpb::GetRequest::new();
+    req.set_cf(CF_DEFAULT.to_owned());
+    req.set_db(debugpb::DB::KV);
+    req.set_key(keys::data_key(k.as_slice()));
+    let mut resp = debug_client.get(req).unwrap();
+    assert_eq!(resp.take_value(), v);
+
+    let mut req = debugpb::GetRequest::new();
+    req.set_cf(CF_DEFAULT.to_owned());
+    req.set_db(debugpb::DB::KV);
+    req.set_key(b"foo".to_vec());
+    match debug_client.get(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
 }
