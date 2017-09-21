@@ -20,7 +20,7 @@ use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, Server
 use kvproto::tikvpb_grpc::*;
 use util::worker::Worker;
 use storage::Storage;
-use raftstore::store::{Msg, SnapManager, SnapshotStatusMsg};
+use raftstore::store::{CopFlowStatistics, Msg, SnapManager, SnapshotStatusMsg};
 use raftstore::Result as RaftStoreResult;
 
 use super::{Config, Result};
@@ -65,13 +65,13 @@ impl<R: RaftStoreRouter + 'static> CopReport<R> {
 impl<R: RaftStoreRouter + 'static> CopSender for CopReport<R> {
     fn send(&self, stats: CopRequestStatistics) -> RaftStoreResult<()> {
         self.router.send(Msg::CoprocessorStats {
-            request_stats: stats,
+            request_stats: stats as CopFlowStatistics,
         })
     }
 
     fn try_send(&self, stats: CopRequestStatistics) -> RaftStoreResult<()> {
         self.router.send(Msg::CoprocessorStats {
-            request_stats: stats,
+            request_stats: stats as CopFlowStatistics,
         })
     }
 }

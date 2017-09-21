@@ -47,7 +47,6 @@ use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use coprocessor::CopRequestStatistics;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, PdTask,
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
@@ -59,7 +58,7 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::{BatchCallback, Callback};
+use super::msg::{BatchCallback, Callback, CopFlowStatistics};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
@@ -2157,7 +2156,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn handle_coprocessor_msg(&mut self, request_stats: CopRequestStatistics) {
+    fn handle_coprocessor_msg(&mut self, request_stats: CopFlowStatistics) {
         for (region_id, stats) in &request_stats {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 if !peer.is_leader() {
