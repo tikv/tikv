@@ -84,6 +84,9 @@ impl ExprColumnRefVisitor {
     }
 }
 
+// Currently TiDB may send a column which id is -1.
+// This indicate that this column stands for handle.
+// It's the same with column.get_pk_handle();
 pub const EXTRA_HANDLE_COLUMN_ID: i64 = -1;
 
 #[derive(Debug)]

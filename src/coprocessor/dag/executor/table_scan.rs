@@ -16,7 +16,7 @@ use tipb::executor::TableScan;
 
 use util::collections::HashSet;
 use storage::{SnapshotStore, Statistics};
-use coprocessor::codec::{datum, table};
+use coprocessor::codec::table;
 use coprocessor::endpoint::{is_point, prefix_next};
 use coprocessor::Result;
 use coprocessor::metrics::*;
@@ -42,7 +42,9 @@ impl<'a> TableScanExecutor<'a> {
     ) -> TableScanExecutor<'a> {
         let col_ids = meta.get_columns()
             .iter()
-            .filter(|c| !c.get_pk_handle())
+            .filter(|c| {
+                !c.get_pk_handle() && c.get_column_id() != EXTRA_HANDLE_COLUMN_ID
+            })
             .map(|c| c.get_column_id())
             .collect();
         let desc = meta.get_desc();
@@ -68,12 +70,7 @@ impl<'a> TableScanExecutor<'a> {
             None => return Ok(None),
         };
         let h = box_try!(table::decode_handle(&key));
-        let mut row_data = box_try!(table::cut_row(value, &self.col_ids));
-        if self.col_ids.contains(&EXTRA_HANDLE_COLUMN_ID) {
-            let handle_datum = datum::Datum::I64(h);
-            let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
-            row_data.append(EXTRA_HANDLE_COLUMN_ID, &mut bytes);
-        }
+        let row_data = box_try!(table::cut_row(value, &self.col_ids));
         let seek_key = if self.desc {
             box_try!(table::truncate_as_row_key(&key)).to_vec()
         } else {
@@ -87,13 +84,8 @@ impl<'a> TableScanExecutor<'a> {
         let key = self.key_ranges[self.cursor].get_start();
         let value = try!(self.scanner.get_row(key));
         if let Some(value) = value {
-            let mut values = box_try!(table::cut_row(value, &self.col_ids));
+            let values = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(key));
-            if self.col_ids.contains(&EXTRA_HANDLE_COLUMN_ID) {
-                let handle_datum = datum::Datum::I64(h);
-                let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
-                values.append(EXTRA_HANDLE_COLUMN_ID, &mut bytes);
-            }
             return Ok(Some(Row::new(h, values)));
         }
         Ok(None)

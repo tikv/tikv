@@ -27,7 +27,8 @@ use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{AggregationExecutor, Executor as DAGExecutor, IndexScanExecutor,
-                      LimitExecutor, Row, SelectionExecutor, TableScanExecutor, TopNExecutor};
+                      LimitExecutor, Row, SelectionExecutor, TableScanExecutor, TopNExecutor,
+                      EXTRA_HANDLE_COLUMN_ID};
 
 pub struct DAGContext<'s> {
     columns: Rc<Vec<ColumnInfo>>,
@@ -208,7 +209,7 @@ fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Resul
         let col_id = col.get_column_id();
         match data.get(col_id) {
             Some(value) => values.extend_from_slice(value),
-            None if col.get_pk_handle() => {
+            None if col.get_pk_handle() || col.get_column_id() == EXTRA_HANDLE_COLUMN_ID => {
                 let pk = get_pk(col, row.handle);
                 box_try!(values.encode(&[pk], false));
             }
