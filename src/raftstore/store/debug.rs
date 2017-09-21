@@ -92,13 +92,16 @@ impl Debugger {
                 let mut sizes = vec![];
                 for cf in cfs {
                     let mut size = 0;
-                    self.engines
-                        .kv_engine
-                        .scan_cf(cf, start_key, end_key, true, &mut |_, v| {
+                    box_try!(self.engines.kv_engine.scan_cf(
+                        cf,
+                        start_key,
+                        end_key,
+                        true,
+                        &mut |_, v| {
                             size += v.len();
                             Ok(true)
-                        })
-                        .unwrap();
+                        }
+                    ));
                     sizes.push((*cf, size));
                 }
                 Ok(sizes)
