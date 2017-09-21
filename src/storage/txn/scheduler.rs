@@ -97,6 +97,7 @@ pub enum Msg {
         cmd: Command,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
+        rows: usize,
     },
     WritePrepareFailed { cid: u64, err: Error },
     WriteFinished {
@@ -228,7 +229,13 @@ impl Drop for RunningCtx {
 }
 
 /// Creates a callback to receive async results of write prepare from the storage engine.
-fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SyncSendCh<Msg>) -> EngineCallback<()> {
+fn make_engine_cb(
+    cmd: &'static str,
+    cid: u64,
+    pr: ProcessResult,
+    ch: SyncSendCh<Msg>,
+    rows: usize,
+) -> EngineCallback<()> {
     Box::new(move |(cb_ctx, result)| {
         match ch.send(Msg::WriteFinished {
             cid: cid,
@@ -236,7 +243,11 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SyncSendCh<Msg>) -> EngineCal
             cb_ctx: cb_ctx,
             result: result,
         }) {
-            Ok(_) => {}
+            Ok(_) => {
+                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                    .with_label_values(&[cmd])
+                    .observe(rows as f64);
+            }
             e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
             Err(e) => {
                 panic!(
@@ -759,7 +770,7 @@ fn process_write_impl(
     snapshot: &Snapshot,
     statistics: &mut Statistics,
 ) -> Result<()> {
-    let (pr, modifies) = match cmd {
+    let (pr, modifies, rows) = match cmd {
         Command::Prewrite {
             ref ctx,
             ref mutations,
@@ -777,6 +788,7 @@ fn process_write_impl(
                 !ctx.get_not_fill_cache(),
             );
             let mut locks = vec![];
+            let rows = mutations.len();
             for m in mutations {
                 match txn.prewrite(m.clone(), primary, options) {
                     Ok(_) => {}
@@ -788,11 +800,11 @@ fn process_write_impl(
             }
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                (pr, txn.modifies())
+                (pr, txn.modifies(), rows)
             } else {
                 // Skip write stage if some keys are locked.
                 let pr = ProcessResult::MultiRes { results: locks };
-                (pr, vec![])
+                (pr, vec![], 0)
             }
         }
         Command::Commit {
@@ -816,12 +828,13 @@ fn process_write_impl(
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
+            let rows = keys.len();
             for k in keys {
                 try!(txn.commit(k, commit_ts));
             }
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies())
+            (pr, txn.modifies(), rows)
         }
         Command::Cleanup {
             ref ctx,
@@ -840,7 +853,7 @@ fn process_write_impl(
             try!(txn.rollback(key));
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies())
+            (pr, txn.modifies(), 1)
         }
         Command::Rollback {
             ref ctx,
@@ -856,12 +869,13 @@ fn process_write_impl(
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
+            let rows = keys.len();
             for k in keys {
                 try!(txn.rollback(k));
             }
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies())
+            (pr, txn.modifies(), rows)
         }
         Command::ResolveLock {
             ref ctx,
@@ -887,6 +901,7 @@ fn process_write_impl(
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
+            let rows = keys.len();
             for k in keys {
                 match commit_ts {
                     Some(ts) => try!(txn.commit(k, ts)),
@@ -898,7 +913,7 @@ fn process_write_impl(
                 }
             }
             if scan_key.is_none() {
-                (ProcessResult::Res, txn.modifies())
+                (ProcessResult::Res, txn.modifies(), rows)
             } else {
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
@@ -909,7 +924,7 @@ fn process_write_impl(
                         keys: vec![],
                     },
                 };
-                (pr, txn.modifies())
+                (pr, txn.modifies(), rows)
             }
         }
         Command::Gc {
@@ -928,6 +943,7 @@ fn process_write_impl(
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
+            let rows = keys.len();
             for k in keys {
                 try!(txn.gc(k, safe_point));
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
@@ -936,7 +952,7 @@ fn process_write_impl(
                 }
             }
             if scan_key.is_none() {
-                (ProcessResult::Res, txn.modifies())
+                (ProcessResult::Res, txn.modifies(), rows)
             } else {
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::Gc {
@@ -947,7 +963,7 @@ fn process_write_impl(
                         keys: vec![],
                     },
                 };
-                (pr, txn.modifies())
+                (pr, txn.modifies(), rows)
             }
         }
         _ => panic!("unsupported write command"),
@@ -958,6 +974,7 @@ fn process_write_impl(
         cmd: cmd,
         pr: pr,
         to_be_write: modifies,
+        rows: rows,
     }));
 
     Ok(())
@@ -982,7 +999,8 @@ impl ThreadContext for ScheContext {
                 for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
                         .with_label_values(&[cmd, cf, tag])
-                        .observe(count as f64 / stat.count as f64);
+                        .inc_by(count as f64)
+                        .unwrap();
                 }
             }
         }
@@ -1344,6 +1362,7 @@ impl Scheduler {
         cmd: Command,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
+        rows: usize,
     ) {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[self.get_ctx_tag(cid), "write"])
@@ -1351,7 +1370,7 @@ impl Scheduler {
         if to_be_write.is_empty() {
             return self.on_write_finished(cid, pr, Ok(()));
         }
-        let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
+        let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.schedch.clone(), rows);
         if let Err(e) = self.engine
             .async_write(cmd.get_context(), to_be_write, engine_cb)
         {
@@ -1443,7 +1462,8 @@ impl Scheduler {
                         cmd,
                         pr,
                         to_be_write,
-                    } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write),
+                        rows,
+                    } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write, rows),
                     Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
                     Msg::WriteFinished {
                         cid, pr, result, ..
