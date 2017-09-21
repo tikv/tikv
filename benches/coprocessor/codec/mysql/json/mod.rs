@@ -71,7 +71,7 @@ fn bench_encode_binary(b: &mut Bencher) {
         .into_iter()
         .map(|t| t.parse().unwrap())
         .collect();
-    let mut buf = Vec::with_capacity(1 << 16);
+    let mut buf = Vec::with_capacity(65536);
     b.iter(|| for j in &jsons {
         buf.clear();
         buf.encode_json(j).unwrap();
@@ -84,7 +84,7 @@ fn bench_encode_text(b: &mut Bencher) {
         .into_iter()
         .map(|t| t.parse().unwrap())
         .collect();
-    let mut buf = Vec::with_capacity(1 << 16);
+    let mut buf = Vec::with_capacity(65536);
     b.iter(|| for j in &jsons {
         buf.clear();
         serde_json::to_writer(&mut buf, j).unwrap();
