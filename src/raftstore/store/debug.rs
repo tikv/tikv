@@ -69,10 +69,7 @@ impl Debugger {
 
     pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<eraftpb::Entry> {
         let key = keys::raft_log_key(region_id, log_index);
-        match self.engines
-            .raft_engine
-            .get_msg::<eraftpb::Entry>(key.as_slice())
-        {
+        match self.engines.raft_engine.get_msg(key.as_slice()) {
             Ok(Some(entry)) => Ok(entry),
             Ok(None) => Err(Error::NotFound(format!(
                 "raft log for region {} at index {}",
