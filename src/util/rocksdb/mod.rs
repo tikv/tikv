@@ -231,7 +231,10 @@ pub fn get_engine_compression_ratio_at_level(
     let prop = format!("{}{}", ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, level);
     if let Some(v) = engine.get_property_value_cf(handle, &prop) {
         if let Ok(f) = f64::from_str(&v) {
-            return Some(f);
+            // RocksDB returns -1.0 if the level is empty.
+            if f >= 0 {
+                Some(f)
+            }
         }
     }
     None
@@ -402,10 +405,9 @@ mod tests {
         let db = check_and_open(path_str, opts, vec![cf_opts]).unwrap();
         let cf = db.cf_handle(CF_DEFAULT).unwrap();
 
-        // RocksDB returns -1.0 if level has no files.
-        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).unwrap() < 0.0);
+        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_none());
         db.put_cf(cf, b"a", b"a").unwrap();
         db.flush_cf(cf, true).unwrap();
-        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).unwrap() > 0.0);
+        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_some());
     }
 }

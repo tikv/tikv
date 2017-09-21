@@ -1009,11 +1009,18 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
 
     // For snapshot
     if let Some(n) = engine.get_property_int(ROCKSDB_NUM_SNAPSHOTS) {
-        STORE_ENGINE_NUM_SNAPSHOTS_GAUGE.set(n as f64);
+        STORE_ENGINE_NUM_SNAPSHOTS_GAUGE
+            .with_label_values(&[name])
+            .set(n as f64);
     }
     if let Some(t) = engine.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME) {
-        let d = time::get_time().sec.checked_sub(t as i64).unwrap_or(0);
-        STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE.set(d as f64);
+        // RocksDB returns 0 if no snapshots.
+        let now = time::get_time().sec;
+        if t > 0 && now > t {
+            STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE
+                .with_label_values(&[name])
+                .set((now - t) as f64);
+        }
     }
 }
 
@@ -1341,16 +1348,18 @@ lazy_static!{
             &["db", "cf", "level"]
         ).unwrap();
 
-    pub static ref STORE_ENGINE_NUM_SNAPSHOTS_GAUGE: Gauge =
-        register_gauge!(
+    pub static ref STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
             "tikv_engine_num_snapshots",
-            "Number of unreleased snapshots"
+            "Number of unreleased snapshots",
+            &["db"]
         ).unwrap();
 
-    pub static ref STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE: Gauge =
-        register_gauge!(
+    pub static ref STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
             "tikv_engine_oldest_snapshot_duration",
-            "Oldest unreleased snapshot duration in seconds"
+            "Oldest unreleased snapshot duration in seconds",
+            &["db"]
         ).unwrap();
 }
 
