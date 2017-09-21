@@ -69,7 +69,10 @@ impl Debugger {
 
     pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<eraftpb::Entry> {
         let key = keys::raft_log_key(region_id, log_index);
-        match self.engines.raft_engine.get_msg::<eraftpb::Entry>(key.as_slice()) {
+        match self.engines
+            .raft_engine
+            .get_msg::<eraftpb::Entry>(key.as_slice())
+        {
             Ok(Some(entry)) => Ok(entry),
             Ok(None) => Err(Error::NotFound(format!(
                 "raft log for region {} at index {}",
@@ -179,10 +182,16 @@ mod tests {
         entry.set_entry_type(eraftpb::EntryType::EntryNormal);
         entry.set_data(vec![42]);
         engine.put_msg(key.as_slice(), &entry).unwrap();
-        assert_eq!(engine.get_msg::<eraftpb::Entry>(key.as_slice()).unwrap().unwrap(), entry);
+        assert_eq!(
+            engine
+                .get_msg::<eraftpb::Entry>(key.as_slice())
+                .unwrap()
+                .unwrap(),
+            entry
+        );
 
         assert_eq!(debugger.raft_log(region_id, log_index).unwrap(), entry);
-        match debugger.raft_log(region_id + 1, log_index) {
+        match debugger.raft_log(region_id + 1, log_index + 1) {
             Err(Error::NotFound(_)) => (),
             _ => panic!("expect Error::NotFound(_)"),
         }
