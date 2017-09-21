@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, CounterVec, Gauge, GaugeVec, HistogramVec};
+use prometheus::{exponential_buckets, CounterVec, GaugeVec, HistogramVec};
 use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
               HistogramData, DB};
 use util::rocksdb;
@@ -1009,18 +1009,21 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
 
     // For snapshot
     if let Some(n) = engine.get_property_int(ROCKSDB_NUM_SNAPSHOTS) {
-        STORE_ENGINE_NUM_SNAPSHOTS_GAUGE
+        STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
             .with_label_values(&[name])
             .set(n as f64);
     }
     if let Some(t) = engine.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME) {
         // RocksDB returns 0 if no snapshots.
-        let now = time::get_time().sec;
-        if t > 0 && now > t {
-            STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE
-                .with_label_values(&[name])
-                .set((now - t) as f64);
-        }
+        let now = time::get_time().sec as u64;
+        let d = if t > 0 && now > t {
+            now - t
+        } else {
+            0
+        };
+        STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
+            .with_label_values(&[name])
+            .set(d as f64);
     }
 }
 
