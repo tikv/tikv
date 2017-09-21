@@ -13,8 +13,9 @@
 
 use std::{error, result};
 use kvproto::debugpb::*;
+use kvproto::eraftpb;
 
-use raftstore::store::Engines;
+use raftstore::store::{keys, Engines};
 use raftstore::store::engine::Peekable;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
@@ -60,8 +61,21 @@ impl Debugger {
         match db.get_value_cf(cf, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
             Ok(None) => Err(Error::NotFound(
-                format!("get none value for key {:?}", key,),
+                format!("value for key {:?} in db {:?}", key, db),
             )),
+            Err(e) => Err(box_err!(e)),
+        }
+    }
+
+    pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<eraftpb::Entry> {
+        let key = keys::raft_log_key(region_id, log_index);
+        match self.engines.raft_engine.get_msg::<eraftpb::Entry>(key.as_slice()) {
+            Ok(Some(entry)) => Ok(entry),
+            Ok(None) => Err(Error::NotFound(format!(
+                "raft log for region {} at index {}",
+                region_id,
+                log_index
+            ))),
             Err(e) => Err(box_err!(e)),
         }
     }
@@ -75,7 +89,7 @@ pub fn validate_db_and_cf(db: DB, cf: &str) -> Result<()> {
         (DB::KV, CF_RAFT) |
         (DB::RAFT, CF_DEFAULT) => Ok(()),
         _ => Err(Error::InvalidArgument(
-            format!("invalid cf {:?} for db {:?}", db, cf),
+            format!("invalid cf {:?} for db {:?}", cf, db),
         )),
     }
 }
@@ -88,8 +102,9 @@ mod tests {
     use kvproto::debugpb::*;
     use tempdir::TempDir;
 
-    use util::rocksdb::{self as rocksdb_util, CFOptions};
+    use raftstore::store::engine::Mutable;
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use util::rocksdb::{self as rocksdb_util, CFOptions};
     use super::*;
 
     #[test]
@@ -147,6 +162,27 @@ mod tests {
 
         assert_eq!(debugger.get(DB::KV, CF_DEFAULT, k).unwrap().as_slice(), v);
         match debugger.get(DB::KV, CF_DEFAULT, b"foo") {
+            Err(Error::NotFound(_)) => (),
+            _ => panic!("expect Error::NotFound(_)"),
+        }
+    }
+
+    #[test]
+    fn test_raft_log() {
+        let debugger = new_debugger();
+        let engine = &debugger.engines.raft_engine;
+        let (region_id, log_index) = (1, 1);
+        let key = keys::raft_log_key(region_id, log_index);
+        let mut entry = eraftpb::Entry::new();
+        entry.set_term(1);
+        entry.set_index(1);
+        entry.set_entry_type(eraftpb::EntryType::EntryNormal);
+        entry.set_data(vec![42]);
+        engine.put_msg(key.as_slice(), &entry).unwrap();
+        assert_eq!(engine.get_msg::<eraftpb::Entry>(key.as_slice()).unwrap().unwrap(), entry);
+
+        assert_eq!(debugger.raft_log(region_id, log_index).unwrap(), entry);
+        match debugger.raft_log(region_id + 1, log_index) {
             Err(Error::NotFound(_)) => (),
             _ => panic!("expect Error::NotFound(_)"),
         }
