@@ -1548,7 +1548,6 @@ impl Peer {
             return Some(peer.clone());
         }
 
-
         // Try to find in region, if found, set in cache.
         for peer in self.get_store().get_region().get_peers() {
             if peer.get_id() == peer_id {

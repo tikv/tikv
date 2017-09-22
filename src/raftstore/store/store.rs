@@ -2189,8 +2189,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if !peer.is_leader() {
                     continue;
                 }
-                peer.peer_stat.read_bytes = stats.read_bytes as u64;
-                peer.peer_stat.read_keys = stats.read_keys as u64;
+                peer.peer_stat.read_bytes += stats.read_bytes as u64;
+                peer.peer_stat.read_keys += stats.read_keys as u64;
             }
         }
     }
