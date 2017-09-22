@@ -21,7 +21,7 @@ use coprocessor::endpoint::{is_point, prefix_next};
 use coprocessor::Result;
 use coprocessor::metrics::*;
 
-use super::{Executor, Row, EXTRA_HANDLE_COLUMN_ID};
+use super::{Executor, Row};
 use super::scanner::Scanner;
 
 
@@ -42,9 +42,7 @@ impl<'a> TableScanExecutor<'a> {
     ) -> TableScanExecutor<'a> {
         let col_ids = meta.get_columns()
             .iter()
-            .filter(|c| {
-                !c.get_pk_handle() && c.get_column_id() != EXTRA_HANDLE_COLUMN_ID
-            })
+            .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
             .collect();
         let desc = meta.get_desc();
