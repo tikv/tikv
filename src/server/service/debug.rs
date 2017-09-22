@@ -85,10 +85,6 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn mvcc(&self, _: RpcContext, _: MvccRequest, _: UnarySink<MvccResponse>) {
-        unimplemented!()
-    }
-
     fn raft_log(&self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
         const TAG: &'static str = "debug_raft_log";
 
@@ -113,32 +109,29 @@ impl debugpb_grpc::Debug for Service {
         unimplemented!()
     }
 
-    fn size(&self, ctx: RpcContext, mut req: SizeRequest, sink: UnarySink<SizeResponse>) {
+    fn region_size(
+        &self,
+        ctx: RpcContext,
+        mut req: RegionSizeRequest,
+        sink: UnarySink<RegionSizeResponse>,
+    ) {
         const TAG: &'static str = "debug_get";
 
         let region_id = req.get_region_id();
         let cfs = req.take_cfs().into_vec();
 
         let f = self.pool
-            .spawn(future::ok(self.debugger.clone()).and_then(
-                move |debugger| {
-                    let cfs_str = cfs.iter().map(|cf| cf.as_str()).collect::<Vec<_>>();
-                    debugger.size(region_id, &cfs_str).and_then(|v| {
-                        Ok(
-                            v.into_iter()
-                                .map(|(cf, size)| (cf.to_string(), size))
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                },
-            ))
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.region_size(region_id, cfs)),
+            )
             .map(|entries| {
-                let mut resp = SizeResponse::new();
+                let mut resp = RegionSizeResponse::new();
                 resp.set_entries(
                     entries
                         .into_iter()
                         .map(|(cf, size)| {
-                            let mut entry = SizeResponse_Entry::new();
+                            let mut entry = RegionSizeResponse_Entry::new();
                             entry.set_cf(cf);
                             entry.set_size(size as u64);
                             entry
@@ -151,7 +144,12 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn scan(&self, _: RpcContext, _: ScanRequest, _: ServerStreamingSink<ScanResponse>) {
+    fn scan_mvcc(
+        &self,
+        _: RpcContext,
+        _: ScanMvccRequest,
+        _: ServerStreamingSink<ScanMvccResponse>,
+    ) {
         unimplemented!()
     }
 }

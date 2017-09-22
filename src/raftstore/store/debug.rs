@@ -79,7 +79,11 @@ impl Debugger {
         }
     }
 
-    pub fn size<'a>(&self, region_id: u64, cfs: &[&'a str]) -> Result<Vec<(&'a str, usize)>> {
+    pub fn region_size<T: AsRef<str>>(
+        &self,
+        region_id: u64,
+        cfs: Vec<T>,
+    ) -> Result<Vec<(T, usize)>> {
         let region_state_key = keys::region_state_key(region_id);
         match self.engines
             .kv_engine
@@ -93,7 +97,7 @@ impl Debugger {
                 for cf in cfs {
                     let mut size = 0;
                     box_try!(self.engines.kv_engine.scan_cf(
-                        cf,
+                        cf.as_ref(),
                         start_key,
                         end_key,
                         true,
@@ -102,7 +106,7 @@ impl Debugger {
                             Ok(true)
                         }
                     ));
-                    sizes.push((*cf, size));
+                    sizes.push((cf, size));
                 }
                 Ok(sizes)
             }
@@ -251,7 +255,7 @@ mod tests {
             engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
         }
 
-        let sizes = debugger.size(region_id, cfs.as_slice()).unwrap();
+        let sizes = debugger.region_size(region_id, cfs.clone()).unwrap();
         assert_eq!(sizes.len(), 4);
         for (cf, size) in sizes {
             cfs.iter().find(|&&c| c == cf).unwrap();

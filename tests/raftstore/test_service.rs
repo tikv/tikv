@@ -623,10 +623,13 @@ fn test_debug_size() {
     let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
     let debug_client = DebugClient::new(channel);
 
-    let mut req = debugpb::SizeRequest::new();
+    let mut req = debugpb::RegionSizeRequest::new();
     req.set_region_id(region_id);
     req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
-    let entries = debug_client.size(req.clone()).unwrap().take_entries();
+    let entries = debug_client
+        .region_size(req.clone())
+        .unwrap()
+        .take_entries();
     assert_eq!(entries.len(), 4);
     for e in entries.into_vec() {
         cfs.iter().find(|&&c| c == e.cf).unwrap();
@@ -634,7 +637,7 @@ fn test_debug_size() {
     }
 
     req.set_region_id(region_id + 1);
-    match debug_client.size(req).unwrap_err() {
+    match debug_client.region_size(req).unwrap_err() {
         Error::RpcFailure(status) => {
             assert_eq!(status.status, RpcStatusCode::NotFound);
         }
