@@ -85,10 +85,6 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn mvcc(&self, _: RpcContext, _: MvccRequest, _: UnarySink<MvccResponse>) {
-        unimplemented!()
-    }
-
     fn raft_log(&self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
         const TAG: &'static str = "debug_raft_log";
 
@@ -141,11 +137,16 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn size(&self, _: RpcContext, _: SizeRequest, _: UnarySink<SizeResponse>) {
+    fn region_size(&self, _: RpcContext, _: RegionSizeRequest, _: UnarySink<RegionSizeResponse>) {
         unimplemented!()
     }
 
-    fn scan(&self, _: RpcContext, _: ScanRequest, _: ServerStreamingSink<ScanResponse>) {
+    fn scan_mvcc(
+        &self,
+        _: RpcContext,
+        _: ScanMvccRequest,
+        _: ServerStreamingSink<ScanMvccResponse>,
+    ) {
         unimplemented!()
     }
 }
