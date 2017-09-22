@@ -176,6 +176,18 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let mut storage = create_raft_storage(raft_router.clone(), kv_engine.clone(), &cfg.storage)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
+    // Create raft engine.
+    let raft_db_opts = cfg.raftdb.build_opt();
+    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+    let raft_engine = Arc::new(
+        rocksdb_util::new_engine_opt(
+            raft_db_path.to_str().unwrap(),
+            raft_db_opts,
+            raft_db_cf_opts,
+        ).unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
+    );
+    let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
+
     // Create pd client, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
     let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
@@ -192,22 +204,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         snap_status_sender,
         resolver,
         snap_mgr.clone(),
+        Some(engines.clone()),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
-    // Create raft engine.
-    let raft_db_opts = cfg.raftdb.build_opt();
-    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
-    let raft_engine = Arc::new(
-        rocksdb_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        ).unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
-    );
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
-    let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
     node.start(
         event_loop,
         engines.clone(),
