@@ -75,6 +75,7 @@ impl Debugger {
         (
             Option<raft_serverpb::RaftLocalState>,
             Option<raft_serverpb::RaftApplyState>,
+            Option<raft_serverpb::RegionLocalState>,
         ),
     > {
         let raft_state_key = keys::raft_state_key(region_id);
@@ -87,12 +88,18 @@ impl Debugger {
             .kv_engine
             .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key);
 
-        match (raft_state, apply_state) {
-            (Ok(None), Ok(None)) => Err(Error::NotFound(
-                format!("region log for region {}", region_id),
-            )),
-            (Ok(raft_state), Ok(apply_state)) => Ok((raft_state, apply_state)),
-            (Err(e), _) | (_, Err(e)) => Err(box_err!(e)),
+        let region_state_key = keys::region_state_key(region_id);
+        let region_state =
+            db.get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key);
+
+        match (raft_state, apply_state, region_state) {
+            (Ok(None), Ok(None), Ok(None)) => {
+                Err(Error::NotFound(format!("info for region {}", region_id)))
+            }
+            (Ok(raft_state), Ok(apply_state), Ok(region_state)) => {
+                Ok((raft_state, apply_state, region_state))
+            }
+            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(box_err!(e)),
         }
     }
 
