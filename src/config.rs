@@ -67,6 +67,7 @@ macro_rules! cf_config {
             pub whole_key_filtering: bool,
             pub bloom_filter_bits_per_key: i32,
             pub block_based_bloom_filter: bool,
+            pub read_amp_bytes_per_bit: u32,
             #[serde(with = "compression_type_level_serde")]
             pub compression_per_level: [DBCompressionType; 7],
             pub write_buffer_size: ReadableSize,
@@ -97,6 +98,7 @@ macro_rules! build_cf_opt {
                                              $opt.block_based_bloom_filter);
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
         }
+        block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_block_based_table_factory(&block_base_opts);
         cf_opts.compression_per_level(&$opt.compression_per_level);
@@ -127,6 +129,7 @@ impl Default for DefaultCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -172,6 +175,7 @@ impl Default for WriteCfConfig {
             whole_key_filtering: false,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -227,6 +231,7 @@ impl Default for LockCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
             write_buffer_size: ReadableSize::mb(128),
             max_write_buffer_number: 5,
@@ -267,6 +272,7 @@ impl Default for RaftCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
             write_buffer_size: ReadableSize::mb(128),
             max_write_buffer_number: 5,
@@ -433,6 +439,7 @@ impl Default for RaftDefaultCfConfig {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
