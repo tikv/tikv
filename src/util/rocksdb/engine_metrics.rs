@@ -1016,11 +1016,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
     if let Some(t) = engine.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME) {
         // RocksDB returns 0 if no snapshots.
         let now = time::get_time().sec as u64;
-        let d = if t > 0 && now > t {
-            now - t
-        } else {
-            0
-        };
+        let d = if t > 0 && now > t { now - t } else { 0 };
         STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
             .with_label_values(&[name])
             .set(d as f64);
