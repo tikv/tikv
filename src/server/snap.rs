@@ -12,16 +12,14 @@
 // limitations under the License.
 
 use std::fmt::{self, Display, Formatter};
-use std::io;
-use std::iter::{self, Once};
 use std::net::SocketAddr;
 use std::boxed::FnBox;
 use std::time::Instant;
-use std::result;
 use std::sync::{Arc, RwLock};
 
 use mio::Token;
-use futures::{stream, Future, Stream};
+use futures::{Async, Future, Poll, Stream};
+use futures::stream::{self, Once};
 use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::SnapshotChunk;
 use kvproto::raft_serverpb::RaftMessage;
@@ -82,21 +80,24 @@ struct SnapChunk {
 
 const SNAP_CHUNK_LEN: usize = 1024 * 1024;
 
-impl Iterator for SnapChunk {
-    type Item = result::Result<Vec<u8>, io::Error>;
+impl Stream for SnapChunk {
+    type Item = (SnapshotChunk, WriteFlags);
+    type Error = Error;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Error> {
         let mut buf = match self.remain_bytes {
-            0 => return None,
+            0 => return Ok(Async::Ready(None)),
             n if n > SNAP_CHUNK_LEN => vec![0; SNAP_CHUNK_LEN],
             n => vec![0; n],
         };
         match self.snap.wl().read_exact(buf.as_mut_slice()) {
             Ok(_) => {
                 self.remain_bytes -= buf.len();
-                Some(Ok(buf))
+                let mut chunk = SnapshotChunk::new();
+                chunk.set_data(buf);
+                Ok(Async::Ready(Some((chunk, WriteFlags::default()))))
             }
-            Err(e) => Some(Err(e)),
+            Err(e) => Err(box_err!("failed to read snapshot chunk: {}", e)),
         }
     }
 }
@@ -137,25 +138,18 @@ fn send_snap(
             snap: s.clone(),
             remain_bytes: total_size as usize,
         };
-        let first: Once<Result<(SnapshotChunk, _)>> = iter::once({
+        let first: Once<(SnapshotChunk, _), Error> = stream::once({
             let mut chunk = SnapshotChunk::new();
             chunk.set_message(msg);
             Ok((chunk, WriteFlags::default()))
         });
-        let rests = snap_chunk.map(|item| {
-            item.map(|buf| {
-                let mut chunk = SnapshotChunk::new();
-                chunk.set_data(buf);
-                (chunk, WriteFlags::default())
-            }).map_err(|e| box_err!("failed to read snapshot chunk: {}", e))
-        });
-        first.chain(rests)
+        first.chain(snap_chunk)
     };
 
     let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
     let client = TikvClient::new(channel);
     let (sink, receiver) = client.snapshot();
-    let send = stream::iter(chunks.into_iter()).forward(sink);
+    let send = chunks.forward(sink);
     let res = send.and_then(|_| receiver.map_err(Error::from))
         .and_then(|_| {
             info!(

@@ -81,6 +81,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker.scheduler(),
         );
         let addr = try!(SocketAddr::from_str(&cfg.addr));
+        info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
