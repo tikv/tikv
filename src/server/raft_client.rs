@@ -62,9 +62,9 @@ impl Conn {
                     sink.sink_map_err(Error::from)
                         .send_all(
                             rx.map(|msgs: Vec<(RaftMessage, WriteFlags)>| {
-                                stream::iter::<_, _, ()>(msgs.into_iter().map(Ok))
+                                stream::iter_ok(msgs)
                             }).flatten()
-                                .map_err(|_| Error::Sink),
+                                .map_err(|()| Error::Sink),
                         )
                         .then(move |r| {
                             alive.store(false, Ordering::SeqCst);
@@ -150,7 +150,7 @@ impl RaftClient {
 
             let mut msgs = conn.buffer.take().unwrap();
             msgs.last_mut().unwrap().1 = WriteFlags::default();
-            if let Err(e) = UnboundedSender::send(&conn.stream, msgs) {
+            if let Err(e) = conn.stream.unbounded_send(msgs) {
                 error!(
                     "server: drop conn with tikv endpoint {} flush conn error: {:?}",
                     addr,
