@@ -641,11 +641,11 @@ impl PdClient for TestPdClient {
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         if let Err(e) = self.check_bootstrap() {
-            return err(e).boxed();
+            return Box::new(err(e));
         }
         match self.cluster.rl().get_region_by_id(region_id) {
-            Ok(resp) => ok(resp).boxed(),
-            Err(e) => err(e).boxed(),
+            Ok(resp) => Box::new(ok(resp)),
+            Err(e) => Box::new(err(e)),
         }
     }
 
@@ -662,7 +662,7 @@ impl PdClient for TestPdClient {
         region_stat: RegionStat,
     ) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
-            return err(e).boxed();
+            return Box::new(err(e));
         }
         let resp = self.cluster
             .wl()
@@ -671,11 +671,11 @@ impl PdClient for TestPdClient {
             Ok(resp) => {
                 let store_id = leader.get_store_id();
                 if let Some(store) = self.cluster.wl().stores.get(&store_id) {
-                    store.sender.send(resp).unwrap();
+                    store.sender.unbounded_send(resp).unwrap();
                 }
-                ok(()).boxed()
+                Box::new(ok(()))
             }
-            Err(e) => err(e).boxed(),
+            Err(e) => Box::new(err(e)),
         }
     }
 
@@ -686,18 +686,19 @@ impl PdClient for TestPdClient {
         let mut cluster = self.cluster.wl();
         let store = cluster.stores.get_mut(&store_id).unwrap();
         let rx = store.receiver.take().unwrap();
-        rx.for_each(move |resp| {
-            f(resp);
-            Ok(())
-        }).map_err(|e| {
-                box_err!("failed to receive next heartbeat response: {:?}", e)
-            })
-            .boxed()
+        Box::new(
+            rx.for_each(move |resp| {
+                f(resp);
+                Ok(())
+            }).map_err(|e| {
+                    box_err!("failed to receive next heartbeat response: {:?}", e)
+                }),
+        )
     }
 
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
         if let Err(e) = self.check_bootstrap() {
-            return err(e).boxed();
+            return Box::new(err(e));
         }
 
         // Must ConfVer and Version be same?
@@ -707,7 +708,7 @@ impl PdClient for TestPdClient {
             .unwrap()
             .unwrap();
         if let Err(e) = check_stale_region(&cur_region, &region) {
-            return err(e).boxed();
+            return Box::new(err(e));
         }
 
         let mut resp = pdpb::AskSplitResponse::new();
@@ -718,27 +719,27 @@ impl PdClient for TestPdClient {
         }
         resp.set_new_peer_ids(peer_ids);
 
-        ok(resp).boxed()
+        Box::new(ok(resp))
     }
 
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
-            return err(e).boxed();
+            return Box::new(err(e));
         }
 
         // Cache it directly now.
         let store_id = stats.get_store_id();
         self.cluster.wl().store_stats.insert(store_id, stats);
 
-        ok(()).boxed()
+        Box::new(ok(()))
     }
 
     fn report_split(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
         // pd just uses this for history show, so here we just count it.
         if let Err(e) = self.check_bootstrap() {
-            return err(e).boxed();
+            return Box::new(err(e));
         }
         self.cluster.wl().split_count += 1;
-        ok(()).boxed()
+        Box::new(ok(()))
     }
 }

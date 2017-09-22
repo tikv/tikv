@@ -15,6 +15,7 @@ use prometheus::{exponential_buckets, CounterVec, GaugeVec, HistogramVec};
 use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
               HistogramData, DB};
 use util::rocksdb;
+use time;
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-size";
 pub const ROCKSDB_TABLE_READERS_MEM: &'static str = "rocksdb.estimate-table-readers-mem";
@@ -23,16 +24,28 @@ pub const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
 pub const ROCKSDB_PENDING_COMPACTION_BYTES: &'static str = "rocksdb.\
                                                             estimate-pending-compaction-bytes";
 pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &'static str = "rocksdb.compression-ratio-at-level";
+pub const ROCKSDB_NUM_SNAPSHOTS: &'static str = "rocksdb.num-snapshots";
+pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &'static str = "rocksdb.oldest-snapshot-time";
 
 pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[
     TickerType::BlockCacheMiss,
     TickerType::BlockCacheHit,
+    TickerType::BlockCacheAdd,
+    TickerType::BlockCacheAddFailures,
     TickerType::BlockCacheIndexMiss,
     TickerType::BlockCacheIndexHit,
+    TickerType::BlockCacheIndexAdd,
+    TickerType::BlockCacheIndexBytesInsert,
+    TickerType::BlockCacheIndexBytesEvict,
     TickerType::BlockCacheFilterMiss,
     TickerType::BlockCacheFilterHit,
+    TickerType::BlockCacheFilterAdd,
+    TickerType::BlockCacheFilterBytesInsert,
+    TickerType::BlockCacheFilterBytesEvict,
     TickerType::BlockCacheDataMiss,
     TickerType::BlockCacheDataHit,
+    TickerType::BlockCacheDataAdd,
+    TickerType::BlockCacheDataBytesInsert,
     TickerType::BlockCacheByteRead,
     TickerType::BlockCacheByteWrite,
     TickerType::BloomFilterUseful,
@@ -115,6 +128,18 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value as f64)
                 .unwrap();
         }
+        TickerType::BlockCacheAdd => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_add"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::BlockCacheAddFailures => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_add_failures"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
         TickerType::BlockCacheIndexMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_index_miss"])
@@ -124,6 +149,24 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
         TickerType::BlockCacheIndexHit => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_index_hit"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::BlockCacheIndexAdd => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_index_add"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::BlockCacheIndexBytesInsert => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_index_bytes_insert"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::BlockCacheIndexBytesEvict => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_index_bytes_evict"])
                 .inc_by(value as f64)
                 .unwrap();
         }
@@ -139,6 +182,24 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value as f64)
                 .unwrap();
         }
+        TickerType::BlockCacheFilterAdd => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_filter_add"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::BlockCacheFilterBytesInsert => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_filter_bytes_insert"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::BlockCacheFilterBytesEvict => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_filter_bytes_evict"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
         TickerType::BlockCacheDataMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_data_miss"])
@@ -148,6 +209,18 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
         TickerType::BlockCacheDataHit => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC
                 .with_label_values(&[name, "block_cache_data_hit"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::BlockCacheDataAdd => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_data_add"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::BlockCacheDataBytesInsert => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC
+                .with_label_values(&[name, "block_cache_data_bytes_insert"])
                 .inc_by(value as f64)
                 .unwrap();
         }
@@ -418,6 +491,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_GET_MICROS_VEC
                 .with_label_values(&[name, "get_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_GET_MICROS_VEC
+                .with_label_values(&[name, "get_max"])
+                .set(value.max);
         }
         HistType::WriteMicros => {
             STORE_ENGINE_WRITE_MICROS_VEC
@@ -435,6 +511,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_WRITE_MICROS_VEC
                 .with_label_values(&[name, "write_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_WRITE_MICROS_VEC
+                .with_label_values(&[name, "write_max"])
+                .set(value.max);
         }
         HistType::CompactionTime => {
             STORE_ENGINE_COMPACTION_TIME_VEC
@@ -452,6 +531,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_COMPACTION_TIME_VEC
                 .with_label_values(&[name, "compaction_time_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_COMPACTION_TIME_VEC
+                .with_label_values(&[name, "compaction_time_max"])
+                .set(value.max);
         }
         HistType::TableSyncMicros => {
             STORE_ENGINE_TABLE_SYNC_MICROS_VEC
@@ -469,6 +551,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_TABLE_SYNC_MICROS_VEC
                 .with_label_values(&[name, "table_sync_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_TABLE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "table_sync_max"])
+                .set(value.max);
         }
         HistType::CompactionOutfileSyncMicros => {
             STORE_ENGINE_COMPACTION_OUTFILE_SYNC_MICROS_VEC
@@ -486,6 +571,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_COMPACTION_OUTFILE_SYNC_MICROS_VEC
                 .with_label_values(&[name, "compaction_outfile_sync_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_COMPACTION_OUTFILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "compaction_outfile_sync_max"])
+                .set(value.max);
         }
         HistType::WalFileSyncMicros => {
             STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
@@ -502,6 +590,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 .set(value.average);
             STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
                 .with_label_values(&[name, "wal_file_sync_standard_deviation"])
+                .set(value.standard_deviation);
+            STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "wal_file_sync_max"])
                 .set(value.standard_deviation);
         }
         HistType::ManifestFileSyncMicros => {
@@ -520,6 +611,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_MANIFEST_FILE_SYNC_MICROS_VEC
                 .with_label_values(&[name, "manifest_file_sync_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_MANIFEST_FILE_SYNC_MICROS_VEC
+                .with_label_values(&[name, "manifest_file_sync_max"])
+                .set(value.max);
         }
         HistType::StallL0SlowdownCount => {
             STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC
@@ -537,6 +631,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC
                 .with_label_values(&[name, "stall_l0_slowdown_count_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_slowdown_count_max"])
+                .set(value.max);
         }
         HistType::StallMemtableCompactionCount => {
             STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC
@@ -557,6 +654,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                     "stall_memtable_compaction_count_standard_deviation",
                 ])
                 .set(value.standard_deviation);
+            STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC
+                .with_label_values(&[name, "stall_memtable_compaction_count_max"])
+                .set(value.max);
         }
         HistType::StallL0NumFilesCount => {
             STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC
@@ -574,6 +674,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC
                 .with_label_values(&[name, "stall_l0_num_files_count_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC
+                .with_label_values(&[name, "stall_l0_num_files_count_max"])
+                .set(value.max);
         }
         HistType::HardRateLimitDelayCount => {
             STORE_ENGINE_HARD_RATE_LIMIT_DELAY_COUNT_VEC
@@ -591,6 +694,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_HARD_RATE_LIMIT_DELAY_COUNT_VEC
                 .with_label_values(&[name, "hard_rate_limit_delay_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_HARD_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "hard_rate_limit_delay_max"])
+                .set(value.max);
         }
         HistType::SoftRateLimitDelayCount => {
             STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_COUNT_VEC
@@ -608,6 +714,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_COUNT_VEC
                 .with_label_values(&[name, "soft_rate_limit_delay_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_COUNT_VEC
+                .with_label_values(&[name, "soft_rate_limit_delay_max"])
+                .set(value.max);
         }
         HistType::NumFilesInSingleCompaction => {
             STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC
@@ -625,6 +734,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC
                 .with_label_values(&[name, "num_files_in_single_compaction_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC
+                .with_label_values(&[name, "num_files_in_single_compaction_max"])
+                .set(value.max);
         }
         HistType::SeekMicros => {
             STORE_ENGINE_SEEK_MICROS_VEC
@@ -642,6 +754,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_SEEK_MICROS_VEC
                 .with_label_values(&[name, "seek_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_SEEK_MICROS_VEC
+                .with_label_values(&[name, "seek_max"])
+                .set(value.max);
         }
         HistType::WriteStall => {
             STORE_ENGINE_WRITE_STALL_VEC
@@ -659,6 +774,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_WRITE_STALL_VEC
                 .with_label_values(&[name, "write_stall_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_WRITE_STALL_VEC
+                .with_label_values(&[name, "write_stall_max"])
+                .set(value.max);
         }
         HistType::SSTReadMicros => {
             STORE_ENGINE_SST_READ_MICROS_VEC
@@ -676,6 +794,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_SST_READ_MICROS_VEC
                 .with_label_values(&[name, "sst_read_micros_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_SST_READ_MICROS_VEC
+                .with_label_values(&[name, "sst_read_micros_max"])
+                .set(value.max);
         }
         HistType::NumSubcompactionsScheduled => {
             STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC
@@ -693,6 +814,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC
                 .with_label_values(&[name, "num_subcompaction_scheduled_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC
+                .with_label_values(&[name, "num_subcompaction_scheduled_max"])
+                .set(value.max);
         }
         HistType::BytesPerRead => {
             STORE_ENGINE_BYTES_PER_READ_VEC
@@ -710,6 +834,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_BYTES_PER_READ_VEC
                 .with_label_values(&[name, "bytes_per_read_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_BYTES_PER_READ_VEC
+                .with_label_values(&[name, "bytes_per_read_max"])
+                .set(value.max);
         }
         HistType::BytesPerWrite => {
             STORE_ENGINE_BYTES_PER_WRITE_VEC
@@ -727,6 +854,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_BYTES_PER_WRITE_VEC
                 .with_label_values(&[name, "bytes_per_write_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_BYTES_PER_WRITE_VEC
+                .with_label_values(&[name, "bytes_per_write_max"])
+                .set(value.max);
         }
         HistType::BytesCompressed => {
             STORE_ENGINE_BYTES_COMPRESSED_VEC
@@ -744,6 +874,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_BYTES_COMPRESSED_VEC
                 .with_label_values(&[name, "bytes_compressed_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_BYTES_COMPRESSED_VEC
+                .with_label_values(&[name, "bytes_compressed_max"])
+                .set(value.max);
         }
         HistType::BytesDecompressed => {
             STORE_ENGINE_BYTES_DECOMPRESSED_VEC
@@ -761,6 +894,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_BYTES_DECOMPRESSED_VEC
                 .with_label_values(&[name, "bytes_decompressed_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_BYTES_DECOMPRESSED_VEC
+                .with_label_values(&[name, "bytes_decompressed_max"])
+                .set(value.max);
         }
         HistType::CompressionTimesNanos => {
             STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
@@ -778,6 +914,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
                 .with_label_values(&[name, "compression_time_nanos_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "compression_time_nanos_max"])
+                .set(value.max);
         }
         HistType::DecompressionTimesNanos => {
             STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC
@@ -795,6 +934,9 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC
                 .with_label_values(&[name, "decompression_time_nanos_standard_deviation"])
                 .set(value.standard_deviation);
+            STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC
+                .with_label_values(&[name, "decompression_time_nanos_max"])
+                .set(value.max);
         }
         _ => {}
     }
@@ -863,6 +1005,21 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
                     .set(v);
             }
         }
+    }
+
+    // For snapshot
+    if let Some(n) = engine.get_property_int(ROCKSDB_NUM_SNAPSHOTS) {
+        STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
+            .with_label_values(&[name])
+            .set(n as f64);
+    }
+    if let Some(t) = engine.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME) {
+        // RocksDB returns 0 if no snapshots.
+        let now = time::get_time().sec as u64;
+        let d = if t > 0 && now > t { now - t } else { 0 };
+        STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
+            .with_label_values(&[name])
+            .set(d as f64);
     }
 }
 
@@ -1188,6 +1345,20 @@ lazy_static!{
             "tikv_engine_compression_ratio",
             "Compression ratio at different levels",
             &["db", "cf", "level"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_num_snapshots",
+            "Number of unreleased snapshots",
+            &["db"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_oldest_snapshot_duration",
+            "Oldest unreleased snapshot duration in seconds",
+            &["db"]
         ).unwrap();
 }
 
