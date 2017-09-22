@@ -55,19 +55,21 @@ fn download_and_extract_file(url: &str) -> io::Result<String> {
     Ok(String::from_utf8(output.stdout).unwrap())
 }
 
-pub fn load_test_jsons() -> Vec<String> {
+pub fn load_test_jsons() -> io::Result<Vec<String>> {
     let url = "https://download.pingcap.org/resources/world_bank.json.tar.gz";
-    download_and_extract_file(url)
-        .unwrap()
-        .split('\n')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_owned())
-        .collect::<Vec<_>>()
+    download_and_extract_file(url).map(|raw: String| {
+        raw.split('\n')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_owned())
+            .collect::<Vec<_>>()
+    })
 }
 
+#[ignore]
 #[bench]
 fn bench_encode_binary(b: &mut Bencher) {
     let jsons: Vec<Json> = load_test_jsons()
+        .unwrap()
         .into_iter()
         .map(|t| t.parse().unwrap())
         .collect();
@@ -78,9 +80,11 @@ fn bench_encode_binary(b: &mut Bencher) {
     });
 }
 
+#[ignore]
 #[bench]
 fn bench_encode_text(b: &mut Bencher) {
     let jsons: Vec<Json> = load_test_jsons()
+        .unwrap()
         .into_iter()
         .map(|t| t.parse().unwrap())
         .collect();
@@ -91,17 +95,20 @@ fn bench_encode_text(b: &mut Bencher) {
     });
 }
 
+#[ignore]
 #[bench]
 fn bench_decode_text(b: &mut Bencher) {
-    let texts = load_test_jsons();
+    let texts = load_test_jsons().unwrap();
     b.iter(|| for text in &texts {
         text.parse::<Json>().unwrap();
     });
 }
 
+#[ignore]
 #[bench]
 fn bench_decode_binary(b: &mut Bencher) {
     let binaries = load_test_jsons()
+        .unwrap()
         .into_iter()
         .map(|t| t.parse::<Json>().unwrap())
         .map(|j| {
