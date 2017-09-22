@@ -18,7 +18,6 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::collections::VecDeque;
 
 use rocksdb::{Writable, WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
@@ -171,7 +170,7 @@ struct ApplyContext<'a> {
     pub cbs: Vec<(Callback, RaftCmdResponse)>,
     pub wb_last_bytes: u64,
     pub wb_last_keys: u64,
-    pub sync_log: bool,
+    pub flush_wal: bool,
 }
 
 impl<'a> ApplyContext<'a> {
@@ -182,7 +181,7 @@ impl<'a> ApplyContext<'a> {
             cbs: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
-            sync_log: false,
+            flush_wal: false,
         }
     }
 
@@ -527,7 +526,7 @@ impl ApplyDelegate {
         }
 
         if cmd.has_admin_request() {
-            apply_ctx.sync_log = true;
+            apply_ctx.flush_wal = true;
         }
 
         let cmd_cb = self.find_cb(index, term, &cmd);
@@ -1496,11 +1495,15 @@ impl Runner {
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(self.sync_log && apply_ctx.sync_log);
         self.db
-            .write_opt(apply_ctx.wb.take().unwrap(), &write_opts)
+            .write(apply_ctx.wb.take().unwrap())
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
+
+        if apply_ctx.flush_wal {
+            self.db
+                .flush_wal(self.sync_log)
+                .unwrap_or_else(|e| panic!("failed to flush wal, error: {:?}", e));
+        }
 
         // Call callbacks
         for (cb, resp) in apply_ctx.cbs.drain(..) {

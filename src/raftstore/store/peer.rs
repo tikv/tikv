@@ -401,9 +401,11 @@ impl Peer {
             PeerState::Tombstone
         ));
         // write kv rocksdb first in case of restart happen between two write
+        try!(self.kv_engine.write(kv_wb));
+        try!(self.kv_engine.flush_wal(self.cfg.sync_log));
+
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(self.cfg.sync_log);
-        try!(self.kv_engine.write_opt(kv_wb, &write_opts));
         try!(self.raft_engine.write_opt(raft_wb, &write_opts));
 
         if self.get_store().is_initialized() {

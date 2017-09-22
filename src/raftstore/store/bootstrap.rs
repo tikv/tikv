@@ -66,7 +66,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     ident.set_store_id(store_id);
 
     try!(engines.kv_engine.put_msg(&ident_key, &ident));
-    try!(engines.kv_engine.sync_wal());
+    try!(engines.kv_engine.flush_wal(true));
     Ok(())
 }
 
@@ -89,7 +89,7 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
         region.get_id()
     ));
     try!(engines.kv_engine.write(wb));
-    try!(engines.kv_engine.sync_wal());
+    try!(engines.kv_engine.flush_wal(true));
 
     let raft_wb = WriteBatch::new();
     try!(write_initial_raft_state(&raft_wb, region.get_id()));
@@ -110,14 +110,14 @@ pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> 
     try!(wb.delete_cf(handle, &keys::region_state_key(region_id)));
     try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
     try!(engines.kv_engine.write(wb));
-    try!(engines.kv_engine.sync_wal());
+    try!(engines.kv_engine.flush_wal(true));
     Ok(())
 }
 
 // Clear prepare state
 pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
     try!(engines.kv_engine.delete(&keys::prepare_bootstrap_key()));
-    try!(engines.kv_engine.sync_wal());
+    try!(engines.kv_engine.flush_wal(true));
     Ok(())
 }
 

@@ -287,8 +287,7 @@ impl<T, C> Store<T, C> {
 
                 let peer = try!(Peer::create(self, region));
                 self.region_ranges.insert(enc_end_key(region), region_id);
-                // No need to check duplicated here, because we use region id as the key
-                // in DB.
+                // No need to check duplicated here, because we use region id as the key in DB.
                 self.region_peers.insert(region_id, peer);
                 Ok(true)
             }
@@ -296,7 +295,7 @@ impl<T, C> Store<T, C> {
 
         if !kv_wb.is_empty() {
             self.kv_engine.write(kv_wb).unwrap();
-            self.kv_engine.sync_wal().unwrap();
+            self.kv_engine.flush_wal(true).unwrap();
         }
         if !raft_wb.is_empty() {
             self.raft_engine.write(raft_wb).unwrap();
@@ -1083,13 +1082,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // but region state may not changed in disk.
         if !kv_wb.is_empty() {
             // RegionLocalState, ApplyState
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log);
-            self.kv_engine
-                .write_opt(kv_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save append state result: {:?}", self.tag, e);
-                });
+            self.kv_engine.write(kv_wb).unwrap_or_else(|e| {
+                panic!("{} failed to save append state result: {:?}", self.tag, e);
+            });
+            self.kv_engine.flush_wal(self.cfg.sync_log).unwrap_or_else(
+                |e| {
+                    panic!("{} failed to flush append state result: {:?}", self.tag, e);
+                },
+            );
         }
 
         if !raft_wb.is_empty() {
