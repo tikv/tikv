@@ -308,7 +308,7 @@
 # 4      =>  03.12 %
 # 8      =>  01.56 %
 # 16     =>  00.78 %
-# read-amp-bytes-per-bit = 16
+# read-amp-bytes-per-bit = 0
 
 # Options for Column Family write
 # Column Family write used to store commit informations in MVCC model
@@ -329,7 +329,7 @@
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = 3
-# read-amp-bytes-per-bit = 16
+# read-amp-bytes-per-bit = 0
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -346,7 +346,7 @@
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = 0
-# read-amp-bytes-per-bit = 16
+# read-amp-bytes-per-bit = 0
 
 [raftdb]
 # max-sub-compactions = 1
@@ -381,4 +381,4 @@
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = 0
-# read-amp-bytes-per-bit = 16
+# read-amp-bytes-per-bit = 0
