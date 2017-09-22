@@ -14,6 +14,9 @@
 // FIXME: remove following later
 #![allow(dead_code)]
 
+use protobuf::RepeatedField;
+use tipb::analyze;
+
 /// Bucket is an element of histogram.
 ///
 /// A bucket count is the number of items stored in all previous buckets and the current bucket.
@@ -50,6 +53,15 @@ impl Bucket {
         self.count += 1;
         self.repeats = 1;
     }
+
+    fn into_proto(self) -> analyze::Bucket {
+        let mut bucket = analyze::Bucket::new();
+        bucket.set_repeats(self.repeats);
+        bucket.set_count(self.count);
+        bucket.set_lower_bound(self.lower_bound);
+        bucket.set_upper_bound(self.upper_bound);
+        bucket
+    }
 }
 
 /// Histogram represents statistics for a column or index.
@@ -76,7 +88,18 @@ impl Histogram {
         h
     }
 
-    fn iterate(&mut self, data: Vec<u8>) {
+    pub fn into_proto(self) -> analyze::Histogram {
+        let mut hist = analyze::Histogram::new();
+        hist.set_ndv(self.ndv);
+        let buckets: Vec<analyze::Bucket> = self.buckets
+            .into_iter()
+            .map(|bucket| bucket.into_proto())
+            .collect();
+        hist.set_buckets(RepeatedField::from_vec(buckets));
+        hist
+    }
+
+    pub fn iterate(&mut self, data: Vec<u8>) {
         if let Some(bucket) = self.buckets.last_mut() {
             // The new item has the same value as last bucket value, to ensure that
             // a same value only stored in a single bucket, we do not increase bucket
