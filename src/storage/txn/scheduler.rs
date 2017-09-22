@@ -42,7 +42,7 @@ use prometheus::HistogramTimer;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-              Statistics, StorageCb};
+              Statistics, StatisticsSummary, StorageCb};
 use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, WriteType,
                     MAX_TXN_WRITE_SIZE};
 use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
@@ -50,7 +50,7 @@ use storage::engine::{self, Callback as EngineCallback, CbContext, Error as Engi
                       Result as EngineResult};
 use raftstore::store::engine::IterOption;
 use util::transport::{Error as TransportError, SyncSendCh};
-use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
 
@@ -97,6 +97,7 @@ pub enum Msg {
         cmd: Command,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
+        rows: usize,
     },
     WritePrepareFailed { cid: u64, err: Error },
     WriteFinished {
@@ -228,7 +229,13 @@ impl Drop for RunningCtx {
 }
 
 /// Creates a callback to receive async results of write prepare from the storage engine.
-fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SyncSendCh<Msg>) -> EngineCallback<()> {
+fn make_engine_cb(
+    cmd: &'static str,
+    cid: u64,
+    pr: ProcessResult,
+    ch: SyncSendCh<Msg>,
+    rows: usize,
+) -> EngineCallback<()> {
     Box::new(move |(cb_ctx, result)| {
         match ch.send(Msg::WriteFinished {
             cid: cid,
@@ -236,7 +243,11 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SyncSendCh<Msg>) -> EngineCal
             cb_ctx: cb_ctx,
             result: result,
         }) {
-            Ok(_) => {}
+            Ok(_) => {
+                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                    .with_label_values(&[cmd])
+                    .observe(rows as f64);
+            }
             e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
             Err(e) => {
                 panic!(
@@ -297,10 +308,10 @@ pub struct Scheduler {
     sched_too_busy_threshold: usize,
 
     // worker pool
-    worker_pool: ThreadPool<DefaultContext>,
+    worker_pool: ThreadPool<ScheContext>,
 
     // high priority commands will be delivered to this pool
-    high_priority_pool: ThreadPool<DefaultContext>,
+    high_priority_pool: ThreadPool<ScheContext>,
 
     has_gc_command: bool,
 
@@ -379,7 +390,12 @@ impl Scheduler {
 
 /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
 /// event loop.
-fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<Snapshot>) {
+fn process_read(
+    cid: u64,
+    mut cmd: Command,
+    ch: SyncSendCh<Msg>,
+    snapshot: Box<Snapshot>,
+) -> Statistics {
     debug!("process read cmd(cid={}) in worker pool.", cid);
     SCHED_WORKER_COUNTER_VEC
         .with_label_values(&[cmd.tag(), "read"])
@@ -475,14 +491,6 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                             .collect(),
                     )
                 });
-
-            for (cf, details) in statistics.details() {
-                for (tag, count) in details {
-                    KV_COMMAND_SCAN_DETAILS
-                        .with_label_values(&[cf, tag])
-                        .observe(count as f64);
-                }
-            }
 
             match res {
                 Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
@@ -709,6 +717,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
         // Todo: if this happens we need to clean up command's context
         panic!("send read finished failed, cid={}, err={:?}", cid, e);
     }
+    statistics
 }
 
 fn process_rawscan(
@@ -731,11 +740,17 @@ fn process_rawscan(
 
 /// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
 /// message if successful or a `WritePrepareFailed` message back to the event loop.
-fn process_write(cid: u64, cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<Snapshot>) {
+fn process_write(
+    cid: u64,
+    cmd: Command,
+    ch: SyncSendCh<Msg>,
+    snapshot: Box<Snapshot>,
+) -> Statistics {
+    let mut statistics = Statistics::default();
     SCHED_WORKER_COUNTER_VEC
         .with_label_values(&[cmd.tag(), "write"])
         .inc();
-    if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref()) {
+    if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref(), &mut statistics) {
         if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
             // Todo: if this happens, lock will hold for ever
             panic!(
@@ -745,6 +760,7 @@ fn process_write(cid: u64, cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<Snap
             );
         }
     }
+    statistics
 }
 
 fn process_write_impl(
@@ -752,9 +768,9 @@ fn process_write_impl(
     mut cmd: Command,
     ch: SyncSendCh<Msg>,
     snapshot: &Snapshot,
+    statistics: &mut Statistics,
 ) -> Result<()> {
-    let mut statistics = Statistics::default();
-    let (pr, modifies) = match cmd {
+    let (pr, modifies, rows) = match cmd {
         Command::Prewrite {
             ref ctx,
             ref mutations,
@@ -765,13 +781,14 @@ fn process_write_impl(
         } => {
             let mut txn = MvccTxn::new(
                 snapshot,
-                &mut statistics,
+                statistics,
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
             let mut locks = vec![];
+            let rows = mutations.len();
             for m in mutations {
                 match txn.prewrite(m.clone(), primary, options) {
                     Ok(_) => {}
@@ -783,11 +800,11 @@ fn process_write_impl(
             }
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                (pr, txn.modifies())
+                (pr, txn.modifies(), rows)
             } else {
                 // Skip write stage if some keys are locked.
                 let pr = ProcessResult::MultiRes { results: locks };
-                (pr, vec![])
+                (pr, vec![], 0)
             }
         }
         Command::Commit {
@@ -805,18 +822,19 @@ fn process_write_impl(
             }
             let mut txn = MvccTxn::new(
                 snapshot,
-                &mut statistics,
+                statistics,
                 lock_ts,
                 None,
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
+            let rows = keys.len();
             for k in keys {
                 try!(txn.commit(k, commit_ts));
             }
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies())
+            (pr, txn.modifies(), rows)
         }
         Command::Cleanup {
             ref ctx,
@@ -826,7 +844,7 @@ fn process_write_impl(
         } => {
             let mut txn = MvccTxn::new(
                 snapshot,
-                &mut statistics,
+                statistics,
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
@@ -835,7 +853,7 @@ fn process_write_impl(
             try!(txn.rollback(key));
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies())
+            (pr, txn.modifies(), 1)
         }
         Command::Rollback {
             ref ctx,
@@ -845,18 +863,19 @@ fn process_write_impl(
         } => {
             let mut txn = MvccTxn::new(
                 snapshot,
-                &mut statistics,
+                statistics,
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
+            let rows = keys.len();
             for k in keys {
                 try!(txn.rollback(k));
             }
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies())
+            (pr, txn.modifies(), rows)
         }
         Command::ResolveLock {
             ref ctx,
@@ -876,12 +895,13 @@ fn process_write_impl(
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(
                 snapshot,
-                &mut statistics,
+                statistics,
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
+            let rows = keys.len();
             for k in keys {
                 match commit_ts {
                     Some(ts) => try!(txn.commit(k, ts)),
@@ -893,7 +913,7 @@ fn process_write_impl(
                 }
             }
             if scan_key.is_none() {
-                (ProcessResult::Res, txn.modifies())
+                (ProcessResult::Res, txn.modifies(), rows)
             } else {
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
@@ -904,7 +924,7 @@ fn process_write_impl(
                         keys: vec![],
                     },
                 };
-                (pr, txn.modifies())
+                (pr, txn.modifies(), rows)
             }
         }
         Command::Gc {
@@ -917,12 +937,13 @@ fn process_write_impl(
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(
                 snapshot,
-                &mut statistics,
+                statistics,
                 0,
                 Some(ScanMode::Forward),
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
+            let rows = keys.len();
             for k in keys {
                 try!(txn.gc(k, safe_point));
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
@@ -931,7 +952,7 @@ fn process_write_impl(
                 }
             }
             if scan_key.is_none() {
-                (ProcessResult::Res, txn.modifies())
+                (ProcessResult::Res, txn.modifies(), rows)
             } else {
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::Gc {
@@ -942,7 +963,7 @@ fn process_write_impl(
                         keys: vec![],
                     },
                 };
-                (pr, txn.modifies())
+                (pr, txn.modifies(), rows)
             }
         }
         _ => panic!("unsupported write command"),
@@ -953,9 +974,37 @@ fn process_write_impl(
         cmd: cmd,
         pr: pr,
         to_be_write: modifies,
+        rows: rows,
     }));
 
     Ok(())
+}
+
+#[derive(Default)]
+struct ScheContext {
+    stats: HashMap<&'static str, StatisticsSummary>,
+}
+
+impl ScheContext {
+    fn add_statistics(&mut self, cmd_tag: &'static str, stat: &Statistics) {
+        let entry = self.stats.entry(cmd_tag).or_insert_with(Default::default);
+        entry.add_statistics(stat);
+    }
+}
+
+impl ThreadContext for ScheContext {
+    fn on_tick(&mut self) {
+        for (cmd, stat) in self.stats.drain() {
+            for (cf, details) in stat.stat.details() {
+                for (tag, count) in details {
+                    KV_COMMAND_SCAN_DETAILS
+                        .with_label_values(&[cmd, cf, tag])
+                        .inc_by(count as f64)
+                        .unwrap();
+                }
+            }
+        }
+    }
 }
 
 impl Scheduler {
@@ -997,7 +1046,7 @@ impl Scheduler {
         ctx.tag
     }
 
-    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool<DefaultContext> {
+    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool<ScheContext> {
         match priority {
             CommandPri::Low | CommandPri::Normal => &self.worker_pool,
             CommandPri::High => &self.high_priority_pool,
@@ -1025,10 +1074,17 @@ impl Scheduler {
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
         let worker_pool = self.fetch_worker_pool(cmd.priority());
+        let tag = cmd.tag();
         if readcmd {
-            worker_pool.execute(move |_| process_read(cid, cmd, ch, snapshot));
+            worker_pool.execute(move |ctx: &mut ScheContext| {
+                let s = process_read(cid, cmd, ch, snapshot);
+                ctx.add_statistics(tag, &s);
+            });
         } else {
-            worker_pool.execute(move |_| process_write(cid, cmd, ch, snapshot));
+            worker_pool.execute(move |ctx: &mut ScheContext| {
+                let s = process_write(cid, cmd, ch, snapshot);
+                ctx.add_statistics(tag, &s);
+            });
         }
     }
 
@@ -1306,6 +1362,7 @@ impl Scheduler {
         cmd: Command,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
+        rows: usize,
     ) {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[self.get_ctx_tag(cid), "write"])
@@ -1313,7 +1370,7 @@ impl Scheduler {
         if to_be_write.is_empty() {
             return self.on_write_finished(cid, pr, Ok(()));
         }
-        let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
+        let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.schedch.clone(), rows);
         if let Err(e) = self.engine
             .async_write(cmd.get_context(), to_be_write, engine_cb)
         {
@@ -1405,7 +1462,8 @@ impl Scheduler {
                         cmd,
                         pr,
                         to_be_write,
-                    } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write),
+                        rows,
+                    } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write, rows),
                     Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
                     Msg::WriteFinished {
                         cid, pr, result, ..

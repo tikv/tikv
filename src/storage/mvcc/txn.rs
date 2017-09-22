@@ -127,6 +127,9 @@ impl<'a> MvccTxn<'a> {
             if let Some((commit, _)) = try!(self.reader.seek_write(key, u64::max_value())) {
                 // Abort on writes after our start timestamp ...
                 if commit >= self.start_ts {
+                    MVCC_CONFLICT_COUNTER
+                        .with_label_values(&["prewrite_write_conflict"])
+                        .inc();
                     return Err(Error::WriteConflict {
                         start_ts: self.start_ts,
                         conflict_ts: commit,
@@ -190,6 +193,9 @@ impl<'a> MvccTxn<'a> {
             _ => {
                 return match try!(self.reader.get_txn_commit_info(key, self.start_ts)) {
                     Some((_, WriteType::Rollback)) | None => {
+                        MVCC_CONFLICT_COUNTER
+                            .with_label_values(&["commit_lock_not_found"])
+                            .inc();
                         // TODO:None should not appear
                         // Rollbacked by concurrent transaction.
                         info!(
@@ -236,6 +242,9 @@ impl<'a> MvccTxn<'a> {
                             // return Ok on Rollback already exist
                             Ok(())
                         } else {
+                            MVCC_CONFLICT_COUNTER
+                                .with_label_values(&["rollback_committed"])
+                                .inc();
                             info!(
                                 "txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
                                 key,
