@@ -14,6 +14,7 @@
 use std::sync::Arc;
 
 use tikv::util::HandyRwLock;
+use tikv::storage::Key;
 use tikv::raftstore::store::keys;
 use tikv::storage::CF_DEFAULT;
 use tikv::raftstore::store::engine::{Mutable, Peekable};
@@ -471,9 +472,9 @@ fn test_raft() {
         .unwrap();
 
     let (sink, _) = client.snapshot();
-    sink.send((SnapshotChunk::new(), Default::default()))
-        .wait()
-        .unwrap();
+    let mut chunk = SnapshotChunk::new();
+    chunk.set_message(RaftMessage::new());
+    sink.send((chunk, Default::default())).wait().unwrap();
 }
 
 #[test]
@@ -482,6 +483,30 @@ fn test_coprocessor() {
 
     // SQL push down commands
     client.coprocessor(Request::new()).unwrap();
+}
+
+#[test]
+fn test_split_region() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+
+    // Split region commands
+    let key = b"b";
+    let mut req = SplitRegionRequest::new();
+    req.set_context(ctx);
+    req.set_split_key(key.to_vec());
+    let resp = client.split_region(req).unwrap();
+    assert_eq!(
+        Key::from_encoded(resp.get_left().get_end_key().to_vec())
+            .truncate_ts()
+            .unwrap()
+            .encoded()
+            .as_slice(),
+        key
+    );
+    assert_eq!(
+        resp.get_left().get_end_key(),
+        resp.get_right().get_start_key()
+    );
 }
 
 #[test]
