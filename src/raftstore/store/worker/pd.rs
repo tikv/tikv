@@ -22,19 +22,20 @@ use kvproto::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::pdpb;
+use rocksdb::DB;
+use fs2;
 
 use util::worker::FutureRunnable as Runnable;
 use util::escape;
 use util::transport::SendCh;
+use util::rocksdb::*;
 use pd::{PdClient, RegionStat};
 use raftstore::store::Msg;
 use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use raftstore::store::metrics::*;
-use rocksdb::DB;
-use fs2;
-use super::metrics::*;
 use raftstore::store::store::StoreInfo;
-use util::rocksdb::*;
+use raftstore::store::Callback;
+use super::metrics::*;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
@@ -44,6 +45,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right region derive origin region_id.
         right_derive: bool,
+        callback: Callback,
     },
     Heartbeat {
         region: metapb::Region,
@@ -129,10 +131,11 @@ impl<T: PdClient> Runner<T> {
     fn handle_ask_split(
         &self,
         handle: &Handle,
-        region: metapb::Region,
+        mut region: metapb::Region,
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
+        callback: Callback,
     ) {
         PD_REQ_COUNTER_VEC
             .with_label_values(&["ask split", "all"])
@@ -158,7 +161,9 @@ impl<T: PdClient> Runner<T> {
                         resp.take_new_peer_ids(),
                         right_derive,
                     );
-                    send_admin_request(ch, region, peer, req);
+                    let region_id = region.get_id();
+                    let epoch = region.take_region_epoch();
+                    send_admin_request(&ch, region_id, epoch, peer, req, Some(callback))
                 }
                 Err(e) => {
                     debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
@@ -363,7 +368,7 @@ impl<T: PdClient> Runner<T> {
                         change_peer.get_change_type().into(),
                         change_peer.take_peer(),
                     );
-                    send_admin_request_raw(&ch, region_id, epoch, peer, req);
+                    send_admin_request(&ch, region_id, epoch, peer, req, None);
                 } else if resp.has_transfer_leader() {
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["transfer leader"])
@@ -377,7 +382,7 @@ impl<T: PdClient> Runner<T> {
                         transfer_leader.get_peer()
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
-                    send_admin_request_raw(&ch, region_id, epoch, peer, req)
+                    send_admin_request(&ch, region_id, epoch, peer, req, None)
                 }
             })
             .map_err(|e| panic!("unexpected error: {:?}", e))
@@ -406,7 +411,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 split_key,
                 peer,
                 right_derive,
-            } => self.handle_ask_split(handle, region, split_key, peer, right_derive),
+                callback,
+            } => self.handle_ask_split(handle, region, split_key, peer, right_derive, callback),
             Task::Heartbeat {
                 region,
                 peer,
@@ -473,22 +479,12 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
 }
 
 fn send_admin_request(
-    ch: SendCh<Msg>,
-    mut region: metapb::Region,
-    peer: metapb::Peer,
-    request: AdminRequest,
-) {
-    let region_id = region.get_id();
-    let epoch = region.take_region_epoch();
-    send_admin_request_raw(&ch, region_id, epoch, peer, request)
-}
-
-fn send_admin_request_raw(
     ch: &SendCh<Msg>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
+    callback: Option<Callback>,
 ) {
     let cmd_type = request.get_cmd_type();
 
@@ -499,7 +495,10 @@ fn send_admin_request_raw(
 
     req.set_admin_request(request);
 
-    if let Err(e) = ch.try_send(Msg::new_raft_cmd(req, Box::new(|_| {}))) {
+    if let Err(e) = ch.try_send(Msg::new_raft_cmd(
+        req,
+        callback.unwrap_or_else(|| Box::new(|_| {})),
+    )) {
         error!(
             "[region {}] send {:?} request err {:?}",
             region_id,

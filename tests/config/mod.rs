@@ -140,6 +140,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -169,6 +170,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -198,6 +200,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -227,6 +230,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -277,6 +281,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
