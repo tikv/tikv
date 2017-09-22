@@ -104,6 +104,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",
@@ -133,6 +134,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",
@@ -162,6 +164,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",
@@ -191,6 +194,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",
@@ -241,6 +245,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",

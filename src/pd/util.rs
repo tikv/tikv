@@ -18,7 +18,7 @@ use std::time::Instant;
 use std::time::Duration;
 use std::collections::HashSet;
 
-use futures::{task, Async, BoxFuture, Future, Poll, Stream};
+use futures::{task, Async, Future, Poll, Stream};
 use futures::task::Task;
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
@@ -119,11 +119,12 @@ impl LeaderClient {
             receiver: None,
             inner: self.inner.clone(),
         };
-        recv.for_each(move |resp| {
-            f(resp);
-            Ok(())
-        }).map_err(|e| panic!("unexpected error: {:?}", e))
-            .boxed()
+        Box::new(
+            recv.for_each(move |resp| {
+                f(resp);
+                Ok(())
+            }).map_err(|e| panic!("unexpected error: {:?}", e)),
+        )
     }
 
     pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
@@ -206,11 +207,11 @@ where
     Resp: Send + 'static,
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
-    fn reconnect_if_needed(mut self) -> BoxFuture<Self, Self> {
+    fn reconnect_if_needed(mut self) -> Box<Future<Item = Self, Error = Self> + Send> {
         debug!("reconnect remains: {}", self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
-            return ok(self).boxed();
+            return Box::new(ok(self));
         }
 
         // Updating client.
@@ -221,41 +222,40 @@ where
         match self.client.reconnect() {
             Ok(_) => {
                 self.request_sent = 0;
-                ok(self).boxed()
+                Box::new(ok(self))
             }
-            Err(_) => self.client
-                .timer
-                .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
-                .then(|_| Err(self))
-                .boxed(),
+            Err(_) => Box::new(
+                self.client
+                    .timer
+                    .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
+                    .then(|_| Err(self)),
+            ),
         }
     }
 
-    fn send_and_receive(mut self) -> BoxFuture<Self, Self> {
+    fn send_and_receive(mut self) -> Box<Future<Item = Self, Error = Self> + Send> {
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
 
-        ok(self)
-            .and_then(|mut ctx| {
-                ctx.timer = Some(PD_SEND_MSG_HISTOGRAM.start_coarse_timer());
-                let req = (ctx.func)(&ctx.client.inner, r);
-                req.then(|resp| {
-                    // Observe on dropping, schedule time will be recorded too.
-                    ctx.timer.take();
-                    match resp {
-                        Ok(resp) => {
-                            ctx.resp = Some(Ok(resp));
-                            Ok(ctx)
-                        }
-                        Err(err) => {
-                            error!("request failed: {:?}", err);
-                            Err(ctx)
-                        }
+        Box::new(ok(self).and_then(|mut ctx| {
+            ctx.timer = Some(PD_SEND_MSG_HISTOGRAM.start_coarse_timer());
+            let req = (ctx.func)(&ctx.client.inner, r);
+            req.then(|resp| {
+                // Observe on dropping, schedule time will be recorded too.
+                ctx.timer.take();
+                match resp {
+                    Ok(resp) => {
+                        ctx.resp = Some(Ok(resp));
+                        Ok(ctx)
                     }
-                })
+                    Err(err) => {
+                        error!("request failed: {:?}", err);
+                        Err(ctx)
+                    }
+                }
             })
-            .boxed()
+        }))
     }
 
     fn break_or_continue(ctx: result::Result<Self, Self>) -> Result<Loop<Self, Self>> {
@@ -279,12 +279,13 @@ where
     /// is resolved successfully, otherwise it repeats `retry` times.
     pub fn execute(self) -> PdFuture<Resp> {
         let ctx = self;
-        loop_fn(ctx, |ctx| {
-            ctx.reconnect_if_needed()
-                .and_then(Self::send_and_receive)
-                .then(Self::break_or_continue)
-        }).then(Self::post_loop)
-            .boxed()
+        Box::new(
+            loop_fn(ctx, |ctx| {
+                ctx.reconnect_if_needed()
+                    .and_then(Self::send_and_receive)
+                    .then(Self::break_or_continue)
+            }).then(Self::post_loop),
+        )
     }
 }
 
