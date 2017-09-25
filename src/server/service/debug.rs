@@ -85,10 +85,6 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn mvcc(&self, _: RpcContext, _: MvccRequest, _: UnarySink<MvccResponse>) {
-        unimplemented!()
-    }
-
     fn raft_log(&self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
         const TAG: &'static str = "debug_raft_log";
 
@@ -109,15 +105,48 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn region_info(&self, _: RpcContext, _: RegionInfoRequest, _: UnarySink<RegionInfoResponse>) {
+    fn region_info(
+        &self,
+        ctx: RpcContext,
+        req: RegionInfoRequest,
+        sink: UnarySink<RegionInfoResponse>,
+    ) {
+        const TAG: &'static str = "debug_region_log";
+
+        let region_id = req.get_region_id();
+
+        let f = self.pool
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.region_info(region_id)),
+            )
+            .map(|(raft_local_state, raft_apply_state, region_state)| {
+                let mut resp = RegionInfoResponse::new();
+                if let Some(raft_local_state) = raft_local_state {
+                    resp.set_raft_local_state(raft_local_state);
+                }
+                if let Some(raft_apply_state) = raft_apply_state {
+                    resp.set_raft_apply_state(raft_apply_state);
+                }
+                if let Some(region_state) = region_state {
+                    resp.set_region_local_state(region_state);
+                }
+                resp
+            });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn region_size(&self, _: RpcContext, _: RegionSizeRequest, _: UnarySink<RegionSizeResponse>) {
         unimplemented!()
     }
 
-    fn size(&self, _: RpcContext, _: SizeRequest, _: UnarySink<SizeResponse>) {
-        unimplemented!()
-    }
-
-    fn scan(&self, _: RpcContext, _: ScanRequest, _: ServerStreamingSink<ScanResponse>) {
+    fn scan_mvcc(
+        &self,
+        _: RpcContext,
+        _: ScanMvccRequest,
+        _: ServerStreamingSink<ScanMvccResponse>,
+    ) {
         unimplemented!()
     }
 }
