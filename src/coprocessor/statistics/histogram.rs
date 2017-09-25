@@ -18,23 +18,19 @@ use protobuf::RepeatedField;
 use tipb::analyze;
 
 /// Bucket is an element of histogram.
-///
-/// A bucket count is the number of items stored in all previous buckets and the current bucket.
-/// bucket numbers are always in increasing order.
-///
-/// A bucket value is the greatest item value stored in the bucket.
-///
-/// Repeat is the number of repeats of the bucket value, it can be used to find popular values.
-///
 struct Bucket {
-    count: i64,
+    // the number of items stored in all previous buckets and the current bucket.
+    count: u64,
+    // the greatest item value stored in the bucket.
     upper_bound: Vec<u8>,
+    // the lowest item value stored in the bucket.
     lower_bound: Vec<u8>,
-    repeats: i64,
+    // the number of repeats of the bucket's upper_bound, it can be used to find popular values.
+    repeats: u64,
 }
 
 impl Bucket {
-    fn new(count: i64, upper_bound: Vec<u8>, lower_bound: Vec<u8>, repeats: i64) -> Bucket {
+    fn new(count: u64, upper_bound: Vec<u8>, lower_bound: Vec<u8>, repeats: u64) -> Bucket {
         Bucket {
             count: count,
             upper_bound: upper_bound,
@@ -43,12 +39,15 @@ impl Bucket {
         }
     }
 
-    fn insert_repeated_item(&mut self) {
+    fn append_repeated_item(&mut self) {
         self.count += 1;
         self.repeats += 1;
+        return;
     }
 
-    fn insert_item(&mut self, data: Vec<u8>) {
+    // insert a item bigger than current upper_bound,
+    // we need data to set as upper_bound
+    fn append_diff_item(&mut self, data: Vec<u8>) {
         self.upper_bound = data;
         self.count += 1;
         self.repeats = 1;
@@ -56,8 +55,8 @@ impl Bucket {
 
     fn into_proto(self) -> analyze::Bucket {
         let mut bucket = analyze::Bucket::new();
-        bucket.set_repeats(self.repeats);
-        bucket.set_count(self.count);
+        bucket.set_repeats(self.repeats as i64);
+        bucket.set_count(self.count as i64);
         bucket.set_lower_bound(self.lower_bound);
         bucket.set_upper_bound(self.upper_bound);
         bucket
@@ -67,30 +66,28 @@ impl Bucket {
 /// Histogram represents statistics for a column or index.
 #[derive(Default)]
 pub struct Histogram {
-    // column's id
-    id: i64,
     // number of distinct values
-    ndv: i64,
+    ndv: u64,
     buckets: Vec<Bucket>,
     // max number of values in per bucket. Notice: when a bucket's count is equal to
     // per_bucket_limit, only value equal with last value can been inserted into it.
-    per_bucket_limit: i64,
+    per_bucket_limit: u64,
     // max number of buckets
     buckets_num: usize,
 }
 
 impl Histogram {
-    pub fn new(id: i64, buckets_num: usize) -> Histogram {
-        let mut h = Histogram::default();
-        h.per_bucket_limit = 1;
-        h.buckets_num = buckets_num;
-        h.id = id;
-        h
+    pub fn new(buckets_num: usize) -> Histogram {
+        Histogram {
+            per_bucket_limit: 1,
+            buckets_num: buckets_num,
+            ..Default::default()
+        }
     }
 
     pub fn into_proto(self) -> analyze::Histogram {
         let mut hist = analyze::Histogram::new();
-        hist.set_ndv(self.ndv);
+        hist.set_ndv(self.ndv as i64);
         let buckets: Vec<analyze::Bucket> = self.buckets
             .into_iter()
             .map(|bucket| bucket.into_proto())
@@ -99,13 +96,14 @@ impl Histogram {
         hist
     }
 
-    pub fn iterate(&mut self, data: Vec<u8>) {
+    // insert a data bigger or equal than max value in current histogram.
+    pub fn append(&mut self, data: Vec<u8>) {
         if let Some(bucket) = self.buckets.last_mut() {
             // The new item has the same value as last bucket value, to ensure that
             // a same value only stored in a single bucket, we do not increase bucket
             // even if it exceeds per_bucket_limit.
             if bucket.upper_bound == data {
-                bucket.insert_repeated_item();
+                bucket.append_repeated_item();
                 return;
             }
         }
@@ -115,7 +113,7 @@ impl Histogram {
         }
 
         if !self.is_last_bucket_full() {
-            self.buckets.last_mut().unwrap().insert_item(data);
+            self.buckets.last_mut().unwrap().append_diff_item(data);
             return;
         }
 
@@ -176,12 +174,12 @@ mod test {
     #[test]
     fn test_histogram() {
         let buckets_num = 3;
-        let mut hist = Histogram::new(1, buckets_num);
+        let mut hist = Histogram::new(buckets_num);
         assert_eq!(hist.buckets.len(), 0);
 
         for item in (0..3).map(Datum::I64) {
             let bytes = datum::encode_value(&[item]).unwrap();
-            hist.iterate(bytes);
+            hist.append(bytes);
         }
         // b0: [0]
         // b1: [1]
@@ -192,7 +190,7 @@ mod test {
 
         // bucket is full now, need to merge
         let bytes = datum::encode_value(&[Datum::I64(3)]).unwrap();
-        hist.iterate(bytes);
+        hist.append(bytes);
         // b0: [0, 1]
         // b1: [2, 3]
         assert_eq!(hist.per_bucket_limit, 2);
@@ -202,7 +200,7 @@ mod test {
         // push repeated item
         for item in repeat(3).take(3).map(Datum::I64) {
             let bytes = datum::encode_value(&[item]).unwrap();
-            hist.iterate(bytes);
+            hist.append(bytes);
         }
 
         // b1: [0, 1]
@@ -213,7 +211,7 @@ mod test {
 
         for item in repeat(4).take(4).map(Datum::I64) {
             let bytes = datum::encode_value(&[item]).unwrap();
-            hist.iterate(bytes);
+            hist.append(bytes);
         }
         // b0: [0, 1]
         // b1: [2, 3, 3, 3, 3]
@@ -224,7 +222,7 @@ mod test {
 
         // bucket is full now, need to merge
         let bytes = datum::encode_value(&[Datum::I64(5)]).unwrap();
-        hist.iterate(bytes);
+        hist.append(bytes);
         // b0: [0, 1, 2, 3, 3, 3, 3]
         // b1: [4, 4, 4, 4, 4]
         // b2: [5]
