@@ -11,14 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::thread;
+use std::collections::btree_map::{BTreeMap, Entry as BTreeMapEntry};
 use std::{error, result};
+use std::sync::mpsc::{channel, Receiver};
+
+use protobuf::RepeatedField;
+use grpc::Error as GrpcError;
+
+use rocksdb::{DB as RocksDB, DBIterator, Kv};
+use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::*;
 use kvproto::raft_serverpb;
 use kvproto::eraftpb;
 
+use raftstore::errors::Error as RaftstoreError;
 use raftstore::store::{keys, Engines};
-use raftstore::store::engine::Peekable;
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use raftstore::store::engine::{IterOption, Iterable, Peekable};
+use storage::{is_short_value, CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use storage::types::Key;
+use storage::mvcc::{Lock, Write, WriteType};
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -35,6 +47,8 @@ quick_error!{
         }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
+            from(e: RaftstoreError) -> (Box::new(e))
+            from(e: GrpcError) -> (Box::new(e))
             cause(err.as_ref())
             description(err.description())
             display("{:?}", err)
@@ -117,6 +131,200 @@ impl Debugger {
             Err(e) => Err(box_err!(e)),
         }
     }
+
+    pub fn scan_mvcc<D, E>(&self, req: ScanMvccRequest, dealer: &mut D) -> Result<()>
+    where
+        Error: ::std::convert::From<E>,
+        D: MvccKVDealer<Error = E>,
+    {
+        let from_key = keys::data_key(req.get_from_key());
+        let to_key = keys::data_key(req.get_to_key());
+
+        let lock_rx = self.mvcc_kvs(CF_LOCK, from_key.clone(), to_key.clone());
+        let default_rx = self.mvcc_kvs_grouped(CF_DEFAULT, from_key.clone(), to_key.clone());
+        let write_rx = self.mvcc_kvs_grouped(CF_WRITE, from_key.clone(), to_key.clone());
+
+        let mut mvcc_infos: BTreeMap<Vec<u8>, (MvccInfo, bool, bool, bool)> = BTreeMap::new();
+        let (mut want_lock, mut want_default, mut want_write) = (true, true, true);
+        let (mut m_l, mut m_d, mut m_w) = (None, None, None);
+        loop {
+            if !want_lock && !want_default && !want_write {
+                break;
+            }
+            if want_lock {
+                if let Ok(kv) = lock_rx.recv() {
+                    let key = keys::origin_key(&kv.0).to_vec();
+                    let lock = Lock::parse(&kv.1).unwrap();
+                    let mut lock_info = LockInfo::default();
+                    lock_info.set_primary_lock(lock.primary);
+                    lock_info.set_lock_version(lock.ts);
+                    lock_info.set_key(kv.0.to_vec());
+                    lock_info.set_lock_ttl(lock.ttl);
+                    match mvcc_infos.entry(key.clone()) {
+                        BTreeMapEntry::Vacant(ent) => {
+                            let mut mvcc_info = MvccInfo::default();
+                            mvcc_info.set_lock(lock_info);
+                            ent.insert((mvcc_info, true, false, false));
+                        }
+                        BTreeMapEntry::Occupied(mut ent) => {
+                            let mut mvcc_and_flags = ent.get_mut();
+                            mvcc_and_flags.0.set_lock(lock_info);
+                            mvcc_and_flags.1 = true;
+                        }
+                    }
+                    m_l = Some(key);
+                } else {
+                    m_l = Some(vec![0xffu8]);
+                }
+                want_lock = false;
+            }
+            if want_default {
+                if let Ok(vec_kv) = default_rx.recv() {
+                    let key = must_truncate_data_key(&vec_kv[0].0).encoded().to_vec();
+                    let mut values = RepeatedField::new();
+                    for kv in vec_kv.into_iter() {
+                        let key = Key::from_encoded(keys::origin_key(&kv.0).to_owned());
+                        let mut value_info = ValueInfo::default();
+                        value_info.set_is_short_value(is_short_value(&kv.1));
+                        value_info.set_value(kv.1);
+                        value_info.set_ts(key.decode_ts().unwrap());
+                        values.push(value_info);
+                    }
+                    match mvcc_infos.entry(key.clone()) {
+                        BTreeMapEntry::Vacant(ent) => {
+                            let mut mvcc_info = MvccInfo::default();
+                            mvcc_info.set_values(values);
+                            ent.insert((mvcc_info, false, true, false));
+                        }
+                        BTreeMapEntry::Occupied(mut ent) => {
+                            let mut mvcc_and_flags = ent.get_mut();
+                            mvcc_and_flags.0.set_values(values);
+                            mvcc_and_flags.2 = true;
+                        }
+                    }
+                    m_d = Some(key);
+                } else {
+                    m_d = Some(vec![0xffu8]);
+                }
+                want_default = false;
+            }
+            if want_write {
+                if let Ok(vec_kv) = write_rx.recv() {
+                    let key = must_truncate_data_key(&vec_kv[0].0).encoded().to_vec();
+                    let mut writes = RepeatedField::new();
+                    for kv in vec_kv.into_iter() {
+                        let key = Key::from_encoded(keys::origin_key(&kv.0).to_owned());
+                        let write = Write::parse(&kv.1).unwrap();
+                        let mut write_info = WriteInfo::default();
+                        write_info.set_start_ts(write.start_ts);
+                        match write.write_type {
+                            WriteType::Put => write_info.set_field_type(Op::Put),
+                            WriteType::Delete => write_info.set_field_type(Op::Del),
+                            WriteType::Lock => write_info.set_field_type(Op::Lock),
+                            WriteType::Rollback => write_info.set_field_type(Op::Rollback),
+                        }
+                        write_info.set_commit_ts(key.decode_ts().unwrap());
+                        writes.push(write_info);
+                    }
+                    match mvcc_infos.entry(key.clone()) {
+                        BTreeMapEntry::Vacant(ent) => {
+                            let mut mvcc_info = MvccInfo::default();
+                            mvcc_info.set_writes(writes);
+                            ent.insert((mvcc_info, false, false, true));
+                        }
+                        BTreeMapEntry::Occupied(mut ent) => {
+                            let mut mvcc_and_flags = ent.get_mut();
+                            mvcc_and_flags.0.set_writes(writes);
+                            mvcc_and_flags.3 = true;
+                        }
+                    }
+                    m_w = Some(key);
+                } else {
+                    m_w = Some(vec![0xffu8]);
+                }
+                want_write = false;
+            }
+            for key in mvcc_infos.keys().cloned().collect::<Vec<_>>() {
+                let mvcc_and_flags = mvcc_infos.remove(&key).unwrap();
+                let g_l = mvcc_and_flags.1 || m_l.as_ref().map(|k| &key <= k).unwrap_or(true);
+                let g_d = mvcc_and_flags.2 || m_d.as_ref().map(|k| &key <= k).unwrap_or(true);
+                let g_w = mvcc_and_flags.3 || m_w.as_ref().map(|k| &key <= k).unwrap_or(true);
+                if g_l && g_d && g_w {
+                    try!(dealer.deal(key, mvcc_and_flags.0).map_err(Error::from));
+                    if mvcc_and_flags.1 {
+                        want_lock = true;
+                    }
+                    if mvcc_and_flags.2 {
+                        want_default = true;
+                    }
+                    if mvcc_and_flags.3 {
+                        want_write = true;
+                    }
+                } else {
+                    mvcc_infos.insert(key, mvcc_and_flags);
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn mvcc_kvs(&self, cf: CfName, from: Vec<u8>, to: Vec<u8>) -> Receiver<Kv> {
+        let (tx, rx) = channel::<Kv>();
+        let db = self.engines.kv_engine.clone();
+        thread::spawn(move || -> Result<()> {
+            for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
+                tx.send(kv).unwrap();
+            }
+            Ok(())
+        });
+        rx
+    }
+
+    fn mvcc_kvs_grouped(&self, cf: CfName, from: Vec<u8>, to: Vec<u8>) -> Receiver<Vec<Kv>> {
+        let (tx, rx) = channel::<Vec<Kv>>();
+        let db = self.engines.kv_engine.clone();
+        thread::spawn(move || -> Result<()> {
+            let (mut cur, mut cur_key): (_, Option<Key>) = (Vec::new(), None);
+            for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
+                if let Some(key) = cur_key {
+                    if keys::origin_key(&kv.0).starts_with(key.encoded()) {
+                        cur_key = Some(key);
+                        cur.push(kv);
+                    } else {
+                        tx.send(cur).unwrap();
+                        cur_key = Some(must_truncate_data_key(&kv.0));
+                        cur = vec![kv];
+                    }
+                } else {
+                    cur_key = Some(must_truncate_data_key(&kv.0));
+                    cur.push(kv);
+                }
+            }
+            if !cur.is_empty() {
+                tx.send(cur).unwrap();
+            }
+            Ok(())
+        });
+        rx
+    }
+}
+
+pub trait MvccKVDealer {
+    type Error;
+    fn deal(&mut self, Vec<u8>, MvccInfo) -> ::std::result::Result<(), Self::Error>;
+}
+
+fn must_truncate_data_key(data_key: &[u8]) -> Key {
+    let k = Key::from_encoded(keys::origin_key(data_key).to_owned());
+    k.truncate_ts().unwrap()
+}
+
+fn gen_mvcc_iter<'a>(db: &'a RocksDB, cf: &str, from: &[u8], to: &[u8]) -> Result<DBIterator<'a>> {
+    let iter_option = IterOption::new(Some(to.to_owned()), false);
+    let mut iter = try!(db.new_iterator_cf(cf, iter_option).map_err(Error::from));
+    iter.seek(from.into());
+    Ok(iter)
 }
 
 pub fn validate_db_and_cf(db: DB, cf: &str) -> Result<()> {

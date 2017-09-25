@@ -11,14 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use grpc::{Error as GrpcError, WriteFlags};
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use futures::{future, Future};
+use futures::{future, Future, Sink};
 use futures_cpupool::{Builder, CpuPool};
+use kvproto::kvrpcpb::MvccInfo;
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
 
 use raftstore::store::Engines;
-use raftstore::store::debug::{Debugger, Error};
+use raftstore::store::debug::{Debugger, Error, MvccKVDealer};
 
 #[derive(Clone)]
 pub struct Service {
@@ -41,25 +43,27 @@ impl Service {
         P: Send + 'static,
         F: Future<Item = P, Error = Error> + Send + 'static,
     {
-        let on_error = move |e| {
-            error!("{} failed: {:?}", tag, e);
-        };
         let f = resp.then(|v| match v {
-            Ok(resp) => sink.success(resp).map_err(on_error),
-            Err(Error::NotFound(msg)) => {
-                let status = RpcStatus::new(RpcStatusCode::NotFound, Some(msg));
-                sink.fail(status).map_err(on_error)
-            }
-            Err(Error::InvalidArgument(msg)) => {
-                let status = RpcStatus::new(RpcStatusCode::InvalidArgument, Some(msg));
-                sink.fail(status).map_err(on_error)
-            }
-            Err(Error::Other(e)) => {
-                let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
-                sink.fail(status).map_err(on_error)
+            Ok(resp) => sink.success(resp),
+            Err(e) => {
+                let status = Service::error_to_status(e);
+                sink.fail(status)
             }
         });
-        ctx.spawn(f);
+        ctx.spawn(f.map_err(move |e| Service::on_grpc_error(tag, e)));
+    }
+
+    fn error_to_status(e: Error) -> RpcStatus {
+        let (code, msg) = match e {
+            Error::NotFound(msg) => (RpcStatusCode::NotFound, Some(msg)),
+            Error::InvalidArgument(msg) => (RpcStatusCode::InvalidArgument, Some(msg)),
+            Error::Other(e) => (RpcStatusCode::Unknown, Some(format!("{:?}", e))),
+        };
+        RpcStatus::new(code, msg)
+    }
+
+    fn on_grpc_error(tag: &'static str, e: GrpcError) {
+        error!("{} failed: {:?}", tag, e);
     }
 }
 
@@ -143,10 +147,55 @@ impl debugpb_grpc::Debug for Service {
 
     fn scan_mvcc(
         &self,
-        _: RpcContext,
-        _: ScanMvccRequest,
-        _: ServerStreamingSink<ScanMvccResponse>,
+        ctx: RpcContext,
+        req: ScanMvccRequest,
+        sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
-        unimplemented!()
+        let debugger = self.debugger.clone();
+        let deal_future = self.pool.spawn_fn(move || {
+            let mut dealer = MvccKVToSink(Some(sink));
+            let result = match debugger.scan_mvcc(req, &mut dealer) {
+                Ok(_) => Ok(dealer.0.unwrap()),
+                Err(e) => Err((dealer.0.unwrap(), e)),
+            };
+            future::result(result)
+        });
+
+        let finish_future = deal_future.then(|v| match v {
+            Ok(mut sink) => {
+                let f = future::poll_fn(move || sink.close())
+                    .map_err(|e| Service::on_grpc_error("scan_mvcc", e));
+                Box::new(f) as Box<Future<Item = (), Error = ()> + Send>
+            }
+            Err((sink, e)) => {
+                let status = Service::error_to_status(e);
+                let f = sink.fail(status)
+                    .map_err(|e| Service::on_grpc_error("scan_mvcc", e));
+                Box::new(f) as Box<Future<Item = (), Error = ()> + Send>
+            }
+        });
+        ctx.spawn(finish_future);
+    }
+}
+
+struct MvccKVToSink(Option<ServerStreamingSink<ScanMvccResponse>>);
+
+impl MvccKVDealer for MvccKVToSink {
+    type Error = GrpcError;
+
+    fn deal(&mut self, key: Vec<u8>, mvcc: MvccInfo) -> Result<(), GrpcError> {
+        let mut mvcc_resp = ScanMvccResponse::new();
+        mvcc_resp.set_key(key);
+        mvcc_resp.set_info(mvcc);
+
+        let sink = self.0.take().unwrap();
+        match sink.send((mvcc_resp, WriteFlags::default())).wait() {
+            Ok(s) => self.0 = Some(s),
+            Err(e) => {
+                error!("debug API scan_mvcc fail: {}", e);
+                return Err(e);
+            }
+        }
+        Ok(())
     }
 }
