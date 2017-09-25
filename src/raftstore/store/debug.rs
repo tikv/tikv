@@ -327,7 +327,7 @@ mod tests {
 
 
     #[test]
-    fn test_size() {
+    fn test_region_size() {
         let debugger = new_debugger();
         let engine = &debugger.engines.kv_engine;
 

@@ -143,7 +143,7 @@ impl debugpb_grpc::Debug for Service {
         mut req: RegionSizeRequest,
         sink: UnarySink<RegionSizeResponse>,
     ) {
-        const TAG: &'static str = "debug_get";
+        const TAG: &'static str = "debug_region_size";
 
         let region_id = req.get_region_id();
         let cfs = req.take_cfs().into_vec();
