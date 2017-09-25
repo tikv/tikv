@@ -171,7 +171,7 @@ mod test {
 
         let ctx = StatementContext::default();
         for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
-            let e = Expression::build(case, &ctx).unwrap();
+            let e = Expression::build(&ctx, case).unwrap();
 
             let i = e.eval_int(&ctx, &[]).unwrap_or(None);
             let r = e.eval_real(&ctx, &[]).unwrap_or(None);
