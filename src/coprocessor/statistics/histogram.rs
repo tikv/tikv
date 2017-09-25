@@ -40,7 +40,7 @@ impl Bucket {
         }
     }
 
-    fn append_repeated_item(&mut self) {
+    fn count_repeated(&mut self) {
         self.count += 1;
         self.repeats += 1;
         return;
@@ -48,7 +48,7 @@ impl Bucket {
 
     // insert a item bigger than current upper_bound,
     // we need data to set as upper_bound
-    fn append_diff_item(&mut self, data: Vec<u8>) {
+    fn append(&mut self, data: Vec<u8>) {
         self.upper_bound = data;
         self.count += 1;
         self.repeats = 1;
@@ -104,7 +104,7 @@ impl Histogram {
             // a same value only stored in a single bucket, we do not increase bucket
             // even if it exceeds per_bucket_limit.
             if bucket.upper_bound == data {
-                bucket.append_repeated_item();
+                bucket.count_repeated();
                 return;
             }
         }
@@ -114,7 +114,7 @@ impl Histogram {
         }
 
         if !self.is_last_bucket_full() {
-            self.buckets.last_mut().unwrap().append_diff_item(data);
+            self.buckets.last_mut().unwrap().append(data);
             return;
         }
 
