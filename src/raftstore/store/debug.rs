@@ -154,7 +154,7 @@ impl Debugger {
             if want_lock {
                 if let Ok(kv) = lock_rx.recv() {
                     let key = keys::origin_key(&kv.0).to_vec();
-                    let lock = Lock::parse(&kv.1).unwrap();
+                    let lock = box_try!(Lock::parse(&kv.1));
                     let mut lock_info = LockInfo::default();
                     lock_info.set_primary_lock(lock.primary);
                     lock_info.set_lock_version(lock.ts);
@@ -180,14 +180,14 @@ impl Debugger {
             }
             if want_default {
                 if let Ok(vec_kv) = default_rx.recv() {
-                    let key = must_truncate_data_key(&vec_kv[0].0).encoded().to_vec();
+                    let key = box_try!(truncate_data_key(&vec_kv[0].0)).encoded().to_vec();
                     let mut values = RepeatedField::new();
-                    for kv in vec_kv.into_iter() {
+                    for kv in vec_kv {
                         let key = Key::from_encoded(keys::origin_key(&kv.0).to_owned());
                         let mut value_info = ValueInfo::default();
                         value_info.set_is_short_value(is_short_value(&kv.1));
                         value_info.set_value(kv.1);
-                        value_info.set_ts(key.decode_ts().unwrap());
+                        value_info.set_ts(box_try!(key.decode_ts()));
                         values.push(value_info);
                     }
                     match mvcc_infos.entry(key.clone()) {
@@ -210,11 +210,11 @@ impl Debugger {
             }
             if want_write {
                 if let Ok(vec_kv) = write_rx.recv() {
-                    let key = must_truncate_data_key(&vec_kv[0].0).encoded().to_vec();
+                    let key = box_try!(truncate_data_key(&vec_kv[0].0)).encoded().to_vec();
                     let mut writes = RepeatedField::new();
-                    for kv in vec_kv.into_iter() {
+                    for kv in vec_kv {
                         let key = Key::from_encoded(keys::origin_key(&kv.0).to_owned());
-                        let write = Write::parse(&kv.1).unwrap();
+                        let write = box_try!(Write::parse(&kv.1));
                         let mut write_info = WriteInfo::default();
                         write_info.set_start_ts(write.start_ts);
                         match write.write_type {
@@ -223,7 +223,7 @@ impl Debugger {
                             WriteType::Lock => write_info.set_field_type(Op::Lock),
                             WriteType::Rollback => write_info.set_field_type(Op::Rollback),
                         }
-                        write_info.set_commit_ts(key.decode_ts().unwrap());
+                        write_info.set_commit_ts(box_try!(key.decode_ts()));
                         writes.push(write_info);
                     }
                     match mvcc_infos.entry(key.clone()) {
@@ -274,7 +274,7 @@ impl Debugger {
         let db = self.engines.kv_engine.clone();
         thread::spawn(move || -> Result<()> {
             for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
-                tx.send(kv).unwrap();
+                box_try!(tx.send(kv));
             }
             Ok(())
         });
@@ -292,17 +292,17 @@ impl Debugger {
                         cur_key = Some(key);
                         cur.push(kv);
                     } else {
-                        tx.send(cur).unwrap();
-                        cur_key = Some(must_truncate_data_key(&kv.0));
+                        box_try!(tx.send(cur));
+                        cur_key = Some(box_try!(truncate_data_key(&kv.0)));
                         cur = vec![kv];
                     }
                 } else {
-                    cur_key = Some(must_truncate_data_key(&kv.0));
+                    cur_key = Some(box_try!(truncate_data_key(&kv.0)));
                     cur.push(kv);
                 }
             }
             if !cur.is_empty() {
-                tx.send(cur).unwrap();
+                box_try!(tx.send(cur));
             }
             Ok(())
         });
@@ -315,9 +315,9 @@ pub trait MvccKVDealer {
     fn deal(&mut self, Vec<u8>, MvccInfo) -> ::std::result::Result<(), Self::Error>;
 }
 
-fn must_truncate_data_key(data_key: &[u8]) -> Key {
+fn truncate_data_key(data_key: &[u8]) -> Result<Key> {
     let k = Key::from_encoded(keys::origin_key(data_key).to_owned());
-    k.truncate_ts().unwrap()
+    k.truncate_ts().map_err(|e| box_err!(e))
 }
 
 fn gen_mvcc_iter<'a>(db: &'a RocksDB, cf: &str, from: &[u8], to: &[u8]) -> Result<DBIterator<'a>> {
