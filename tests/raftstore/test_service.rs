@@ -20,7 +20,7 @@ use tikv::raftstore::store::{keys, Mutable, Peekable};
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
 use kvproto::coprocessor::*;
-use kvproto::{debugpb, eraftpb, metapb};
+use kvproto::{debugpb, eraftpb, metapb, raft_serverpb};
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::debugpb_grpc::DebugClient;
 use rocksdb::Writable;
@@ -585,6 +585,76 @@ fn test_debug_raft_log() {
     req.set_region_id(region_id + 1);
     req.set_log_index(region_id + 1);
     match debug_client.raft_log(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+#[test]
+fn test_debug_region_info() {
+    let (cluster, leader, _) = must_new_cluster();
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
+    let debug_client = DebugClient::new(channel);
+
+    let raft_engine = cluster.get_raft_engine(leader.get_store_id());
+    let kv_engine = cluster.get_engine(leader.get_store_id());
+    let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
+
+    let region_id = 100;
+    let raft_state_key = keys::raft_state_key(region_id);
+    let mut raft_state = raft_serverpb::RaftLocalState::new();
+    raft_state.set_last_index(42);
+    raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+    assert_eq!(
+        raft_engine
+            .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
+            .unwrap()
+            .unwrap(),
+        raft_state
+    );
+
+    let apply_state_key = keys::apply_state_key(region_id);
+    let mut apply_state = raft_serverpb::RaftApplyState::new();
+    apply_state.set_applied_index(42);
+    kv_engine
+        .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
+        .unwrap();
+    assert_eq!(
+        kv_engine
+            .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
+            .unwrap()
+            .unwrap(),
+        apply_state
+    );
+
+    let region_state_key = keys::region_state_key(region_id);
+    let mut region_state = raft_serverpb::RegionLocalState::new();
+    region_state.set_state(raft_serverpb::PeerState::Tombstone);
+    kv_engine
+        .put_msg_cf(raft_cf, &region_state_key, &region_state)
+        .unwrap();
+    assert_eq!(
+        kv_engine
+            .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
+            .unwrap()
+            .unwrap(),
+        region_state
+    );
+
+    // Debug region_info
+    let mut req = debugpb::RegionInfoRequest::new();
+    req.set_region_id(region_id);
+    let mut resp = debug_client.region_info(req.clone()).unwrap();
+    assert_eq!(resp.take_raft_local_state(), raft_state);
+    assert_eq!(resp.take_raft_apply_state(), apply_state);
+    assert_eq!(resp.take_region_local_state(), region_state);
+
+    req.set_region_id(region_id + 1);
+    match debug_client.region_info(req).unwrap_err() {
         Error::RpcFailure(status) => {
             assert_eq!(status.status, RpcStatusCode::NotFound);
         }

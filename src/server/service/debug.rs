@@ -105,8 +105,36 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn region_info(&self, _: RpcContext, _: RegionInfoRequest, _: UnarySink<RegionInfoResponse>) {
-        unimplemented!()
+    fn region_info(
+        &self,
+        ctx: RpcContext,
+        req: RegionInfoRequest,
+        sink: UnarySink<RegionInfoResponse>,
+    ) {
+        const TAG: &'static str = "debug_region_log";
+
+        let region_id = req.get_region_id();
+
+        let f = self.pool
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.region_info(region_id)),
+            )
+            .map(|(raft_local_state, raft_apply_state, region_state)| {
+                let mut resp = RegionInfoResponse::new();
+                if let Some(raft_local_state) = raft_local_state {
+                    resp.set_raft_local_state(raft_local_state);
+                }
+                if let Some(raft_apply_state) = raft_apply_state {
+                    resp.set_raft_apply_state(raft_apply_state);
+                }
+                if let Some(region_state) = region_state {
+                    resp.set_region_local_state(region_state);
+                }
+                resp
+            });
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 
     fn region_size(

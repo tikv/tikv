@@ -79,6 +79,43 @@ impl Debugger {
         }
     }
 
+    pub fn region_info(
+        &self,
+        region_id: u64,
+    ) -> Result<
+        (
+            Option<raft_serverpb::RaftLocalState>,
+            Option<raft_serverpb::RaftApplyState>,
+            Option<raft_serverpb::RegionLocalState>,
+        ),
+    > {
+        let raft_state_key = keys::raft_state_key(region_id);
+        let raft_state = box_try!(
+            self.engines
+                .raft_engine
+                .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
+        );
+
+        let apply_state_key = keys::apply_state_key(region_id);
+        let apply_state = box_try!(
+            self.engines
+                .kv_engine
+                .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
+        );
+
+        let region_state_key = keys::region_state_key(region_id);
+        let region_state = box_try!(
+            self.engines
+                .kv_engine
+                .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
+        );
+
+        match (raft_state, apply_state, region_state) {
+            (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
+            (raft_state, apply_state, region_state) => Ok((raft_state, apply_state, region_state)),
+        }
+    }
+
     pub fn region_size<T: AsRef<str>>(
         &self,
         region_id: u64,
@@ -229,6 +266,65 @@ mod tests {
             _ => panic!("expect Error::NotFound(_)"),
         }
     }
+
+    #[test]
+    fn test_region_info() {
+        let debugger = new_debugger();
+        let raft_engine = &debugger.engines.raft_engine;
+        let kv_engine = &debugger.engines.kv_engine;
+        let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
+        let region_id = 1;
+
+        let raft_state_key = keys::raft_state_key(region_id);
+        let mut raft_state = raft_serverpb::RaftLocalState::new();
+        raft_state.set_last_index(42);
+        raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+        assert_eq!(
+            raft_engine
+                .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
+                .unwrap()
+                .unwrap(),
+            raft_state
+        );
+
+        let apply_state_key = keys::apply_state_key(region_id);
+        let mut apply_state = raft_serverpb::RaftApplyState::new();
+        apply_state.set_applied_index(42);
+        kv_engine
+            .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
+            .unwrap();
+        assert_eq!(
+            kv_engine
+                .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
+                .unwrap()
+                .unwrap(),
+            apply_state
+        );
+
+        let region_state_key = keys::region_state_key(region_id);
+        let mut region_state = raft_serverpb::RegionLocalState::new();
+        region_state.set_state(raft_serverpb::PeerState::Tombstone);
+        kv_engine
+            .put_msg_cf(raft_cf, &region_state_key, &region_state)
+            .unwrap();
+        assert_eq!(
+            kv_engine
+                .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
+                .unwrap()
+                .unwrap(),
+            region_state
+        );
+
+        assert_eq!(
+            debugger.region_info(region_id).unwrap(),
+            (Some(raft_state), Some(apply_state), Some(region_state))
+        );
+        match debugger.region_info(region_id + 1) {
+            Err(Error::NotFound(_)) => (),
+            _ => panic!("expect Error::NotFound(_)"),
+        }
+    }
+
 
     #[test]
     fn test_size() {
