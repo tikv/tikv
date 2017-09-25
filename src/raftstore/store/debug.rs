@@ -13,11 +13,9 @@
 
 use std::{error, result};
 use kvproto::debugpb::*;
-use kvproto::raft_serverpb;
-use kvproto::eraftpb;
+use kvproto::{eraftpb, raft_serverpb};
 
-use raftstore::store::{keys, Engines};
-use raftstore::store::engine::Peekable;
+use raftstore::store::{keys, Engines, Iterable, Peekable};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
 pub type Result<T> = result::Result<T, Error>;
@@ -68,6 +66,19 @@ impl Debugger {
         }
     }
 
+    pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<eraftpb::Entry> {
+        let key = keys::raft_log_key(region_id, log_index);
+        match self.engines.raft_engine.get_msg(&key) {
+            Ok(Some(entry)) => Ok(entry),
+            Ok(None) => Err(Error::NotFound(format!(
+                "raft log for region {} at index {}",
+                region_id,
+                log_index
+            ))),
+            Err(e) => Err(box_err!(e)),
+        }
+    }
+
     pub fn region_info(
         &self,
         region_id: u64,
@@ -105,15 +116,38 @@ impl Debugger {
         }
     }
 
-    pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<eraftpb::Entry> {
-        let key = keys::raft_log_key(region_id, log_index);
-        match self.engines.raft_engine.get_msg(&key) {
-            Ok(Some(entry)) => Ok(entry),
-            Ok(None) => Err(Error::NotFound(format!(
-                "raft log for region {} at index {}",
-                region_id,
-                log_index
-            ))),
+    pub fn region_size<T: AsRef<str>>(
+        &self,
+        region_id: u64,
+        cfs: Vec<T>,
+    ) -> Result<Vec<(T, usize)>> {
+        let region_state_key = keys::region_state_key(region_id);
+        match self.engines
+            .kv_engine
+            .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
+        {
+            Ok(Some(region_state)) => {
+                let region = region_state.get_region();
+                let start_key = &keys::data_key(region.get_start_key());
+                let end_key = &keys::data_end_key(region.get_end_key());
+                let mut sizes = vec![];
+                for cf in cfs {
+                    let mut size = 0;
+                    box_try!(self.engines.kv_engine.scan_cf(
+                        cf.as_ref(),
+                        start_key,
+                        end_key,
+                        false,
+                        &mut |_, v| {
+                            size += v.len();
+                            Ok(true)
+                        }
+                    ));
+                    sizes.push((cf, size));
+                }
+                Ok(sizes)
+            }
+            Ok(None) => Err(Error::NotFound(format!("none region {:?}", region_id))),
             Err(e) => Err(box_err!(e)),
         }
     }
@@ -138,6 +172,7 @@ mod tests {
 
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::debugpb::*;
+    use kvproto::metapb;
     use tempdir::TempDir;
 
     use raftstore::store::engine::Mutable;
@@ -287,6 +322,40 @@ mod tests {
         match debugger.region_info(region_id + 1) {
             Err(Error::NotFound(_)) => (),
             _ => panic!("expect Error::NotFound(_)"),
+        }
+    }
+
+
+    #[test]
+    fn test_region_size() {
+        let debugger = new_debugger();
+        let engine = &debugger.engines.kv_engine;
+
+        let region_id = 1;
+        let region_state_key = keys::region_state_key(region_id);
+        let mut region = metapb::Region::new();
+        region.set_id(region_id);
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"zz".to_vec());
+        let mut state = raft_serverpb::RegionLocalState::new();
+        state.set_region(region);
+        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+        engine
+            .put_msg_cf(cf_raft, &region_state_key, &state)
+            .unwrap();
+
+        let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE];
+        let (k, v) = (keys::data_key(b"k"), b"v");
+        for cf in &cfs {
+            let cf_handle = engine.cf_handle(cf).unwrap();
+            engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+        }
+
+        let sizes = debugger.region_size(region_id, cfs.clone()).unwrap();
+        assert_eq!(sizes.len(), 4);
+        for (cf, size) in sizes {
+            cfs.iter().find(|&&c| c == cf).unwrap();
+            assert!(size > 0);
         }
     }
 }
