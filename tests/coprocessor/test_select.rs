@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, HashMap};
+use std::mem;
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
@@ -133,11 +134,9 @@ impl Iterator for DAGChunkSpliter {
                 self.datums = data.decode().unwrap();
                 continue;
             }
-            let mut cols = Vec::with_capacity(self.col_cnt);
-            for _ in 0..self.col_cnt {
-                assert_eq!(self.datums.is_empty(), false);
-                cols.push(self.datums.remove(0))
-            }
+            assert_eq!(self.datums.len() >= self.col_cnt, true);
+            let mut cols = self.datums.split_off(self.col_cnt);
+            mem::swap(&mut self.datums, &mut cols);
             return Some(cols);
         }
     }
@@ -251,6 +250,7 @@ impl Table {
             let mut handle_info = ColumnInfo::new();
             handle_info.set_tp(TYPE_LONG);
             handle_info.set_column_id(-1);
+            handle_info.set_pk_handle(true);
             idx_info.mut_columns().push(handle_info);
         }
         idx_info
