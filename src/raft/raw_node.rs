@@ -245,12 +245,15 @@ impl<T: Storage> RawNode<T> {
     }
 
     // Propose proposes data be appended to the raft log.
-    pub fn propose(&mut self, data: Vec<u8>) -> Result<()> {
+    pub fn propose(&mut self, data: Vec<u8>, sync_log: bool) -> Result<()> {
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgPropose);
         m.set_from(self.raft.id);
         let mut e = Entry::new();
         e.set_data(data);
+        if sync_log {
+            e.set_sync_log(true);
+        }
         m.set_entries(RepeatedField::from_vec(vec![e]));
         self.raft.step(m)
     }
@@ -263,6 +266,7 @@ impl<T: Storage> RawNode<T> {
         let mut e = Entry::new();
         e.set_entry_type(EntryType::EntryConfChange);
         e.set_data(data);
+        e.set_sync_log(true);
         m.set_entries(RepeatedField::from_vec(vec![e]));
         self.raft.step(m)
     }
