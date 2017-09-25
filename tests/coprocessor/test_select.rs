@@ -31,7 +31,7 @@ use kvproto::coprocessor::{KeyRange, Request, Response};
 use tipb::select::{Chunk, DAGRequest, SelectRequest, SelectResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
 use tipb::schema::{self, ColumnInfo};
-use tipb::expression::{ByItem, Expr, ExprType};
+use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
 use protobuf::{Message, RepeatedField};
 
 use raftstore::util::MAX_LEADER_LEASE;
@@ -2177,11 +2177,16 @@ fn test_where_for_dag() {
         let mut value = Expr::new();
         value.set_tp(ExprType::String);
         value.set_val(String::from("2").into_bytes());
+        let mut right = Expr::new();
+        right.set_tp(ExprType::ScalarFunc);
+        right.set_sig(ScalarFuncSig::CastStringAsInt);
+        right.mut_children().push(value);
 
         let mut cond = Expr::new();
-        cond.set_tp(ExprType::LT);
+        cond.set_tp(ExprType::ScalarFunc);
+        cond.set_sig(ScalarFuncSig::LTInt);
         cond.mut_children().push(col);
-        cond.mut_children().push(value);
+        cond.mut_children().push(right);
         cond
     };
 
@@ -2222,7 +2227,6 @@ fn test_handle_truncate() {
             let mut value = Expr::new();
             value.set_tp(ExprType::String);
             value.set_val(String::from("2x").into_bytes());
-
             let mut cond = Expr::new();
             cond.set_tp(ExprType::LT);
             cond.mut_children().push(col);
@@ -2315,10 +2319,17 @@ fn test_handle_truncate_for_dag() {
             value.set_tp(ExprType::String);
             value.set_val(String::from("2x").into_bytes());
 
+            let mut right = Expr::new();
+            right.set_tp(ExprType::ScalarFunc);
+            right.set_sig(ScalarFuncSig::CastStringAsInt);
+            right.mut_children().push(value);
+
+
             let mut cond = Expr::new();
-            cond.set_tp(ExprType::LT);
+            cond.set_tp(ExprType::ScalarFunc);
+            cond.set_sig(ScalarFuncSig::LTInt);
             cond.mut_children().push(col);
-            cond.mut_children().push(value);
+            cond.mut_children().push(right);
             cond
         },
         {
@@ -2333,6 +2344,11 @@ fn test_handle_truncate_for_dag() {
             value.set_tp(ExprType::String);
             value.set_val(String::from("3x").into_bytes());
 
+            let mut int_3 = Expr::new();
+            int_3.set_tp(ExprType::ScalarFunc);
+            int_3.set_sig(ScalarFuncSig::CastStringAsInt);
+            int_3.mut_children().push(value);
+
             // count
             let mut col_count = Expr::new();
             col_count.set_tp(ExprType::ColumnRef);
@@ -2341,13 +2357,15 @@ fn test_handle_truncate_for_dag() {
 
             // "3x" + count
             let mut plus = Expr::new();
-            plus.set_tp(ExprType::Plus);
-            plus.mut_children().push(value);
+            plus.set_tp(ExprType::ScalarFunc);
+            plus.set_sig(ScalarFuncSig::PlusInt);
+            plus.mut_children().push(int_3);
             plus.mut_children().push(col_count);
 
             // id = "3x" + count
             let mut cond = Expr::new();
-            cond.set_tp(ExprType::EQ);
+            cond.set_tp(ExprType::ScalarFunc);
+            cond.set_sig(ScalarFuncSig::EQInt);
             cond.mut_children().push(col_id);
             cond.mut_children().push(plus);
             cond
