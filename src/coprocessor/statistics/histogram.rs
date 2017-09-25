@@ -142,7 +142,7 @@ impl Histogram {
 
     // It merges every two neighbor buckets.
     fn merge_buckets(&mut self) {
-        let bucket_num = (self.buckets_num >> 1) + (self.buckets_num & 1);
+        let bucket_num = self.buckets_num / 2 + self.buckets_num % 2;
         for id in 0..bucket_num {
             if id == 0 {
                 let (left, right) = self.buckets.split_at_mut(1);
@@ -151,7 +151,7 @@ impl Histogram {
                 left[0].repeats = right[0].repeats;
                 continue;
             }
-            let (left, right) = self.buckets.split_at_mut(id << 1);
+            let (left, right) = self.buckets.split_at_mut(id * 2);
             if right.len() == 1 {
                 mem::swap(&mut left[id], &mut right[0]);
                 continue;
@@ -161,8 +161,8 @@ impl Histogram {
             left[id].count = right[1].count;
             left[id].repeats = right[1].repeats;
         }
-        self.buckets.split_off(bucket_num);
-        self.per_bucket_limit <<= 1;
+        self.buckets.drain(bucket_num..);
+        self.per_bucket_limit *= 2;
     }
 }
 
