@@ -100,7 +100,7 @@ impl Debugger {
                         cf.as_ref(),
                         start_key,
                         end_key,
-                        true,
+                        false,
                         &mut |_, v| {
                             size += v.len();
                             Ok(true)
