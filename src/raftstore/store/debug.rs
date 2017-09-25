@@ -94,13 +94,15 @@ impl Debugger {
             .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key);
 
         match (raft_state, apply_state, region_state) {
+            (Err(e), Err(_), Err(_)) => Err(box_err!(e)),
             (Ok(None), Ok(None), Ok(None)) => {
                 Err(Error::NotFound(format!("info for region {}", region_id)))
             }
-            (Ok(raft_state), Ok(apply_state), Ok(region_state)) => {
-                Ok((raft_state, apply_state, region_state))
-            }
-            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(box_err!(e)),
+            (raft_state, apply_state, region_state) => Ok((
+                raft_state.unwrap_or_default(),
+                apply_state.unwrap_or_default(),
+                region_state.unwrap_or_default(),
+            )),
         }
     }
 
