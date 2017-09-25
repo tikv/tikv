@@ -285,13 +285,13 @@ mod test {
             let arg1 = datum_expr(lhs);
             let arg2 = datum_expr(rhs);
             {
-                let op = Expression::build(fncall_expr(op, &[arg1.clone(), arg2.clone()]), &ctx)
+                let op = Expression::build(&ctx, fncall_expr(op, &[arg1.clone(), arg2.clone()]))
                     .unwrap();
                 let res = op.eval_int(&ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
             {
-                let op = Expression::build(fncall_expr(op, &[arg2, arg1]), &ctx).unwrap();
+                let op = Expression::build(&ctx, fncall_expr(op, &[arg2, arg1])).unwrap();
                 let res = op.eval_int(&ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
@@ -345,7 +345,7 @@ mod test {
         let ctx = StatementContext::default();
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(fncall_expr(operator, &[arg1]), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(operator, &[arg1])).unwrap();
             let res = op.eval(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -403,7 +403,7 @@ mod test {
         let ctx = StatementContext::default();
         for (op, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(fncall_expr(op, &[arg1]), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(op, &[arg1])).unwrap();
             let res = op.eval_int(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -428,7 +428,7 @@ mod test {
         let ctx = StatementContext::default();
         for (op, argument) in tests {
             let arg = datum_expr(argument);
-            let op = Expression::build(fncall_expr(op, &[arg]), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(op, &[arg])).unwrap();
             let got = op.eval(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
@@ -444,7 +444,7 @@ mod test {
         let ctx = StatementContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op = Expression::build(fncall_expr(ScalarFuncSig::BitAndSig, args), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(ScalarFuncSig::BitAndSig, args)).unwrap();
             let res = op.eval(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -460,7 +460,7 @@ mod test {
         let ctx = StatementContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op = Expression::build(fncall_expr(ScalarFuncSig::BitOrSig, args), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(ScalarFuncSig::BitOrSig, args)).unwrap();
             let res = op.eval(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -476,7 +476,7 @@ mod test {
         let ctx = StatementContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op = Expression::build(fncall_expr(ScalarFuncSig::BitXorSig, args), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(ScalarFuncSig::BitXorSig, args)).unwrap();
             let res = op.eval(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -492,7 +492,7 @@ mod test {
         let ctx = StatementContext::default();
         for (arg, exp) in cases {
             let args = &[datum_expr(arg)];
-            let op = Expression::build(fncall_expr(ScalarFuncSig::BitNegSig, args), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(ScalarFuncSig::BitNegSig, args)).unwrap();
             let res = op.eval(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }

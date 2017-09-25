@@ -144,7 +144,7 @@ mod test {
             if sig == ScalarFuncSig::AbsUInt {
                 f.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
             }
-            let op = Expression::build(f, &ctx).unwrap();
+            let op = Expression::build(&ctx, f).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -156,7 +156,7 @@ mod test {
         let ctx = StatementContext::default();
         for tt in tests {
             let arg = datum_expr(tt.1);
-            let op = Expression::build(fncall_expr(tt.0, &[arg]), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(tt.0, &[arg])).unwrap();
             let got = op.eval(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
@@ -216,7 +216,7 @@ mod test {
         ctx.ignore_truncate = true; // for ceil decimal to int.
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut op = Expression::build(fncall_expr(sig, &[arg.clone()]), &ctx).unwrap();
+            let mut op = Expression::build(&ctx, fncall_expr(sig, &[arg.clone()])).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
@@ -283,7 +283,7 @@ mod test {
         ctx.ignore_truncate = true; // for ceil decimal to int.
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut op = Expression::build(fncall_expr(sig, &[arg.clone()]), &ctx).unwrap();
+            let mut op = Expression::build(&ctx, fncall_expr(sig, &[arg.clone()])).unwrap();
             if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }

@@ -106,7 +106,7 @@ mod test {
         let ctx = StatementContext::default();
         for (ii, exp) in expecteds.iter().enumerate().take(row.len()) {
             let c = col_expr(ii as i64);
-            let e = Expression::build(c, &ctx).unwrap();
+            let e = Expression::build(&ctx, c).unwrap();
 
             let i = e.eval_int(&ctx, &row).unwrap_or(None);
             let r = e.eval_real(&ctx, &row).unwrap_or(None);
