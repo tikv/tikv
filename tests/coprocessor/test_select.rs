@@ -38,7 +38,7 @@ use raftstore::util::MAX_LEADER_LEASE;
 use storage::sync_storage::SyncStorage;
 use storage::util::new_raft_engine;
 use tikv::coprocessor::select::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
-use tikv::raftstore::Result as RaftStoreResult;
+use tikv::coprocessor::Result as CopResult;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
@@ -66,7 +66,7 @@ impl MockCopSender {
     }
 }
 impl CopSender for MockCopSender {
-    fn send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
+    fn send(&self, _stats: CopRequestStatistics) -> CopResult<()> {
         Ok(())
     }
 }

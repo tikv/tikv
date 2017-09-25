@@ -31,7 +31,6 @@ use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
 use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
-use raftstore::Result as RaftStoreResult;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
@@ -74,7 +73,7 @@ pub struct Host<R: CopSender + 'static> {
 pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
 
 pub trait CopSender: Send + Clone {
-    fn send(&self, CopRequestStatistics) -> RaftStoreResult<()>;
+    fn send(&self, CopRequestStatistics) -> Result<()>;
 }
 
 struct CopContextFactory<R: CopSender + 'static> {
@@ -721,7 +720,7 @@ mod tests {
         }
     }
     impl CopSender for MockCopSender {
-        fn send(&self, _stats: CopRequestStatistics) -> RaftStoreResult<()> {
+        fn send(&self, _stats: CopRequestStatistics) -> Result<()> {
             Ok(())
         }
     }

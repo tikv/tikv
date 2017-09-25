@@ -23,10 +23,9 @@ use kvproto::debugpb_grpc::create_debug;
 use util::worker::Worker;
 use storage::Storage;
 use raftstore::store::{CopFlowStatistics, Engines, Msg, SnapManager, SnapshotStatusMsg};
-use raftstore::Result as RaftStoreResult;
 
 use super::{Config, Result};
-use coprocessor::{CopRequestStatistics, CopSender, EndPointHost, EndPointTask};
+use coprocessor::{CopRequestStatistics, CopSender, EndPointHost, EndPointTask, Result as CopResult};
 use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
@@ -65,10 +64,11 @@ impl<R: RaftStoreRouter + 'static> CopReport<R> {
 }
 
 impl<R: RaftStoreRouter + 'static> CopSender for CopReport<R> {
-    fn send(&self, stats: CopRequestStatistics) -> RaftStoreResult<()> {
-        self.router.send(Msg::CoprocessorStats {
+    fn send(&self, stats: CopRequestStatistics) -> CopResult<()> {
+        box_try!(self.router.send(Msg::CoprocessorStats {
             request_stats: stats as CopFlowStatistics,
-        })
+        }));
+        Ok(())
     }
 }
 
