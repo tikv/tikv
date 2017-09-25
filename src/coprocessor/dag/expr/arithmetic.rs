@@ -253,7 +253,7 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
+            let mut op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
@@ -327,7 +327,7 @@ mod test {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
             assert_eq!(got, tt.3);
         }
@@ -390,7 +390,7 @@ mod test {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
             assert_eq!(got, tt.3);
         }
@@ -448,7 +448,7 @@ mod test {
             let rus = mysql::has_unsigned_flag(rhs.get_field_type().get_flag());
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
+            let mut op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
@@ -488,7 +488,7 @@ mod test {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(fncall_expr(tt.0, &[lhs, rhs]), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
