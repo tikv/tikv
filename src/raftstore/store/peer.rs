@@ -146,6 +146,7 @@ impl ProposalQueue {
 pub struct ReadyContext<'a, T: 'a> {
     pub kv_wb: WriteBatch,
     pub raft_wb: WriteBatch,
+    pub sync_log: bool,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
     pub ready_res: Vec<(Ready, InvokeContext)>,
@@ -156,6 +157,7 @@ impl<'a, T> ReadyContext<'a, T> {
         ReadyContext {
             kv_wb: WriteBatch::new(),
             raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
+            sync_log: false,
             metrics: metrics,
             trans: t,
             ready_res: Vec::with_capacity(cap),
@@ -1364,8 +1366,9 @@ impl Peer {
             return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
         }
 
+        let sync_log = get_sync_log_from_request(&req);
         let propose_index = self.next_proposal_index();
-        try!(self.raft_group.propose(data));
+        try!(self.raft_group.propose(data, sync_log));
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -1700,6 +1703,16 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
     }
 
     Some(req.get_transfer_leader())
+}
+
+fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
+    if msg.has_admin_request() {
+        let req = msg.get_admin_request();
+        return req.get_cmd_type() == AdminCmdType::ChangePeer ||
+            req.get_cmd_type() == AdminCmdType::Split;
+    }
+
+    msg.get_header().get_sync_log()
 }
 
 fn make_transfer_leader_response() -> RaftCmdResponse {

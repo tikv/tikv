@@ -67,7 +67,16 @@ pub enum Msg {
     SplitCheckResult {
         region_id: u64,
         epoch: RegionEpoch,
+        // It's a data key, starts with `DATA_PREFIX_KEY`.
         split_key: Vec<u8>,
+    },
+
+    SplitRegion {
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        // It's an encoded key.
+        split_key: Vec<u8>,
+        callback: Callback,
     },
 
     ReportUnreachable { region_id: u64, to_peer_id: u64 },
@@ -112,6 +121,11 @@ impl fmt::Debug for Msg {
                 index,
                 escape(hash)
             ),
+            Msg::SplitRegion {
+                ref region_id,
+                ref split_key,
+                ..
+            } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
         }
     }
 }
