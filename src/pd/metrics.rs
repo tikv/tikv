@@ -41,7 +41,7 @@ lazy_static! {
             "Total number of raftstore pd worker validate peer task.",
             &["type"]
         ).unwrap();
-    
+
     pub static ref STORE_SIZE_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_raftstore_store_size_bytes",
