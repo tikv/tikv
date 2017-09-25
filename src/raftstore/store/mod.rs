@@ -20,8 +20,8 @@ pub mod bootstrap;
 pub mod cmd_resp;
 pub mod util;
 pub mod debug;
+pub mod store;
 
-mod store;
 mod peer;
 mod peer_storage;
 mod snap;

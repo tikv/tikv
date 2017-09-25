@@ -32,10 +32,9 @@ use util::rocksdb::*;
 use pd::{PdClient, RegionStat};
 use raftstore::store::Msg;
 use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
-use raftstore::store::metrics::*;
+use pd::metrics::*;
 use raftstore::store::store::StoreInfo;
 use raftstore::store::Callback;
-use super::metrics::*;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {

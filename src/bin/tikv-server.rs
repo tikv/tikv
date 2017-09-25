@@ -62,6 +62,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
+use tikv::util::worker::FutureWorker;
 use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -188,10 +189,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     );
     let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
 
-    // Create pd client, snapshot manager, server.
+    // Create pd client and pd work, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
     let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
+    let pd_worker = FutureWorker::new("pd worker");
+    // Create Server
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
@@ -216,6 +219,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         trans,
         snap_mgr,
         snap_status_receiver,
+        pd_worker,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 

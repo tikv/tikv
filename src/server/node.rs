@@ -20,11 +20,13 @@ use std::process;
 use mio::EventLoop;
 use rocksdb::DB;
 
-use pd::{Error as PdError, PdClient, INVALID_ID};
+use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
+use util::worker::FutureWorker;
+
 use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SnapManager,
                        SnapshotStatusMsg, Store, StoreChannel, Transport};
 use super::Result;
@@ -124,6 +126,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         snap_status_receiver: Receiver<SnapshotStatusMsg>,
+        pd_work: FutureWorker<PdTask>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -160,7 +163,8 @@ where
             engines,
             trans,
             snap_mgr,
-            snap_status_receiver
+            snap_status_receiver,
+            pd_work,
         ));
         Ok(())
     }
@@ -316,6 +320,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
+    #[allow(too_many_arguments)]
     fn start_store<T>(
         &mut self,
         mut event_loop: EventLoop<Store<T, C>>,
@@ -324,6 +329,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
+        pd_work: FutureWorker<PdTask>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -346,10 +352,11 @@ where
                 sender: sender,
                 snapshot_status_receiver: snapshot_status_receiver,
             };
-            let mut store = match Store::new(ch, store, cfg, engines, trans, pd_client, snap_mgr) {
-                Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                Ok(s) => s,
-            };
+            let mut store =
+                match Store::new(ch, store, cfg, engines, trans, pd_client, snap_mgr, pd_work) {
+                    Err(e) => panic!("construct store {} err {:?}", store_id, e),
+                    Ok(s) => s,
+                };
             tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);

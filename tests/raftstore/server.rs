@@ -30,7 +30,7 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{store, Error, Result};
 use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
 use tikv::util::transport::SendCh;
-use tikv::util::worker::Worker;
+use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{CfName, Engine};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
@@ -135,6 +135,7 @@ impl Simulator for ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
+        let pd_worker = FutureWorker::new("pd worker");
 
         // Create node.
         let mut node = Node::new(
@@ -149,6 +150,7 @@ impl Simulator for ServerCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
+            pd_worker,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

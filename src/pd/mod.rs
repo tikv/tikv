@@ -17,9 +17,11 @@ mod client;
 mod util;
 
 pub mod errors;
+pub mod pd;
 pub use self::errors::{Error, Result};
 pub use self::client::RpcClient;
 pub use self::util::validate_endpoints;
+pub use self::pd::{Runner as PdRunner, Task as PdTask};
 
 use kvproto::metapb;
 use kvproto::pdpb;

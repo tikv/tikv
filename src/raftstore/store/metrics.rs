@@ -63,13 +63,6 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_SIZE_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
-            "tikv_raftstore_store_size_bytes",
-            "Size of raftstore storage.",
-            &["type"]
-        ).unwrap();
-
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_raftstore_snapshot_traffic_total",

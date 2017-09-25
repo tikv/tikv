@@ -18,6 +18,7 @@ use tikv::raftstore::store::{bootstrap_store, create_event_loop, keys, Engines, 
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::util::rocksdb;
+use tikv::util::worker::FutureWorker;
 use tempdir::TempDir;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
@@ -69,6 +70,7 @@ fn test_node_bootstrap_with_prepared_data() {
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
     let (_, snapshot_status_receiver) = mpsc::channel();
+    let pd_worker = FutureWorker::new("pd worker");
 
 
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
@@ -99,6 +101,7 @@ fn test_node_bootstrap_with_prepared_data() {
         simulate_trans,
         snap_mgr,
         snapshot_status_receiver,
+        pd_worker,
     ).unwrap();
     assert!(
         engine
