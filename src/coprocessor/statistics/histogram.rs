@@ -14,6 +14,7 @@
 // FIXME: remove following later
 #![allow(dead_code)]
 
+use std::mem;
 use protobuf::RepeatedField;
 use tipb::analyze;
 
@@ -96,7 +97,7 @@ impl Histogram {
         hist
     }
 
-    // insert a data bigger or equal than max value in current histogram.
+    // insert a data bigger than or equal to the max value in current histogram.
     pub fn append(&mut self, data: Vec<u8>) {
         if let Some(bucket) = self.buckets.last_mut() {
             // The new item has the same value as last bucket value, to ensure that
@@ -141,24 +142,27 @@ impl Histogram {
 
     // It merges every two neighbor buckets.
     fn merge_buckets(&mut self) {
-        self.buckets = {
-            let mut buckets = Vec::with_capacity(self.buckets.len() / 2 + (self.buckets.len() & 1));
-            let mut iter = self.buckets.drain(..);
-            while let Some(first) = iter.next() {
-                let bucket = match iter.next() {
-                    Some(second) => Bucket::new(
-                        second.count,
-                        second.upper_bound,
-                        first.lower_bound,
-                        second.repeats,
-                    ),
-                    None => first,
-                };
-                buckets.push(bucket);
+        let bucket_num = (self.buckets_num >> 1) + (self.buckets_num & 1);
+        for id in 0..bucket_num {
+            if id == 0 {
+                let (left, right) = self.buckets.split_at_mut(1);
+                mem::swap(&mut left[0].upper_bound, &mut right[0].upper_bound);
+                left[0].count = right[0].count;
+                left[0].repeats = right[0].repeats;
+                continue;
             }
-            buckets
-        };
-        self.per_bucket_limit *= 2;
+            let (left, right) = self.buckets.split_at_mut(id << 1);
+            if right.len() == 1 {
+                mem::swap(&mut left[id], &mut right[0]);
+                continue;
+            }
+            mem::swap(&mut left[id].lower_bound, &mut right[0].lower_bound);
+            mem::swap(&mut left[id].upper_bound, &mut right[1].upper_bound);
+            left[id].count = right[1].count;
+            left[id].repeats = right[1].repeats;
+        }
+        self.buckets.split_off(bucket_num);
+        self.per_bucket_limit <<= 1;
     }
 }
 
