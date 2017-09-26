@@ -1101,16 +1101,14 @@ impl PeerStorage {
         let snapshot_index = if raft::is_empty_snap(&ready.snapshot) {
             0
         } else {
-            let f = || fail_point!("raft_before_apply_snap");
-            f();
+            fail_point!("raft_before_apply_snap");
             try!(self.apply_snapshot(
                 &mut ctx,
                 &ready.snapshot,
                 &ready_ctx.kv_wb,
                 &ready_ctx.raft_wb
             ));
-            let f = || fail_point!("raft_after_apply_snap");
-            f();
+            fail_point!("raft_after_apply_snap");
 
             last_index(&ctx.raft_state)
         };

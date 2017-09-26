@@ -1081,8 +1081,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
         // otherwise, if program restart happen between two write, raft log will be removed,
         // but region state may not changed in disk.
-        let f = || fail_point!("raft_before_save");
-        f();
+        fail_point!("raft_before_save");
         if !kv_wb.is_empty() {
             // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
@@ -1093,8 +1092,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
         }
-        let f = || fail_point!("raft_between_save");
-        f();
+        fail_point!("raft_between_save");
 
         if !raft_wb.is_empty() {
             // RaftLocalState, Raft Log Entry
@@ -1106,8 +1104,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
         }
-        let f = || fail_point!("raft_after_save");
-        f();
+        fail_point!("raft_after_save");
 
         let mut ready_results = Vec::with_capacity(append_res.len());
         for (mut ready, invoke_ctx) in append_res {
