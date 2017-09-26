@@ -44,7 +44,7 @@ static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 const TYPE_VAR_CHAR: i32 = 1;
 const TYPE_LONG: i32 = 2;
 
-fn next_id() -> i64 {
+pub fn next_id() -> i64 {
     ID_GENERATOR.fetch_add(1, Ordering::Relaxed) as i64
 }
 
@@ -161,7 +161,7 @@ impl ColumnBuilder {
     }
 }
 
-struct Table {
+pub struct Table {
     id: i64,
     handle_id: i64,
     cols: BTreeMap<i64, Column>,
@@ -176,7 +176,7 @@ impl Table {
         tb_info
     }
 
-    fn get_table_columns(&self) -> Vec<ColumnInfo> {
+    pub fn get_table_columns(&self) -> Vec<ColumnInfo> {
         let mut tb_info = Vec::new();
         for col in self.cols.values() {
             let mut c_info = ColumnInfo::new();
@@ -204,6 +204,28 @@ impl Table {
             idx_info.mut_columns().push(c_info);
         }
         idx_info
+    }
+
+    pub fn get_select_range(&self) -> KeyRange {
+        let mut range = KeyRange::new();
+        let mut buf = Vec::with_capacity(8);
+        buf.encode_i64(i64::MIN).unwrap();
+        range.set_start(table::encode_row_key(self.id, &buf));
+        buf.clear();
+        buf.encode_i64(i64::MAX).unwrap();
+        range.set_end(table::encode_row_key(self.id, &buf));
+        range
+    }
+
+    pub fn get_index_range(&self, idx: i64) -> KeyRange {
+        let mut range = KeyRange::new();
+        let mut buf = Vec::with_capacity(8);
+        buf.encode_i64(i64::MIN).unwrap();
+        range.set_start(table::encode_index_seek_key(self.id, idx, &buf));
+        buf.clear();
+        buf.encode_i64(i64::MAX).unwrap();
+        range.set_end(table::encode_index_seek_key(self.id, idx, &buf));
+        range
     }
 }
 
@@ -434,21 +456,11 @@ impl<'a> Select<'a> {
         }
         self.sel.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
         req.set_data(self.sel.write_to_bytes().unwrap());
-        let mut range = KeyRange::new();
-        let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(i64::MIN).unwrap();
-        if self.idx < 0 {
-            range.set_start(table::encode_row_key(self.table.id, &buf));
+        let range = if self.idx < 0 {
+            self.table.get_select_range()
         } else {
-            range.set_start(table::encode_index_seek_key(self.table.id, self.idx, &buf));
-        }
-        buf.clear();
-        buf.encode_i64(i64::MAX).unwrap();
-        if self.idx < 0 {
-            range.set_end(table::encode_row_key(self.table.id, &buf));
-        } else {
-            range.set_end(table::encode_index_seek_key(self.table.id, self.idx, &buf));
-        }
+            self.table.get_index_range(self.idx)
+        };
         req.set_ranges(RepeatedField::from_vec(vec![range]));
         req
     }
@@ -486,7 +498,7 @@ impl<'a> Delete<'a> {
     }
 }
 
-struct Store {
+pub struct Store {
     store: SyncStorage,
     current_ts: u64,
     handles: Vec<Vec<u8>>,
@@ -558,15 +570,15 @@ fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
 }
 
 /// An example table for test purpose.
-struct ProductTable {
+pub struct ProductTable {
     id: Column,
     name: Column,
     count: Column,
-    table: Table,
+    pub table: Table,
 }
 
 impl ProductTable {
-    fn new() -> ProductTable {
+    pub fn new() -> ProductTable {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
             .primary_key(true)
@@ -625,7 +637,7 @@ fn init_data_with_engine_and_commit(
     (store, end_point)
 }
 
-fn init_data_with_commit(
+pub fn init_data_with_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
@@ -706,15 +718,7 @@ impl DAGSelect {
         scan.set_columns(columns_info.clone());
         exec.set_idx_scan(scan);
 
-        let mut range = KeyRange::new();
-
-        let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(i64::MIN).unwrap();
-        range.set_start(table::encode_index_seek_key(table.id, idx, &buf));
-        buf.clear();
-        buf.encode_i64(i64::MAX).unwrap();
-        range.set_end(table::encode_index_seek_key(table.id, idx, &buf));
-
+        let range = table.get_index_range(idx);
         DAGSelect {
             execs: vec![exec],
             cols: columns_info.to_vec(),
@@ -1556,7 +1560,7 @@ fn test_reverse() {
     end_point.stop().unwrap().join().unwrap();
 }
 
-fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
+pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = mpsc::channel();
     let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
     end_point.schedule(EndPointTask::Request(req)).unwrap();
