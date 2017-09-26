@@ -44,7 +44,7 @@ use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
 use pd::INVALID_ID;
 
-use super::store::Store;
+use super::store::{Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::util;
 use super::msg::Callback;
@@ -876,7 +876,12 @@ impl Peer {
         }
     }
 
-    pub fn post_apply(&mut self, res: &ApplyRes, groups: &mut HashSet<u64>) {
+    pub fn post_apply(
+        &mut self,
+        res: &ApplyRes,
+        groups: &mut HashSet<u64>,
+        store_stat: &mut StoreStat,
+    ) {
         if self.is_applying_snapshot() {
             panic!("{} should not applying snapshot.", self.tag);
         }
@@ -892,6 +897,8 @@ impl Peer {
         self.mut_store().applied_index_term = res.applied_index_term;
         self.peer_stat.written_keys += res.metrics.written_keys;
         self.peer_stat.written_bytes += res.metrics.written_bytes;
+        store_stat.engine_total_bytes_written += res.metrics.written_bytes;
+        store_stat.engine_total_keys_written += res.metrics.written_keys;
 
         let diff = if has_split {
             self.delete_keys_hint = res.metrics.delete_keys_hint;

@@ -103,10 +103,10 @@ pub struct StoreStat {
     pub engine_total_bytes_read: u64,
     pub engine_total_keys_read: u64,
 
-    pub engine_interval_bytes_written: u64,
-    pub engine_interval_keys_written: u64,
-    pub engine_interval_bytes_read: u64,
-    pub engine_interval_keys_read: u64,
+    pub engine_last_total_bytes_written: u64,
+    pub engine_last_total_keys_written: u64,
+    pub engine_last_total_bytes_read: u64,
+    pub engine_last_total_keys_read: u64,
 }
 
 impl Default for StoreStat {
@@ -122,10 +122,10 @@ impl Default for StoreStat {
             engine_total_bytes_read: 0,
             engine_total_keys_read: 0,
 
-            engine_interval_bytes_written: 0,
-            engine_interval_keys_written: 0,
-            engine_interval_bytes_read: 0,
-            engine_interval_keys_read: 0,
+            engine_last_total_bytes_written: 0,
+            engine_last_total_keys_written: 0,
+            engine_last_total_bytes_read: 0,
+            engine_last_total_keys_read: 0,
         }
     }
 }
@@ -673,7 +673,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Ok(ApplyTaskRes::Applys(multi_res)) => for res in multi_res {
                     if let Some(p) = self.region_peers.get_mut(&res.region_id) {
                         debug!("{} async apply finish: {:?}", p.tag, res);
-                        p.post_apply(&res, &mut self.pending_raft_groups);
+                        p.post_apply(&res, &mut self.pending_raft_groups, &mut self.store_stat);
                     }
                     self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
                     self.on_ready_result(res.region_id, res.exec_res);
@@ -1692,31 +1692,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.store_stat.region_keys_read.flush();
     }
 
-    fn on_report_store_flow(&mut self) {
-        let mut total_bytes_written: u64 = 0;
-        let mut total_keys_written: u64 = 0;
-        let mut total_bytes_read: u64 = 0;
-        let mut total_keys_read: u64 = 0;
-        for peer in self.region_peers.values_mut() {
-            total_bytes_written += peer.peer_stat.written_bytes;
-            total_keys_written += peer.peer_stat.written_keys;
-            total_bytes_read += peer.peer_stat.read_bytes;
-            total_keys_read += peer.peer_stat.read_keys;
-
-        }
-        self.store_stat.engine_interval_bytes_written =
-            total_bytes_written - self.store_stat.engine_total_bytes_written;
-        self.store_stat.engine_interval_keys_written =
-            total_keys_written - self.store_stat.engine_total_keys_written;
-        self.store_stat.engine_interval_bytes_read =
-            total_bytes_read - self.store_stat.engine_total_bytes_read;
-        self.store_stat.engine_interval_keys_read =
-            total_keys_read - self.store_stat.engine_interval_keys_read;
-
-        self.store_stat.engine_total_bytes_written = total_bytes_written;
-        self.store_stat.engine_total_keys_written = total_keys_written;
-        self.store_stat.engine_total_bytes_read = total_bytes_read;
-        self.store_stat.engine_total_keys_read = total_keys_written;
+    fn on_update_store_flow(&mut self) {
+        self.store_stat.engine_last_total_bytes_written =
+            self.store_stat.engine_total_bytes_written;
+        self.store_stat.engine_last_total_keys_written = self.store_stat.engine_total_keys_written;
+        self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
+        self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
     }
 
     #[allow(if_same_then_else)]
@@ -2029,10 +2010,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_start_time(self.start_time.sec as u32);
 
         // report store write flow to pd
-        stats.set_bytes_read(self.store_stat.engine_interval_bytes_read);
-        stats.set_keys_read(self.store_stat.engine_interval_keys_read);
-        stats.set_bytes_written(self.store_stat.engine_interval_bytes_written);
-        stats.set_keys_written(self.store_stat.engine_interval_keys_written);
+        stats.set_bytes_written(
+            self.store_stat.engine_total_bytes_written -
+                self.store_stat.engine_last_total_bytes_written,
+        );
+        stats.set_keys_written(
+            self.store_stat.engine_total_keys_written -
+                self.store_stat.engine_last_total_keys_written,
+        );
+        stats.set_bytes_read(
+            self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
+        );
+        stats.set_keys_read(
+            self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
+        );
 
 
         stats.set_is_busy(self.is_busy);
@@ -2053,8 +2044,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        self.on_report_store_flow();
         self.store_heartbeat_pd();
+        self.on_update_store_flow();
         self.register_pd_store_heartbeat_tick(event_loop);
     }
 
@@ -2193,6 +2184,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 peer.peer_stat.read_bytes += stats.read_bytes as u64;
                 peer.peer_stat.read_keys += stats.read_keys as u64;
+                self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
+                self.store_stat.engine_total_keys_read += stats.read_keys as u64;
             }
         }
     }
