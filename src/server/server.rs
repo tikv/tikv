@@ -72,6 +72,19 @@ impl<R: RaftStoreRouter + 'static> CopSender for CopReport<R> {
     }
 }
 
+#[derive(Clone)]
+struct MockCopSender {}
+impl MockCopSender {
+    fn new() -> MockCopSender {
+        MockCopSender {}
+    }
+}
+impl CopSender for MockCopSender {
+    fn send(&self, _stats: CopRequestStatistics) -> CopResult<()> {
+        Ok(())
+    }
+}
+
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(too_many_arguments)]
     pub fn new(
@@ -157,7 +170,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
             cfg,
-            CopReport::new(self.raft_router.clone()),
+            MockCopSender::new(),
         );
         box_try!(
             self.end_point_worker
