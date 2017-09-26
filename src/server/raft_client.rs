@@ -11,8 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ffi::CString;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use std::net::SocketAddr;
 
 use futures::sync::mpsc::{self, UnboundedSender};
@@ -29,6 +30,8 @@ const INITIAL_BUFFER_CAP: usize = 1024;
 use util::collections::HashMap;
 use super::{Config, Error, Result};
 use super::metrics::*;
+
+static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
 struct Conn {
     stream: UnboundedSender<Vec<(RaftMessage, WriteFlags)>>,
@@ -50,6 +53,11 @@ impl Conn {
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
+            // hack: so it's different args, grpc will always create a new connection.
+            .raw_cfg_int(
+                CString::new("random id").unwrap(),
+                CONN_ID.fetch_add(1, Ordering::SeqCst),
+            )
             .connect(&format!("{}", addr));
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
