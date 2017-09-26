@@ -241,7 +241,7 @@ impl Table {
             c_info.set_tp(col.col_type);
             c_info.set_column_id(col.id);
             if col.id == self.handle_id {
-                c_info.set_pk_handle(col.id == self.handle_id);
+                c_info.set_pk_handle(true);
                 has_pk = true
             }
             idx_info.mut_columns().push(c_info);
