@@ -140,7 +140,7 @@ impl Histogram {
     // It merges every two neighbor buckets.
     fn merge_buckets(&mut self) {
         let bucket_num = (self.buckets_num + 1) / 2;
-        if bucket_num > 1 {
+        if self.buckets_num > 1 {
             let (left, right) = self.buckets.split_at_mut(1);
             mem::swap(&mut left[0].upper_bound, &mut right[0].upper_bound);
             left[0].count = right[0].count;
