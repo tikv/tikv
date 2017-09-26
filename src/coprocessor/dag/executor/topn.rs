@@ -19,15 +19,42 @@ use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
 
+use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
-use coprocessor::select::xeval::{EvalContext, Evaluator};
+use coprocessor::select::xeval::EvalContext;
+use coprocessor::dag::expr::Expression;
 use coprocessor::select::topn_heap::{SortRow, TopNHeap};
 use coprocessor::metrics::*;
 
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
+struct OrderBy {
+    items: Rc<Vec<ByItem>>,
+    exprs: Vec<Expression>,
+}
+
+impl OrderBy {
+    fn new(ctx: &EvalContext, mut order_by: Vec<ByItem>) -> Result<OrderBy> {
+        let exprs: Vec<Expression> = box_try!(
+            order_by
+                .iter_mut()
+                .map(|v| Expression::build(ctx, v.take_expr()))
+                .collect()
+        );
+        Ok(OrderBy {
+            items: Rc::new(order_by),
+            exprs: exprs,
+        })
+    }
+
+    fn eval(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
+        let res: Vec<Datum> = box_try!(self.exprs.iter().map(|v| v.eval(ctx, row)).collect());
+        Ok(res)
+    }
+}
+
 pub struct TopNExecutor<'a> {
-    order_by: Rc<Vec<ByItem>>,
+    order_by: OrderBy,
     cols: Rc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     heap: Option<TopNHeap>,
@@ -52,7 +79,7 @@ impl<'a> TopNExecutor<'a> {
 
         COPR_EXECUTOR_COUNT.with_label_values(&["topn"]).inc();
         Ok(TopNExecutor {
-            order_by: Rc::new(order_by),
+            order_by: try!(OrderBy::new(&ctx, order_by)),
             heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),
             cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
@@ -64,25 +91,19 @@ impl<'a> TopNExecutor<'a> {
 
     fn fetch_all(&mut self) -> Result<()> {
         while let Some(row) = try!(self.src.next()) {
-            let mut eval = Evaluator::default();
-            try!(inflate_with_col_for_dag(
-                &mut eval,
+            let cols = try!(inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
                 self.cols.clone(),
                 &self.related_cols_offset,
                 row.handle
             ));
-            let mut ob_values = Vec::with_capacity(self.order_by.len());
-            for by_item in self.order_by.as_ref().iter() {
-                let v = box_try!(eval.eval(&self.ctx, by_item.get_expr()));
-                ob_values.push(v);
-            }
+            let ob_values = try!(self.order_by.eval(&self.ctx, &cols));
             try!(self.heap.as_mut().unwrap().try_add_row(
                 row.handle,
                 row.data,
                 ob_values,
-                self.order_by.clone(),
+                self.order_by.items.clone(),
                 self.ctx.clone()
             ));
         }
