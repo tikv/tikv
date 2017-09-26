@@ -141,8 +141,39 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn region_size(&self, _: RpcContext, _: RegionSizeRequest, _: UnarySink<RegionSizeResponse>) {
-        unimplemented!()
+    fn region_size(
+        &self,
+        ctx: RpcContext,
+        mut req: RegionSizeRequest,
+        sink: UnarySink<RegionSizeResponse>,
+    ) {
+        const TAG: &'static str = "debug_region_size";
+
+        let region_id = req.get_region_id();
+        let cfs = req.take_cfs().into_vec();
+
+        let f = self.pool
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.region_size(region_id, cfs)),
+            )
+            .map(|entries| {
+                let mut resp = RegionSizeResponse::new();
+                resp.set_entries(
+                    entries
+                        .into_iter()
+                        .map(|(cf, size)| {
+                            let mut entry = RegionSizeResponse_Entry::new();
+                            entry.set_cf(cf);
+                            entry.set_size(size as u64);
+                            entry
+                        })
+                        .collect(),
+                );
+                resp
+            });
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 
     fn scan_mvcc(
