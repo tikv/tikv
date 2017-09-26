@@ -52,7 +52,7 @@ use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, Compact
                     RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
                     SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
-use super::{util, Msg, SnapManager, SnapshotDeleter, SnapshotStatusMsg, Tick};
+use super::{util, Msg, SignificantMsg, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
@@ -88,7 +88,7 @@ impl Engines {
 // A helper structure to bundle all channels for messages to `Store`.
 pub struct StoreChannel {
     pub sender: Sender<Msg>,
-    pub snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
+    pub significant_msg_receiver: StdReceiver<SignificantMsg>,
 }
 
 pub struct StoreStat {
@@ -119,8 +119,7 @@ pub struct Store<T, C: 'static> {
     store: metapb::Store,
     sendch: SendCh<Msg>,
 
-    sent_snapshot_count: u64,
-    snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
+    significant_msg_receiver: StdReceiver<SignificantMsg>,
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
@@ -200,8 +199,7 @@ impl<T, C> Store<T, C> {
             kv_engine: engines.kv_engine,
             raft_engine: engines.raft_engine,
             sendch: sendch,
-            sent_snapshot_count: 0,
-            snapshot_status_receiver: ch.snapshot_status_receiver,
+            significant_msg_receiver: ch.significant_msg_receiver,
             region_peers: HashMap::default(),
             pending_raft_groups: HashSet::default(),
             split_check_worker: Worker::new("split check worker"),
@@ -427,15 +425,11 @@ impl<T, C> Store<T, C> {
         self.cfg.clone()
     }
 
-    fn poll_snapshot_status(&mut self) {
-        if self.sent_snapshot_count == 0 {
-            return;
-        }
-
+    fn poll_significant_msg(&mut self) {
         // Poll all snapshot messages and handle them.
         loop {
-            match self.snapshot_status_receiver.try_recv() {
-                Ok(SnapshotStatusMsg {
+            match self.significant_msg_receiver.try_recv() {
+                Ok(SignificantMsg::SnapshotStatus {
                     region_id,
                     to_peer_id,
                     status,
@@ -443,6 +437,12 @@ impl<T, C> Store<T, C> {
                     // Report snapshot status to the corresponding peer.
                     self.report_snapshot_status(region_id, to_peer_id, status);
                 }
+                Ok(SignificantMsg::Unreachable {
+                    region_id,
+                    to_peer_id,
+                }) => if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                    peer.raft_group.report_unreachable(to_peer_id);
+                },
                 Err(TryRecvError::Empty) => {
                     // The snapshot status receiver channel is empty
                     return;
@@ -460,7 +460,6 @@ impl<T, C> Store<T, C> {
     }
 
     fn report_snapshot_status(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
-        self.sent_snapshot_count -= 1;
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
             let to_peer = match peer.get_peer_from_cache(to_peer_id) {
                 Some(peer) => peer,
@@ -639,7 +638,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        self.poll_snapshot_status();
+        self.poll_significant_msg();
 
         timer.observe_duration();
 
@@ -1056,7 +1055,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
-        let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
@@ -1126,9 +1124,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.raft_metrics
             .append_log
             .observe(duration_to_sec(t.elapsed()) as f64);
-
-        let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
-        self.sent_snapshot_count += sent_snapshot_count;
 
         slow_log!(
             t,
@@ -2135,12 +2130,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
-
-    fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
-        if let Some(peer) = self.region_peers.get_mut(&region_id) {
-            peer.raft_group.report_unreachable(to_peer_id);
-        }
-    }
 }
 
 // Consistency Check implementation.
@@ -2449,12 +2438,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     keys::origin_key(split_key.as_slice()).to_vec(),
                     None,
                 );
-            }
-            Msg::ReportUnreachable {
-                region_id,
-                to_peer_id,
-            } => {
-                self.on_unreachable(region_id, to_peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
             Msg::ComputeHashResult {
