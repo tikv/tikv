@@ -14,20 +14,16 @@
 use std::sync::Arc;
 
 use tikv::util::HandyRwLock;
-use tikv::storage::Key;
-use tikv::raftstore::store::keys;
-use tikv::storage::{CF_DEFAULT, CF_RAFT};
-use tikv::raftstore::store::engine::{Mutable, Peekable};
+use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use tikv::raftstore::store::{keys, Mutable, Peekable};
 
-use kvproto::tikvpb_grpc::TikvClient;
-use kvproto::metapb;
 use kvproto::kvrpcpb::*;
-use kvproto::debugpb_grpc::DebugClient;
-use kvproto::debugpb;
-use kvproto::eraftpb;
-use kvproto::raft_serverpb;
 use kvproto::raft_serverpb::*;
 use kvproto::coprocessor::*;
+use kvproto::{debugpb, eraftpb, metapb, raft_serverpb};
+use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::debugpb_grpc::DebugClient;
+use rocksdb::Writable;
 use futures::{Future, Sink};
 use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
@@ -510,38 +506,36 @@ fn test_split_region() {
     );
 }
 
-#[test]
-fn test_debug_get() {
-    let (cluster, leader, ctx) = must_new_cluster();
+fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
+    let (cluster, leader, _) = must_new_cluster();
 
     let addr = cluster.sim.rl().get_addr(leader.get_store_id());
     let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
-    let kv_client = TikvClient::new(channel);
-    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
-    let debug_client = DebugClient::new(channel);
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
+    let client = DebugClient::new(channel);
 
-    // Raw put
-    let mut put_req = RawPutRequest::new();
-    put_req.set_context(ctx.clone());
-    put_req.key = k.clone();
-    put_req.value = v.clone();
-    let put_resp = kv_client.raw_put(put_req).unwrap();
-    assert!(!put_resp.has_region_error());
-    assert!(put_resp.error.is_empty());
+    (cluster, client, leader.get_store_id())
+}
+
+#[test]
+fn test_debug_get() {
+    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+    let (k, v) = (b"key", b"value");
+
+    // Put some data.
+    let engine = cluster.get_engine(store_id);
+    let key = keys::data_key(k);
+    engine.put(&key, v).unwrap();
+    assert_eq!(engine.get(&key).unwrap().unwrap(), v);
 
     // Debug get
     let mut req = debugpb::GetRequest::new();
     req.set_cf(CF_DEFAULT.to_owned());
     req.set_db(debugpb::DB::KV);
-    req.set_key(keys::data_key(k.as_slice()));
-    let mut resp = debug_client.get(req).unwrap();
+    req.set_key(key);
+    let mut resp = debug_client.get(req.clone()).unwrap();
     assert_eq!(resp.take_value(), v);
 
-    let mut req = debugpb::GetRequest::new();
-    req.set_cf(CF_DEFAULT.to_owned());
-    req.set_db(debugpb::DB::KV);
     req.set_key(b"foo".to_vec());
     match debug_client.get(req).unwrap_err() {
         Error::RpcFailure(status) => {
@@ -553,10 +547,10 @@ fn test_debug_get() {
 
 #[test]
 fn test_debug_raft_log() {
-    let (cluster, leader, _) = must_new_cluster();
+    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
 
     // Put some data.
-    let engine = cluster.get_raft_engine(leader.get_store_id());
+    let engine = cluster.get_raft_engine(store_id);
     let (region_id, log_index) = (200, 200);
     let key = keys::raft_log_key(region_id, log_index);
     let mut entry = eraftpb::Entry::new();
@@ -572,11 +566,6 @@ fn test_debug_raft_log() {
             .unwrap(),
         entry
     );
-
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
-    let debug_client = DebugClient::new(channel);
 
     // Debug raft_log
     let mut req = debugpb::RaftLogRequest::new();
@@ -598,14 +587,10 @@ fn test_debug_raft_log() {
 
 #[test]
 fn test_debug_region_info() {
-    let (cluster, leader, _) = must_new_cluster();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
-    let debug_client = DebugClient::new(channel);
+    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
 
-    let raft_engine = cluster.get_raft_engine(leader.get_store_id());
-    let kv_engine = cluster.get_engine(leader.get_store_id());
+    let raft_engine = cluster.get_raft_engine(store_id);
+    let kv_engine = cluster.get_engine(store_id);
     let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
 
     let region_id = 100;
@@ -659,6 +644,54 @@ fn test_debug_region_info() {
 
     req.set_region_id(region_id + 1);
     match debug_client.region_info(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+#[test]
+fn test_debug_region_size() {
+    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+    let engine = cluster.get_engine(store_id);
+
+    // Put some data.
+    let region_id = 100;
+    let region_state_key = keys::region_state_key(region_id);
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.set_start_key(b"a".to_vec());
+    region.set_end_key(b"z".to_vec());
+    let mut state = RegionLocalState::new();
+    state.set_region(region);
+    let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+    engine
+        .put_msg_cf(cf_raft, &region_state_key, &state)
+        .unwrap();
+
+    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE];
+    let (k, v) = (keys::data_key(b"k"), b"v");
+    for cf in &cfs {
+        let cf_handle = engine.cf_handle(cf).unwrap();
+        engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+    }
+
+    let mut req = debugpb::RegionSizeRequest::new();
+    req.set_region_id(region_id);
+    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
+    let entries = debug_client
+        .region_size(req.clone())
+        .unwrap()
+        .take_entries();
+    assert_eq!(entries.len(), 4);
+    for e in entries.into_vec() {
+        cfs.iter().find(|&&c| c == e.cf).unwrap();
+        assert!(e.size > 0);
+    }
+
+    req.set_region_id(region_id + 1);
+    match debug_client.region_size(req).unwrap_err() {
         Error::RpcFailure(status) => {
             assert_eq!(status.status, RpcStatusCode::NotFound);
         }
