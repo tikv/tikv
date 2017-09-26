@@ -94,6 +94,7 @@ optional = true
 
 [dependencies.fail]
 git = "https://github.com/pingcap/fail-rs.git"
+branch = "ov/easy-fp"
 
 [dev-dependencies]
 futures-cpupool = "0.1"
