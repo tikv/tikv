@@ -893,6 +893,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         ) {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
+                raft_metrics.message_dropped.region_nonexistent += 1;
                 if util::is_first_vote_msg(msg) {
                     self.pending_votes.push(msg.to_owned());
                     info!(
@@ -932,6 +933,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
+                raft_metrics.message_dropped.region_tombstone_peer += 1;
                 return Err(box_err!(
                     "tombstone peer [epoch: {:?}] receive an invalid \
                      message {:?}, ignore it",

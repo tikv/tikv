@@ -168,6 +168,8 @@ pub struct RaftMessageDropMetrics {
     pub stale_peer: u64,
     pub region_overlap: u64,
     pub region_no_peer: u64,
+    pub region_tombstone_peer: u64,
+    pub region_nonexistent: u64,
 }
 
 impl RaftMessageDropMetrics {
@@ -213,6 +215,20 @@ impl RaftMessageDropMetrics {
                 .inc_by(self.region_no_peer as f64)
                 .unwrap();
             self.region_no_peer = 0;
+        }
+        if self.region_tombstone_peer > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["region_tombstone_peer"])
+                .inc_by(self.region_tombstone_peer as f64)
+                .unwrap();
+            self.region_tombstone_peer = 0;
+        }
+        if self.region_nonexistent > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["region_nonexistent"])
+                .inc_by(self.region_nonexistent as f64)
+                .unwrap();
+            self.region_nonexistent = 0;
         }
     }
 }
