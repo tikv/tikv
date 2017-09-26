@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use protobuf::RepeatedField;
 use futures::{future, Future, Sink, Stream};
-use futures::sync::mpsc::{self, UnboundedSender};
+use futures::sync::mpsc;
 use grpc::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
@@ -209,17 +209,14 @@ impl PdClient for RpcClient {
         let executor = |client: &RwLock<Inner>, req: pdpb::GetRegionByIDRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.get_region_by_id_async_opt(req, option);
-            handler
-                .map_err(Error::Grpc)
-                .and_then(|mut resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    if resp.has_region() {
-                        Ok(Some(resp.take_region()))
-                    } else {
-                        Ok(None)
-                    }
-                })
-                .boxed()
+            Box::new(handler.map_err(Error::Grpc).and_then(|mut resp| {
+                try!(check_resp_header(resp.get_header()));
+                if resp.has_region() {
+                    Ok(Some(resp.take_region()))
+                } else {
+                    Ok(None)
+                }
+            })) as PdFuture<_>
         };
 
         self.leader_client
@@ -248,26 +245,29 @@ impl PdClient for RpcClient {
             let sender = match inner.hb_sender {
                 Either::Left(ref mut sender) => sender.take(),
                 Either::Right(ref sender) => {
-                    return future::result(
-                        UnboundedSender::send(sender, req).map_err(|e| Error::Other(Box::new(e))),
-                    ).boxed()
+                    return Box::new(future::result(
+                        sender
+                            .unbounded_send(req)
+                            .map_err(|e| Error::Other(Box::new(e))),
+                    )) as PdFuture<_>
                 }
             };
 
             match sender {
                 Some(sender) => {
                     let (tx, rx) = mpsc::unbounded();
-                    UnboundedSender::send(&tx, req).unwrap();
+                    tx.unbounded_send(req).unwrap();
                     inner.hb_sender = Either::Right(tx);
-                    sender
-                        .sink_map_err(Error::Grpc)
-                        .send_all(
-                            rx.map_err(|e| {
-                                Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
-                            }).map(|r| (r, WriteFlags::default())),
-                        )
-                        .map(|_| ())
-                        .boxed()
+                    Box::new(
+                        sender
+                            .sink_map_err(Error::Grpc)
+                            .send_all(
+                                rx.map_err(|e| {
+                                    Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
+                                }).map(|r| (r, WriteFlags::default())),
+                            )
+                            .map(|_| ()),
+                    ) as PdFuture<_>
                 }
                 None => unreachable!(),
             }
@@ -293,13 +293,10 @@ impl PdClient for RpcClient {
         let executor = |client: &RwLock<Inner>, req: pdpb::AskSplitRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.ask_split_async_opt(req, option);
-            handler
-                .map_err(Error::Grpc)
-                .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    Ok(resp)
-                })
-                .boxed()
+            Box::new(handler.map_err(Error::Grpc).and_then(|resp| {
+                try!(check_resp_header(resp.get_header()));
+                Ok(resp)
+            })) as PdFuture<_>
         };
 
         self.leader_client
@@ -315,13 +312,10 @@ impl PdClient for RpcClient {
         let executor = |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.store_heartbeat_async_opt(req, option);
-            handler
-                .map_err(Error::Grpc)
-                .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    Ok(())
-                })
-                .boxed()
+            Box::new(handler.map_err(Error::Grpc).and_then(|resp| {
+                try!(check_resp_header(resp.get_header()));
+                Ok(())
+            })) as PdFuture<_>
         };
 
         self.leader_client
@@ -338,13 +332,10 @@ impl PdClient for RpcClient {
         let executor = |client: &RwLock<Inner>, req: pdpb::ReportSplitRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.report_split_async_opt(req, option);
-            handler
-                .map_err(Error::Grpc)
-                .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    Ok(())
-                })
-                .boxed()
+            Box::new(handler.map_err(Error::Grpc).and_then(|resp| {
+                try!(check_resp_header(resp.get_header()));
+                Ok(())
+            })) as PdFuture<_>
         };
 
         self.leader_client

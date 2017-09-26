@@ -87,6 +87,7 @@ fn test_serde_custom_tikv_config() {
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
         region_split_check_diff: ReadableSize::mb(12),
+        region_split_check_after_initialization: true,
         region_compact_check_interval: ReadableDuration::secs(12),
         region_compact_delete_keys_count: 1_234,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
@@ -140,6 +141,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -169,6 +171,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -198,6 +201,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -227,6 +231,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,
@@ -277,6 +282,7 @@ fn test_serde_custom_tikv_config() {
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
             compression_per_level: [
                 DBCompressionType::No,
                 DBCompressionType::No,

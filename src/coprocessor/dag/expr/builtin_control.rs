@@ -320,7 +320,7 @@ mod test {
         for (operator, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(branch1);
             let arg2 = datum_expr(branch2);
-            let op = Expression::build(fncall_expr(operator, &[arg1, arg2]), &ctx).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(operator, &[arg1, arg2])).unwrap();
             let res = op.eval(&ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -454,8 +454,8 @@ mod test {
             let arg1 = datum_expr(cond);
             let arg2 = datum_expr(branch1);
             let arg3 = datum_expr(branch2);
-            let expected = Expression::build(datum_expr(exp), &ctx).unwrap();
-            let op = Expression::build(fncall_expr(operator, &[arg1, arg2, arg3]), &ctx).unwrap();
+            let expected = Expression::build(&ctx, datum_expr(exp)).unwrap();
+            let op = Expression::build(&ctx, fncall_expr(operator, &[arg1, arg2, arg3])).unwrap();
             let lhs = op.eval(&ctx, &[]).unwrap();
             let rhs = expected.eval(&ctx, &[]).unwrap();
             assert_eq!(lhs, rhs);
@@ -528,7 +528,7 @@ mod test {
             expr.set_sig(sig);
 
             expr.set_children(RepeatedField::from_vec(children));
-            let e = Expression::build(expr, &ctx).unwrap();
+            let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&ctx, &row).unwrap();
             assert_eq!(res, exp);
         }

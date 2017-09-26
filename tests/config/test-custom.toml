@@ -53,6 +53,7 @@ split-region-check-tick-interval = "12s"
 region-max-size = "12MB"
 region-split-size = "12MB"
 region-split-check-diff = "12MB"
+region-split-check-after-initialization = true
 region-compact-check-interval = "12s"
 region-compact-delete-keys-count = 1234
 pd-heartbeat-tick-interval = "12m"
@@ -104,6 +105,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",
@@ -133,6 +135,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",
@@ -162,6 +165,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",
@@ -191,6 +195,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",
@@ -241,6 +246,7 @@ use-bloom-filter = false
 whole-key-filtering = true
 bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
 compression-per-level = [
     "no",
     "no",

@@ -235,6 +235,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         if ctx.get_term() != 0 {
             header.set_term(ctx.get_term());
         }
+        header.set_sync_log(ctx.get_sync_log());
         header
     }
 

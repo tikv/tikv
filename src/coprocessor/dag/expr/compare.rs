@@ -421,7 +421,7 @@ mod test {
             expr.set_sig(sig);
 
             expr.set_children(RepeatedField::from_vec(children));
-            let e = Expression::build(expr, &ctx).unwrap();
+            let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&ctx, &row).unwrap();
             assert_eq!(res, exp);
         }
@@ -467,7 +467,7 @@ mod test {
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let escape = datum_expr(Datum::I64(escape as i64));
             let op = fncall_expr(ScalarFuncSig::LikeSig, &[target, pattern, escape]);
-            let op = Expression::build(op, &ctx).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "{:?} like {:?}", target_str, pattern_str);
