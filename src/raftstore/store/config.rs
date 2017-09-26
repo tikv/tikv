@@ -58,6 +58,9 @@ pub struct Config {
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_diff: ReadableSize,
+    /// Set it to true will check regions if they need to spilt right after
+    /// initialization. It is useful when we adjust the region size.
+    pub region_split_check_after_initialization: bool,
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
     /// When delete keys of a region exceeds the size, a compaction will
@@ -120,6 +123,7 @@ impl Default for Config {
             region_max_size: split_size / 2 * 3,
             region_split_size: split_size,
             region_split_check_diff: split_size / 8,
+            region_split_check_after_initialization: false,
             // Disable manual compaction by default.
             region_compact_check_interval: ReadableDuration::secs(0),
             region_compact_delete_keys_count: 1_000_000,
