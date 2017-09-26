@@ -91,7 +91,8 @@ impl<'a> AnalyzeContext<'a> {
             let bytes = row.data.get_binary().to_vec();
             hist.append(bytes);
         }
-        let res = hist.into_proto();
+        let mut res = analyze::AnalyzeIndexResp::new();
+        res.set_hist(hist.into_proto());
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
     }

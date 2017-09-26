@@ -14,7 +14,8 @@
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::{Message, RepeatedField};
-use tipb::analyze::{AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeReq, AnalyzeType};
+use tipb::analyze::{AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp,
+                    AnalyzeReq, AnalyzeType};
 use super::test_select::*;
 
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -45,6 +46,20 @@ fn new_analyze_column_req(
     new_analyze_req(
         analy_req.write_to_bytes().unwrap(),
         table.get_select_range(),
+    )
+}
+
+fn new_analyze_index_req(table: &Table, bucket_size: i64, idx: i64) -> Request {
+    let mut idx_req = AnalyzeIndexReq::new();
+    idx_req.set_num_columns(2);
+    idx_req.set_bucket_size(bucket_size);
+    let mut analy_req = AnalyzeReq::new();
+    analy_req.set_tp(AnalyzeType::TypeIndex);
+    analy_req.set_start_ts(next_id() as u64);
+    analy_req.set_idx_req(idx_req);
+    new_analyze_req(
+        analy_req.write_to_bytes().unwrap(),
+        table.get_index_range(idx),
     )
 }
 
@@ -96,7 +111,6 @@ fn test_analyze_column() {
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::new();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
-    println!("{:?}", analyze_resp);
     let hist = analyze_resp.get_pk_hist();
     assert_eq!(hist.get_buckets().len(), 2);
     assert_eq!(hist.get_ndv(), 4);
@@ -107,5 +121,60 @@ fn test_analyze_column() {
     );
     assert_eq!(collectors[0].get_null_count(), 1);
     assert_eq!(collectors[0].get_count(), 3);
+    end_point.stop().unwrap().join().unwrap();
+}
+
+
+#[test]
+fn test_analyze_index_with_lock() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_data_with_commit(&product, &data, false);
+
+    // with isolation level si
+    let req = new_analyze_index_req(&product.table, 3, product.name.index);
+    let resp = handle_request(&end_point, req);
+    assert!(resp.get_data().is_empty(), "{:?}", resp);
+    assert!(resp.has_locked(), "{:?}", resp);
+
+    // with isolation level rc
+    let mut req = new_analyze_index_req(&product.table, 3, product.name.index);
+    let mut ctx = Context::new();
+    ctx.set_isolation_level(IsolationLevel::RC);
+    req.set_context(ctx);
+    let mut analyze_resp = AnalyzeIndexResp::new();
+    analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
+    let hist = analyze_resp.get_hist();
+    assert!(hist.get_buckets().is_empty());
+    assert_eq!(hist.get_ndv(), 0);
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_analyze_index() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_data_with_commit(&product, &data, true);
+
+    let req = new_analyze_index_req(&product.table, 3, product.name.index);
+    let resp = handle_request(&end_point, req);
+    assert!(!resp.get_data().is_empty());
+    let mut analyze_resp = AnalyzeIndexResp::new();
+    analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
+    let hist = analyze_resp.get_hist();
+    assert_eq!(hist.get_ndv(), 4);
+    assert_eq!(hist.get_buckets().len(), 2);
     end_point.stop().unwrap().join().unwrap();
 }
