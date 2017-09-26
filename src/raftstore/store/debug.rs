@@ -307,40 +307,46 @@ impl Debugger {
     fn mvcc_kvs(&self, cf: CfName, from: Vec<u8>, to: Vec<u8>) -> Receiver<Kv> {
         let (tx, rx) = channel::<Kv>();
         let db = self.engines.kv_engine.clone();
-        thread::spawn(move || -> Result<()> {
-            for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
-                box_try!(tx.send(kv));
-            }
-            Ok(())
-        });
+        thread::Builder::new()
+            .name(format!("scan_mvcc_{}", cf))
+            .spawn(move || -> Result<()> {
+                for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
+                    box_try!(tx.send(kv));
+                }
+                Ok(())
+            })
+            .unwrap();
         rx
     }
 
     fn mvcc_kvs_grouped(&self, cf: CfName, from: Vec<u8>, to: Vec<u8>) -> Receiver<Vec<Kv>> {
         let (tx, rx) = channel::<Vec<Kv>>();
         let db = self.engines.kv_engine.clone();
-        thread::spawn(move || -> Result<()> {
-            let (mut cur, mut cur_key): (_, Option<Key>) = (Vec::new(), None);
-            for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
-                if let Some(key) = cur_key {
-                    if keys::origin_key(&kv.0).starts_with(key.encoded()) {
-                        cur_key = Some(key);
-                        cur.push(kv);
+        thread::Builder::new()
+            .name(format!("scan_mvcc_{}", cf))
+            .spawn(move || -> Result<()> {
+                let (mut cur, mut cur_key): (_, Option<Key>) = (Vec::new(), None);
+                for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
+                    if let Some(key) = cur_key {
+                        if keys::origin_key(&kv.0).starts_with(key.encoded()) {
+                            cur_key = Some(key);
+                            cur.push(kv);
+                        } else {
+                            box_try!(tx.send(cur));
+                            cur_key = Some(box_try!(truncate_data_key(&kv.0)));
+                            cur = vec![kv];
+                        }
                     } else {
-                        box_try!(tx.send(cur));
                         cur_key = Some(box_try!(truncate_data_key(&kv.0)));
-                        cur = vec![kv];
+                        cur.push(kv);
                     }
-                } else {
-                    cur_key = Some(box_try!(truncate_data_key(&kv.0)));
-                    cur.push(kv);
                 }
-            }
-            if !cur.is_empty() {
-                box_try!(tx.send(cur));
-            }
-            Ok(())
-        });
+                if !cur.is_empty() {
+                    box_try!(tx.send(cur));
+                }
+                Ok(())
+            })
+            .unwrap();
         rx
     }
 }
