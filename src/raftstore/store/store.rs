@@ -285,7 +285,9 @@ impl<T, C> Store<T, C> {
                     return Ok(true);
                 }
 
-                let peer = try!(Peer::create(self, region));
+                let mut peer = try!(Peer::create(self, region));
+                // Check if it needs to split ASAP.
+                peer.size_diff_hint = self.cfg.region_split_check_diff.0;
                 self.region_ranges.insert(enc_end_key(region), region_id);
                 // No need to check duplicated here, because we use region id as the key
                 // in DB.
