@@ -14,6 +14,7 @@
 mod endpoint;
 mod metrics;
 mod dag;
+mod statistics;
 pub mod select;
 pub mod codec;
 

@@ -13,19 +13,24 @@
 
 use std::sync::Arc;
 
-use grpc::{ChannelBuilder, Environment};
 use tikv::util::HandyRwLock;
+use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use tikv::raftstore::store::{keys, Mutable, Peekable};
 
-use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
-use futures::{Future, Sink};
 use kvproto::coprocessor::*;
+use kvproto::{debugpb, eraftpb, metapb, raft_serverpb};
+use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::debugpb_grpc::DebugClient;
+use rocksdb::Writable;
+use futures::{Future, Sink};
+use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use super::server::*;
 use super::cluster::Cluster;
 
-fn must_new_cluster_and_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
+fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
@@ -38,6 +43,12 @@ fn must_new_cluster_and_client() -> (Cluster<ServerCluster>, TikvClient, Context
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(epoch);
 
+    (cluster, leader, ctx)
+}
+
+fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
+    let (cluster, leader, ctx) = must_new_cluster();
+
     let addr = cluster.sim.rl().get_addr(leader.get_store_id());
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
@@ -48,7 +59,7 @@ fn must_new_cluster_and_client() -> (Cluster<ServerCluster>, TikvClient, Context
 
 #[test]
 fn test_rawkv() {
-    let (_cluster, client, ctx) = must_new_cluster_and_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     // Raw put
@@ -135,7 +146,7 @@ fn must_kv_commit(
 
 #[test]
 fn test_mvcc_basic() {
-    let (_cluster, client, ctx) = must_new_cluster_and_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -213,7 +224,7 @@ fn test_mvcc_basic() {
 
 #[test]
 fn test_mvcc_rollback_and_cleanup() {
-    let (_cluster, client, ctx) = must_new_cluster_and_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -320,7 +331,7 @@ fn test_mvcc_rollback_and_cleanup() {
 
 #[test]
 fn test_mvcc_resolve_lock_gc_and_delete() {
-    let (_cluster, client, ctx) = must_new_cluster_and_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -449,7 +460,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
 #[test]
 fn test_raft() {
-    let (_cluster, client, _) = must_new_cluster_and_client();
+    let (_cluster, client, _) = must_new_cluster_and_kv_client();
 
     // Raft commands
     let (sink, _) = client.raft();
@@ -458,15 +469,232 @@ fn test_raft() {
         .unwrap();
 
     let (sink, _) = client.snapshot();
-    sink.send((SnapshotChunk::new(), Default::default()))
-        .wait()
-        .unwrap();
+    let mut chunk = SnapshotChunk::new();
+    chunk.set_message(RaftMessage::new());
+    sink.send((chunk, Default::default())).wait().unwrap();
 }
 
 #[test]
 fn test_coprocessor() {
-    let (_cluster, client, _) = must_new_cluster_and_client();
+    let (_cluster, client, _) = must_new_cluster_and_kv_client();
 
     // SQL push down commands
     client.coprocessor(Request::new()).unwrap();
+}
+
+#[test]
+fn test_split_region() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+
+    // Split region commands
+    let key = b"b";
+    let mut req = SplitRegionRequest::new();
+    req.set_context(ctx);
+    req.set_split_key(key.to_vec());
+    let resp = client.split_region(req).unwrap();
+    assert_eq!(
+        Key::from_encoded(resp.get_left().get_end_key().to_vec())
+            .truncate_ts()
+            .unwrap()
+            .encoded()
+            .as_slice(),
+        key
+    );
+    assert_eq!(
+        resp.get_left().get_end_key(),
+        resp.get_right().get_start_key()
+    );
+}
+
+fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
+    let (cluster, leader, _) = must_new_cluster();
+
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
+    let client = DebugClient::new(channel);
+
+    (cluster, client, leader.get_store_id())
+}
+
+#[test]
+fn test_debug_get() {
+    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+    let (k, v) = (b"key", b"value");
+
+    // Put some data.
+    let engine = cluster.get_engine(store_id);
+    let key = keys::data_key(k);
+    engine.put(&key, v).unwrap();
+    assert_eq!(engine.get(&key).unwrap().unwrap(), v);
+
+    // Debug get
+    let mut req = debugpb::GetRequest::new();
+    req.set_cf(CF_DEFAULT.to_owned());
+    req.set_db(debugpb::DB::KV);
+    req.set_key(key);
+    let mut resp = debug_client.get(req.clone()).unwrap();
+    assert_eq!(resp.take_value(), v);
+
+    req.set_key(b"foo".to_vec());
+    match debug_client.get(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+#[test]
+fn test_debug_raft_log() {
+    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+
+    // Put some data.
+    let engine = cluster.get_raft_engine(store_id);
+    let (region_id, log_index) = (200, 200);
+    let key = keys::raft_log_key(region_id, log_index);
+    let mut entry = eraftpb::Entry::new();
+    entry.set_term(1);
+    entry.set_index(1);
+    entry.set_entry_type(eraftpb::EntryType::EntryNormal);
+    entry.set_data(vec![42]);
+    engine.put_msg(key.as_slice(), &entry).unwrap();
+    assert_eq!(
+        engine
+            .get_msg::<eraftpb::Entry>(key.as_slice())
+            .unwrap()
+            .unwrap(),
+        entry
+    );
+
+    // Debug raft_log
+    let mut req = debugpb::RaftLogRequest::new();
+    req.set_region_id(region_id);
+    req.set_log_index(log_index);
+    let resp = debug_client.raft_log(req).unwrap();
+    assert_ne!(resp.get_entry(), &eraftpb::Entry::new());
+
+    let mut req = debugpb::RaftLogRequest::new();
+    req.set_region_id(region_id + 1);
+    req.set_log_index(region_id + 1);
+    match debug_client.raft_log(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+#[test]
+fn test_debug_region_info() {
+    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+
+    let raft_engine = cluster.get_raft_engine(store_id);
+    let kv_engine = cluster.get_engine(store_id);
+    let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
+
+    let region_id = 100;
+    let raft_state_key = keys::raft_state_key(region_id);
+    let mut raft_state = raft_serverpb::RaftLocalState::new();
+    raft_state.set_last_index(42);
+    raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+    assert_eq!(
+        raft_engine
+            .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
+            .unwrap()
+            .unwrap(),
+        raft_state
+    );
+
+    let apply_state_key = keys::apply_state_key(region_id);
+    let mut apply_state = raft_serverpb::RaftApplyState::new();
+    apply_state.set_applied_index(42);
+    kv_engine
+        .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
+        .unwrap();
+    assert_eq!(
+        kv_engine
+            .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
+            .unwrap()
+            .unwrap(),
+        apply_state
+    );
+
+    let region_state_key = keys::region_state_key(region_id);
+    let mut region_state = raft_serverpb::RegionLocalState::new();
+    region_state.set_state(raft_serverpb::PeerState::Tombstone);
+    kv_engine
+        .put_msg_cf(raft_cf, &region_state_key, &region_state)
+        .unwrap();
+    assert_eq!(
+        kv_engine
+            .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
+            .unwrap()
+            .unwrap(),
+        region_state
+    );
+
+    // Debug region_info
+    let mut req = debugpb::RegionInfoRequest::new();
+    req.set_region_id(region_id);
+    let mut resp = debug_client.region_info(req.clone()).unwrap();
+    assert_eq!(resp.take_raft_local_state(), raft_state);
+    assert_eq!(resp.take_raft_apply_state(), apply_state);
+    assert_eq!(resp.take_region_local_state(), region_state);
+
+    req.set_region_id(region_id + 1);
+    match debug_client.region_info(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
+}
+
+#[test]
+fn test_debug_region_size() {
+    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+    let engine = cluster.get_engine(store_id);
+
+    // Put some data.
+    let region_id = 100;
+    let region_state_key = keys::region_state_key(region_id);
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.set_start_key(b"a".to_vec());
+    region.set_end_key(b"z".to_vec());
+    let mut state = RegionLocalState::new();
+    state.set_region(region);
+    let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+    engine
+        .put_msg_cf(cf_raft, &region_state_key, &state)
+        .unwrap();
+
+    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE];
+    let (k, v) = (keys::data_key(b"k"), b"v");
+    for cf in &cfs {
+        let cf_handle = engine.cf_handle(cf).unwrap();
+        engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+    }
+
+    let mut req = debugpb::RegionSizeRequest::new();
+    req.set_region_id(region_id);
+    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
+    let entries = debug_client
+        .region_size(req.clone())
+        .unwrap()
+        .take_entries();
+    assert_eq!(entries.len(), 4);
+    for e in entries.into_vec() {
+        cfs.iter().find(|&&c| c == e.cf).unwrap();
+        assert!(e.size > 0);
+    }
+
+    req.set_region_id(region_id + 1);
+    match debug_client.region_size(req).unwrap_err() {
+        Error::RpcFailure(status) => {
+            assert_eq!(status.status, RpcStatusCode::NotFound);
+        }
+        _ => panic!("expect NotFound"),
+    }
 }

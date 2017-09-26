@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::BoxFuture;
 
 mod metrics;
 mod client;
@@ -24,9 +23,10 @@ pub use self::util::validate_endpoints;
 
 use kvproto::metapb;
 use kvproto::pdpb;
+use futures::Future;
 
 pub type Key = Vec<u8>;
-pub type PdFuture<T> = BoxFuture<T, Error>;
+pub type PdFuture<T> = Box<Future<Item = T, Error = Error> + Send>;
 
 #[derive(Default)]
 pub struct RegionStat {
