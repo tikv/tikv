@@ -392,6 +392,7 @@ mod tests {
 
     use raftstore::store::engine::Mutable;
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use storage::mvcc::{Lock, LockType};
     use util::rocksdb::{self as rocksdb_util, CFOptions};
     use super::*;
 
@@ -572,5 +573,33 @@ mod tests {
             cfs.iter().find(|&&c| c == cf).unwrap();
             assert!(size > 0);
         }
+    }
+
+    #[test]
+    fn test_scan_mvcc() {
+        struct MvccCounter(usize);
+        impl MvccKVDealer for MvccCounter {
+            type Error = Error;
+            fn deal(&mut self, _: Vec<u8>, _: MvccInfo) -> Result<()> {
+                self.0 += 1;
+                Ok(())
+            }
+        }
+
+        let debugger = new_debugger();
+        let engine = &debugger.engines.kv_engine;
+
+        let k = keys::data_key(b"meta_lock");
+        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None).to_bytes();
+        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
+        engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+
+        let mut scan_mvcc_req = ScanMvccRequest::new();
+        scan_mvcc_req.set_from_key(b"m".to_vec());
+        scan_mvcc_req.set_to_key(b"n".to_vec());
+
+        let mut counter = MvccCounter(0);
+        debugger.scan_mvcc(scan_mvcc_req, &mut counter).unwrap();
+        assert_eq!(counter.0, 1);
     }
 }
