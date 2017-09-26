@@ -300,7 +300,7 @@ mod test {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
