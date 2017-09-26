@@ -166,7 +166,6 @@ pub struct RaftMessageDropMetrics {
     pub mismatch_region_epoch: u64,
     pub stale_msg: u64,
     pub stale_peer: u64,
-    pub destroy_stale_peer: u64,
     pub region_overlap: u64,
     pub region_no_peer: u64,
 }
@@ -200,13 +199,6 @@ impl RaftMessageDropMetrics {
                 .inc_by(self.stale_msg as f64)
                 .unwrap();
             self.stale_msg = 0;
-        }
-        if self.destroy_stale_peer > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["destroy_stale_peer"])
-                .inc_by(self.destroy_stale_peer as f64)
-                .unwrap();
-            self.destroy_stale_peer = 0;
         }
         if self.region_overlap > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC

@@ -723,7 +723,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region_id,
                     p
                 );
-                self.raft_metrics.message_dropped.destroy_stale_peer += 1;
+                self.raft_metrics.message_dropped.stale_peer += 1;
                 return Ok(false);
             }
             info!("[region {}] destroying stale peer {:?}", region_id, p);
@@ -868,6 +868,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         //  unlike case e, 2 will be stale forever.
         // TODO: for case f, if 2 is stale for a long time, 2 will communicate with pd and pd will
         // tell 2 is stale, so 2 can remove itself.
+        let trans = &self.trans;
+        let raft_metrics = &mut self.raft_metrics;
         if let Some(peer) = self.region_peers.get(&region_id) {
             let region = peer.region();
             let epoch = region.get_region_epoch();
@@ -876,7 +878,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 util::find_peer(region, from_store_id).is_none()
             {
                 // The message is stale and not in current region.
-                self.handle_stale_msg(msg, epoch, is_vote_msg);
+                Self::handle_stale_msg(trans, msg, epoch, is_vote_msg, raft_metrics);
                 return Ok(true);
             }
 
@@ -918,7 +920,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
 
                 let not_exist = util::find_peer(region, from_store_id).is_none();
-                self.handle_stale_msg(msg, region_epoch, is_vote_msg && not_exist);
+                Self::handle_stale_msg(
+                    trans,
+                    msg,
+                    region_epoch,
+                    is_vote_msg && not_exist,
+                    raft_metrics,
+                );
 
                 return Ok(true);
             }
@@ -936,7 +944,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(false)
     }
 
-    fn handle_stale_msg(&self, msg: &RaftMessage, cur_epoch: &metapb::RegionEpoch, need_gc: bool) {
+    fn handle_stale_msg(
+        trans: &T,
+        msg: &RaftMessage,
+        cur_epoch: &metapb::RegionEpoch,
+        need_gc: bool,
+        raft_metrics: &mut RaftMetrics,
+    ) {
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
@@ -949,6 +963,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 msg_type,
                 cur_epoch
             );
+            raft_metrics.message_dropped.stale_msg += 1;
             return;
         }
 
@@ -965,7 +980,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         gc_msg.set_to_peer(from_peer.clone());
         gc_msg.set_region_epoch(cur_epoch.clone());
         gc_msg.set_is_tombstone(true);
-        if let Err(e) = self.trans.send(gc_msg) {
+        if let Err(e) = trans.send(gc_msg) {
             error!("[region {}] send gc message failed {:?}", region_id, e);
         }
     }
