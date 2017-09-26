@@ -88,7 +88,7 @@ impl Iterator for ChunkSpliter {
                 assert_eq!(self.readed, self.chunk[0].get_rows_data().len());
                 self.idx = 0;
                 self.readed = 0;
-                self.chunk.swap_remove(0);
+                self.chunk.remove(0);
                 continue;
             }
             let metas = self.chunk[0].get_rows_meta();
@@ -129,7 +129,7 @@ impl Iterator for DAGChunkSpliter {
             if self.chunks.is_empty() && self.datums.is_empty() {
                 return None;
             } else if self.datums.is_empty() {
-                let chunk = self.chunks.swap_remove(0);
+                let chunk = self.chunks.remove(0);
                 let mut data = chunk.get_rows_data();
                 self.datums = data.decode().unwrap();
                 continue;
