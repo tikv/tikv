@@ -997,7 +997,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
 
         // Compression ratio at levels
         let opts = engine.get_options_cf(handle);
-        for level in 0..opts.get_num_levels() {
+        for level in 0..(opts.get_num_levels() + 1) {
             if let Some(v) = rocksdb::get_engine_compression_ratio_at_level(engine, handle, level) {
                 let level_str = level.to_string();
                 STORE_ENGINE_COMPRESSION_RATIO_VEC
