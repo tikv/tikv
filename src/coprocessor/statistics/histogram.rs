@@ -142,15 +142,14 @@ impl Histogram {
 
     // It merges every two neighbor buckets.
     fn merge_buckets(&mut self) {
-        let bucket_num = self.buckets_num / 2 + self.buckets_num % 2;
-        for id in 0..bucket_num {
-            if id == 0 {
-                let (left, right) = self.buckets.split_at_mut(1);
-                mem::swap(&mut left[0].upper_bound, &mut right[0].upper_bound);
-                left[0].count = right[0].count;
-                left[0].repeats = right[0].repeats;
-                continue;
-            }
+        let bucket_num = (self.buckets_num + 1) / 2;
+        if bucket_num > 1 {
+            let (left, right) = self.buckets.split_at_mut(1);
+            mem::swap(&mut left[0].upper_bound, &mut right[0].upper_bound);
+            left[0].count = right[0].count;
+            left[0].repeats = right[0].repeats;
+        }
+        for id in 1..bucket_num {
             let (left, right) = self.buckets.split_at_mut(id * 2);
             if right.len() == 1 {
                 mem::swap(&mut left[id], &mut right[0]);
@@ -174,7 +173,6 @@ mod test {
     use coprocessor::codec::datum::Datum;
     use super::*;
 
-    // This test was ported from tidb.
     #[test]
     fn test_histogram() {
         let buckets_num = 3;
@@ -233,5 +231,20 @@ mod test {
         assert_eq!(hist.per_bucket_limit, 4);
         assert_eq!(hist.buckets.len(), 3);
         assert_eq!(hist.ndv, 6);
+    }
+
+    #[test]
+    fn test_buckets_limit() {
+        let buckets_num = 1;
+        let mut hist = Histogram::new(buckets_num);
+        assert_eq!(hist.buckets.len(), 0);
+        hist.append(datum::encode_value(&[Datum::I64(1)]).unwrap());
+        assert_eq!(hist.buckets.len(), 1);
+        assert_eq!(hist.per_bucket_limit, 1);
+        hist.append(datum::encode_value(&[Datum::I64(2)]).unwrap());
+        assert_eq!(hist.buckets.len(), 1);
+        assert_eq!(hist.per_bucket_limit, 2);
+        hist.append(datum::encode_value(&[Datum::I64(3)]).unwrap());
+        assert_eq!(hist.per_bucket_limit, 4);
     }
 }
