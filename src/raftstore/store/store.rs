@@ -1263,6 +1263,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     p.peer_heartbeats.remove(&cp.peer.get_id());
                     p.remove_peer_from_cache(cp.peer.get_id());
                 }
+                ConfChangeType::AddNonvoter => {
+                    // Add this peer to cache.
+                    let peer = cp.peer.clone();
+                    p.peer_heartbeats.insert(peer.get_id(), Instant::now());
+                    p.insert_peer_cache(peer);
+                }
+                ConfChangeType::AddVoter |
+                ConfChangeType::UpdateNode |
+                ConfChangeType::DemoteVoter => {
+                    unimplemented!();
+                }
             }
 
             my_peer_id = p.peer_id();

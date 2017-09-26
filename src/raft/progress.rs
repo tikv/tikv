@@ -28,6 +28,8 @@
 
 use std::cmp;
 
+use kvproto::eraftpb::SuffrageState;
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {
     Probe,
@@ -56,6 +58,8 @@ pub struct Progress {
     // When in ProgressStateSnapshot, leader should have sent out snapshot
     // before and stops sending any replication message.
     pub state: ProgressState,
+
+    pub suffrage: SuffrageState,
     // Paused is used in ProgressStateProbe.
     // When Paused is true, raft should pause sending replication message to this peer.
     pub paused: bool,

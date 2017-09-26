@@ -1222,6 +1222,12 @@ impl Peer {
                     return Ok(());
                 }
             }
+            ConfChangeType::AddNonvoter => {
+                status.progress.insert(peer.get_id(), Progress::default());
+            }
+            ConfChangeType::AddVoter | ConfChangeType::UpdateNode | ConfChangeType::DemoteVoter => {
+                unimplemented!();
+            }
         }
         let healthy = self.count_healthy_node(status.progress.values());
         let quorum_after_change = raft::quorum(status.progress.len());

@@ -809,6 +809,17 @@ impl ApplyDelegate {
                     self.region
                 );
             }
+            ConfChangeType::AddNonvoter => {
+                info!(
+                    "{} add Nonvoter peer {:?} to region {:?}",
+                    self.tag,
+                    peer,
+                    self.region
+                );
+            }
+            ConfChangeType::AddVoter | ConfChangeType::UpdateNode | ConfChangeType::DemoteVoter => {
+                unimplemented!();
+            }
         }
 
         let state = if self.pending_remove {
