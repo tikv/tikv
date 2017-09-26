@@ -13,7 +13,7 @@ dependencies = [
  "fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpcio 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemallocator 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -286,18 +286,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "grpcio"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "futures 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpcio-sys 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio-sys 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "grpcio-sys"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "cmake 0.1.25 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -408,10 +409,10 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git#3c5b40fb2000acb6b3441d5695cb470a23e8f1b5"
+source = "git+https://github.com/pingcap/kvproto.git#0479661bcfa014e7a720973615ded186afb61cd1"
 dependencies = [
  "futures 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpcio 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1103,8 +1104,8 @@ dependencies = [
 "checksum futures-cpupool 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)" = "a283c84501e92cade5ea673a2a7ca44f71f209ccdd302a3e0896f50083d2c5ff"
 "checksum gcc 0.3.53 (registry+https://github.com/rust-lang/crates.io-index)" = "e8310f7e9c890398b0e80e301c4f474e9918d2b27fca8f48486ca775fa9ffc5a"
 "checksum getopts 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)" = "d9047cfbd08a437050b363d35ef160452c5fe8ea5187ae0a624708c91581d685"
-"checksum grpcio 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "af0efa07e74c8ad0712a656b488cbb57cc04b96cb11338ffaa6c1ad5232621d2"
-"checksum grpcio-sys 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "0b6e704b6c410246b6cb0509565b9f4a69d7214ac9e6942d01dedba9445522b7"
+"checksum grpcio 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "a49e76143184b5f2330a8a3997fbc8958b18d25c3707dc9a4f2cdd1d326fdfb8"
+"checksum grpcio-sys 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "58c40e409903abc12399f6aa58007fb3a22324df8ed1fb17f2a41ef5cf09b0bf"
 "checksum hpack 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3d2da7d3a34cf6406d9d700111b8eafafe9a251de41ae71d8052748259343b58"
 "checksum httparse 1.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "46534074dbb80b070d60a5cb8ecadd8963a00a438ae1a95268850a7ef73b67ae"
 "checksum hyper 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)" = "eb27e8a3e8f17ac43ffa41bbda9cf5ad3f9f13ef66fa4873409d4902310275f7"
