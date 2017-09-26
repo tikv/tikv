@@ -29,7 +29,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerR
 
 use util::worker::Runnable;
 use util::{escape, rocksdb};
-use util::time::SlowTimer;
+use util::time::{duration_to_sec, SlowTimer};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use raftstore::{Error, Result};
@@ -336,9 +336,7 @@ impl ApplyDelegate {
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
-        let t = SlowTimer::new();
         let mut results = vec![];
-        let committed_count = committed_entries.len();
         for entry in committed_entries {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
@@ -372,12 +370,6 @@ impl ApplyDelegate {
         self.update_metrics(apply_ctx);
         apply_ctx.mark_last_bytes_and_keys();
 
-        slow_log!(
-            t,
-            "{} handle ready {} committed entries",
-            self.tag,
-            committed_count
-        );
         results
     }
 
@@ -1434,6 +1426,7 @@ pub struct Runner {
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
     sync_log: bool,
+    tag: String,
 }
 
 impl Runner {
@@ -1449,14 +1442,16 @@ impl Runner {
             delegates: delegates,
             notifier: notifier,
             sync_log: sync_log,
+            tag: format!("[store {}]", store.store_id()),
         }
     }
 
     fn handle_applies(&mut self, applys: Vec<Apply>) {
-        let _timer = STORE_APPLY_LOG_HISTOGRAM.start_coarse_timer();
+        let t = SlowTimer::new();
 
         let mut applys_res = Vec::with_capacity(applys.len());
         let mut apply_ctx = ApplyContext::new(self.host.as_ref());
+        let mut committed_count = 0;
         for apply in applys {
             if apply.entries.is_empty() {
                 continue;
@@ -1472,6 +1467,7 @@ impl Runner {
                 let delegate = e.get_mut();
                 delegate.metrics = ApplyMetrics::default();
                 delegate.term = apply.term;
+                committed_count += apply.entries.len();
                 let results = delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
 
                 if delegate.pending_remove {
@@ -1510,6 +1506,15 @@ impl Runner {
         if !applys_res.is_empty() {
             self.notifier.send(TaskRes::Applys(applys_res)).unwrap();
         }
+
+        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+
+        slow_log!(
+            t,
+            "{} handle ready {} committed entries",
+            self.tag,
+            committed_count
+        );
     }
 
     fn handle_proposals(&mut self, proposals: Vec<RegionProposal>) {
@@ -1624,6 +1629,7 @@ mod tests {
             delegates: HashMap::default(),
             notifier: tx,
             sync_log: false,
+            tag: "".to_owned(),
         }
     }
 
