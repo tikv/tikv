@@ -2024,7 +2024,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_keys_read(
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
-
+        self.on_update_store_flow()
 
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
@@ -2045,7 +2045,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         self.store_heartbeat_pd();
-        self.on_update_store_flow();
         self.register_pd_store_heartbeat_tick(event_loop);
     }
 
