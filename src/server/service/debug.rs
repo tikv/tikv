@@ -185,11 +185,10 @@ impl debugpb_grpc::Debug for Service {
         let debugger = self.debugger.clone();
         let deal_future = self.pool.spawn_fn(move || {
             let mut dealer = MvccKVToSink(Some(sink));
-            let result = match debugger.scan_mvcc(req, &mut dealer) {
+            match debugger.scan_mvcc(req, &mut dealer) {
                 Ok(_) => Ok(dealer.0.unwrap()),
                 Err(e) => Err((dealer.0.unwrap(), e)),
-            };
-            future::result(result)
+            }
         });
 
         let finish_future = deal_future.then(|v| match v {
