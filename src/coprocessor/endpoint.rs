@@ -15,6 +15,7 @@ use std::usize;
 use std::time::Duration;
 use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::mem;
 
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
 use tipb::executor::ExecType;
@@ -118,9 +119,10 @@ impl<R: CopSender + 'static> CopContext<R> {
         }
     }
 
-    fn add_statistics_by_request(&mut self, id: u64, stats: &Statistics) {
-        let empty_stat = FlowStatistics::default();
-        let flow_stats = self.request_stats.entry(id).or_insert(empty_stat);
+    fn add_statistics_by_region(&mut self, region_id: u64, stats: &Statistics) {
+        let flow_stats = self.request_stats
+            .entry(region_id)
+            .or_insert_with(FlowStatistics::default);
         flow_stats.add(&stats.write.flow_stats);
         flow_stats.add(&stats.data.flow_stats);
     }
@@ -144,10 +146,11 @@ impl<R: CopSender + 'static> Context for CopContext<R> {
             *this_statistics = Default::default();
         }
         if !self.request_stats.is_empty() {
-            if let Err(e) = self.sender.send(self.request_stats.clone()) {
+            let mut to_send_stats = HashMap::default();
+            mem::swap(&mut to_send_stats, &mut self.request_stats);
+            if let Err(e) = self.sender.send(to_send_stats) {
                 error!("send coprocessor statistics: {:?}", e);
             };
-            self.request_stats = HashMap::default();
         }
 
     }
@@ -218,7 +221,7 @@ impl<R: CopSender + 'static> Host<R> {
                 let region_id = req.req.get_context().get_region_id();
                 let stats = end_point.handle_request(req);
                 ctx.add_statistics(type_str, &stats);
-                ctx.add_statistics_by_request(region_id, &stats);
+                ctx.add_statistics_by_region(region_id, &stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();

@@ -1569,10 +1569,10 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.peer_stat.last_written_bytes,
-            written_keys: self.peer_stat.last_written_keys,
-            read_bytes: self.peer_stat.last_read_bytes,
-            read_keys: self.peer_stat.last_read_keys,
+            written_bytes: self.peer_stat.written_bytes - self.peer_stat.last_written_bytes,
+            written_keys: self.peer_stat.written_keys - self.peer_stat.last_written_keys,
+            read_bytes: self.peer_stat.read_bytes - self.peer_stat.last_read_bytes,
+            read_keys: self.peer_stat.read_keys - self.peer_stat.last_read_keys,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
