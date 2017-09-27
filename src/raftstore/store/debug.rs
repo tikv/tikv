@@ -167,10 +167,10 @@ impl Debugger {
         }
     }
 
-    pub fn scan_mvcc<D, E>(&self, req: ScanMvccRequest, dealer: &mut D) -> Result<()>
+    pub fn scan_mvcc<D, E>(&self, req: ScanMvccRequest, deal: &mut D) -> Result<()>
     where
         Error: ::std::convert::From<E>,
-        D: MvccKVDealer<Error = E>,
+        D: FnMut(Vec<u8>, MvccInfo) -> ::std::result::Result<(), E>,
     {
         let from_key = keys::data_key(req.get_from_key());
         let to_key = keys::data_key(req.get_to_key());
@@ -285,7 +285,7 @@ impl Debugger {
                 let g_d = mvcc_and_flags.2 || m_d.as_ref().map(|k| &key <= k).unwrap_or(true);
                 let g_w = mvcc_and_flags.3 || m_w.as_ref().map(|k| &key <= k).unwrap_or(true);
                 if g_l && g_d && g_w {
-                    try!(dealer.deal(key, mvcc_and_flags.0).map_err(Error::from));
+                    try!(deal(key, mvcc_and_flags.0).map_err(Error::from));
                     if mvcc_and_flags.1 {
                         want_lock = true;
                     }
@@ -349,11 +349,6 @@ impl Debugger {
             .unwrap();
         rx
     }
-}
-
-pub trait MvccKVDealer {
-    type Error;
-    fn deal(&mut self, Vec<u8>, MvccInfo) -> ::std::result::Result<(), Self::Error>;
 }
 
 fn truncate_data_key(data_key: &[u8]) -> Result<Key> {
@@ -577,15 +572,6 @@ mod tests {
 
     #[test]
     fn test_scan_mvcc() {
-        struct MvccCounter(usize);
-        impl MvccKVDealer for MvccCounter {
-            type Error = Error;
-            fn deal(&mut self, _: Vec<u8>, _: MvccInfo) -> Result<()> {
-                self.0 += 1;
-                Ok(())
-            }
-        }
-
         let debugger = new_debugger();
         let engine = &debugger.engines.kv_engine;
 
@@ -598,8 +584,13 @@ mod tests {
         scan_mvcc_req.set_from_key(b"m".to_vec());
         scan_mvcc_req.set_to_key(b"n".to_vec());
 
-        let mut counter = MvccCounter(0);
-        debugger.scan_mvcc(scan_mvcc_req, &mut counter).unwrap();
-        assert_eq!(counter.0, 1);
+        let mut count = 0;
+        debugger
+            .scan_mvcc(scan_mvcc_req, &mut |_, _| -> Result<()> {
+                count += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

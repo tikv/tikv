@@ -15,12 +15,11 @@ use grpc::{Error as GrpcError, WriteFlags};
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use futures::{future, Future, Sink};
 use futures_cpupool::{Builder, CpuPool};
-use kvproto::kvrpcpb::MvccInfo;
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
 
 use raftstore::store::Engines;
-use raftstore::store::debug::{Debugger, Error, MvccKVDealer};
+use raftstore::store::debug::{Debugger, Error};
 
 #[derive(Clone)]
 pub struct Service {
@@ -184,10 +183,18 @@ impl debugpb_grpc::Debug for Service {
     ) {
         let debugger = self.debugger.clone();
         let deal_future = self.pool.spawn_fn(move || {
-            let mut dealer = MvccKVToSink(Some(sink));
-            match debugger.scan_mvcc(req, &mut dealer) {
-                Ok(_) => Ok(dealer.0.unwrap()),
-                Err(e) => Err((dealer.0.unwrap(), e)),
+            let mut opt_sink = Some(sink);
+            match debugger.scan_mvcc(req, &mut |key, mvcc| {
+                let mut resp = ScanMvccResponse::new();
+                resp.set_key(key);
+                resp.set_info(mvcc);
+                let sink = opt_sink.take().unwrap();
+                sink.send((resp, WriteFlags::default()))
+                    .wait()
+                    .map(|s| opt_sink = Some(s))
+            }) {
+                Ok(_) => Ok(opt_sink.unwrap()),
+                Err(e) => Err((opt_sink, e)),
             }
         });
 
@@ -197,35 +204,15 @@ impl debugpb_grpc::Debug for Service {
                     .map_err(|e| Service::on_grpc_error("scan_mvcc", e));
                 Box::new(f) as Box<Future<Item = (), Error = ()> + Send>
             }
-            Err((sink, e)) => {
+            Err((opt_sink, e)) => if let Some(sink) = opt_sink {
                 let status = Service::error_to_status(e);
                 let f = sink.fail(status)
                     .map_err(|e| Service::on_grpc_error("scan_mvcc", e));
                 Box::new(f) as Box<Future<Item = (), Error = ()> + Send>
-            }
+            } else {
+                Box::new(future::ok(())) as Box<Future<Item = (), Error = ()> + Send>
+            },
         });
         ctx.spawn(finish_future);
-    }
-}
-
-struct MvccKVToSink(Option<ServerStreamingSink<ScanMvccResponse>>);
-
-impl MvccKVDealer for MvccKVToSink {
-    type Error = GrpcError;
-
-    fn deal(&mut self, key: Vec<u8>, mvcc: MvccInfo) -> Result<(), GrpcError> {
-        let mut mvcc_resp = ScanMvccResponse::new();
-        mvcc_resp.set_key(key);
-        mvcc_resp.set_info(mvcc);
-
-        let sink = self.0.take().unwrap();
-        match sink.send((mvcc_resp, WriteFlags::default())).wait() {
-            Ok(s) => self.0 = Some(s),
-            Err(e) => {
-                error!("debug API scan_mvcc fail: {}", e);
-                return Err(e);
-            }
-        }
-        Ok(())
     }
 }
