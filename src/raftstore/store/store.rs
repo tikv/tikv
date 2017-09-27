@@ -58,7 +58,7 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::{BatchCallback, Callback};
+use super::msg::{BatchCallback, Callback, CopFlowStatistics};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
@@ -94,7 +94,19 @@ pub struct StoreChannel {
 pub struct StoreStat {
     pub region_bytes_written: LocalHistogram,
     pub region_keys_written: LocalHistogram,
+    pub region_bytes_read: LocalHistogram,
+    pub region_keys_read: LocalHistogram,
     pub lock_cf_bytes_written: u64,
+
+    pub engine_total_bytes_written: u64,
+    pub engine_total_keys_written: u64,
+    pub engine_total_bytes_read: u64,
+    pub engine_total_keys_read: u64,
+
+    pub engine_last_total_bytes_written: u64,
+    pub engine_last_total_keys_written: u64,
+    pub engine_last_total_bytes_read: u64,
+    pub engine_last_total_keys_read: u64,
 }
 
 impl Default for StoreStat {
@@ -102,7 +114,18 @@ impl Default for StoreStat {
         StoreStat {
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
+            region_bytes_read: REGION_READ_BYTES_HISTOGRAM.local(),
+            region_keys_read: REGION_READ_KEYS_HISTOGRAM.local(),
             lock_cf_bytes_written: 0,
+            engine_total_bytes_written: 0,
+            engine_total_keys_written: 0,
+            engine_total_bytes_read: 0,
+            engine_total_keys_read: 0,
+
+            engine_last_total_bytes_written: 0,
+            engine_last_total_keys_written: 0,
+            engine_last_total_bytes_read: 0,
+            engine_last_total_keys_read: 0,
         }
     }
 }
@@ -493,12 +516,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
         self.register_compact_check_tick(event_loop);
-        self.register_pd_heartbeat_tick(event_loop);
         self.register_pd_store_heartbeat_tick(event_loop);
+        self.register_pd_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
-        self.register_report_region_flow_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             self.kv_engine.clone(),
@@ -654,7 +676,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Ok(ApplyTaskRes::Applys(multi_res)) => for res in multi_res {
                     if let Some(p) = self.region_peers.get_mut(&res.region_id) {
                         debug!("{} async apply finish: {:?}", p.tag, res);
-                        p.post_apply(&res, &mut self.pending_raft_groups);
+                        p.post_apply(&res, &mut self.pending_raft_groups, &mut self.store_stat);
                     }
                     self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
                     self.on_ready_result(res.region_id, res.exec_res);
@@ -695,6 +717,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             region_id,
                             p.peer_id()
                         );
+                        self.raft_metrics.message_dropped.stale_peer += 1;
                         return Ok(false);
                     }
                     // There is no tasks in apply worker.
@@ -709,6 +732,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     target_peer_id,
                     p.peer_id()
                 );
+                self.raft_metrics.message_dropped.stale_msg += 1;
                 return Ok(false);
             }
         }
@@ -724,6 +748,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region_id,
                     p
                 );
+                self.raft_metrics.message_dropped.stale_peer += 1;
                 return Ok(false);
             }
             info!("[region {}] destroying stale peer {:?}", region_id, p);
@@ -745,6 +770,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 target,
                 msg_type
             );
+            self.raft_metrics.message_dropped.stale_msg += 1;
             return Ok(false);
         }
 
@@ -759,6 +785,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if util::is_first_vote_msg(msg) {
                     self.pending_votes.push(msg.to_owned());
                 }
+                self.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(false);
             }
         }
@@ -772,7 +799,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-        if !self.is_raft_msg_valid(&msg) {
+        if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
 
@@ -805,7 +832,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     // return false means the message is invalid, and can be ignored.
-    fn is_raft_msg_valid(&self, msg: &RaftMessage) -> bool {
+    fn validate_raft_msg(&mut self, msg: &RaftMessage) -> bool {
         let region_id = msg.get_region_id();
         let from = msg.get_from_peer();
         let to = msg.get_to_peer();
@@ -825,6 +852,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 to.get_store_id(),
                 self.store_id()
             );
+            self.raft_metrics.message_dropped.mismatch_store_id += 1;
             return false;
         }
 
@@ -833,6 +861,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 "[region {}] missing epoch in raft message, ignore it",
                 region_id
             );
+            self.raft_metrics.message_dropped.mismatch_region_epoch += 1;
             return false;
         }
 
@@ -864,6 +893,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         //  unlike case e, 2 will be stale forever.
         // TODO: for case f, if 2 is stale for a long time, 2 will communicate with pd and pd will
         // tell 2 is stale, so 2 can remove itself.
+        let trans = &self.trans;
+        let raft_metrics = &mut self.raft_metrics;
         if let Some(peer) = self.region_peers.get(&region_id) {
             let region = peer.region();
             let epoch = region.get_region_epoch();
@@ -872,7 +903,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 util::find_peer(region, from_store_id).is_none()
             {
                 // The message is stale and not in current region.
-                self.handle_stale_msg(msg, epoch, is_vote_msg);
+                Self::handle_stale_msg(trans, msg, epoch, is_vote_msg, raft_metrics);
                 return Ok(true);
             }
 
@@ -887,6 +918,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         ) {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
+                raft_metrics.message_dropped.region_nonexistent += 1;
                 if util::is_first_vote_msg(msg) {
                     self.pending_votes.push(msg.to_owned());
                     info!(
@@ -914,12 +946,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
 
                 let not_exist = util::find_peer(region, from_store_id).is_none();
-                self.handle_stale_msg(msg, region_epoch, is_vote_msg && not_exist);
+                Self::handle_stale_msg(
+                    trans,
+                    msg,
+                    region_epoch,
+                    is_vote_msg && not_exist,
+                    raft_metrics,
+                );
 
                 return Ok(true);
             }
 
             if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
+                raft_metrics.message_dropped.region_tombstone_peer += 1;
                 return Err(box_err!(
                     "tombstone peer [epoch: {:?}] receive an invalid \
                      message {:?}, ignore it",
@@ -932,7 +971,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(false)
     }
 
-    fn handle_stale_msg(&self, msg: &RaftMessage, cur_epoch: &metapb::RegionEpoch, need_gc: bool) {
+    fn handle_stale_msg(
+        trans: &T,
+        msg: &RaftMessage,
+        cur_epoch: &metapb::RegionEpoch,
+        need_gc: bool,
+        raft_metrics: &mut RaftMetrics,
+    ) {
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
@@ -945,6 +990,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 msg_type,
                 cur_epoch
             );
+            raft_metrics.message_dropped.stale_msg += 1;
             return;
         }
 
@@ -961,7 +1007,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         gc_msg.set_to_peer(from_peer.clone());
         gc_msg.set_region_epoch(cur_epoch.clone());
         gc_msg.set_is_tombstone(true);
-        if let Err(e) = self.trans.send(gc_msg) {
+        if let Err(e) = trans.send(gc_msg) {
             error!("[region {}] send gc message failed {:?}", region_id, e);
         }
     }
@@ -1024,6 +1070,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 snap_region,
                 msg.get_to_peer()
             );
+            self.raft_metrics.message_dropped.region_no_peer += 1;
             return Ok(false);
         }
         if let Some((_, &exist_region_id)) = self.region_ranges
@@ -1033,6 +1080,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < enc_end_key(&snap_region) {
                 info!("region overlapped {:?}, {:?}", exist_region, snap_region);
+                self.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(false);
             }
         }
@@ -1043,6 +1091,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                region.get_id() != snap_region.get_id()
             {
                 info!("pending region overlapped {:?}, {:?}", region, snap_region);
+                self.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(false);
             }
         }
@@ -1643,25 +1692,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn register_report_region_flow_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(
-            event_loop,
-            Tick::ReportRegionFlow,
-            self.cfg.report_region_flow_interval.as_millis(),
-        ) {
-            error!("{} register raft gc log tick err: {:?}", self.tag, e);
-        };
-    }
-
-    fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
+    fn on_update_region_flow(&mut self) {
         for peer in self.region_peers.values_mut() {
             peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
             peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
-            if !peer.is_leader() {
-                peer.peer_stat.written_bytes = 0;
-                peer.peer_stat.written_keys = 0;
-                continue;
-            }
+            peer.peer_stat.last_read_bytes = peer.peer_stat.read_bytes;
+            peer.peer_stat.last_read_keys = peer.peer_stat.read_keys;
 
             self.store_stat
                 .region_bytes_written
@@ -1669,13 +1705,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.store_stat
                 .region_keys_written
                 .observe(peer.peer_stat.written_keys as f64);
-            peer.peer_stat.written_bytes = 0;
-            peer.peer_stat.written_keys = 0;
+            self.store_stat
+                .region_bytes_read
+                .observe(peer.peer_stat.read_bytes as f64);
+            self.store_stat
+                .region_keys_read
+                .observe(peer.peer_stat.read_keys as f64);
         }
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
+        self.store_stat.region_bytes_read.flush();
+        self.store_stat.region_keys_read.flush();
+    }
 
-        self.register_report_region_flow_tick(event_loop);
+    fn on_update_store_flow(&mut self) {
+        self.store_stat.engine_last_total_bytes_written =
+            self.store_stat.engine_total_bytes_written;
+        self.store_stat.engine_last_total_keys_written = self.store_stat.engine_total_keys_written;
+        self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
+        self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
     }
 
     #[allow(if_same_then_else)]
@@ -1926,7 +1974,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for peer in self.region_peers.values_mut() {
             peer.check_peers();
         }
-
         let mut leader_count = 0;
         for peer in self.region_peers.values() {
             if peer.is_leader() {
@@ -1934,7 +1981,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer.heartbeat_pd(&self.pd_worker);
             }
         }
-
+        self.on_update_region_flow();
         STORE_PD_HEARTBEAT_GAUGE_VEC
             .with_label_values(&["leader"])
             .set(leader_count as f64);
@@ -1987,6 +2034,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .set(apply_snapshot_count as f64);
 
         stats.set_start_time(self.start_time.sec as u32);
+
+        // report store write flow to pd
+        stats.set_bytes_written(
+            self.store_stat.engine_total_bytes_written -
+                self.store_stat.engine_last_total_bytes_written,
+        );
+        stats.set_keys_written(
+            self.store_stat.engine_total_keys_written -
+                self.store_stat.engine_last_total_keys_written,
+        );
+        stats.set_bytes_read(
+            self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
+        );
+        stats.set_keys_read(
+            self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
+        );
+        self.on_update_store_flow();
 
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
@@ -2128,6 +2192,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.cfg.lock_cf_compact_interval.as_millis(),
         ) {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
+        }
+    }
+
+    fn handle_coprocessor_msg(&mut self, request_stats: CopFlowStatistics) {
+        for (region_id, stats) in &request_stats {
+            if let Some(peer) = self.region_peers.get_mut(region_id) {
+                if !peer.is_leader() {
+                    continue;
+                }
+                peer.peer_stat.read_bytes += stats.read_bytes as u64;
+                peer.peer_stat.read_keys += stats.read_keys as u64;
+                self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
+                self.store_stat.engine_total_keys_read += stats.read_keys as u64;
+            }
         }
     }
 }
@@ -2440,6 +2518,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 );
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
+            Msg::CoprocessorStats { request_stats } => self.handle_coprocessor_msg(request_stats),
             Msg::ComputeHashResult {
                 region_id,
                 index,
@@ -2475,7 +2554,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
-            Tick::ReportRegionFlow => self.on_report_region_flow(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

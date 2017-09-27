@@ -183,7 +183,9 @@ impl<'a> Executor for AggregationExecutor<'a> {
         let value_size = group_key.len() + approximate_size(&aggr_cols, false);
         let mut value = Vec::with_capacity(value_size);
         box_try!(value.encode(aggr_cols.as_slice(), false));
-        value.extend_from_slice(group_key);
+        if !self.group_by.is_empty() {
+            value.extend_from_slice(group_key);
+        }
         self.cursor += 1;
         Ok(Some(Row {
             handle: 0,

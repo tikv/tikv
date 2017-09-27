@@ -19,11 +19,14 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
+use util::collections::HashMap;
+use storage::FlowStatistics;
 
 use util::escape;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 pub type BatchCallback = Box<FnBox(Vec<Option<RaftCmdResponse>>) + Send>;
+pub type CopFlowStatistics = HashMap<u64, FlowStatistics>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Tick {
@@ -36,7 +39,6 @@ pub enum Tick {
     SnapGc,
     CompactLockCf,
     ConsistencyCheck,
-    ReportRegionFlow,
 }
 
 #[derive(Debug, PartialEq)]
@@ -86,6 +88,8 @@ pub enum Msg {
     // For snapshot stats.
     SnapshotStats,
 
+    CoprocessorStats { request_stats: CopFlowStatistics },
+
     // For consistency check
     ComputeHashResult {
         region_id: u64,
@@ -103,6 +107,7 @@ impl fmt::Debug for Msg {
             Msg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
             Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
+            Msg::CoprocessorStats { .. } => write!(fmt, "Coperocessor stats"),
             Msg::ComputeHashResult {
                 region_id,
                 index,
