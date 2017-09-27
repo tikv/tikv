@@ -186,7 +186,21 @@ pub struct CFStatistics {
     pub prev: usize,
     pub seek: usize,
     pub seek_for_prev: usize,
+    pub flow_stats: FlowStatistics,
     pub over_seek_bound: usize,
+}
+
+#[derive(Default, Clone)]
+pub struct FlowStatistics {
+    pub read_keys: usize,
+    pub read_bytes: usize,
+}
+
+impl FlowStatistics {
+    pub fn add(&mut self, other: &Self) {
+        self.read_bytes = self.read_keys.saturating_add(other.read_bytes);
+        self.read_keys = self.read_keys.saturating_add(other.read_keys);
+    }
 }
 
 impl CFStatistics {
@@ -216,6 +230,7 @@ impl CFStatistics {
         self.seek = self.seek.saturating_add(other.seek);
         self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
         self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
+        self.flow_stats.add(&other.flow_stats);
     }
 }
 

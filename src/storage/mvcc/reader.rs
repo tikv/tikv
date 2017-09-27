@@ -94,7 +94,8 @@ impl<'a> MvccReader<'a> {
         };
 
         self.statistics.data.processed += 1;
-
+        self.statistics.data.flow_stats.read_bytes += res.len();
+        self.statistics.data.flow_stats.read_keys += 1;
         Ok(res)
     }
 
@@ -185,6 +186,8 @@ impl<'a> MvccReader<'a> {
         }
         let write = try!(Write::parse(cursor.value()));
         self.statistics.write.processed += 1;
+        self.statistics.write.flow_stats.read_bytes += cursor.value().len();
+        self.statistics.write.flow_stats.read_keys += 1;
         Ok(Some((commit_ts, write)))
     }
 
@@ -222,7 +225,6 @@ impl<'a> MvccReader<'a> {
             match try!(self.seek_write(key, ts)) {
                 Some((commit_ts, mut write)) => match write.write_type {
                     WriteType::Put => {
-                        self.statistics.write.processed += 1;
                         if write.short_value.is_some() {
                             if self.key_only {
                                 return Ok(Some(vec![]));
@@ -232,7 +234,6 @@ impl<'a> MvccReader<'a> {
                         return self.load_data(key, write.start_ts).map(Some);
                     }
                     WriteType::Delete => {
-                        self.statistics.write.processed += 1;
                         return Ok(None);
                     }
                     WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
@@ -250,7 +251,6 @@ impl<'a> MvccReader<'a> {
         let mut seek_ts = start_ts;
         while let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, seek_ts)) {
             if write.start_ts == start_ts {
-                self.statistics.write.processed += 1;
                 return Ok(Some((commit_ts, write.write_type)));
             }
             seek_ts = commit_ts + 1;

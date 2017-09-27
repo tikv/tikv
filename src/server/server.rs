@@ -22,10 +22,10 @@ use kvproto::debugpb_grpc::create_debug;
 
 use util::worker::Worker;
 use storage::Storage;
-use raftstore::store::{Engines, SnapManager, SnapshotStatusMsg};
+use raftstore::store::{CopFlowStatistics, Engines, Msg, SnapManager, SnapshotStatusMsg};
 
 use super::{Config, Result};
-use coprocessor::{EndPointHost, EndPointTask};
+use coprocessor::{CopRequestStatistics, CopSender, EndPointHost, EndPointTask, Result as CopResult};
 use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
@@ -50,6 +50,39 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
+}
+
+#[derive(Clone)]
+pub struct CopReport<R: RaftStoreRouter + 'static> {
+    router: R,
+}
+
+impl<R: RaftStoreRouter + 'static> CopReport<R> {
+    pub fn new(r: R) -> CopReport<R> {
+        CopReport { router: r.clone() }
+    }
+}
+
+impl<R: RaftStoreRouter + 'static> CopSender for CopReport<R> {
+    fn send(&self, stats: CopRequestStatistics) -> CopResult<()> {
+        box_try!(self.router.try_send(Msg::CoprocessorStats {
+            request_stats: stats as CopFlowStatistics,
+        }));
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct MockCopSender {}
+impl MockCopSender {
+    fn new() -> MockCopSender {
+        MockCopSender {}
+    }
+}
+impl CopSender for MockCopSender {
+    fn send(&self, _stats: CopRequestStatistics) -> CopResult<()> {
+        Ok(())
+    }
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -137,6 +170,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
             cfg,
+            MockCopSender::new(),
         );
         box_try!(
             self.end_point_worker
