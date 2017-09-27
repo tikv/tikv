@@ -176,7 +176,7 @@ impl Debugger {
         let limit = req.get_limit();
         let to_key = Some(req.get_to_key())
             .into_iter()
-            .filter(|k| k.len() > 0)
+            .filter(|k| !k.is_empty())
             .map(|k| keys::data_key(k))
             .next();
         if to_key.is_none() && limit == 0 {
@@ -375,12 +375,12 @@ fn truncate_data_key(data_key: &[u8]) -> Result<Key> {
     k.truncate_ts().map_err(|e| box_err!(e))
 }
 
-fn gen_mvcc_iter<'a>(
-    db: &'a RocksDB,
+fn gen_mvcc_iter(
+    db: &RocksDB,
     cf: CfName,
     from: Vec<u8>,
     to: Option<Vec<u8>>,
-) -> Result<DBIterator<'a>> {
+) -> Result<DBIterator> {
     let iter_option = IterOption::new(to, false);
     let mut iter = try!(db.new_iterator_cf(cf, iter_option).map_err(Error::from));
     iter.seek(SeekKey::from(from.as_ref()));
