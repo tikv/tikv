@@ -29,8 +29,8 @@ use std::sync::Arc;
 use clap::{App, Arg};
 use grpc::{CallOption, ChannelBuilder, EnvBuilder};
 use protobuf::RepeatedField;
-use kvproto::tikvpb;
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::debugpb;
+use kvproto::debugpb_grpc::DebugClient;
 
 fn main() {
     let app = App::new("TiKV fail point")
@@ -50,21 +50,22 @@ fn main() {
 
     let env = Arc::new(EnvBuilder::new().name_prefix("tikv-fail").build());
     let channel = ChannelBuilder::new(env).connect(addr);
-    let client = TikvClient::new(channel);
+    let client = DebugClient::new(channel);
 
-    let mut fail_cfgs = vec![];
-    let mut fail_cfg = tikvpb::FailPointCfg::new();
-    fail_cfg.set_name(
+    let mut failures = vec![];
+    let mut failure = debugpb::Failure::new();
+    failure.set_field_type(debugpb::Failure_Type::INJECT);
+    failure.set_name(
         "tikv::raftstore::store::store::raft_between_save".to_owned(),
     );
-    fail_cfg.set_actions("panic(fail_point_raft_between_write)".to_owned());
-    fail_cfgs.push(fail_cfg);
+    failure.set_actions("panic(fail_point_raft_between_write)".to_owned());
+    failures.push(failure);
 
-    let mut req = tikvpb::FailPointRequest::new();
-    req.set_fail_cfgs(RepeatedField::from_vec(fail_cfgs));
+    let mut req = debugpb::FailPointRequest::new();
+    req.set_failures(RepeatedField::from_vec(failures));
     println!("req {:?}", req);
 
     let option = CallOption::default().timeout(Duration::from_secs(10));
-    let resp = client.fail_point_opt(req.clone(), option).unwrap();
-    println!("resp {:?}", resp);
+    client.fail_point_opt(req.clone(), option).unwrap();
+    println!("Done!");
 }

@@ -16,6 +16,7 @@ use futures::{future, Future};
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
+use fail;
 
 use raftstore::store::Engines;
 use raftstore::store::debug::{Debugger, Error};
@@ -179,5 +180,47 @@ impl debugpb_grpc::Debug for Service {
         _: ServerStreamingSink<ScanMvccResponse>,
     ) {
         unimplemented!()
+    }
+
+    fn fail_point(
+        &self,
+        ctx: RpcContext,
+        req: FailPointRequest,
+        sink: UnarySink<FailPointResponse>,
+    ) {
+        const TAG: &'static str = "debug_region_size";
+
+        let on_error = move |e| {
+            error!("{} failed: {:?}", TAG, e);
+        };
+
+        for failure in req.get_failures() {
+            match failure.get_field_type() {
+                Failure_Type::INVALID => {
+                    let status = RpcStatus::new(
+                        RpcStatusCode::Unknown,
+                        Some("Failure Type INVALID".to_owned()),
+                    );
+                    ctx.spawn(sink.fail(status).map_err(on_error));
+                    return;
+                }
+                Failure_Type::INJECT => if let Err(e) =
+                    fail::cfg(failure.get_name(), failure.get_actions())
+                {
+                    let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
+                    ctx.spawn(sink.fail(status).map_err(on_error));
+                    return;
+                },
+                Failure_Type::RECOVER => if let Err(e) =
+                    fail::cfg(failure.get_name(), failure.get_actions())
+                {
+                    let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
+                    ctx.spawn(sink.fail(status).map_err(on_error));
+                    return;
+                },
+            }
+        }
+        let resp = FailPointResponse::new();
+        ctx.spawn(sink.success(resp).map_err(on_error));
     }
 }
