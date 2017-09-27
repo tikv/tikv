@@ -718,6 +718,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             region_id,
                             p.peer_id()
                         );
+                        self.raft_metrics.message_dropped.stale_peer += 1;
                         return Ok(false);
                     }
                     // There is no tasks in apply worker.
@@ -732,6 +733,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     target_peer_id,
                     p.peer_id()
                 );
+                self.raft_metrics.message_dropped.stale_msg += 1;
                 return Ok(false);
             }
         }
@@ -747,6 +749,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region_id,
                     p
                 );
+                self.raft_metrics.message_dropped.stale_peer += 1;
                 return Ok(false);
             }
             info!("[region {}] destroying stale peer {:?}", region_id, p);
@@ -768,6 +771,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 target,
                 msg_type
             );
+            self.raft_metrics.message_dropped.stale_msg += 1;
             return Ok(false);
         }
 
@@ -782,6 +786,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if util::is_first_vote_msg(msg) {
                     self.pending_votes.push(msg.to_owned());
                 }
+                self.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(false);
             }
         }
@@ -795,7 +800,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-        if !self.is_raft_msg_valid(&msg) {
+        if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
 
@@ -828,7 +833,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     // return false means the message is invalid, and can be ignored.
-    fn is_raft_msg_valid(&self, msg: &RaftMessage) -> bool {
+    fn validate_raft_msg(&mut self, msg: &RaftMessage) -> bool {
         let region_id = msg.get_region_id();
         let from = msg.get_from_peer();
         let to = msg.get_to_peer();
@@ -848,6 +853,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 to.get_store_id(),
                 self.store_id()
             );
+            self.raft_metrics.message_dropped.mismatch_store_id += 1;
             return false;
         }
 
@@ -856,6 +862,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 "[region {}] missing epoch in raft message, ignore it",
                 region_id
             );
+            self.raft_metrics.message_dropped.mismatch_region_epoch += 1;
             return false;
         }
 
@@ -887,6 +894,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         //  unlike case e, 2 will be stale forever.
         // TODO: for case f, if 2 is stale for a long time, 2 will communicate with pd and pd will
         // tell 2 is stale, so 2 can remove itself.
+        let trans = &self.trans;
+        let raft_metrics = &mut self.raft_metrics;
         if let Some(peer) = self.region_peers.get(&region_id) {
             let region = peer.region();
             let epoch = region.get_region_epoch();
@@ -895,7 +904,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 util::find_peer(region, from_store_id).is_none()
             {
                 // The message is stale and not in current region.
-                self.handle_stale_msg(msg, epoch, is_vote_msg);
+                Self::handle_stale_msg(trans, msg, epoch, is_vote_msg, raft_metrics);
                 return Ok(true);
             }
 
@@ -910,6 +919,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         ) {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
+                raft_metrics.message_dropped.region_nonexistent += 1;
                 if util::is_first_vote_msg(msg) {
                     self.pending_votes.push(msg.to_owned());
                     info!(
@@ -937,12 +947,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
 
                 let not_exist = util::find_peer(region, from_store_id).is_none();
-                self.handle_stale_msg(msg, region_epoch, is_vote_msg && not_exist);
+                Self::handle_stale_msg(
+                    trans,
+                    msg,
+                    region_epoch,
+                    is_vote_msg && not_exist,
+                    raft_metrics,
+                );
 
                 return Ok(true);
             }
 
             if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
+                raft_metrics.message_dropped.region_tombstone_peer += 1;
                 return Err(box_err!(
                     "tombstone peer [epoch: {:?}] receive an invalid \
                      message {:?}, ignore it",
@@ -955,7 +972,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(false)
     }
 
-    fn handle_stale_msg(&self, msg: &RaftMessage, cur_epoch: &metapb::RegionEpoch, need_gc: bool) {
+    fn handle_stale_msg(
+        trans: &T,
+        msg: &RaftMessage,
+        cur_epoch: &metapb::RegionEpoch,
+        need_gc: bool,
+        raft_metrics: &mut RaftMetrics,
+    ) {
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
@@ -968,6 +991,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 msg_type,
                 cur_epoch
             );
+            raft_metrics.message_dropped.stale_msg += 1;
             return;
         }
 
@@ -984,7 +1008,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         gc_msg.set_to_peer(from_peer.clone());
         gc_msg.set_region_epoch(cur_epoch.clone());
         gc_msg.set_is_tombstone(true);
-        if let Err(e) = self.trans.send(gc_msg) {
+        if let Err(e) = trans.send(gc_msg) {
             error!("[region {}] send gc message failed {:?}", region_id, e);
         }
     }
@@ -1047,6 +1071,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 snap_region,
                 msg.get_to_peer()
             );
+            self.raft_metrics.message_dropped.region_no_peer += 1;
             return Ok(false);
         }
         if let Some((_, &exist_region_id)) = self.region_ranges
@@ -1056,6 +1081,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < enc_end_key(&snap_region) {
                 info!("region overlapped {:?}, {:?}", exist_region, snap_region);
+                self.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(false);
             }
         }
@@ -1066,6 +1092,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                region.get_id() != snap_region.get_id()
             {
                 info!("pending region overlapped {:?}, {:?}", region, snap_region);
+                self.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(false);
             }
         }
