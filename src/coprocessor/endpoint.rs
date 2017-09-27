@@ -471,6 +471,12 @@ impl BatchRunnable<Task> for Host {
         if let Err(e) = self.pool.stop() {
             warn!("Stop threadpool failed with {:?}", e);
         }
+        if let Err(e) = self.low_priority_pool.stop() {
+            warn!("Stop threadpool failed with {:?}", e);
+        }
+        if let Err(e) = self.high_priority_pool.stop() {
+            warn!("Stop threadpool failed with {:?}", e);
+        }
     }
 }
 
