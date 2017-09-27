@@ -95,7 +95,10 @@ impl Stream for SnapChunk {
                 self.remain_bytes -= buf.len();
                 let mut chunk = SnapshotChunk::new();
                 chunk.set_data(buf);
-                Ok(Async::Ready(Some((chunk, WriteFlags::default()))))
+                Ok(Async::Ready(Some((
+                    chunk,
+                    WriteFlags::default().buffer_hint(self.remain_bytes > 0),
+                ))))
             }
             Err(e) => Err(box_err!("failed to read snapshot chunk: {}", e)),
         }
