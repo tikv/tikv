@@ -40,6 +40,7 @@ use raftstore::util::MAX_LEADER_LEASE;
 use storage::sync_storage::SyncStorage;
 use storage::util::new_raft_engine;
 use tikv::coprocessor::select::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
+use tikv::coprocessor::Result as CopResult;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
@@ -57,6 +58,19 @@ fn row_cnt(chunks: &[Chunk]) -> usize {
 struct Row {
     handle: i64,
     data: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct MockCopSender {}
+impl MockCopSender {
+    fn new() -> MockCopSender {
+        MockCopSender {}
+    }
+}
+impl CopSender for MockCopSender {
+    fn send(&self, _stats: CopRequestStatistics) -> CopResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -670,7 +684,12 @@ fn init_data_with_engine_and_commit(
     let mut end_point = Worker::new("test select worker");
     let mut cfg = Config::default();
     cfg.end_point_concurrency = 1;
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg);
+    let runner = EndPointHost::new(
+        store.get_engine(),
+        end_point.scheduler(),
+        &cfg,
+        MockCopSender::new(),
+    );
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)
