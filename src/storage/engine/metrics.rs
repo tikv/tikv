@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, Counter, CounterVec, HistogramVec};
+use prometheus::{exponential_buckets, CounterVec, HistogramVec};
 
 lazy_static! {
     pub static ref ASYNC_REQUESTS_COUNTER_VEC: CounterVec =
@@ -27,11 +27,5 @@ lazy_static! {
             "Bucketed histogram of processing successful asynchronous requests.",
             &["type"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
-        ).unwrap();
-
-    pub static ref CURSOR_OVER_SEEK_BOUND_COUNTER: Counter =
-        register_counter!(
-            "tikv_storage_engine_cursor_over_seek_bound_total",
-            "Total number of cursor next over seek bound number"
         ).unwrap();
 }
