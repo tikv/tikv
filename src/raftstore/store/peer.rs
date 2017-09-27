@@ -1213,7 +1213,7 @@ impl Peer {
         }
 
         match change_type {
-            ConfChangeType::AddNode => {
+            ConfChangeType::AddNode | ConfChangeType::AddNonvoter => {
                 status.progress.insert(peer.get_id(), Progress::default());
             }
             ConfChangeType::RemoveNode => {
@@ -1221,9 +1221,6 @@ impl Peer {
                     // It's always safe to remove a unexisting node.
                     return Ok(());
                 }
-            }
-            ConfChangeType::AddNonvoter => {
-                status.progress.insert(peer.get_id(), Progress::default());
             }
             ConfChangeType::AddVoter | ConfChangeType::UpdateNode | ConfChangeType::DemoteVoter => {
                 unimplemented!();

@@ -169,7 +169,7 @@ pub struct SoftState {
     pub raft_state: StateRole,
 }
 
-#[derive(Default)]
+// #[derive(Default)]
 pub struct Raft<T: Storage> {
     pub term: u64,
     pub vote: u64,
@@ -236,12 +236,11 @@ pub struct Raft<T: Storage> {
 }
 
 fn new_progress(next_idx: u64, ins_size: usize, suffrage: SuffrageState) -> Progress {
-    Progress {
-        next_idx: next_idx,
-        ins: Inflights::new(ins_size),
-        suffrage: suffrage,
-        ..Default::default()
-    }
+    let mut p = Progress::default();
+    p.next_idx = next_idx;
+    p.ins = Inflights::new(ins_size);
+    p.suffrage = suffrage;
+    p
 }
 
 fn new_message(to: u64, field_type: MessageType, from: Option<u64>) -> Message {
@@ -273,7 +272,8 @@ impl<T: Storage> Raft<T> {
         c.validate().expect("configuration is invalid");
         let rs = store.initial_state().expect("");
         let raft_log = RaftLog::new(store, c.tag.clone());
-        let mut peers: &[u64] = &c.peers;
+        let mut peers: Vec<Server> = vec![];
+        peers.extend_from_slice(&c.peers);
         if !rs.conf_state.get_nodes().is_empty() && !rs.conf_state.get_servers().is_empty() {
             panic!(
                 "{} cannot specify both ConfState.Nodes and ConfState.Servers",
@@ -292,7 +292,7 @@ impl<T: Storage> Raft<T> {
             }
             for id in rs.conf_state.get_nodes() {
                 let mut server = Server::new();
-                server.set_node(id);
+                server.set_node(*id);
                 server.set_suffrage(SuffrageState::Voter);
                 peers.push(server);
             }
@@ -336,7 +336,7 @@ impl<T: Storage> Raft<T> {
             skip_bcast_commit: c.skip_bcast_commit,
             tag: c.tag.to_owned(),
         };
-        for p in peers {
+        for p in peers.drain(..) {
             r.prs.insert(
                 p.get_node(),
                 new_progress(1, r.max_inflight, p.get_suffrage()),
@@ -1786,7 +1786,7 @@ impl<T: Storage> Raft<T> {
                 self.prs[&n]
             );
         }
-        for &s in meta.get_conf_state().get_servers() {
+        for s in meta.get_conf_state().get_servers() {
             let next_idx = self.raft_log.last_index() + 1;
             let mut matched = 0;
             if s.get_node() == self.id {
@@ -1798,7 +1798,7 @@ impl<T: Storage> Raft<T> {
                 "{} restored progress of {} [{:?}]",
                 self.tag,
                 s.get_node(),
-                self.prs[s.get_node()]
+                self.prs.get(&s.get_node())
             );
         }
         None
@@ -1841,8 +1841,9 @@ impl<T: Storage> Raft<T> {
 
     fn add_node_with_suffrage(&mut self, id: u64, suffrage: SuffrageState) {
         self.pending_conf = false;
-        if let Some(pr) = self.prs.get_mut(&id) {
-            if pr.suffrage >= suffrage {
+        if self.prs.contains_key(&id) {
+            let mut pr = self.prs.get_mut(&id).unwrap();
+            if pr.suffrage == suffrage {
                 // Ignore any redundant addNode calls (which can happen because the
                 // initial bootstrapping entries are applied twice).
                 return;

@@ -83,7 +83,6 @@ pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
 const STR_CONF_CHANGE_ADD_NODE: &'static str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &'static str = "RemoveNode";
 const STR_CONF_CHANGE_ADD_NON_VOTER: &'static str = "AddNonvoter";
-const STR_CONF_CHANGE_ADD_VOTER: &'static str = "AddVoter";
 
 pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
     match *conf_type {
@@ -91,7 +90,7 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::UpdateNode => unimplemented!(),
         ConfChangeType::AddNonvoter => STR_CONF_CHANGE_ADD_NON_VOTER,
-        ConfChangeType::AddVoter => STR_CONF_CHANGE_Add_VOTER,
+        ConfChangeType::AddVoter => unimplemented!(),
         ConfChangeType::DemoteVoter => unimplemented!(),
     }
 }

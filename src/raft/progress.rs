@@ -43,8 +43,7 @@ impl Default for ProgressState {
     }
 }
 
-
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Progress {
     pub matched: u64,
     pub next_idx: u64,
@@ -86,8 +85,20 @@ pub struct Progress {
 }
 
 
-
 impl Progress {
+    pub fn default() -> Progress {
+        Progress {
+            matched: 0,
+            next_idx: 0,
+            state: ProgressState::default(),
+            suffrage: SuffrageState::Nonvoter,
+            paused: false,
+            pending_snapshot: 0,
+            recent_active: false,
+            ins: Inflights::new(0),
+        }
+    }
+
     fn reset_state(&mut self, state: ProgressState) {
         self.paused = false;
         self.pending_snapshot = 0;
