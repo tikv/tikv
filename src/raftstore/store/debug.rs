@@ -308,7 +308,7 @@ impl Debugger {
         let (tx, rx) = channel::<Kv>();
         let db = self.engines.kv_engine.clone();
         thread::Builder::new()
-            .name(format!("scan_mvcc_{}", cf))
+            .name(thd_name!(format!("scan_mvcc_{}", cf)))
             .spawn(move || -> Result<()> {
                 for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
                     box_try!(tx.send(kv));
@@ -323,7 +323,7 @@ impl Debugger {
         let (tx, rx) = channel::<Vec<Kv>>();
         let db = self.engines.kv_engine.clone();
         thread::Builder::new()
-            .name(format!("scan_mvcc_{}", cf))
+            .name(thd_name!(format!("scan_mvcc_{}", cf)))
             .spawn(move || -> Result<()> {
                 let (mut cur, mut cur_key): (_, Option<Key>) = (Vec::new(), None);
                 for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
