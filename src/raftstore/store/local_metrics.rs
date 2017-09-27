@@ -160,6 +160,79 @@ impl RaftMessageMetrics {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct RaftMessageDropMetrics {
+    pub mismatch_store_id: u64,
+    pub mismatch_region_epoch: u64,
+    pub stale_msg: u64,
+    pub stale_peer: u64,
+    pub region_overlap: u64,
+    pub region_no_peer: u64,
+    pub region_tombstone_peer: u64,
+    pub region_nonexistent: u64,
+}
+
+impl RaftMessageDropMetrics {
+    fn flush(&mut self) {
+        if self.mismatch_store_id > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["mismatch_store_id"])
+                .inc_by(self.mismatch_store_id as f64)
+                .unwrap();
+            self.mismatch_store_id = 0;
+        }
+        if self.mismatch_region_epoch > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["mismatch_region_epoch"])
+                .inc_by(self.mismatch_region_epoch as f64)
+                .unwrap();
+            self.mismatch_region_epoch = 0;
+        }
+        if self.stale_peer > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["stale_peer"])
+                .inc_by(self.stale_peer as f64)
+                .unwrap();
+            self.stale_peer = 0;
+        }
+        if self.stale_msg > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["stale_msg"])
+                .inc_by(self.stale_msg as f64)
+                .unwrap();
+            self.stale_msg = 0;
+        }
+        if self.region_overlap > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["region_overlap"])
+                .inc_by(self.region_overlap as f64)
+                .unwrap();
+            self.region_overlap = 0;
+        }
+        if self.region_no_peer > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["region_no_peer"])
+                .inc_by(self.region_no_peer as f64)
+                .unwrap();
+            self.region_no_peer = 0;
+        }
+        if self.region_tombstone_peer > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["region_tombstone_peer"])
+                .inc_by(self.region_tombstone_peer as f64)
+                .unwrap();
+            self.region_tombstone_peer = 0;
+        }
+        if self.region_nonexistent > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["region_nonexistent"])
+                .inc_by(self.region_nonexistent as f64)
+                .unwrap();
+            self.region_nonexistent = 0;
+        }
+    }
+}
+
 /// The buffered metrics counters for raft propose.
 #[derive(Clone)]
 pub struct RaftProposeMetrics {
@@ -242,6 +315,7 @@ impl RaftProposeMetrics {
 pub struct RaftMetrics {
     pub ready: RaftReadyMetrics,
     pub message: RaftMessageMetrics,
+    pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
     pub process_tick: LocalHistogram,
     pub process_ready: LocalHistogram,
@@ -253,6 +327,7 @@ impl Default for RaftMetrics {
         RaftMetrics {
             ready: Default::default(),
             message: Default::default(),
+            message_dropped: Default::default(),
             propose: Default::default(),
             process_tick: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["tick"])
@@ -274,5 +349,6 @@ impl RaftMetrics {
         self.process_tick.flush();
         self.process_ready.flush();
         self.append_log.flush();
+        self.message_dropped.flush();
     }
 }

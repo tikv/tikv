@@ -56,6 +56,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_raft_dropped_message_total",
+            "Total number of raft dropped messages.",
+            &["type"]
+        ).unwrap();
+
     pub static ref STORE_PD_HEARTBEAT_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_pd_heartbeat_tick_total",
