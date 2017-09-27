@@ -16,7 +16,7 @@
 mod imp {
     use std::{ptr, slice};
     use std::sync::Arc;
-    use libc::{self, c_char, c_void, c_int};
+    use libc::{self, c_char, c_int, c_void};
 
     use rocksdb::DB;
     use prometheus::{self, Encoder, TextEncoder};
