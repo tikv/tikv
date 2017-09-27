@@ -28,6 +28,7 @@ use storage::{Snapshot, SnapshotStore, Statistics};
 use super::fmsketch::FMSketch;
 use super::histogram::Histogram;
 
+// `AnalyzeContext` is used to handle `anlyzeReq`
 pub struct AnalyzeContext<'a> {
     req: AnalyzeReq,
     snap: SnapshotStore<'a>,
@@ -78,6 +79,8 @@ impl<'a> AnalyzeContext<'a> {
         }
     }
 
+    // handle_index is used to handle `AnalyzeIndexReq`,
+    // it would build a histogram of index values.
     fn handle_index(mut self) -> Result<Vec<u8>> {
         let req = self.req.take_idx_req();
         let mut scanner = IndexScanExecutor::new_with_cols_len(
@@ -97,6 +100,9 @@ impl<'a> AnalyzeContext<'a> {
         Ok(dt)
     }
 
+    // handle_column is used to process `AnalyzeColumnsReq`
+    // it would build a histogram for the primary key(if needed) and
+    // collectors for each column value.
     fn handle_column(mut self) -> Result<Vec<u8>> {
         let col_req = self.req.take_col_req();
         let builder = SampleBuilder::new(col_req, self.snap, self.ranges, &mut self.statistics);
@@ -129,6 +135,9 @@ struct SampleBuilder<'a> {
     max_sketch_size: usize,
 }
 
+/// `SampleBuilder` is used to analyze columns. It collects sample from
+/// the result set using Reservoir Sampling algorithm, and estimates NDVs
+/// using FM Sketch during the collecting process.
 impl<'a> SampleBuilder<'a> {
     fn new(
         mut req: AnalyzeColumnsReq,
@@ -158,6 +167,9 @@ impl<'a> SampleBuilder<'a> {
         }
     }
 
+    // `collect_samples_and_estimate_ndvs` returns the sample collectors which contain total count,
+    // null count and distinct values count. And it also returns the statistic builder for PK
+    // which contains the histogram. See https://en.wikipedia.org/wiki/Reservoir_sampling
     fn collect_samples_and_estimate_ndvs(mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
         let mut pk_builder = if self.pk_id == -1 {
             Histogram::default()
@@ -185,6 +197,7 @@ impl<'a> SampleBuilder<'a> {
     }
 }
 
+/// `SampleCollector` will collect Samples and calculate the count and ndv of an attribute.
 #[derive(Clone)]
 struct SampleCollector {
     samples: Vec<Vec<u8>>,

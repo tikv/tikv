@@ -299,6 +299,7 @@ impl RowColsDict {
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 
+    // get binary of cols, keep the origin order and return one slice.
     pub fn get_binary(&self) -> &[u8] {
         let mut start = self.value.len();
         let mut length = 0;

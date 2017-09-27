@@ -98,6 +98,7 @@ impl Row {
         }
     }
 
+    // get binary of each column in order of columns
     pub fn get_binary_cols(&self, columns: &[ColumnInfo]) -> Result<Vec<Vec<u8>>> {
         let mut res = Vec::with_capacity(columns.len());
         for col in columns {
