@@ -156,7 +156,7 @@ pub trait Iterator {
 }
 
 macro_rules! near_loop {
-    ($cond:expr, $fallback:expr,$st:expr) => ({
+    ($cond:expr, $fallback:expr, $st:expr) => ({
         let mut cnt = 0;
         while $cond {
             cnt += 1;
