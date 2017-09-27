@@ -13,9 +13,12 @@
 
 use std::time::Duration;
 use std::{fs, thread};
+use std::sync::mpsc::channel;
 use rand::{self, Rng};
 
+use kvproto::metapb;
 use kvproto::eraftpb::MessageType;
+use kvproto::raft_cmdpb::RaftCmdResponse;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -31,7 +34,11 @@ use super::transport_simulate::*;
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
 
-fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
+fn test_base_split_region<T, F>(cluster: &mut Cluster<T>, split: F, right_derive: bool)
+where
+    T: Simulator,
+    F: Fn(&mut Cluster<T>, &metapb::Region, &[u8]),
+{
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
 
@@ -53,7 +60,7 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>, right_derive: 
         assert_eq!(region.get_id(), region2.get_id());
 
         // Split with split_key, so left_key must in left, and right_key in right.
-        cluster.must_split(&region, split_key);
+        split(cluster, &region, split_key);
 
         let left = pd_client.get_region(left_key).unwrap();
         let right = pd_client.get_region(right_key).unwrap();
@@ -101,28 +108,80 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>, right_derive: 
 fn test_node_base_split_region_left_derive() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_base_split_region(&mut cluster, false);
+    test_base_split_region(&mut cluster, Cluster::must_split, false);
 }
 
 #[test]
 fn test_node_base_split_region_right_derive() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_base_split_region(&mut cluster, true);
+    test_base_split_region(&mut cluster, Cluster::must_split, true);
 }
 
 #[test]
 fn test_server_base_split_region_left_derive() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_base_split_region(&mut cluster, false);
+    test_base_split_region(&mut cluster, Cluster::must_split, false);
 }
 
 #[test]
 fn test_server_base_split_region_right_derive() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_base_split_region(&mut cluster, true);
+    test_base_split_region(&mut cluster, Cluster::must_split, true);
+}
+
+#[test]
+fn test_server_manual_split_region_right_derive() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_base_split_region(&mut cluster, Cluster::must_manual_split, false);
+}
+
+#[test]
+fn test_server_manual_split_region_twice() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+    let pd_client = cluster.pd_client.clone();
+
+    let (split_key, left_key, right_key) = (b"k22", b"k11", b"k33");
+    cluster.must_put(left_key, b"v1");
+    cluster.must_put(right_key, b"v3");
+
+    // Left and right key must be in same region before split.
+    let region = pd_client.get_region(left_key).unwrap();
+    let region2 = pd_client.get_region(right_key).unwrap();
+    assert_eq!(region.get_id(), region2.get_id());
+
+    let (tx, rx) = channel();
+    let key = split_key.to_vec();
+    let c = Box::new(move |mut resp: RaftCmdResponse| {
+        let admin_resp = resp.mut_admin_response();
+        let split_resp = admin_resp.mut_split();
+        let left = split_resp.take_left();
+        let right = split_resp.take_right();
+        assert_eq!(left.get_end_key(), key.as_slice());
+        assert_eq!(region2.get_start_key(), left.get_start_key());
+        assert_eq!(left.get_end_key(), right.get_start_key());
+        assert_eq!(region2.get_end_key(), right.get_end_key());
+        tx.send(right).unwrap();
+    });
+    cluster.split_region_by_key(&region, split_key, c);
+    let region3 = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    cluster.must_put(split_key, b"v2");
+
+    let (tx1, rx1) = channel();
+    let c = Box::new(move |resp: RaftCmdResponse| {
+        assert!(resp.has_header());
+        assert!(resp.get_header().has_error());
+        assert!(!resp.has_admin_response());
+        tx1.send(()).unwrap();
+    });
+    cluster.split_region_by_key(&region3, split_key, c);
+    rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
 /// Keep puting random kvs until specified size limit is reached.

@@ -593,7 +593,7 @@ impl SelectContextCore {
             Entry::Vacant(e) => {
                 let mut aggrs = Vec::with_capacity(aggr_exprs.len());
                 for expr in aggr_exprs {
-                    let mut aggr = try!(aggregate::build_aggr_func(expr));
+                    let mut aggr = try!(aggregate::build_aggr_func(expr.get_tp()));
                     let args = box_try!(self.eval.batch_eval(&self.ctx, expr.get_children()));
                     try!(aggr.update(&self.ctx, args));
                     aggrs.push(aggr);

@@ -46,7 +46,7 @@ impl<T: Display> Scheduler<T> {
     /// If the worker is stopped, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
         debug!("scheduling task {}", task);
-        if let Err(err) = self.sender.send(Some(task)) {
+        if let Err(err) = self.sender.unbounded_send(Some(task)) {
             return Err(Stopped(err.into_inner().unwrap()));
         }
         Ok(())
@@ -150,7 +150,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         if self.handle.is_none() {
             return None;
         }
-        if let Err(e) = self.scheduler.sender.send(None) {
+        if let Err(e) = self.scheduler.sender.unbounded_send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
         self.handle.take()
