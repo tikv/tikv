@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, HashMap};
+use std::mem;
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
@@ -22,6 +23,7 @@ use tikv::coprocessor::*;
 use tikv::coprocessor;
 use kvproto::kvrpcpb::Context;
 use tikv::coprocessor::codec::{datum, table, Datum};
+use tikv::coprocessor::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
 use tikv::storage::{Key, Mutation, ALL_CFS};
 use tikv::server::Config;
@@ -86,7 +88,7 @@ impl Iterator for ChunkSpliter {
                 assert_eq!(self.readed, self.chunk[0].get_rows_data().len());
                 self.idx = 0;
                 self.readed = 0;
-                self.chunk.swap_remove(0);
+                self.chunk.remove(0);
                 continue;
             }
             let metas = self.chunk[0].get_rows_meta();
@@ -99,6 +101,43 @@ impl Iterator for ChunkSpliter {
             self.readed += data_len as usize;
             self.idx += 1;
             return Some(row);
+        }
+    }
+}
+
+struct DAGChunkSpliter {
+    chunks: Vec<Chunk>,
+    datums: Vec<Datum>,
+    col_cnt: usize,
+}
+
+impl DAGChunkSpliter {
+    fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DAGChunkSpliter {
+        DAGChunkSpliter {
+            chunks: chunks,
+            col_cnt: col_cnt,
+            datums: Vec::with_capacity(0),
+        }
+    }
+}
+
+impl Iterator for DAGChunkSpliter {
+    type Item = Vec<Datum>;
+
+    fn next(&mut self) -> Option<Vec<Datum>> {
+        loop {
+            if self.chunks.is_empty() && self.datums.is_empty() {
+                return None;
+            } else if self.datums.is_empty() {
+                let chunk = self.chunks.remove(0);
+                let mut data = chunk.get_rows_data();
+                self.datums = data.decode().unwrap();
+                continue;
+            }
+            assert_eq!(self.datums.len() >= self.col_cnt, true);
+            let mut cols = self.datums.split_off(self.col_cnt);
+            mem::swap(&mut self.datums, &mut cols);
+            return Some(cols);
         }
     }
 }
@@ -191,17 +230,28 @@ impl Table {
         tb_info
     }
 
-    fn get_index_info(&self, index: i64) -> schema::IndexInfo {
+    fn get_index_info(&self, index: i64, store_handle: bool) -> schema::IndexInfo {
         let mut idx_info = schema::IndexInfo::new();
         idx_info.set_table_id(self.id);
         idx_info.set_index_id(index);
+        let mut has_pk = false;
         for col_id in &self.idxs[&index] {
             let col = self.cols[col_id];
             let mut c_info = ColumnInfo::new();
             c_info.set_tp(col.col_type);
             c_info.set_column_id(col.id);
-            c_info.set_pk_handle(col.id == self.handle_id);
+            if col.id == self.handle_id {
+                c_info.set_pk_handle(true);
+                has_pk = true
+            }
             idx_info.mut_columns().push(c_info);
+        }
+        if !has_pk && store_handle {
+            let mut handle_info = ColumnInfo::new();
+            handle_info.set_tp(TYPE_LONG);
+            handle_info.set_column_id(-1);
+            handle_info.set_pk_handle(true);
+            idx_info.mut_columns().push(handle_info);
         }
         idx_info
     }
@@ -429,7 +479,8 @@ impl<'a> Select<'a> {
             self.sel.set_table_info(self.table.get_table_info());
             req.set_tp(REQ_TYPE_SELECT);
         } else {
-            self.sel.set_index_info(self.table.get_index_info(self.idx));
+            self.sel
+                .set_index_info(self.table.get_index_info(self.idx, false));
             req.set_tp(REQ_TYPE_INDEX);
         }
         self.sel.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
@@ -698,7 +749,7 @@ impl DAGSelect {
         let mut exec = Executor::new();
         exec.set_tp(ExecType::TypeIndexScan);
         let mut scan = IndexScan::new();
-        let mut index_info = table.get_index_info(idx);
+        let mut index_info = table.get_index_info(idx, true);
         scan.set_table_id(index_info.get_table_id());
         scan.set_index_id(idx);
 
@@ -897,14 +948,13 @@ fn test_select() {
     // for dag selection
     let req = DAGSelect::from(&product.table).build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), data.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
             datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
-        assert_eq!(id, row.handle);
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(result_encoded, &*expected_encoded);
     }
 
     end_point.stop().unwrap().join().unwrap();
@@ -984,12 +1034,15 @@ fn test_group_by() {
         .build();
     let mut resp = handle_select(&end_point, req);
     // should only have name:0, name:2 and name:1
-    assert_eq!(row_cnt(resp.get_chunks()), 3);
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
     for (row, name) in spliter.zip(&[b"name:0", b"name:2", b"name:1"]) {
         let expected_encoded = datum::encode_value(&[Datum::Bytes(name.to_vec())]).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, 3);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1042,13 +1095,17 @@ fn test_aggr_count() {
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 2);
     for (row, (name, cnt)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), name];
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
 
     let exp = vec![
         (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)], 1),
@@ -1079,14 +1136,18 @@ fn test_aggr_count() {
         .group_by(&[product.name, product.count])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (gk_data, cnt)) in spliter.zip(exp) {
         let mut expected_datum = vec![Datum::U64(cnt)];
         expected_datum.extend_from_slice(gk_data.as_slice());
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1136,13 +1197,17 @@ fn test_aggr_first() {
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 2);
     for (row, (name, id)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::I64(id), name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
 
     let exp = vec![
         (2, Datum::Bytes(b"name:0".to_vec())),
@@ -1172,13 +1237,17 @@ fn test_aggr_first() {
         .group_by(&[product.count])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 2);
     for (row, (count, name)) in spliter.zip(exp) {
         let expected_datum = vec![name, Datum::I64(count)];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1233,13 +1302,17 @@ fn test_aggr_avg() {
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (name, (sum, cnt))) in spliter.zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), sum, name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
 
     end_point.stop().unwrap();
 }
@@ -1284,13 +1357,17 @@ fn test_aggr_sum() {
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 2);
     for (row, (name, cnt)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::Dec(cnt.into()), name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
     end_point.stop().unwrap();
 }
 
@@ -1360,13 +1437,17 @@ fn test_aggr_extre() {
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (name, max, min)) in spliter.zip(exp) {
         let expected_datum = vec![max, min, name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
 
     end_point.stop().unwrap();
 }
@@ -1416,15 +1497,17 @@ fn test_order_by_column() {
         .limit(5)
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), 5);
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (id, name, cnt)) in spliter.zip(exp) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
             datum::encode_value(&[(id as i64).into(), name_datum, (cnt as i64).into()]).unwrap();
-        assert_eq!(id as i64, row.handle);
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, 5);
     end_point.stop().unwrap().join().unwrap();
 }
 
@@ -1460,11 +1543,17 @@ fn test_order_by_pk_with_select_from_index() {
         .limit(5)
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), 5);
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
-    for (row, (id, _, _)) in spliter.zip(expect) {
-        assert_eq!(id, row.handle);
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
+    for (row, (id, name, cnt)) in spliter.zip(expect) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded =
+            datum::encode_value(&[name_datum, (cnt as i64).into(), (id as i64).into()]).unwrap();
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, 5);
     end_point.stop().unwrap().join().unwrap();
 }
 
@@ -1496,14 +1585,16 @@ fn test_limit() {
     // for dag
     let req = DAGSelect::from(&product.table).limit(5).build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), 5);
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
-        assert_eq!(id, row.handle);
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, 5);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1544,14 +1635,16 @@ fn test_reverse() {
         .order_by(product.id, true)
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), 5);
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
-        assert_eq!(id, row.handle);
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, 5);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1597,14 +1690,15 @@ fn test_index() {
     // for dag
     let req = DAGSelect::from_index(&product.table, product.id).build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), data.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
-    let mut handles: Vec<_> = spliter.map(|row| row.handle).collect();
-    handles.sort();
-    for (&h, (id, _, _)) in handles.iter().zip(data) {
-        assert_eq!(id, h);
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
+    for (row, (id, _, _)) in spliter.zip(data) {
+        let expected_encoded = datum::encode_value(&[id.into()]).unwrap();
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
-
+    assert_eq!(row_count, 6);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1643,13 +1737,15 @@ fn test_index_reverse_limit() {
         .build();
 
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), 5);
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
-    let handles = spliter.map(|row| row.handle);
-    data.reverse();
-    for (h, (id, _, _)) in handles.zip(expect) {
-        assert_eq!(id, h);
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
+    for (row, (id, _, _)) in spliter.zip(expect) {
+        let expected_encoded = datum::encode_value(&[id.into()]).unwrap();
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, 5);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1684,13 +1780,15 @@ fn test_limit_oom() {
         .limit(100000000)
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), data.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
-    let mut handles: Vec<_> = spliter.map(|row| row.handle).collect();
-    handles.sort();
-    for (&h, (id, _, _)) in handles.iter().zip(data) {
-        assert_eq!(id, h);
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
+    for (row, (id, _, _)) in spliter.zip(data) {
+        let expected_encoded = datum::encode_value(&[id.into()]).unwrap();
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, 6);
     end_point.stop().unwrap().join().unwrap();
 }
 
@@ -1722,8 +1820,13 @@ fn test_del_select() {
 
     // for dag
     let req = DAGSelect::from_index(&product.table, product.id).build();
-    let resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), data.len());
+    let mut resp = handle_select(&end_point, req);
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
+    let mut row_count = 0;
+    for _ in spliter {
+        row_count += 1;
+    }
+    assert_eq!(row_count, 5);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1758,12 +1861,15 @@ fn test_index_group_by() {
         .build();
     let mut resp = handle_select(&end_point, req);
     // should only have name:0, name:2 and name:1
-    assert_eq!(row_cnt(resp.get_chunks()), 3);
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
     for (row, name) in spliter.zip(&[b"name:0", b"name:1", b"name:2"]) {
         let expected_encoded = datum::encode_value(&[Datum::Bytes(name.to_vec())]).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, 3);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1797,11 +1903,13 @@ fn test_index_aggr_count() {
         .count()
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), 1);
-    let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
-    let gk = Datum::Bytes(coprocessor::SINGLE_GROUP.to_vec());
-    expected_encoded = datum::encode_value(&[Datum::U64(data.len() as u64), gk]).unwrap();
-    assert_eq!(spliter.next().unwrap().data, &*expected_encoded);
+    let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
+    expected_encoded = datum::encode_value(&[Datum::U64(data.len() as u64)]).unwrap();
+    let ret_data = spliter.next();
+    assert_eq!(ret_data.is_some(), true);
+    let result_encoded = datum::encode_value(&ret_data.unwrap()).unwrap();
+    assert_eq!(&*result_encoded, &*expected_encoded);
+    assert_eq!(spliter.next().is_none(), true);
 
     let exp = vec![
         (Datum::Null, 1),
@@ -1829,13 +1937,17 @@ fn test_index_aggr_count() {
         .group_by(&[product.name])
         .build();
     resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 2);
     for (row, (name, cnt)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), name];
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
 
     let exp = vec![
         (vec![Datum::Null, Datum::I64(4)], 1),
@@ -1864,14 +1976,18 @@ fn test_index_aggr_count() {
         .group_by(&[product.name, product.count])
         .build();
     resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (gk_data, cnt)) in spliter.zip(exp) {
         let mut expected_datum = vec![Datum::U64(cnt)];
         expected_datum.extend_from_slice(gk_data.as_slice());
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1916,13 +2032,17 @@ fn test_index_aggr_first() {
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 2);
     for (row, (name, id)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::I64(id), name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -1977,13 +2097,17 @@ fn test_index_aggr_avg() {
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (name, (sum, cnt))) in spliter.zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), sum, name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
     end_point.stop().unwrap();
 }
 
@@ -2027,13 +2151,17 @@ fn test_index_aggr_sum() {
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 2);
     for (row, (name, cnt)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::Dec(cnt.into()), name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
     end_point.stop().unwrap();
 }
 
@@ -2103,13 +2231,17 @@ fn test_index_aggr_extre() {
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), exp.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (name, max, min)) in spliter.zip(exp) {
         let expected_datum = vec![max, min, name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, exp_len);
     end_point.stop().unwrap();
 }
 
@@ -2192,14 +2324,14 @@ fn test_where_for_dag() {
 
     let req = DAGSelect::from(&product.table).where_expr(cond).build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), 1);
-    let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     let row = spliter.next().unwrap();
     let (id, name, cnt) = data[2];
     let name_datum = name.map(|s| s.as_bytes()).into();
     let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
-    assert_eq!(id, row.handle);
-    assert_eq!(row.data, &*expected_encoded);
+    let result_encoded = datum::encode_value(&row).unwrap();
+    assert_eq!(&*result_encoded, &*expected_encoded);
+    assert_eq!(spliter.next().is_none(), true);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -2378,15 +2510,15 @@ fn test_handle_truncate_for_dag() {
             .where_expr(cond.clone())
             .build_with(&[FLAG_IGNORE_TRUNCATE]);
         let mut resp = handle_select(&end_point, req);
-        assert_eq!(row_cnt(resp.get_chunks()), 1);
-        let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+        let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
         let row = spliter.next().unwrap();
         let (id, name, cnt) = data[2];
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
             datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
-        assert_eq!(id, row.handle);
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        assert_eq!(spliter.next().is_none(), true);
 
         // Do NOT ignore truncate error.
         let req = DAGSelect::from(&product.table)
@@ -2440,15 +2572,17 @@ fn test_default_val() {
     // for dag
     let req = DAGSelect::from(&tbl).limit(5).build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), 5);
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 4);
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
             datum::encode_value(&[id.into(), name_datum, cnt.into(), Datum::I64(3)]).unwrap();
-        assert_eq!(id, row.handle);
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
+        row_count += 1;
     }
+    assert_eq!(row_count, 5);
 
     end_point.stop().unwrap().join().unwrap();
 }
@@ -2470,13 +2604,12 @@ fn test_output_offsets() {
         .output_offsets(Some(vec![1]))
         .build();
     let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), data.len());
-    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
-    for (row, (id, name, _)) in spliter.zip(data) {
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
+    for (row, (_, name, _)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(&[name_datum]).unwrap();
-        assert_eq!(id, row.handle);
-        assert_eq!(row.data, &*expected_encoded);
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(&*result_encoded, &*expected_encoded);
     }
 
     end_point.stop().unwrap().join().unwrap();
