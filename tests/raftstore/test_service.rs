@@ -706,14 +706,20 @@ fn test_debug_scan_mvcc() {
     let engine = cluster.get_engine(store_id);
 
     // Put some data.
-    let k = keys::data_key(b"meta_lock");
-    let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None).to_bytes();
-    let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
-    engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+    let keys = [
+        keys::data_key(b"meta_lock_1"),
+        keys::data_key(b"meta_lock_2"),
+    ];
+    for k in keys.iter() {
+        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None).to_bytes();
+        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
+        engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+    }
 
     let mut req = debugpb::ScanMvccRequest::new();
     req.set_from_key(b"m".to_vec());
     req.set_to_key(b"n".to_vec());
+    req.set_limit(1);
 
     let receiver = debug_client.scan_mvcc(req);
     let future = receiver.fold(Vec::new(), |mut keys, mut resp| {
@@ -723,5 +729,5 @@ fn test_debug_scan_mvcc() {
     });
     let keys = future.wait().unwrap();
     assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0], b"meta_lock");
+    assert_eq!(keys[0], b"meta_lock_1");
 }

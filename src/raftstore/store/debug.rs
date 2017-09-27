@@ -19,7 +19,7 @@ use std::sync::mpsc::{channel, Receiver};
 use protobuf::RepeatedField;
 use grpc::Error as GrpcError;
 
-use rocksdb::{DB as RocksDB, DBIterator, Kv};
+use rocksdb::{DB as RocksDB, DBIterator, Kv, SeekKey};
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::*;
 use kvproto::{eraftpb, raft_serverpb};
@@ -173,7 +173,15 @@ impl Debugger {
         D: FnMut(Vec<u8>, MvccInfo) -> ::std::result::Result<(), E>,
     {
         let from_key = keys::data_key(req.get_from_key());
-        let to_key = keys::data_key(req.get_to_key());
+        let limit = req.get_limit();
+        let to_key = Some(req.get_to_key())
+            .into_iter()
+            .filter(|k| k.len() > 0)
+            .map(|k| keys::data_key(k))
+            .next();
+        if to_key.is_none() && limit == 0 {
+            return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
+        }
 
         let lock_rx = self.mvcc_kvs(CF_LOCK, from_key.clone(), to_key.clone());
         let default_rx = self.mvcc_kvs_grouped(CF_DEFAULT, from_key.clone(), to_key.clone());
@@ -182,6 +190,7 @@ impl Debugger {
         let mut mvcc_infos: BTreeMap<Vec<u8>, (MvccInfo, bool, bool, bool)> = BTreeMap::new();
         let (mut want_lock, mut want_default, mut want_write) = (true, true, true);
         let (mut m_l, mut m_d, mut m_w) = (None, None, None);
+        let mut count = 0;
         loop {
             if !want_lock && !want_default && !want_write {
                 break;
@@ -286,6 +295,11 @@ impl Debugger {
                 let g_w = mvcc_and_flags.3 || m_w.as_ref().map(|k| &key <= k).unwrap_or(true);
                 if g_l && g_d && g_w {
                     try!(deal(key, mvcc_and_flags.0).map_err(Error::from));
+                    count += 1;
+                    if limit != 0 && count >= limit {
+                        break;
+                    }
+                    if count >= limit {}
                     if mvcc_and_flags.1 {
                         want_lock = true;
                     }
@@ -304,13 +318,13 @@ impl Debugger {
         Ok(())
     }
 
-    fn mvcc_kvs(&self, cf: CfName, from: Vec<u8>, to: Vec<u8>) -> Receiver<Kv> {
+    fn mvcc_kvs(&self, cf: CfName, from: Vec<u8>, to: Option<Vec<u8>>) -> Receiver<Kv> {
         let (tx, rx) = channel::<Kv>();
         let db = self.engines.kv_engine.clone();
         thread::Builder::new()
             .name(thd_name!(format!("scan_mvcc_{}", cf)))
             .spawn(move || -> Result<()> {
-                for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
+                for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, from, to)) {
                     box_try!(tx.send(kv));
                 }
                 Ok(())
@@ -319,14 +333,19 @@ impl Debugger {
         rx
     }
 
-    fn mvcc_kvs_grouped(&self, cf: CfName, from: Vec<u8>, to: Vec<u8>) -> Receiver<Vec<Kv>> {
+    fn mvcc_kvs_grouped(
+        &self,
+        cf: CfName,
+        from: Vec<u8>,
+        to: Option<Vec<u8>>,
+    ) -> Receiver<Vec<Kv>> {
         let (tx, rx) = channel::<Vec<Kv>>();
         let db = self.engines.kv_engine.clone();
         thread::Builder::new()
             .name(thd_name!(format!("scan_mvcc_{}", cf)))
             .spawn(move || -> Result<()> {
                 let (mut cur, mut cur_key): (_, Option<Key>) = (Vec::new(), None);
-                for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, &from, &to)) {
+                for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, from, to)) {
                     if let Some(key) = cur_key {
                         if keys::origin_key(&kv.0).starts_with(key.encoded()) {
                             cur_key = Some(key);
@@ -356,10 +375,15 @@ fn truncate_data_key(data_key: &[u8]) -> Result<Key> {
     k.truncate_ts().map_err(|e| box_err!(e))
 }
 
-fn gen_mvcc_iter<'a>(db: &'a RocksDB, cf: &str, from: &[u8], to: &[u8]) -> Result<DBIterator<'a>> {
-    let iter_option = IterOption::new(Some(to.to_owned()), false);
+fn gen_mvcc_iter<'a>(
+    db: &'a RocksDB,
+    cf: CfName,
+    from: Vec<u8>,
+    to: Option<Vec<u8>>,
+) -> Result<DBIterator<'a>> {
+    let iter_option = IterOption::new(to, false);
     let mut iter = try!(db.new_iterator_cf(cf, iter_option).map_err(Error::from));
-    iter.seek(from.into());
+    iter.seek(SeekKey::from(from.as_ref()));
     Ok(iter)
 }
 
