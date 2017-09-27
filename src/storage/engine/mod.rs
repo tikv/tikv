@@ -26,7 +26,6 @@ use kvproto::errorpb::Error as ErrorHeader;
 mod rocksdb;
 pub mod raftkv;
 mod metrics;
-use self::metrics::*;
 use super::super::raftstore::store::engine::IterOption;
 
 // only used for rocksdb without persistent.
@@ -42,6 +41,7 @@ const STAT_NEXT: &'static str = "next";
 const STAT_PREV: &'static str = "prev";
 const STAT_SEEK: &'static str = "seek";
 const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
+const STAT_OVER_SEEK_BOUND: &'static str = "over_seek_bound";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 pub type BatchResults<T> = Vec<Option<(CbContext, Result<T>)>>;
@@ -156,12 +156,12 @@ pub trait Iterator {
 }
 
 macro_rules! near_loop {
-    ($cond:expr, $fallback:expr) => ({
+    ($cond:expr, $fallback:expr,$st:expr) => ({
         let mut cnt = 0;
         while $cond {
             cnt += 1;
             if cnt >= SEEK_BOUND {
-                CURSOR_OVER_SEEK_BOUND_COUNTER.inc();
+                $st.over_seek_bound += 1;
                 return $fallback;
             }
         }
@@ -186,6 +186,7 @@ pub struct CFStatistics {
     pub prev: usize,
     pub seek: usize,
     pub seek_for_prev: usize,
+    pub over_seek_bound: usize,
 }
 
 impl CFStatistics {
@@ -203,6 +204,7 @@ impl CFStatistics {
             (STAT_PREV, self.prev),
             (STAT_SEEK, self.seek),
             (STAT_SEEK_FOR_PREV, self.seek_for_prev),
+            (STAT_OVER_SEEK_BOUND, self.over_seek_bound),
         ]
     }
 
@@ -213,6 +215,7 @@ impl CFStatistics {
         self.prev = self.prev.saturating_add(other.prev);
         self.seek = self.seek.saturating_add(other.seek);
         self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
+        self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
     }
 }
 
@@ -322,7 +325,8 @@ impl<'a> Cursor<'a> {
         if ord == Ordering::Greater {
             near_loop!(
                 self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
-                self.seek(key, statistics)
+                self.seek(key, statistics),
+                statistics
             );
             if self.iter.valid() {
                 if self.iter.key() < key.encoded().as_slice() {
@@ -336,7 +340,8 @@ impl<'a> Cursor<'a> {
             // ord == Less
             near_loop!(
                 self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
-                self.seek(key, statistics)
+                self.seek(key, statistics),
+                statistics
             );
         }
         if !self.iter.valid() {
@@ -405,7 +410,8 @@ impl<'a> Cursor<'a> {
         if ord == Ordering::Less {
             near_loop!(
                 self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
-                self.seek_for_prev(key, statistics)
+                self.seek_for_prev(key, statistics),
+                statistics
             );
             if self.iter.valid() {
                 if self.iter.key() > key.encoded().as_slice() {
@@ -418,7 +424,8 @@ impl<'a> Cursor<'a> {
         } else {
             near_loop!(
                 self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
-                self.seek_for_prev(key, statistics)
+                self.seek_for_prev(key, statistics),
+                statistics
             );
         }
 
