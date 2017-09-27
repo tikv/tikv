@@ -32,7 +32,8 @@ mod metrics;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
-                       Modify, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR};
+                       FlowStatistics, Modify, ScanMode, Snapshot, Statistics, StatisticsSummary,
+                       TEMP_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
