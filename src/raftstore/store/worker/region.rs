@@ -310,4 +310,10 @@ impl Runnable<Task> for Runner {
             } => self.ctx.handle_destroy(region_id, start_key, end_key),
         }
     }
+
+    fn shutdown(&mut self) {
+        if let Err(e) = self.pool.stop() {
+            warn!("Stop threadpool failed with {:?}", e);
+        }
+    }
 }

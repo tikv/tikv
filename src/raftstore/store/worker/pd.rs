@@ -54,6 +54,8 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
+        read_bytes: u64,
+        read_keys: u64,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -418,6 +420,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
+                read_bytes,
+                read_keys,
             } => {
                 let approximate_size = get_region_approximate_size(&self.db, &region).unwrap_or(0);
                 self.handle_heartbeat(
@@ -429,6 +433,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         pending_peers,
                         written_bytes,
                         written_keys,
+                        read_bytes,
+                        read_keys,
                         approximate_size,
                     ),
                 )

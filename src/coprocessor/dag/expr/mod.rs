@@ -366,7 +366,7 @@ impl Expression {
                 };
                 Ok(Expression::ColumnRef(column))
             }
-            unhandled => unreachable!("can't handle {:?} expr in DAG mode", unhandled),
+            unhandled => Err(box_err!("can't handle {:?} expr in DAG mode", unhandled)),
         }
     }
 }
