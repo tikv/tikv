@@ -81,7 +81,7 @@ lazy_static! {
 
     pub static ref KV_COMMAND_SCAN_DETAILS: CounterVec =
         register_counter_vec!(
-            "tikv_scheudler_kv_scan_details",
+            "tikv_scheduler_kv_scan_details",
             "Bucketed counter of kv keys scan details for each cf",
             &["req","cf","tag"]
         ).unwrap();

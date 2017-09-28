@@ -12,3 +12,4 @@
 // limitations under the License.
 
 pub mod fmsketch;
+pub mod histogram;

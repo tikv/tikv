@@ -15,6 +15,7 @@ use std::usize;
 use std::time::Duration;
 use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::mem;
 
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
 use tipb::executor::ExecType;
@@ -27,9 +28,9 @@ use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 use util::time::{duration_to_sec, Instant};
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::HashMap;
-use util::threadpool::{Context, ThreadPool, ThreadPoolBuilder};
+use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, Snapshot, Statistics, StatisticsSummary};
+use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
 
 use super::codec::mysql;
@@ -59,24 +60,50 @@ const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
 
-pub struct Host {
+pub struct Host<R: CopSender + 'static> {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<CopContext>,
-    low_priority_pool: ThreadPool<CopContext>,
-    high_priority_pool: ThreadPool<CopContext>,
+    pool: ThreadPool<CopContext<R>>,
+    low_priority_pool: ThreadPool<CopContext<R>>,
+    high_priority_pool: ThreadPool<CopContext<R>>,
     max_running_task_count: usize,
 }
 
-#[derive(Default)]
-struct CopContext {
-    select_stats: StatisticsSummary,
-    index_stats: StatisticsSummary,
+pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
+
+pub trait CopSender: Send + Clone {
+    fn send(&self, CopRequestStatistics) -> Result<()>;
 }
 
-impl CopContext {
+struct CopContextFactory<R: CopSender + 'static> {
+    sender: R,
+}
+
+impl<R> ContextFactory<CopContext<R>> for CopContextFactory<R>
+where
+    R: CopSender + 'static,
+{
+    fn create(&self) -> CopContext<R> {
+        CopContext {
+            sender: self.sender.clone(),
+            select_stats: Default::default(),
+            index_stats: Default::default(),
+            request_stats: HashMap::default(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct CopContext<R: CopSender + 'static> {
+    select_stats: StatisticsSummary,
+    index_stats: StatisticsSummary,
+    request_stats: CopRequestStatistics,
+    sender: R,
+}
+
+impl<R: CopSender + 'static> CopContext<R> {
     fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
         self.get_statistics(type_str).add_statistics(stats);
     }
@@ -91,9 +118,17 @@ impl CopContext {
             }
         }
     }
+
+    fn add_statistics_by_region(&mut self, region_id: u64, stats: &Statistics) {
+        let flow_stats = self.request_stats
+            .entry(region_id)
+            .or_insert_with(FlowStatistics::default);
+        flow_stats.add(&stats.write.flow_stats);
+        flow_stats.add(&stats.data.flow_stats);
+    }
 }
 
-impl Context for CopContext {
+impl<R: CopSender + 'static> Context for CopContext<R> {
     fn on_tick(&mut self) {
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
             let this_statistics = self.get_statistics(type_str);
@@ -110,26 +145,38 @@ impl Context for CopContext {
             }
             *this_statistics = Default::default();
         }
+        if !self.request_stats.is_empty() {
+            let mut to_send_stats = HashMap::default();
+            mem::swap(&mut to_send_stats, &mut self.request_stats);
+            if let Err(e) = self.sender.send(to_send_stats) {
+                error!("send coprocessor statistics: {:?}", e);
+            };
+        }
+
     }
 }
 
-impl Host {
-    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config) -> Host {
+impl<R: CopSender + 'static> Host<R> {
+    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config, r: R) -> Host<R> {
         Host {
             engine: engine,
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
-            pool: ThreadPoolBuilder::with_default_factory(thd_name!("endpoint-normal-pool"))
-                .thread_count(cfg.end_point_concurrency)
-                .build(),
-            low_priority_pool: ThreadPoolBuilder::with_default_factory(
-                thd_name!("endpoint-low-pool"),
+            pool: ThreadPoolBuilder::new(
+                thd_name!("endpoint-normal-pool"),
+                CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
-            high_priority_pool: ThreadPoolBuilder::with_default_factory(
+            low_priority_pool: ThreadPoolBuilder::new(
+                thd_name!("endpoint-low-pool"),
+                CopContextFactory { sender: r.clone() },
+            ).thread_count(cfg.end_point_concurrency)
+                .build(),
+            high_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-high-pool"),
+                CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
                 .build(),
         }
@@ -170,9 +217,11 @@ impl Host {
                 CommandPri::High => &mut self.high_priority_pool,
                 CommandPri::Normal => &mut self.pool,
             };
-            pool.execute(move |ctx: &mut CopContext| {
+            pool.execute(move |ctx: &mut CopContext<R>| {
+                let region_id = req.req.get_context().get_region_id();
                 let stats = end_point.handle_request(req);
                 ctx.add_statistics(type_str, &stats);
+                ctx.add_statistics_by_region(region_id, &stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
@@ -367,7 +416,7 @@ impl Display for RequestTask {
     }
 }
 
-impl BatchRunnable<Task> for Host {
+impl<R: CopSender + 'static> BatchRunnable<Task> for Host<R> {
     // TODO: limit pending reqs
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
@@ -469,6 +518,12 @@ impl BatchRunnable<Task> for Host {
 
     fn shutdown(&mut self) {
         if let Err(e) = self.pool.stop() {
+            warn!("Stop threadpool failed with {:?}", e);
+        }
+        if let Err(e) = self.low_priority_pool.stop() {
+            warn!("Stop threadpool failed with {:?}", e);
+        }
+        if let Err(e) = self.high_priority_pool.stop() {
             warn!("Stop threadpool failed with {:?}", e);
         }
     }
@@ -655,17 +710,29 @@ pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use storage::engine::{self, TEMP_DIR};
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
 
     use kvproto::coprocessor::Request;
 
-    use storage::engine::{self, TEMP_DIR};
     use util::worker::Worker;
     use util::time::Instant;
 
-    use super::*;
+    #[derive(Clone)]
+    struct MockCopSender {}
+    impl MockCopSender {
+        fn new() -> MockCopSender {
+            MockCopSender {}
+        }
+    }
+    impl CopSender for MockCopSender {
+        fn send(&self, _stats: CopRequestStatistics) -> Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_get_reg_scan_tag() {
@@ -686,7 +753,7 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let end_point = Host::new(engine, worker.scheduler(), &cfg);
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, MockCopSender::new());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
@@ -703,7 +770,7 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg);
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, MockCopSender::new());
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();

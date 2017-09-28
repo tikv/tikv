@@ -85,10 +85,6 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn mvcc(&self, _: RpcContext, _: MvccRequest, _: UnarySink<MvccResponse>) {
-        unimplemented!()
-    }
-
     fn raft_log(&self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
         const TAG: &'static str = "debug_raft_log";
 
@@ -109,15 +105,79 @@ impl debugpb_grpc::Debug for Service {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn region_info(&self, _: RpcContext, _: RegionInfoRequest, _: UnarySink<RegionInfoResponse>) {
-        unimplemented!()
+    fn region_info(
+        &self,
+        ctx: RpcContext,
+        req: RegionInfoRequest,
+        sink: UnarySink<RegionInfoResponse>,
+    ) {
+        const TAG: &'static str = "debug_region_log";
+
+        let region_id = req.get_region_id();
+
+        let f = self.pool
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.region_info(region_id)),
+            )
+            .map(|(raft_local_state, raft_apply_state, region_state)| {
+                let mut resp = RegionInfoResponse::new();
+                if let Some(raft_local_state) = raft_local_state {
+                    resp.set_raft_local_state(raft_local_state);
+                }
+                if let Some(raft_apply_state) = raft_apply_state {
+                    resp.set_raft_apply_state(raft_apply_state);
+                }
+                if let Some(region_state) = region_state {
+                    resp.set_region_local_state(region_state);
+                }
+                resp
+            });
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn size(&self, _: RpcContext, _: SizeRequest, _: UnarySink<SizeResponse>) {
-        unimplemented!()
+    fn region_size(
+        &self,
+        ctx: RpcContext,
+        mut req: RegionSizeRequest,
+        sink: UnarySink<RegionSizeResponse>,
+    ) {
+        const TAG: &'static str = "debug_region_size";
+
+        let region_id = req.get_region_id();
+        let cfs = req.take_cfs().into_vec();
+
+        let f = self.pool
+            .spawn(
+                future::ok(self.debugger.clone())
+                    .and_then(move |debugger| debugger.region_size(region_id, cfs)),
+            )
+            .map(|entries| {
+                let mut resp = RegionSizeResponse::new();
+                resp.set_entries(
+                    entries
+                        .into_iter()
+                        .map(|(cf, size)| {
+                            let mut entry = RegionSizeResponse_Entry::new();
+                            entry.set_cf(cf);
+                            entry.set_size(size as u64);
+                            entry
+                        })
+                        .collect(),
+                );
+                resp
+            });
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn scan(&self, _: RpcContext, _: ScanRequest, _: ServerStreamingSink<ScanResponse>) {
+    fn scan_mvcc(
+        &self,
+        _: RpcContext,
+        _: ScanMvccRequest,
+        _: ServerStreamingSink<ScanMvccResponse>,
+    ) {
         unimplemented!()
     }
 }
