@@ -16,6 +16,19 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![allow(needless_pass_by_value)]
 
+/// Inject failures to TikV.
+///
+/// TODO: Integrate into tikv-ctl.
+///
+/// # Examples
+///
+/// ```sh
+/// ./tikv-fail -a 127.0.0.1:9090 inject\
+//      -f tikv::raftstore::store::store::raft_between_save\
+///     -a "panic(fail_point_raft_between_write)"
+/// ```
+///
+
 extern crate tikv;
 extern crate clap;
 extern crate grpcio as grpc;
@@ -26,7 +39,7 @@ use std::str;
 use std::time::Duration;
 use std::sync::Arc;
 
-use clap::{App, Arg};
+use clap::{App, Arg, SubCommand};
 use grpc::{CallOption, ChannelBuilder, EnvBuilder};
 use protobuf::RepeatedField;
 use kvproto::debugpb;
@@ -43,6 +56,32 @@ fn main() {
                 .short("a")
                 .takes_value(true)
                 .help("set tikv ip:port"),
+        )
+        .subcommand(
+            SubCommand::with_name("inject")
+                .about("Inject failures")
+                .arg(
+                    Arg::with_name("failpoint")
+                        .short("f")
+                        .takes_value(true)
+                        .help("Fail point name"),
+                )
+                .arg(
+                    Arg::with_name("action")
+                        .short("a")
+                        .takes_value(true)
+                        .help("Actions that injects to the fail point"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("recover")
+                .about("Recover failures")
+                .arg(
+                    Arg::with_name("failpoint")
+                        .short("f")
+                        .takes_value(true)
+                        .help("Fail point name"),
+                ),
         );
     let matches = app.clone().get_matches();
     let addr = matches.value_of("addr").unwrap();
@@ -53,17 +92,22 @@ fn main() {
     let client = DebugClient::new(channel);
 
     let mut failures = vec![];
-    let mut failure = debugpb::Failure::new();
-    failure.set_field_type(debugpb::Failure_Type::INJECT);
-    failure.set_name(
-        "tikv::raftstore::store::store::raft_between_save".to_owned(),
-    );
-    failure.set_actions("panic(fail_point_raft_between_write)".to_owned());
-    failures.push(failure);
+    if let Some(matches) = matches.subcommand_matches("inject") {
+        let mut failure = debugpb::Failure::new();
+        failure.set_field_type(debugpb::Failure_Type::INJECT);
+        failure.set_name(matches.value_of("failpoint").unwrap().to_owned());
+        failure.set_actions(matches.value_of("action").unwrap().to_owned());
+        failures.push(failure);
+    } else if let Some(matches) = matches.subcommand_matches("recover") {
+        let mut failure = debugpb::Failure::new();
+        failure.set_field_type(debugpb::Failure_Type::RECOVER);
+        failure.set_name(matches.value_of("failpoint").unwrap().to_owned());
+        failures.push(failure);
+    }
 
     let mut req = debugpb::FailPointRequest::new();
     req.set_failures(RepeatedField::from_vec(failures));
-    println!("req {:?}", req);
+    println!("Req {:?}", req);
 
     let option = CallOption::default().timeout(Duration::from_secs(10));
     client.fail_point_opt(req.clone(), option).unwrap();
