@@ -35,7 +35,7 @@ run:
 	cargo run --features "${ENABLE_FEATURES}"
 
 release:
-	cargo build --release --features "${ENABLE_FEATURES}"
+	cargo build --release --features "${ENABLE_FEATURES} no-fail"
 	@mkdir -p ${BIN_PATH}
 	cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 
