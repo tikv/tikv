@@ -167,17 +167,16 @@ impl Debugger {
         }
     }
 
-    pub fn scan_mvcc<D, E>(&self, req: ScanMvccRequest, deal: &mut D) -> Result<()>
+    pub fn scan_mvcc<D, E>(&self, mut req: ScanMvccRequest, deal: &mut D) -> Result<()>
     where
         Error: ::std::convert::From<E>,
         D: FnMut(Vec<u8>, MvccInfo) -> ::std::result::Result<(), E>,
     {
-        let from_key = keys::data_key(req.get_from_key());
+        let from_key = req.take_from_key();
         let limit = req.get_limit();
-        let to_key = Some(req.get_to_key())
+        let to_key = Some(req.take_to_key())
             .into_iter()
             .filter(|k| !k.is_empty())
-            .map(|k| keys::data_key(k))
             .next();
         if to_key.is_none() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
