@@ -64,12 +64,14 @@ fn new_ready(
     hs: Option<HardState>,
     entries: Vec<Entry>,
     committed_entries: Vec<Entry>,
+    must_sync: bool,
 ) -> Ready {
     Ready {
         ss: ss,
         hs: hs,
         entries: entries,
         committed_entries: Some(committed_entries),
+        must_sync: must_sync,
         ..Default::default()
     }
 }
@@ -341,12 +343,14 @@ fn test_raw_node_start() {
             vec![
                 entry(EntryType::EntryConfChange, 1, 1, Some(ccdata.clone())),
             ],
+            true,
         ),
         new_ready(
             None,
             Some(hard_state(2, 3, 1)),
             vec![new_entry(2, 3, Some("foo"))],
             vec![new_entry(2, 3, Some("foo"))],
+            false,
         ),
     ];
 
@@ -380,7 +384,7 @@ fn test_raw_node_restart() {
     let entries = vec![empty_entry(1, 1), new_entry(1, 2, Some("foo"))];
     let st = hard_state(1, 1, 0);
 
-    let want = new_ready(None, None, vec![], entries[..1].to_vec());
+    let want = new_ready(None, None, vec![], entries[..1].to_vec(), false);
 
     let store = new_storage();
     store.wl().set_hardstate(st);
@@ -398,7 +402,7 @@ fn test_raw_node_restart_from_snapshot() {
     let entries = vec![new_entry(1, 3, Some("foo"))];
     let st = hard_state(1, 3, 0);
 
-    let want = new_ready(None, None, vec![], entries.clone());
+    let want = new_ready(None, None, vec![], entries.clone(), false);
 
     let s = new_storage();
     s.wl().set_hardstate(st);

@@ -16,7 +16,7 @@
 mod imp {
     use std::{ptr, slice};
     use std::sync::Arc;
-    use libc::{self, c_char, c_void};
+    use libc::{self, c_char, c_int, c_void};
 
     use rocksdb::DB;
     use prometheus::{self, Encoder, TextEncoder};
@@ -65,7 +65,7 @@ mod imp {
         for sig in trap {
             match sig {
                 SIGTERM | SIGINT | SIGHUP => {
-                    info!("receive signal {}, stopping server...", sig);
+                    info!("receive signal {}, stopping server...", sig as c_int);
                     break;
                 }
                 SIGUSR1 => {
