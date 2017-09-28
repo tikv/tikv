@@ -1117,6 +1117,10 @@ impl PeerStorage {
             last_index(&ctx.raft_state)
         };
 
+        if ready.must_sync {
+            ready_ctx.sync_log = true;
+        }
+
         if !ready.entries.is_empty() {
             try!(self.append(&mut ctx, &ready.entries, ready_ctx));
         }
