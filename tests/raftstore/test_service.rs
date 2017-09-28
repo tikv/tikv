@@ -717,8 +717,8 @@ fn test_debug_scan_mvcc() {
     }
 
     let mut req = debugpb::ScanMvccRequest::new();
-    req.set_from_key(b"m".to_vec());
-    req.set_to_key(b"n".to_vec());
+    req.set_from_key(keys::data_key(b"m"));
+    req.set_to_key(keys::data_key(b"n"));
     req.set_limit(1);
 
     let receiver = debug_client.scan_mvcc(req);

@@ -173,11 +173,8 @@ impl Debugger {
         D: FnMut(Vec<u8>, MvccInfo) -> ::std::result::Result<(), E>,
     {
         let from_key = req.take_from_key();
+        let to_key = Some(req.take_to_key()).into_iter().find(|k| !k.is_empty());
         let limit = req.get_limit();
-        let to_key = Some(req.take_to_key())
-            .into_iter()
-            .filter(|k| !k.is_empty())
-            .next();
         if to_key.is_none() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
@@ -186,15 +183,39 @@ impl Debugger {
         let default_rx = self.mvcc_kvs_grouped(CF_DEFAULT, from_key.clone(), to_key.clone());
         let write_rx = self.mvcc_kvs_grouped(CF_WRITE, from_key.clone(), to_key.clone());
 
-        let mut mvcc_infos: BTreeMap<Vec<u8>, (MvccInfo, bool, bool, bool)> = BTreeMap::new();
-        let (mut want_lock, mut want_default, mut want_write) = (true, true, true);
-        let (mut m_l, mut m_d, mut m_w) = (None, None, None);
+        // The indices in arrays: 0 for lock, 1 for default and 2 for write.
+        struct MvccInfoCollector(BTreeMap<Vec<u8>, (MvccInfo, [bool; 3])>);
+        impl MvccInfoCollector {
+            fn collect<F: FnOnce(&mut MvccInfo)>(&mut self, key: Vec<u8>, i: usize, update: F) {
+                let mut gots = [false; 3];
+                gots[i] = true;
+                match self.0.entry(key) {
+                    BTreeMapEntry::Vacant(ent) => {
+                        let mut mvcc_info = MvccInfo::default();
+                        update(&mut mvcc_info);
+                        ent.insert((mvcc_info, gots));
+                    }
+                    BTreeMapEntry::Occupied(mut ent) => {
+                        let mut mvcc_and_gots = ent.get_mut();
+                        update(&mut mvcc_and_gots.0);
+                        mvcc_and_gots.1 = gots;
+                    }
+                }
+            }
+        }
+
+        let mut collector = MvccInfoCollector(BTreeMap::new());
+        // `wants[i] == true` means we want the component to construct the current MvccInfo.
+        let mut wants = [true; 3];
+        // `next_keys[i]` is the key of the component respectively in next MvccInfo.
+        let mut next_keys = [None, None, None];
+
         let mut count = 0;
         loop {
-            if !want_lock && !want_default && !want_write {
+            if wants.iter().all(|want| !want) {
                 break;
             }
-            if want_lock {
+            if wants[0] {
                 if let Ok(kv) = lock_rx.recv() {
                     let key = keys::origin_key(&kv.0).to_vec();
                     let lock = box_try!(Lock::parse(&kv.1));
@@ -203,25 +224,12 @@ impl Debugger {
                     lock_info.set_lock_version(lock.ts);
                     lock_info.set_key(kv.0.to_vec());
                     lock_info.set_lock_ttl(lock.ttl);
-                    match mvcc_infos.entry(key.clone()) {
-                        BTreeMapEntry::Vacant(ent) => {
-                            let mut mvcc_info = MvccInfo::default();
-                            mvcc_info.set_lock(lock_info);
-                            ent.insert((mvcc_info, true, false, false));
-                        }
-                        BTreeMapEntry::Occupied(mut ent) => {
-                            let mut mvcc_and_flags = ent.get_mut();
-                            mvcc_and_flags.0.set_lock(lock_info);
-                            mvcc_and_flags.1 = true;
-                        }
-                    }
-                    m_l = Some(key);
-                } else {
-                    m_l = Some(vec![0xffu8]);
+                    collector.collect(key.clone(), 0, move |mvcc| mvcc.set_lock(lock_info));
+                    next_keys[0] = Some(key);
                 }
-                want_lock = false;
+                wants[0] = false;
             }
-            if want_default {
+            if wants[1] {
                 if let Ok(vec_kv) = default_rx.recv() {
                     let key = box_try!(truncate_data_key(&vec_kv[0].0)).encoded().to_vec();
                     let mut values = RepeatedField::new();
@@ -233,25 +241,12 @@ impl Debugger {
                         value_info.set_ts(box_try!(key.decode_ts()));
                         values.push(value_info);
                     }
-                    match mvcc_infos.entry(key.clone()) {
-                        BTreeMapEntry::Vacant(ent) => {
-                            let mut mvcc_info = MvccInfo::default();
-                            mvcc_info.set_values(values);
-                            ent.insert((mvcc_info, false, true, false));
-                        }
-                        BTreeMapEntry::Occupied(mut ent) => {
-                            let mut mvcc_and_flags = ent.get_mut();
-                            mvcc_and_flags.0.set_values(values);
-                            mvcc_and_flags.2 = true;
-                        }
-                    }
-                    m_d = Some(key);
-                } else {
-                    m_d = Some(vec![0xffu8]);
+                    collector.collect(key.clone(), 1, move |mvcc| mvcc.set_values(values));
+                    next_keys[1] = Some(key);
                 }
-                want_default = false;
+                wants[1] = false;
             }
-            if want_write {
+            if wants[2] {
                 if let Ok(vec_kv) = write_rx.recv() {
                     let key = box_try!(truncate_data_key(&vec_kv[0].0)).encoded().to_vec();
                     let mut writes = RepeatedField::new();
@@ -269,48 +264,37 @@ impl Debugger {
                         write_info.set_commit_ts(box_try!(key.decode_ts()));
                         writes.push(write_info);
                     }
-                    match mvcc_infos.entry(key.clone()) {
-                        BTreeMapEntry::Vacant(ent) => {
-                            let mut mvcc_info = MvccInfo::default();
-                            mvcc_info.set_writes(writes);
-                            ent.insert((mvcc_info, false, false, true));
-                        }
-                        BTreeMapEntry::Occupied(mut ent) => {
-                            let mut mvcc_and_flags = ent.get_mut();
-                            mvcc_and_flags.0.set_writes(writes);
-                            mvcc_and_flags.3 = true;
-                        }
-                    }
-                    m_w = Some(key);
-                } else {
-                    m_w = Some(vec![0xffu8]);
+                    collector.collect(key.clone(), 2, move |mvcc| mvcc.set_writes(writes));
+                    next_keys[2] = Some(key);
                 }
-                want_write = false;
+                wants[2] = false;
             }
-            for key in mvcc_infos.keys().cloned().collect::<Vec<_>>() {
-                let mvcc_and_flags = mvcc_infos.remove(&key).unwrap();
-                let g_l = mvcc_and_flags.1 || m_l.as_ref().map(|k| &key <= k).unwrap_or(true);
-                let g_d = mvcc_and_flags.2 || m_d.as_ref().map(|k| &key <= k).unwrap_or(true);
-                let g_w = mvcc_and_flags.3 || m_w.as_ref().map(|k| &key <= k).unwrap_or(true);
-                if g_l && g_d && g_w {
-                    try!(deal(key, mvcc_and_flags.0).map_err(Error::from));
-                    count += 1;
-                    if limit != 0 && count >= limit {
-                        break;
+
+            #[allow(while_let_loop)]
+            loop {
+                let key = match collector.0.iter().next() {
+                    Some((k, _)) => k.to_owned(),
+                    None => break,
+                };
+                if let BTreeMapEntry::Occupied(ent) = collector.0.entry(key) {
+                    let gots = ent.get().1;
+                    let got_or_finished = gots.into_iter()
+                        .enumerate()
+                        .map(|(i, &got)| {
+                            got || next_keys[i].as_ref().map_or(true, |k| ent.key() <= k)
+                        })
+                        .all(|elem_got_or_finished| elem_got_or_finished);
+                    if got_or_finished {
+                        let (key, (mvcc, gots)) = ent.remove_entry();
+                        try!(deal(key, mvcc).map_err(Error::from));
+                        count += 1;
+                        if limit != 0 && count >= limit {
+                            break;
+                        }
+                        for (i, _) in gots.iter().enumerate().filter(|&(_, got)| *got) {
+                            wants[i] = true;
+                        }
                     }
-                    if count >= limit {}
-                    if mvcc_and_flags.1 {
-                        want_lock = true;
-                    }
-                    if mvcc_and_flags.2 {
-                        want_default = true;
-                    }
-                    if mvcc_and_flags.3 {
-                        want_write = true;
-                    }
-                } else {
-                    mvcc_infos.insert(key, mvcc_and_flags);
-                    break;
                 }
             }
         }
@@ -604,8 +588,8 @@ mod tests {
         engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
 
         let mut scan_mvcc_req = ScanMvccRequest::new();
-        scan_mvcc_req.set_from_key(b"m".to_vec());
-        scan_mvcc_req.set_to_key(b"n".to_vec());
+        scan_mvcc_req.set_from_key(keys::data_key(b"m"));
+        scan_mvcc_req.set_to_key(keys::data_key(b"n"));
 
         let mut count = 0;
         debugger
