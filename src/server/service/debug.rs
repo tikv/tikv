@@ -190,37 +190,25 @@ impl debugpb_grpc::Debug for Service {
     ) {
         const TAG: &'static str = "debug_region_size";
 
-        let on_error = move |e| {
-            error!("{} failed: {:?}", TAG, e);
-        };
-
-        for failure in req.get_failures() {
-            match failure.get_field_type() {
-                Failure_Type::INVALID => {
-                    let status = RpcStatus::new(
-                        RpcStatusCode::Unknown,
-                        Some("Failure Type INVALID".to_owned()),
-                    );
-                    ctx.spawn(sink.fail(status).map_err(on_error));
-                    return;
+        let f = future::ok(()).and_then(move |_| {
+            for failure in req.get_failures() {
+                match failure.get_field_type() {
+                    Failure_Type::INVALID => {
+                        return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
+                    }
+                    Failure_Type::INJECT => {
+                        if let Err(e) = fail::cfg(failure.get_name(), failure.get_actions()) {
+                            return Err(box_err!("{:?}", e));
+                        }
+                    }
+                    Failure_Type::RECOVER => {
+                        fail::remove(failure.get_name());
+                    }
                 }
-                Failure_Type::INJECT => if let Err(e) =
-                    fail::cfg(failure.get_name(), failure.get_actions())
-                {
-                    let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
-                    ctx.spawn(sink.fail(status).map_err(on_error));
-                    return;
-                },
-                Failure_Type::RECOVER => if let Err(e) =
-                    fail::cfg(failure.get_name(), failure.get_actions())
-                {
-                    let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
-                    ctx.spawn(sink.fail(status).map_err(on_error));
-                    return;
-                },
             }
-        }
-        let resp = FailPointResponse::new();
-        ctx.spawn(sink.success(resp).map_err(on_error));
+            Ok(FailPointResponse::new())
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 }
