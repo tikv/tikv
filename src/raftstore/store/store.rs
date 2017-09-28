@@ -2519,20 +2519,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();
             }
-            // TODO: Unified split region message.
-            Msg::SplitCheckResult {
-                region_id,
-                epoch,
-                split_key,
-            } => {
-                info!("[region {}] split check complete.", region_id);
-                self.on_prepare_split_region(
-                    region_id,
-                    epoch,
-                    keys::origin_key(split_key.as_slice()).to_vec(),
-                    None,
-                );
-            }
             Msg::ReportUnreachable {
                 region_id,
                 to_peer_id,

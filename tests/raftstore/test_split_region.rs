@@ -133,14 +133,7 @@ fn test_server_base_split_region_right_derive() {
 }
 
 #[test]
-fn test_server_manual_split_region_right_derive() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    test_base_split_region(&mut cluster, Cluster::must_manual_split, false);
-}
-
-#[test]
-fn test_server_manual_split_region_twice() {
+fn test_server_split_region_twice() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
@@ -168,7 +161,7 @@ fn test_server_manual_split_region_twice() {
         assert_eq!(region2.get_end_key(), right.get_end_key());
         tx.send(right).unwrap();
     });
-    cluster.split_region_by_key(&region, split_key, c);
+    cluster.split_region(&region, split_key, c);
     let region3 = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     cluster.must_put(split_key, b"v2");
@@ -180,7 +173,7 @@ fn test_server_manual_split_region_twice() {
         assert!(!resp.has_admin_response());
         tx1.send(()).unwrap();
     });
-    cluster.split_region_by_key(&region3, split_key, c);
+    cluster.split_region(&region3, split_key, c);
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 

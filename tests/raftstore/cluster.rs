@@ -36,7 +36,6 @@ use tikv::pd::PdClient;
 use tikv::util::{escape, rocksdb, HandyRwLock};
 use tikv::util::transport::SendCh;
 use super::pd::TestPdClient;
-use tikv::raftstore::store::keys::data_key;
 use super::transport_simulate::*;
 
 // We simulate 3 or 5 nodes, each has a store.
@@ -737,7 +736,7 @@ impl<T: Simulator> Cluster<T> {
     // It's similar to `ask_split`, the difference is the msg, it sends, is `Msg::SplitRegion`,
     // and `region` will not be embedded to that msg.
     // Caller must ensure that the `split_key` is in the `region`.
-    pub fn split_region_by_key(&mut self, region: &metapb::Region, split_key: &[u8], cb: Callback) {
+    pub fn split_region(&mut self, region: &metapb::Region, split_key: &[u8], cb: Callback) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let ch = self.sim
             .rl()
@@ -752,38 +751,7 @@ impl<T: Simulator> Cluster<T> {
         }).unwrap();
     }
 
-    fn split_region_by_split_check(
-        &mut self,
-        region: &metapb::Region,
-        split_key: &[u8],
-        _: Callback,
-    ) {
-        // Now we can't control split easily in pd, so here we use store send channel
-        // directly to send the AskSplit request.
-        let leader = self.leader_of_region(region.get_id()).unwrap();
-        let ch = self.sim
-            .rl()
-            .get_store_sendch(leader.get_store_id())
-            .unwrap();
-        ch.try_send(Msg::SplitCheckResult {
-            region_id: region.get_id(),
-            epoch: region.get_region_epoch().clone(),
-            split_key: data_key(split_key),
-        }).unwrap();
-    }
-
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
-        self.must_split_by(Self::split_region_by_split_check, region, split_key);
-    }
-
-    pub fn must_manual_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
-        self.must_split_by(Self::split_region_by_key, region, split_key);
-    }
-
-    pub fn must_split_by<F>(&mut self, split: F, region: &metapb::Region, split_key: &[u8])
-    where
-        F: Fn(&mut Self, &metapb::Region, &[u8], Callback),
-    {
         let mut try_cnt = 0;
         let split_count = self.pd_client.get_split_count();
         loop {
@@ -799,7 +767,7 @@ impl<T: Simulator> Cluster<T> {
                     assert_eq!(left.get_end_key(), key.as_slice());
                     assert_eq!(left.take_end_key(), right.take_start_key());
                 });
-                split(self, region, split_key, check);
+                self.split_region(region, split_key, check);
             }
 
             if self.pd_client.check_split(region, split_key) &&

@@ -238,7 +238,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
 
         let region_epoch = region.get_region_epoch().clone();
         let res = self.ch
-            .try_send(new_split_check_result(region_id, region_epoch, split_key));
+            .try_send(new_split_region(region_id, region_epoch, split_key));
         if let Err(e) = res {
             warn!("[region {}] failed to send check result: {}", region_id, e);
         }
@@ -249,11 +249,13 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     }
 }
 
-fn new_split_check_result(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> Msg {
-    Msg::SplitCheckResult {
+fn new_split_region(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> Msg {
+    let key = keys::origin_key(split_key.as_slice()).to_vec();
+    Msg::SplitRegion {
         region_id: region_id,
-        epoch: epoch,
-        split_key: split_key,
+        region_epoch: epoch,
+        split_key: key,
+        callback: Box::new(|_| {}),
     }
 }
 
@@ -313,14 +315,15 @@ mod tests {
 
         runnable.run(Task::new(&region));
         match rx.try_recv() {
-            Ok(Msg::SplitCheckResult {
+            Ok(Msg::SplitRegion {
                 region_id,
-                epoch,
+                region_epoch,
                 split_key,
+                ..
             }) => {
                 assert_eq!(region_id, region.get_id());
-                assert_eq!(&epoch, region.get_region_epoch());
-                assert_eq!(split_key, keys::data_key(b"0006"));
+                assert_eq!(&region_epoch, region.get_region_epoch());
+                assert_eq!(split_key, b"0006");
             }
             others => panic!("expect split check result, but got {:?}", others),
         }
@@ -340,14 +343,15 @@ mod tests {
 
         runnable.run(Task::new(&region));
         match rx.try_recv() {
-            Ok(Msg::SplitCheckResult {
+            Ok(Msg::SplitRegion {
                 region_id,
-                epoch,
+                region_epoch,
                 split_key,
+                ..
             }) => {
                 assert_eq!(region_id, region.get_id());
-                assert_eq!(&epoch, region.get_region_epoch());
-                assert_eq!(split_key, keys::data_key(b"0003"));
+                assert_eq!(&region_epoch, region.get_region_epoch());
+                assert_eq!(split_key, b"0003");
             }
             others => panic!("expect split check result, but got {:?}", others),
         }
