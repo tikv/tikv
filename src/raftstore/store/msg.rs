@@ -65,20 +65,13 @@ pub enum Msg {
         on_finished: BatchCallback,
     },
 
-    // For split check
-    SplitCheckResult {
-        region_id: u64,
-        epoch: RegionEpoch,
-        // It's a data key, starts with `DATA_PREFIX_KEY`.
-        split_key: Vec<u8>,
-    },
-
     SplitRegion {
         region_id: u64,
         region_epoch: RegionEpoch,
         // It's an encoded key.
+        // TODO: support meta key.
         split_key: Vec<u8>,
-        callback: Callback,
+        callback: Option<Callback>,
     },
 
     ReportUnreachable { region_id: u64, to_peer_id: u64 },
@@ -103,7 +96,6 @@ impl fmt::Debug for Msg {
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
-            Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
             Msg::ReportUnreachable {
                 ref region_id,
                 ref to_peer_id,
