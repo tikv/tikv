@@ -16,8 +16,8 @@ use kvproto::debugpb::*;
 use kvproto::{eraftpb, raft_serverpb};
 
 use raftstore::store::{keys, Engines, Iterable, Peekable};
-use raftstore::store::worker::CompactRunner;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use util::rocksdb::{compact_range, get_cf_handle};
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -153,12 +153,17 @@ impl Debugger {
         }
     }
 
-    pub fn compact(&self, cf: String, from: Vec<u8>, to: Vec<u8>) -> Result<()> {
-        try!(validate_db_and_cf(DB::KV, &cf));
-        let db = self.engines.kv_engine.clone();
-        CompactRunner::new(db)
-            .compact_range_cf(cf, Some(from), Some(to))
-            .map_err(|e| box_err!(e))
+    /// Compact the cf[start..end) in the db **by manual**.
+    pub fn compact(&self, db: DB, cf: &str, start: &[u8], end: &[u8]) -> Result<()> {
+        try!(validate_db_and_cf(db, cf));
+        let db = match db {
+            DB::KV => &self.engines.kv_engine,
+            DB::RAFT => &self.engines.raft_engine,
+            _ => unreachable!(),
+        };
+        let handle = box_try!(get_cf_handle(db, cf));
+        compact_range(db, handle, Some(start), Some(end), true);
+        Ok(())
     }
 }
 
