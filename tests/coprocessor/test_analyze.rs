@@ -73,25 +73,30 @@ fn test_analyze_column_with_lock() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_data_with_commit(&product, &data, false);
+    for &iso_level in &[IsolationLevel::SI, IsolationLevel::RC] {
+        let (_, mut end_point) = init_data_with_commit(&product, &data, false);
 
-    // with isolation level si
-    let req = new_analyze_column_req(&product.table, 3, 3, 3);
-    let resp = handle_request(&end_point, req);
-    assert!(resp.get_data().is_empty(), "{:?}", resp);
-    assert!(resp.has_locked(), "{:?}", resp);
+        let mut req = new_analyze_column_req(&product.table, 3, 3, 3);
+        let mut ctx = Context::new();
+        ctx.set_isolation_level(iso_level);
+        req.set_context(ctx);
 
-    // with isolation level rc
-    let mut req = new_analyze_column_req(&product.table, 3, 3, 3);
-    let mut ctx = Context::new();
-    ctx.set_isolation_level(IsolationLevel::RC);
-    req.set_context(ctx);
-    let mut analyze_resp = AnalyzeColumnsResp::new();
-    analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
-    let hist = analyze_resp.get_pk_hist();
-    assert!(hist.get_buckets().is_empty());
-    assert_eq!(hist.get_ndv(), 0);
-    end_point.stop().unwrap().join().unwrap();
+        let resp = handle_request(&end_point, req);
+        match iso_level {
+            IsolationLevel::SI => {
+                assert!(resp.get_data().is_empty(), "{:?}", resp);
+                assert!(resp.has_locked(), "{:?}", resp);
+            }
+            IsolationLevel::RC => {
+                let mut analyze_resp = AnalyzeColumnsResp::new();
+                analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
+                let hist = analyze_resp.get_pk_hist();
+                assert!(hist.get_buckets().is_empty());
+                assert_eq!(hist.get_ndv(), 0);
+                end_point.stop().unwrap().join().unwrap();
+            }
+        }
+    }
 }
 
 #[test]

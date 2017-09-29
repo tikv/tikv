@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::iter;
-
 use rand::{thread_rng, Rng, ThreadRng};
 use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Response};
@@ -104,7 +102,12 @@ impl<'a> AnalyzeContext<'a> {
     // collectors for each column value.
     fn handle_column(mut self) -> Result<Vec<u8>> {
         let col_req = self.req.take_col_req();
-        let builder = SampleBuilder::new(col_req, self.snap, self.ranges, &mut self.statistics);
+        let builder = try!(SampleBuilder::new(
+            col_req,
+            self.snap,
+            self.ranges,
+            &mut self.statistics
+        ));
 
         let (collectors, pk_builder) = try!(builder.collect_samples_and_estimate_ndvs());
         let pk_hist = pk_builder.into_proto();
@@ -124,11 +127,9 @@ impl<'a> AnalyzeContext<'a> {
 struct SampleBuilder<'a> {
     data: TableScanExecutor<'a>,
     cols: Vec<ColumnInfo>,
-    // the number of columns need to be sampled
+    // the number of columns need to be sampled. It equals to cols.len()
+    // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,
-    // If primary key is handle, the pk_id is the id of the primary key.
-    // If not exists, it is -1.
-    pk_id: i64,
     max_bucket_size: usize,
     max_sample_size: usize,
     max_sketch_size: usize,
@@ -143,53 +144,48 @@ impl<'a> SampleBuilder<'a> {
         snap: SnapshotStore<'a>,
         ranges: Vec<KeyRange>,
         statistics: &'a mut Statistics,
-    ) -> SampleBuilder<'a> {
+    ) -> Result<SampleBuilder<'a>> {
         let cols_info = req.take_columns_info();
-        let mut pk_id = -1;
-        let mut num_cols = cols_info.len();
+        if cols_info.is_empty() {
+            return Err(box_err!("empty columns_info"));
+        }
+
+        let mut col_len = cols_info.len();
         if cols_info[0].get_pk_handle() {
-            pk_id = cols_info[0].get_column_id();
-            num_cols -= 1;
+            col_len -= 1;
         }
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
         let table_scanner = TableScanExecutor::new(&meta, ranges, snap, statistics);
-        SampleBuilder {
+        Ok(SampleBuilder {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
-            col_len: num_cols,
-            pk_id: pk_id,
+            col_len: col_len,
             max_bucket_size: req.get_bucket_size() as usize,
             max_sketch_size: req.get_sketch_size() as usize,
             max_sample_size: req.get_sample_size() as usize,
-        }
+        })
     }
 
     // `collect_samples_and_estimate_ndvs` returns the sample collectors which contain total count,
     // null count and distinct values count. And it also returns the statistic builder for PK
     // which contains the histogram. See https://en.wikipedia.org/wiki/Reservoir_sampling
     fn collect_samples_and_estimate_ndvs(mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
-        let mut pk_builder = if self.pk_id == -1 {
-            Histogram::default()
-        } else {
-            Histogram::new(self.max_bucket_size)
-        };
-        let mut collectors: Vec<SampleCollector> = iter::repeat(SampleCollector::new(
-            self.max_sample_size,
-            self.max_sketch_size,
-        )).take(self.col_len)
-            .collect();
+        let mut pk_builder = Histogram::new(self.max_bucket_size);
+        let mut collectors =
+            vec![SampleCollector::new(self.max_sample_size, self.max_sketch_size); self.col_len];
         while let Some(row) = try!(self.data.next()) {
             let cols = try!(row.get_binary_cols(&self.cols));
+            let retreive_len = cols.len();
             let mut cols_iter = cols.into_iter();
-            if self.pk_id != -1 {
+            if self.col_len != retreive_len {
                 if let Some(v) = cols_iter.next() {
                     pk_builder.append(&v);
                 }
             }
-            for (id, val) in cols_iter.enumerate() {
-                collectors[id].collect(val);
+            for (collector, val) in collectors.iter_mut().zip(cols_iter) {
+                collector.collect(val);
             }
         }
         Ok((collectors, pk_builder))
@@ -239,9 +235,8 @@ impl SampleCollector {
             self.samples.push(data);
             return;
         }
-        let seed = self.rng.next_u64();
-        if seed % self.count < self.max_sample_size as u64 {
-            let idx = self.rng.next_u64() as usize % self.max_sample_size;
+        if self.rng.gen_range(0, self.count) < self.max_sample_size as u64 {
+            let idx = self.rng.gen_range(0, self.max_sample_size);
             self.samples[idx] = data;
         }
     }

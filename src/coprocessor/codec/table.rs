@@ -309,7 +309,7 @@ impl RowColsDict {
             }
             length += meta.length;
         }
-        &self.value[start..(start + length)]
+        &self.value[start..start + length]
     }
 }
 
