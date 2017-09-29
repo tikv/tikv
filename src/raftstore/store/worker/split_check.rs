@@ -255,7 +255,7 @@ fn new_split_region(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> M
         region_id: region_id,
         region_epoch: epoch,
         split_key: key,
-        callback: Box::new(|_| {}),
+        callback: None,
     }
 }
 

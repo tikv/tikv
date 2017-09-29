@@ -71,7 +71,7 @@ pub enum Msg {
         // It's an encoded key.
         // TODO: support meta key.
         split_key: Vec<u8>,
-        callback: Callback,
+        callback: Option<Callback>,
     },
 
     ReportUnreachable { region_id: u64, to_peer_id: u64 },
