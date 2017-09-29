@@ -138,6 +138,9 @@
 # Interval (s) to check region whether the data are consistent.
 # consistency-check-interval = 0
 
+# Use delete range to drop a large number of continuous keys.
+# use-delete-range = false
+
 [rocksdb]
 # Maximum number of concurrent background jobs (compactions and flushes)
 # max-background-jobs = 8
