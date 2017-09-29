@@ -15,6 +15,7 @@ use std::{error, result};
 use kvproto::debugpb::*;
 use kvproto::{eraftpb, raft_serverpb};
 
+use rocksdb::DB as RocksDB;
 use raftstore::store::{keys, Engines, Iterable, Peekable};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::rocksdb::{compact_range, get_cf_handle};
@@ -51,13 +52,17 @@ impl Debugger {
         Debugger { engines }
     }
 
+    fn get_db_from_type(&self, db: DB) -> Result<&RocksDB> {
+        match db {
+            DB::KV => Ok(&self.engines.kv_engine),
+            DB::RAFT => Ok(&self.engines.raft_engine),
+            _ => Err(box_err!("invalid DB type")),
+        }
+    }
+
     pub fn get(&self, db: DB, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
         try!(validate_db_and_cf(db, cf));
-        let db = match db {
-            DB::KV => &self.engines.kv_engine,
-            DB::RAFT => &self.engines.raft_engine,
-            _ => unreachable!(),
-        };
+        let db = try!(self.get_db_from_type(db));
         match db.get_value_cf(cf, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
             Ok(None) => Err(Error::NotFound(
@@ -156,11 +161,7 @@ impl Debugger {
     /// Compact the cf[start..end) in the db **by manual**.
     pub fn compact(&self, db: DB, cf: &str, start: &[u8], end: &[u8]) -> Result<()> {
         try!(validate_db_and_cf(db, cf));
-        let db = match db {
-            DB::KV => &self.engines.kv_engine,
-            DB::RAFT => &self.engines.raft_engine,
-            _ => unreachable!(),
-        };
+        let db = try!(self.get_db_from_type(db));
         let handle = box_try!(get_cf_handle(db, cf));
         compact_range(db, handle, Some(start), Some(end), true);
         Ok(())
