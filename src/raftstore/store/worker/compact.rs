@@ -41,7 +41,7 @@ impl Display for Task {
 
 quick_error! {
     #[derive(Debug)]
-    enum Error {
+    pub enum Error {
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -60,7 +60,7 @@ impl Runner {
         Runner { engine: engine }
     }
 
-    fn compact_range_cf(
+    pub fn compact_range_cf(
         &mut self,
         cf_name: String,
         start_key: Option<Vec<u8>>,

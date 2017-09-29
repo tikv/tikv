@@ -16,6 +16,7 @@ use kvproto::debugpb::*;
 use kvproto::{eraftpb, raft_serverpb};
 
 use raftstore::store::{keys, Engines, Iterable, Peekable};
+use raftstore::store::worker::CompactRunner;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
 pub type Result<T> = result::Result<T, Error>;
@@ -150,6 +151,14 @@ impl Debugger {
             Ok(None) => Err(Error::NotFound(format!("none region {:?}", region_id))),
             Err(e) => Err(box_err!(e)),
         }
+    }
+
+    pub fn compact(&self, cf: String, from: Vec<u8>, to: Vec<u8>) -> Result<()> {
+        try!(validate_db_and_cf(DB::KV, &cf));
+        let db = self.engines.kv_engine.clone();
+        CompactRunner::new(db)
+            .compact_range_cf(cf, Some(from), Some(to))
+            .map_err(|e| box_err!(e))
     }
 }
 
