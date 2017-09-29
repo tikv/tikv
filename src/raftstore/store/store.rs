@@ -1137,12 +1137,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
 
         // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
-        // otherwise, if program restart happen between two write, raft log will be removed,
+        // otherwise, if program restart between two write, raft log will be removed,
         // but region state may not changed in disk.
         if !kv_wb.is_empty() {
             // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log || sync_log);
+            write_opts.set_sync(true);
             self.kv_engine
                 .write_opt(kv_wb, &write_opts)
                 .unwrap_or_else(|e| {

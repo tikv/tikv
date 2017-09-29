@@ -1114,7 +1114,6 @@ impl PeerStorage {
                 &ready_ctx.kv_wb,
                 &ready_ctx.raft_wb
             ));
-            ready_ctx.sync_log = true;
             last_index(&ctx.raft_state)
         };
 
