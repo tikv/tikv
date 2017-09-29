@@ -459,7 +459,7 @@ mod test {
             task_pool.execute(move |_: &mut TestContext| {});
         }
         for _ in 0..10 {
-            rx.recv_timeout(Duration::from_millis(20)).unwrap();
+            rx.recv_timeout(Duration::from_millis(100)).unwrap();
         }
         task_pool.stop().unwrap();
         // `on_tick` may be called even if there is no task.

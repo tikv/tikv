@@ -19,11 +19,14 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
+use util::collections::HashMap;
+use storage::FlowStatistics;
 
 use util::escape;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 pub type BatchCallback = Box<FnBox(Vec<Option<RaftCmdResponse>>) + Send>;
+pub type CopFlowStatistics = HashMap<u64, FlowStatistics>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Tick {
@@ -36,7 +39,6 @@ pub enum Tick {
     SnapGc,
     CompactLockCf,
     ConsistencyCheck,
-    ReportRegionFlow,
 }
 
 pub struct SnapshotStatusMsg {
@@ -63,26 +65,21 @@ pub enum Msg {
         on_finished: BatchCallback,
     },
 
-    // For split check
-    SplitCheckResult {
-        region_id: u64,
-        epoch: RegionEpoch,
-        // It's a data key, starts with `DATA_PREFIX_KEY`.
-        split_key: Vec<u8>,
-    },
-
     SplitRegion {
         region_id: u64,
         region_epoch: RegionEpoch,
         // It's an encoded key.
+        // TODO: support meta key.
         split_key: Vec<u8>,
-        callback: Callback,
+        callback: Option<Callback>,
     },
 
     ReportUnreachable { region_id: u64, to_peer_id: u64 },
 
     // For snapshot stats.
     SnapshotStats,
+
+    CoprocessorStats { request_stats: CopFlowStatistics },
 
     // For consistency check
     ComputeHashResult {
@@ -99,7 +96,6 @@ impl fmt::Debug for Msg {
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
-            Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
             Msg::ReportUnreachable {
                 ref region_id,
                 ref to_peer_id,
@@ -110,6 +106,7 @@ impl fmt::Debug for Msg {
                 region_id
             ),
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
+            Msg::CoprocessorStats { .. } => write!(fmt, "Coperocessor stats"),
             Msg::ComputeHashResult {
                 region_id,
                 index,
