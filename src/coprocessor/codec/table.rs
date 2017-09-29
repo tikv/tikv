@@ -300,7 +300,7 @@ impl RowColsDict {
     }
 
     // get binary of cols, keep the origin order and return one slice.
-    pub fn get_binary(&self) -> &[u8] {
+    pub fn get_column_values(&self) -> &[u8] {
         let mut start = self.value.len();
         let mut length = 0;
         for meta in self.cols.values() {
@@ -308,9 +308,6 @@ impl RowColsDict {
                 start = meta.offset;
             }
             length += meta.length;
-        }
-        if length == 0 {
-            return &[];
         }
         &self.value[start..(start + length)]
     }

@@ -13,7 +13,7 @@
 
 use std::iter;
 
-use rand;
+use rand::{thread_rng, Rng, ThreadRng};
 use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Response};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeReq, AnalyzeType};
@@ -69,13 +69,12 @@ impl<'a> AnalyzeContext<'a> {
                 resp.set_data(data);
                 Ok(resp)
             }
-            Err(e) => if let Error::Other(_) = e {
+            Err(Error::Other(e)) => {
                 let mut resp = Response::new();
                 resp.set_other_error(format!("{}", e));
                 Ok(resp)
-            } else {
-                Err(e)
-            },
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -91,7 +90,7 @@ impl<'a> AnalyzeContext<'a> {
         );
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         while let Some(row) = try!(scanner.next()) {
-            let bytes = row.data.get_binary().to_vec();
+            let bytes = row.data.get_column_values();
             hist.append(bytes);
         }
         let mut res = analyze::AnalyzeIndexResp::new();
@@ -186,7 +185,7 @@ impl<'a> SampleBuilder<'a> {
             let mut cols_iter = cols.into_iter();
             if self.pk_id != -1 {
                 if let Some(v) = cols_iter.next() {
-                    pk_builder.append(v);
+                    pk_builder.append(&v);
                 }
             }
             for (id, val) in cols_iter.enumerate() {
@@ -205,6 +204,7 @@ struct SampleCollector {
     count: u64,
     max_sample_size: usize,
     sketch: FMSketch,
+    rng: ThreadRng,
 }
 
 impl SampleCollector {
@@ -215,6 +215,7 @@ impl SampleCollector {
             count: 0,
             max_sample_size: max_sample_size,
             sketch: FMSketch::new(max_sketch_size),
+            rng: thread_rng(),
         }
     }
 
@@ -238,9 +239,9 @@ impl SampleCollector {
             self.samples.push(data);
             return;
         }
-        let seed: u64 = rand::random();
+        let seed = self.rng.next_u64();
         if seed % self.count < self.max_sample_size as u64 {
-            let idx = rand::random::<usize>() % self.max_sample_size;
+            let idx = self.rng.next_u64() as usize % self.max_sample_size;
             self.samples[idx] = data;
         }
     }

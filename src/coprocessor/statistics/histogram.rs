@@ -95,7 +95,7 @@ impl Histogram {
     }
 
     // insert a data bigger than or equal to the max value in current histogram.
-    pub fn append(&mut self, data: Vec<u8>) {
+    pub fn append(&mut self, data: &[u8]) {
         if let Some(bucket) = self.buckets.last_mut() {
             // The new item has the same value as last bucket value, to ensure that
             // a same value only stored in a single bucket, we do not increase bucket
@@ -111,7 +111,7 @@ impl Histogram {
         }
 
         if !self.is_last_bucket_full() {
-            self.buckets.last_mut().unwrap().append(data);
+            self.buckets.last_mut().unwrap().append(data.to_vec());
             return;
         }
 
@@ -120,7 +120,8 @@ impl Histogram {
         if let Some(bucket) = self.buckets.last() {
             count += bucket.count
         }
-        self.buckets.push(Bucket::new(count, data.clone(), data, 1));
+        self.buckets
+            .push(Bucket::new(count, data.to_vec(), data.to_vec(), 1));
     }
 
     // check whether the last bucket is full.
@@ -178,7 +179,7 @@ mod test {
 
         for item in (0..3).map(Datum::I64) {
             let bytes = datum::encode_value(&[item]).unwrap();
-            hist.append(bytes);
+            hist.append(&bytes);
         }
         // b0: [0]
         // b1: [1]
@@ -189,7 +190,7 @@ mod test {
 
         // bucket is full now, need to merge
         let bytes = datum::encode_value(&[Datum::I64(3)]).unwrap();
-        hist.append(bytes);
+        hist.append(&bytes);
         // b0: [0, 1]
         // b1: [2, 3]
         assert_eq!(hist.per_bucket_limit, 2);
@@ -199,7 +200,7 @@ mod test {
         // push repeated item
         for item in repeat(3).take(3).map(Datum::I64) {
             let bytes = datum::encode_value(&[item]).unwrap();
-            hist.append(bytes);
+            hist.append(&bytes);
         }
 
         // b1: [0, 1]
@@ -210,7 +211,7 @@ mod test {
 
         for item in repeat(4).take(4).map(Datum::I64) {
             let bytes = datum::encode_value(&[item]).unwrap();
-            hist.append(bytes);
+            hist.append(&bytes);
         }
         // b0: [0, 1]
         // b1: [2, 3, 3, 3, 3]
@@ -221,7 +222,7 @@ mod test {
 
         // bucket is full now, need to merge
         let bytes = datum::encode_value(&[Datum::I64(5)]).unwrap();
-        hist.append(bytes);
+        hist.append(&bytes);
         // b0: [0, 1, 2, 3, 3, 3, 3]
         // b1: [4, 4, 4, 4, 4]
         // b2: [5]
@@ -235,13 +236,13 @@ mod test {
         let buckets_num = 1;
         let mut hist = Histogram::new(buckets_num);
         assert_eq!(hist.buckets.len(), 0);
-        hist.append(datum::encode_value(&[Datum::I64(1)]).unwrap());
+        hist.append(&datum::encode_value(&[Datum::I64(1)]).unwrap());
         assert_eq!(hist.buckets.len(), 1);
         assert_eq!(hist.per_bucket_limit, 1);
-        hist.append(datum::encode_value(&[Datum::I64(2)]).unwrap());
+        hist.append(&datum::encode_value(&[Datum::I64(2)]).unwrap());
         assert_eq!(hist.buckets.len(), 1);
         assert_eq!(hist.per_bucket_limit, 2);
-        hist.append(datum::encode_value(&[Datum::I64(3)]).unwrap());
+        hist.append(&datum::encode_value(&[Datum::I64(3)]).unwrap());
         assert_eq!(hist.per_bucket_limit, 4);
     }
 }
