@@ -187,18 +187,18 @@ impl Debugger {
         struct MvccInfoCollector(BTreeMap<Vec<u8>, (MvccInfo, [bool; 3])>);
         impl MvccInfoCollector {
             fn collect<F: FnOnce(&mut MvccInfo)>(&mut self, key: Vec<u8>, i: usize, update: F) {
-                let mut gots = [false; 3];
-                gots[i] = true;
                 match self.0.entry(key) {
                     BTreeMapEntry::Vacant(ent) => {
                         let mut mvcc_info = MvccInfo::default();
                         update(&mut mvcc_info);
+                        let mut gots = [false; 3];
+                        gots[i] = true;
                         ent.insert((mvcc_info, gots));
                     }
                     BTreeMapEntry::Occupied(mut ent) => {
                         let mut mvcc_and_gots = ent.get_mut();
                         update(&mut mvcc_and_gots.0);
-                        mvcc_and_gots.1 = gots;
+                        mvcc_and_gots.1[i] = true;
                     }
                 }
             }
@@ -276,24 +276,30 @@ impl Debugger {
                     Some((k, _)) => k.to_owned(),
                     None => break,
                 };
-                if let BTreeMapEntry::Occupied(ent) = collector.0.entry(key) {
-                    let gots = ent.get().1;
-                    let got_or_finished = gots.into_iter()
+                if let Some((mvcc, gots)) = collector.0.remove(&key) {
+                    let got_or_finished = gots.iter()
                         .enumerate()
                         .map(|(i, &got)| {
-                            got || next_keys[i].as_ref().map_or(true, |k| ent.key() <= k)
+                            got || next_keys[i].as_ref().map_or(true, |k| &key <= k)
                         })
                         .all(|elem_got_or_finished| elem_got_or_finished);
                     if got_or_finished {
-                        let (key, (mvcc, gots)) = ent.remove_entry();
+                        for (i, _) in gots.iter().enumerate().filter(|&(_, got)| *got) {
+                            if let Some(next_key) = next_keys[i].take() {
+                                if key != next_key {
+                                    next_keys[i] = Some(next_key);
+                                    wants[i] = true;
+                                }
+                            }
+                        }
                         try!(deal(key, mvcc).map_err(Error::from));
                         count += 1;
                         if limit != 0 && count >= limit {
                             break;
                         }
-                        for (i, _) in gots.iter().enumerate().filter(|&(_, got)| *got) {
-                            wants[i] = true;
-                        }
+                    } else {
+                        collector.0.insert(key, (mvcc, gots));
+                        break;
                     }
                 }
             }

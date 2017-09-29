@@ -188,10 +188,11 @@ impl debugpb_grpc::Debug for Service {
                 let mut resp = ScanMvccResponse::new();
                 resp.set_key(key);
                 resp.set_info(mvcc);
-                let sink = opt_sink.take().unwrap();
+                let sink = try!(opt_sink.take().ok_or::<Error>(box_err!("Invalid sink")));
                 sink.send((resp, WriteFlags::default()))
                     .wait()
                     .map(|s| opt_sink = Some(s))
+                    .map_err(Error::from)
             }) {
                 Ok(_) => Ok(opt_sink.unwrap()),
                 Err(e) => Err((opt_sink, e)),
