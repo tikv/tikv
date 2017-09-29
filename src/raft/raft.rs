@@ -169,7 +169,6 @@ pub struct SoftState {
     pub raft_state: StateRole,
 }
 
-// #[derive(Default)]
 pub struct Raft<T: Storage> {
     pub term: u64,
     pub vote: u64,
@@ -411,6 +410,7 @@ impl<T: Storage> Raft<T> {
         self.state == StateRole::Leader && self.check_quorum
     }
 
+    // TODO: optimize, maybe record voterCount in raft
     fn voter_count(&self) -> usize {
         let mut count = 0;
         for p in self.prs.values() {
@@ -1846,6 +1846,10 @@ impl<T: Storage> Raft<T> {
             if pr.suffrage == suffrage {
                 // Ignore any redundant addNode calls (which can happen because the
                 // initial bootstrapping entries are applied twice).
+                return;
+            }
+            if pr.suffrage != SuffrageState::Voter {
+                // TODO(shuaili): check state change, Nonvoter -> Staging -> Voter
                 return;
             }
             pr.suffrage = suffrage;

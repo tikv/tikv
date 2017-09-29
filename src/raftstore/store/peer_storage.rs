@@ -24,7 +24,7 @@ use rocksdb::{Writable, WriteBatch, DB};
 use protobuf::Message;
 
 use kvproto::metapb::{self, Region};
-use kvproto::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use kvproto::eraftpb::{ConfState, Entry, HardState, Server, Snapshot, SuffrageState};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
                              RegionLocalState};
 use util::worker::Scheduler;
@@ -534,7 +534,14 @@ impl PeerStorage {
         }
 
         for p in self.region.get_peers() {
-            conf_state.mut_nodes().push(p.get_id());
+            let mut server = Server::new();
+            server.set_node(p.get_id());
+            if p.has_suffrage() {
+                server.set_suffrage(p.get_suffrage());
+            } else {
+                server.set_suffrage(SuffrageState::Voter);
+            }
+            conf_state.mut_servers().push(server);
         }
 
         Ok(RaftState {
@@ -1288,7 +1295,10 @@ pub fn do_snapshot(
 
     let mut conf_state = ConfState::new();
     for p in state.get_region().get_peers() {
-        conf_state.mut_nodes().push(p.get_id());
+        let mut server = Server::new();
+        server.set_node(p.get_id());
+        server.set_suffrage(p.get_suffrage());
+        conf_state.mut_servers().push(server);
     }
 
     snapshot.mut_metadata().set_conf_state(conf_state);

@@ -43,6 +43,7 @@ impl Default for ProgressState {
     }
 }
 
+
 #[derive(Debug, Clone)]
 pub struct Progress {
     pub matched: u64,
@@ -83,6 +84,7 @@ pub struct Progress {
     // be freed by calling inflights.freeTo.
     pub ins: Inflights,
 }
+
 
 
 impl Progress {
