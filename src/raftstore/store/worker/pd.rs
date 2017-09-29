@@ -309,7 +309,9 @@ impl<T: PdClient> Runner<T> {
                         return Ok(());
                     }
 
-                    if pd_region.get_peers().into_iter().all(|p| p != &peer) {
+                    if pd_region.get_peers().into_iter().all(
+                        |p| p.get_id() != peer.get_id() ||
+                            p.get_store_id() != peer.get_store_id()) {
                         // Peer is not a member of this region anymore. Probably it's removed out.
                         // Send it a raft massage to destroy it since it's obsolete.
                         info!("[region {}] {} is not a valid member of region {:?}. To be \

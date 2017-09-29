@@ -290,6 +290,10 @@ impl<T: Storage> RawNode<T> {
         match cc.get_change_type() {
             ConfChangeType::AddNode => self.raft.add_node(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
+            ConfChangeType::UpdateNode => unimplemented!(),
+            ConfChangeType::AddNonvoter => self.raft.add_non_voter(nid),
+            ConfChangeType::AddVoter => unimplemented!(),
+            ConfChangeType::DemoteVoter => unimplemented!(),
         }
         let mut cs = ConfState::new();
         cs.set_nodes(self.raft.nodes());

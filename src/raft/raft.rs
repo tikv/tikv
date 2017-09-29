@@ -29,7 +29,8 @@
 use std::cmp;
 
 use rand::{self, Rng};
-use kvproto::eraftpb::{Entry, EntryType, HardState, Message, MessageType, Snapshot};
+use kvproto::eraftpb::{Entry, EntryType, HardState, Message, MessageType, Server, Snapshot,
+                       SuffrageState};
 use protobuf::repeated::RepeatedField;
 
 use raft::storage::Storage;
@@ -80,7 +81,7 @@ pub struct Config {
     /// Restarting raft from previous configuration will panic if
     /// peers is set.
     /// peer is private and only used for testing right now.
-    pub peers: Vec<u64>,
+    pub peers: Vec<Server>,
 
     /// ElectionTick is the number of node.tick invocations that must pass between
     /// elections. That is, if a follower does not receive any message from the
@@ -168,7 +169,6 @@ pub struct SoftState {
     pub raft_state: StateRole,
 }
 
-#[derive(Default)]
 pub struct Raft<T: Storage> {
     pub term: u64,
     pub vote: u64,
@@ -185,6 +185,8 @@ pub struct Raft<T: Storage> {
     pub prs: FlatMap<u64, Progress>,
 
     pub state: StateRole,
+
+    pub suffrage: SuffrageState,
 
     pub votes: FlatMap<u64, bool>,
 
@@ -232,12 +234,12 @@ pub struct Raft<T: Storage> {
     tag: String,
 }
 
-fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
-    Progress {
-        next_idx: next_idx,
-        ins: Inflights::new(ins_size),
-        ..Default::default()
-    }
+fn new_progress(next_idx: u64, ins_size: usize, suffrage: SuffrageState) -> Progress {
+    let mut p = Progress::default();
+    p.next_idx = next_idx;
+    p.ins = Inflights::new(ins_size);
+    p.suffrage = suffrage;
+    p
 }
 
 fn new_message(to: u64, field_type: MessageType, from: Option<u64>) -> Message {
@@ -269,7 +271,14 @@ impl<T: Storage> Raft<T> {
         c.validate().expect("configuration is invalid");
         let rs = store.initial_state().expect("");
         let raft_log = RaftLog::new(store, c.tag.clone());
-        let mut peers: &[u64] = &c.peers;
+        let mut peers: Vec<Server> = vec![];
+        peers.extend_from_slice(&c.peers);
+        if !rs.conf_state.get_nodes().is_empty() && !rs.conf_state.get_servers().is_empty() {
+            panic!(
+                "{} cannot specify both ConfState.Nodes and ConfState.Servers",
+                c.tag
+            );
+        }
         if !rs.conf_state.get_nodes().is_empty() {
             if !peers.is_empty() {
                 // TODO: the peers argument is always nil except in
@@ -278,9 +287,25 @@ impl<T: Storage> Raft<T> {
                 panic!(
                     "{} cannot specify both new(peers) and ConfState.Nodes",
                     c.tag
-                )
+                );
             }
-            peers = rs.conf_state.get_nodes();
+            for id in rs.conf_state.get_nodes() {
+                let mut server = Server::new();
+                server.set_node(*id);
+                server.set_suffrage(SuffrageState::Voter);
+                peers.push(server);
+            }
+        }
+        if !rs.conf_state.get_servers().is_empty() {
+            if !peers.is_empty() {
+                panic!(
+                    "{} cannot specify both new(peers) and ConfState.Nodes",
+                    c.tag
+                );
+            }
+            for server in rs.conf_state.get_servers() {
+                peers.push(server.clone());
+            }
         }
         let mut r = Raft {
             id: c.id,
@@ -290,6 +315,7 @@ impl<T: Storage> Raft<T> {
             max_msg_size: c.max_size_per_msg,
             prs: FlatMap::with_capacity(peers.len()),
             state: StateRole::Follower,
+            suffrage: SuffrageState::Voter,
             check_quorum: c.check_quorum,
             pre_vote: c.pre_vote,
             read_only: ReadOnly::new(c.read_only_option),
@@ -309,8 +335,14 @@ impl<T: Storage> Raft<T> {
             skip_bcast_commit: c.skip_bcast_commit,
             tag: c.tag.to_owned(),
         };
-        for p in peers {
-            r.prs.insert(*p, new_progress(1, r.max_inflight));
+        for p in peers.drain(..) {
+            r.prs.insert(
+                p.get_node(),
+                new_progress(1, r.max_inflight, p.get_suffrage()),
+            );
+            if r.id == p.get_node() {
+                r.suffrage = p.get_suffrage();
+            }
         }
         if rs.hard_state != HardState::new() {
             r.load_state(rs.hard_state);
@@ -378,8 +410,19 @@ impl<T: Storage> Raft<T> {
         self.state == StateRole::Leader && self.check_quorum
     }
 
+    // TODO: optimize, maybe record voterCount in raft
+    fn voter_count(&self) -> usize {
+        let mut count = 0;
+        for p in self.prs.values() {
+            if p.suffrage == SuffrageState::Voter {
+                count += 1;
+            }
+        }
+        count
+    }
+
     fn quorum(&self) -> usize {
-        quorum(self.prs.len())
+        quorum(self.voter_count())
     }
 
     // for testing leader lease
@@ -601,9 +644,11 @@ impl<T: Storage> Raft<T> {
     // r.bcast_append).
     pub fn maybe_commit(&mut self) -> bool {
         // TODO: optimize
-        let mut mis = Vec::with_capacity(self.prs.len());
+        let mut mis = Vec::with_capacity(self.voter_count());
         for p in self.prs.values() {
-            mis.push(p.matched);
+            if p.suffrage == SuffrageState::Voter {
+                mis.push(p.matched);
+            }
         }
         // reverse sort
         mis.sort_by(|a, b| b.cmp(a));
@@ -628,7 +673,7 @@ impl<T: Storage> Raft<T> {
         let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
         let self_id = self.id;
         for (id, p) in &mut self.prs {
-            *p = new_progress(last_index + 1, max_inflight);
+            *p = new_progress(last_index + 1, max_inflight, p.suffrage);
             if id == &self_id {
                 p.matched = last_index;
             }
@@ -800,6 +845,9 @@ impl<T: Storage> Raft<T> {
         let ids: Vec<_> = self.prs.keys().cloned().collect();
         for id in ids {
             if id == self.id {
+                continue;
+            }
+            if self.prs.get(&id).unwrap().suffrage != SuffrageState::Voter {
                 continue;
             }
             info!(
@@ -1288,6 +1336,14 @@ impl<T: Storage> Raft<T> {
                 );
             }
             MessageType::MsgTransferLeader => {
+                if self.prs.get(&m.get_from()).unwrap().suffrage != SuffrageState::Voter {
+                    debug!(
+                        "{} ignored transferring leader, {} is not Voter",
+                        self.tag,
+                        m.get_from()
+                    );
+                    return;
+                }
                 self.handle_transfer_leader(m);
             }
             _ => {}
@@ -1705,16 +1761,44 @@ impl<T: Storage> Raft<T> {
             meta.get_index(),
             meta.get_term()
         );
-        self.prs = FlatMap::with_capacity(meta.get_conf_state().get_nodes().len());
+
+        if !meta.get_conf_state().get_nodes().is_empty() &&
+            !meta.get_conf_state().get_servers().is_empty()
+        {
+            panic!(
+                "{} cannot specify both ConfState.Nodes and ConfState.Servers",
+                self.tag
+            );
+        }
+        self.prs = FlatMap::new();
         for &n in meta.get_conf_state().get_nodes() {
             let next_idx = self.raft_log.last_index() + 1;
-            let matched = if n == self.id { next_idx - 1 } else { 0 };
-            self.set_progress(n, matched, next_idx);
+            let mut matched = 0;
+            if n == self.id {
+                matched = next_idx - 1;
+                self.suffrage = SuffrageState::Voter;
+            }
+            self.set_progress(n, matched, next_idx, SuffrageState::Voter);
             info!(
                 "{} restored progress of {} [{:?}]",
                 self.tag,
                 n,
                 self.prs[&n]
+            );
+        }
+        for s in meta.get_conf_state().get_servers() {
+            let next_idx = self.raft_log.last_index() + 1;
+            let mut matched = 0;
+            if s.get_node() == self.id {
+                matched = next_idx - 1;
+                self.suffrage = s.get_suffrage();
+            }
+            self.set_progress(s.get_node(), matched, next_idx, s.get_suffrage());
+            info!(
+                "{} restored progress of {} [{:?}]",
+                self.tag,
+                s.get_node(),
+                self.prs.get(&s.get_node())
             );
         }
         None
@@ -1738,20 +1822,49 @@ impl<T: Storage> Raft<T> {
     }
 
     // promotable indicates whether state machine can be promoted to leader,
-    // which is true when its own id is in progress list.
+    // which is true when its own id is in progress list and suffrage is Voter
     pub fn promotable(&self) -> bool {
-        self.prs.contains_key(&self.id)
+        self.prs.contains_key(&self.id) && self.suffrage == SuffrageState::Voter
+    }
+
+    pub fn add_non_voter(&mut self, id: u64) {
+        self.add_node_with_suffrage(id, SuffrageState::Nonvoter);
+    }
+
+    pub fn add_voter(&mut self, id: u64) {
+        self.add_node_with_suffrage(id, SuffrageState::Staging);
     }
 
     pub fn add_node(&mut self, id: u64) {
+        self.add_node_with_suffrage(id, SuffrageState::Voter);
+    }
+
+    fn add_node_with_suffrage(&mut self, id: u64, suffrage: SuffrageState) {
         self.pending_conf = false;
         if self.prs.contains_key(&id) {
-            // Ignore any redundant addNode calls (which can happen because the
-            // initial bootstrapping entries are applied twice).
-            return;
+            let mut pr = self.prs.get_mut(&id).unwrap();
+            if pr.suffrage == suffrage {
+                // Ignore any redundant addNode calls (which can happen because the
+                // initial bootstrapping entries are applied twice).
+                return;
+            }
+            if pr.suffrage != SuffrageState::Voter {
+                // TODO(shuaili): check state change, Nonvoter -> Staging -> Voter
+                return;
+            }
+            pr.suffrage = suffrage;
+        } else {
+            let last_index = self.raft_log.last_index();
+            self.set_progress(id, 0, last_index + 1, suffrage);
         }
-        let last_index = self.raft_log.last_index();
-        self.set_progress(id, 0, last_index + 1);
+
+        if self.id == id {
+            self.suffrage = suffrage
+        }
+        // When a node is first added, we should mark it as recently active.
+        // Otherwise, CheckQuorum may cause us to step down if it is invoked
+        // before the added node has a chance to communicate with us.
+        self.prs.get_mut(&id).unwrap().recent_active = true;
     }
 
     pub fn remove_node(&mut self, id: u64) {
@@ -1778,8 +1891,8 @@ impl<T: Storage> Raft<T> {
         self.pending_conf = false;
     }
 
-    pub fn set_progress(&mut self, id: u64, matched: u64, next_idx: u64) {
-        let mut p = new_progress(next_idx, self.max_inflight);
+    pub fn set_progress(&mut self, id: u64, matched: u64, next_idx: u64, suffrage: SuffrageState) {
+        let mut p = new_progress(next_idx, self.max_inflight, suffrage);
         p.matched = matched;
         self.prs.insert(id, p);
     }
@@ -1841,7 +1954,7 @@ impl<T: Storage> Raft<T> {
                 continue;
             }
 
-            if p.recent_active {
+            if p.recent_active && p.suffrage == SuffrageState::Voter {
                 act += 1;
             }
 

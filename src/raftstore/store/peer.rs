@@ -23,7 +23,7 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType};
+use kvproto::eraftpb::{self, ConfChangeType, MessageType, SuffrageState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
@@ -1178,18 +1178,22 @@ impl Peer {
     /// 2. it's a follower, and it does not lag behind the leader a lot.
     ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn count_healthy_node(&self, progress: Values<u64, Progress>) -> usize {
+    fn count_healthy_node(&self, progress: Values<u64, Progress>) -> (usize, usize) {
         let mut healthy = 0;
+        let mut voter_count = 0;
         for pr in progress {
-            if pr.matched >= self.get_store().truncated_index() {
-                healthy += 1;
+            if pr.suffrage == SuffrageState::Voter {
+                voter_count += 1;
+                if pr.matched >= self.get_store().truncated_index() {
+                    healthy += 1;
+                }
             }
         }
-        healthy
+        (healthy, voter_count)
     }
 
     /// Check whether it's safe to propose the specified conf change request.
-    /// It's safe iff at least the quorum of the Raft group is still healthy
+    /// It's safe if at least the quorum of the Raft group is still healthy
     /// right after that conf change is applied.
     /// Define the total number of nodes in current Raft cluster to be `total`.
     /// To ensure the above safety, if the cmd is
@@ -1225,7 +1229,9 @@ impl Peer {
 
         match change_type {
             ConfChangeType::AddNode => {
-                status.progress.insert(peer.get_id(), Progress::default());
+                let mut p = Progress::default();
+                p.suffrage = SuffrageState::Voter;
+                status.progress.insert(peer.get_id(), p);
             }
             ConfChangeType::RemoveNode => {
                 if status.progress.remove(&peer.get_id()).is_none() {
@@ -1233,9 +1239,22 @@ impl Peer {
                     return Ok(());
                 }
             }
+            ConfChangeType::AddNonvoter => if status.progress.contains_key(&peer.get_id()) {
+                warn!(
+                    "{} rejects add non-voter for exist node {:?}",
+                    self.tag,
+                    change_peer
+                );
+                return Err(box_err!("ignore add non-voter"));
+            },
+            ConfChangeType::AddVoter | ConfChangeType::UpdateNode | ConfChangeType::DemoteVoter => {
+                unimplemented!();
+            }
         }
-        let healthy = self.count_healthy_node(status.progress.values());
-        let quorum_after_change = raft::quorum(status.progress.len());
+
+        // TODO: remove this check after non-voting member added
+        let (healthy, voter_count) = self.count_healthy_node(status.progress.values());
+        let quorum_after_change = raft::quorum(voter_count);
         if healthy >= quorum_after_change {
             return Ok(());
         }
@@ -1561,8 +1580,12 @@ impl Peer {
         // Try to find in region, if found, set in cache.
         for peer in self.get_store().get_region().get_peers() {
             if peer.get_id() == peer_id {
-                self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
-                return Some(peer.clone());
+                let mut new_peer = peer.clone();
+                new_peer.clear_suffrage();
+                self.peer_cache
+                    .borrow_mut()
+                    .insert(peer_id, new_peer.clone());
+                return Some(new_peer);
             }
         }
 

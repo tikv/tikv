@@ -22,7 +22,7 @@ use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
-use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
+use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, SuffrageState};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftTruncatedState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           RaftCmdRequest, RaftCmdResponse, Request, Response};
@@ -718,7 +718,7 @@ impl ApplyDelegate {
         request: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
-        let peer = request.get_peer();
+        let mut peer = request.get_peer().clone();
         let store_id = peer.get_store_id();
         let change_type = request.get_change_type();
         let mut region = self.region.clone();
@@ -742,23 +742,31 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "all"])
                     .inc();
 
-                if exists {
-                    error!(
-                        "{} can't add duplicated peer {:?} to region {:?}",
-                        self.tag,
-                        peer,
-                        self.region
-                    );
-                    return Err(box_err!(
-                        "can't add duplicated peer {:?} to region {:?}",
-                        peer,
-                        self.region
-                    ));
+                if !exists {
+                    peer.set_suffrage(SuffrageState::Voter);
+                    region.mut_peers().push(peer.clone());
+                } else {
+                    for exist_peer in region.mut_peers().iter_mut() {
+                        if exist_peer.get_store_id() == store_id {
+                            if exist_peer.get_suffrage() == SuffrageState::Voter {
+                                error!(
+                                    "{} can't add duplicated voter peer {:?} to region {:?}",
+                                    self.tag,
+                                    peer,
+                                    self.region
+                                );
+                                return Err(box_err!(
+                                    "can't add duplicated voter peer {:?} to region {:?}",
+                                    peer,
+                                    self.region
+                                ));
+                            }
+                            // TODO: Do we allow adding peer in same node?
+                            exist_peer.set_suffrage(SuffrageState::Voter);
+                            break;
+                        }
+                    }
                 }
-
-                // TODO: Do we allow adding peer in same node?
-
-                region.mut_peers().push(peer.clone());
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "success"])
@@ -809,6 +817,42 @@ impl ApplyDelegate {
                     self.region
                 );
             }
+            ConfChangeType::AddNonvoter => {
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_non_voter", "all"])
+                    .inc();
+
+                if exists {
+                    error!(
+                        "{} can't add duplicated non-voter peer {:?} to region {:?}",
+                        self.tag,
+                        peer,
+                        self.region
+                    );
+                    return Err(box_err!(
+                        "can't add duplicated non-voter peer {:?} to region {:?}",
+                        peer,
+                        self.region
+                    ));
+                }
+
+                peer.set_suffrage(SuffrageState::Nonvoter);
+                region.mut_peers().push(peer.clone());
+
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["add_non_voter", "success"])
+                    .inc();
+
+                info!(
+                    "{} add peer {:?} to region {:?}",
+                    self.tag,
+                    peer,
+                    self.region
+                );
+            }
+            ConfChangeType::AddVoter | ConfChangeType::UpdateNode | ConfChangeType::DemoteVoter => {
+                unimplemented!();
+            }
         }
 
         let state = if self.pending_remove {
@@ -827,7 +871,7 @@ impl ApplyDelegate {
             resp,
             Some(ExecResult::ChangePeer(ChangePeer {
                 conf_change: Default::default(),
-                peer: peer.clone(),
+                peer: peer,
                 region: region,
             })),
         ))

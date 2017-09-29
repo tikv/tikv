@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use rocksdb::{Writable, WriteBatch, DB};
+use kvproto::eraftpb::SuffrageState;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 use kvproto::metapb;
 use raftstore::Result;
@@ -138,6 +139,7 @@ pub fn prepare_bootstrap(
     let mut peer = metapb::Peer::new();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
+    peer.set_suffrage(SuffrageState::Voter);
     region.mut_peers().push(peer);
 
     try!(write_prepare_bootstrap(engines, &region));
