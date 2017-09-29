@@ -1912,13 +1912,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             split_key: split_key,
             peer: peer.peer.clone(),
             right_derive: self.cfg.right_derive_when_split,
-            callback: cb.unwrap_or_else(|| Box::new(|_| {})),
+            callback: cb,
         };
         if let Err(Stopped(t)) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd to split: Stopped", peer.tag);
             match t {
                 PdTask::AskSplit { callback, .. } => {
-                    callback(new_error(box_err!("failed to split: Stopped")))
+                    callback.map(|cb| cb(new_error(box_err!("failed to split: Stopped"))));
                 }
                 _ => unreachable!(),
             }
@@ -2519,20 +2519,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();
             }
-            // TODO: Unified split region message.
-            Msg::SplitCheckResult {
-                region_id,
-                epoch,
-                split_key,
-            } => {
-                info!("[region {}] split check complete.", region_id);
-                self.on_prepare_split_region(
-                    region_id,
-                    epoch,
-                    keys::origin_key(split_key.as_slice()).to_vec(),
-                    None,
-                );
-            }
             Msg::ReportUnreachable {
                 region_id,
                 to_peer_id,
@@ -2559,7 +2545,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     region_id,
                     split_key
                 );
-                self.on_prepare_split_region(region_id, region_epoch, split_key, Some(callback));
+                self.on_prepare_split_region(region_id, region_epoch, split_key, callback);
             }
         }
     }
