@@ -26,7 +26,7 @@ use storage::{Snapshot, SnapshotStore, Statistics};
 use super::fmsketch::FMSketch;
 use super::histogram::Histogram;
 
-// `AnalyzeContext` is used to handle `anlyzeReq`
+// `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<'a> {
     req: AnalyzeReq,
     snap: SnapshotStore<'a>,
