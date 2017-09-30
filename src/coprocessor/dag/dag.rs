@@ -201,7 +201,7 @@ impl<'s> DAGContext<'s> {
 
         match first.get_tp() {
             ExecType::TypeTableScan => Box::new(TableScanExecutor::new(
-                first.take_tbl_scan(),
+                first.get_tbl_scan(),
                 self.ranges.clone(),
                 store,
                 statistics,

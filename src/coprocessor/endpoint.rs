@@ -18,6 +18,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
+use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
 use protobuf::Message as PbMsg;
@@ -38,12 +39,14 @@ use super::codec::datum::Datum;
 use super::select::select::SelectContext;
 use super::select::xeval::EvalContext;
 use super::dag::DAGContext;
+use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
 use super::{Error, Result};
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
 pub const REQ_TYPE_DAG: i64 = 103;
+pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const BATCH_ROW_COUNT: usize = 64;
 
 // If a request has been handled for more than 60 seconds, the client should
@@ -251,6 +254,7 @@ impl Display for Task {
 enum CopRequest {
     Select(SelectRequest),
     DAG(DAGRequest),
+    Analyze(AnalyzeReq),
 }
 
 pub struct ReqContext {
@@ -326,6 +330,19 @@ impl RequestTask {
                     Ok(CopRequest::DAG(dag))
                 }
             }
+            REQ_TYPE_ANALYZE => {
+                let mut analyze = AnalyzeReq::new();
+                if let Err(e) = analyze.merge_from_bytes(req.get_data()) {
+                    Err(box_err!(e))
+                } else {
+                    start_ts = Some(analyze.get_start_ts());
+                    if analyze.get_tp() == AnalyzeType::TypeColumn {
+                        table_scan = true;
+                    }
+                    Ok(CopRequest::Analyze(analyze))
+                }
+            }
+
             _ => Err(box_err!("unsupported tp {}", tp)),
         };
         let req_ctx = ReqContext {
@@ -606,6 +623,7 @@ impl TiDbEndPoint {
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t),
+            Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
         };
         match resp {
@@ -637,6 +655,18 @@ impl TiDbEndPoint {
             (ctx.get_region_id(), ctx.get_region_epoch().clone())
         };
         ctx.handle_request(region_id, epoch, &mut t.statistics)
+    }
+
+    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
+        let ranges = t.req.get_ranges().to_vec();
+        let ctx = AnalyzeContext::new(
+            analyze,
+            ranges,
+            self.snap.as_ref(),
+            &mut t.statistics,
+            &t.ctx,
+        );
+        ctx.handle_request()
     }
 }
 

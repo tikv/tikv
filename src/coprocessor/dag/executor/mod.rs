@@ -19,7 +19,7 @@ use tipb::schema::ColumnInfo;
 use util::collections::HashSet;
 
 use coprocessor::codec::mysql;
-use coprocessor::codec::datum::Datum;
+use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
 use coprocessor::select::xeval::EvalContext;
@@ -96,6 +96,30 @@ impl Row {
             handle: handle,
             data: data,
         }
+    }
+
+    // get binary of each column in order of columns
+    pub fn get_binary_cols(&self, columns: &[ColumnInfo]) -> Result<Vec<Vec<u8>>> {
+        let mut res = Vec::with_capacity(columns.len());
+        for col in columns {
+            if col.get_pk_handle() {
+                let v = get_pk(col, self.handle);
+                let bt = box_try!(datum::encode_value(&[v]));
+                res.push(bt);
+                continue;
+            }
+            let col_id = col.get_column_id();
+            let value = match self.data.get(col_id) {
+                None if col.has_default_val() => col.get_default_val().to_vec(),
+                None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                    return Err(box_err!("column {} of {} is missing", col_id, self.handle));
+                }
+                None => box_try!(datum::encode_value(&[Datum::Null])),
+                Some(bs) => bs.to_vec(),
+            };
+            res.push(value);
+        }
+        Ok(res)
     }
 }
 
