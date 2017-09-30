@@ -35,7 +35,7 @@ pub struct TableScanExecutor<'a> {
 
 impl<'a> TableScanExecutor<'a> {
     pub fn new(
-        meta: TableScan,
+        meta: &TableScan,
         mut key_ranges: Vec<KeyRange>,
         store: SnapshotStore<'a>,
         statistics: &'a mut Statistics,
@@ -184,7 +184,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, &mut statistics);
+            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store, &mut statistics);
 
         let row = table_scanner.next().unwrap().unwrap();
         assert_eq!(row.handle, handle as i64);
@@ -217,7 +217,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, &mut statistics);
+            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store, &mut statistics);
 
         for handle in 0..KEY_NUMBER {
             let row = table_scanner.next().unwrap().unwrap();
@@ -253,7 +253,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, &mut statistics);
+            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store, &mut statistics);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
