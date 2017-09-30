@@ -698,3 +698,20 @@ fn test_debug_region_size() {
         _ => panic!("expect NotFound"),
     }
 }
+
+#[test]
+#[cfg(not(feature = "no-fail"))]
+fn test_debug_fail_point() {
+    let (_cluster, debug_client, _) = must_new_cluster_and_debug_client();
+
+    let (fp, act) = ("tikv::raftstore::store::store::raft_between_save", "off");
+
+    let mut inject_req = debugpb::InjectFailPointRequest::new();
+    inject_req.set_name(fp.to_owned());
+    inject_req.set_actions(act.to_owned());
+    debug_client.inject_fail_point(inject_req).unwrap();
+
+    let mut recover_req = debugpb::RecoverFailPointRequest::new();
+    recover_req.set_name(fp.to_owned());
+    debug_client.recover_fail_point(recover_req).unwrap();
+}
