@@ -163,8 +163,8 @@ impl Debugger {
         try!(validate_db_and_cf(db, cf));
         let db = try!(self.get_db_from_type(db));
         let handle = box_try!(get_cf_handle(db, cf));
-        let start = Some(start).into_iter().find(|s| s.len() > 0);
-        let end = Some(end).into_iter().find(|s| s.len() > 0);
+        let start = Some(start).into_iter().find(|s| !s.is_empty());
+        let end = Some(end).into_iter().find(|s| !s.is_empty());
         compact_range(db, handle, start, end, false);
         Ok(())
     }
