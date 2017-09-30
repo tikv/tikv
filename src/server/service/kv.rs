@@ -943,7 +943,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             region_id: req.get_context().get_region_id(),
             region_epoch: req.take_context().take_region_epoch(),
             split_key: Key::from_raw(req.get_split_key()).encoded().clone(),
-            callback: cb,
+            callback: Some(cb),
         };
 
         if let Err(e) = self.ch.try_send(req) {
