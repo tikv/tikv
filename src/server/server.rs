@@ -20,17 +20,18 @@ use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, Server
 use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
 
-use util::worker::Worker;
+use util::worker::{FutureScheduler, Worker};
 use storage::Storage;
-use raftstore::store::{CopFlowStatistics, Engines, Msg, SnapManager, SnapshotStatusMsg};
+use raftstore::store::{Engines, SnapManager, SnapshotStatusMsg};
 
 use super::{Config, Result};
-use coprocessor::{CopRequestStatistics, CopSender, EndPointHost, EndPointTask, Result as CopResult};
+use coprocessor::{EndPointHost, EndPointTask};
 use super::service::*;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::raft_client::RaftClient;
+use pd::PdTask;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
@@ -50,39 +51,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
-}
-
-#[derive(Clone)]
-pub struct CopReport<R: RaftStoreRouter + 'static> {
-    router: R,
-}
-
-impl<R: RaftStoreRouter + 'static> CopReport<R> {
-    pub fn new(r: R) -> CopReport<R> {
-        CopReport { router: r.clone() }
-    }
-}
-
-impl<R: RaftStoreRouter + 'static> CopSender for CopReport<R> {
-    fn send(&self, stats: CopRequestStatistics) -> CopResult<()> {
-        box_try!(self.router.try_send(Msg::CoprocessorStats {
-            request_stats: stats as CopFlowStatistics,
-        }));
-        Ok(())
-    }
-}
-
-#[derive(Clone)]
-struct MockCopSender {}
-impl MockCopSender {
-    fn new() -> MockCopSender {
-        MockCopSender {}
-    }
-}
-impl CopSender for MockCopSender {
-    fn send(&self, _stats: CopRequestStatistics) -> CopResult<()> {
-        Ok(())
-    }
+    pd_scheduler: FutureScheduler<PdTask>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -95,6 +64,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snapshot_status_sender: Sender<SnapshotStatusMsg>,
         resolver: S,
         snap_mgr: SnapManager,
+        pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
@@ -156,6 +126,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
+            pd_scheduler: pd_scheduler,
         };
 
         Ok(svr)
@@ -170,7 +141,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
             cfg,
-            MockCopSender::new(),
+            self.pd_scheduler.clone(),
         );
         box_try!(
             self.end_point_worker
@@ -222,6 +193,7 @@ mod tests {
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::transport::Transport;
+    use util::worker::FutureWorker;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -283,6 +255,7 @@ mod tests {
         let (snapshot_status_sender, _) = mpsc::channel();
 
         let addr = Arc::new(Mutex::new(None));
+        let pd_worker = FutureWorker::new("pd worker");
         let mut server = Server::new(
             &cfg,
             1024,
@@ -291,6 +264,7 @@ mod tests {
             snapshot_status_sender,
             MockResolver { addr: addr.clone() },
             SnapManager::new("", None),
+            pd_worker.scheduler(),
             None,
         ).unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());

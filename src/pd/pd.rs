@@ -34,7 +34,9 @@ use raftstore::store::Msg;
 use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use pd::metrics::*;
 use raftstore::store::store::StoreInfo;
-use raftstore::store::Callback;
+use raftstore::store::{Callback, PeerStat};
+use coprocessor::CopRequestStatistics;
+use util::collections::HashMap;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
@@ -53,8 +55,6 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
-        read_bytes: u64,
-        read_keys: u64,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -68,6 +68,20 @@ pub enum Task {
         region: metapb::Region,
         peer: metapb::Peer,
     },
+    CopFlowStats { flow_stats: CopRequestStatistics },
+}
+
+#[derive(Default)]
+pub struct StoreStat {
+    pub engine_total_bytes_written: u64,
+    pub engine_total_keys_written: u64,
+    pub engine_total_bytes_read: u64,
+    pub engine_total_keys_read: u64,
+
+    pub engine_last_total_bytes_written: u64,
+    pub engine_last_total_keys_written: u64,
+    pub engine_last_total_bytes_read: u64,
+    pub engine_last_total_keys_read: u64,
 }
 
 impl Display for Task {
@@ -104,26 +118,31 @@ impl Display for Task {
                 ref region,
                 ref peer,
             } => write!(f, "validate peer {:?} with region {:?}", peer, region),
+            Task::CopFlowStats { ref flow_stats } => {
+                write!(f, "coprocessor get statistics {:?}", flow_stats)
+            }
         }
     }
 }
 
 pub struct Runner<T: PdClient> {
-    store_id: u64,
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
     db: Arc<DB>,
+    region_peers: HashMap<u64, PeerStat>,
+    store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
+    pub fn new(pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
         Runner {
-            store_id: store_id,
             pd_client: pd_client,
             ch: ch,
             db: db,
             is_hb_receiver_scheduled: false,
+            region_peers: HashMap::default(),
+            store_stat: StoreStat::default(),
         }
     }
 
@@ -198,7 +217,7 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_store_heartbeat(
-        &self,
+        &mut self,
         handle: &Handle,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo,
@@ -241,6 +260,14 @@ impl<T: PdClient> Runner<T> {
         }
 
         stats.set_available(available);
+        stats.set_bytes_read(
+            self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
+        );
+        stats.set_keys_read(
+            self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
+        );
+        self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
+        self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
 
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
@@ -341,9 +368,8 @@ impl<T: PdClient> Runner<T> {
 
     fn schedule_heartbeat_receiver(&mut self, handle: &Handle) {
         let ch = self.ch.clone();
-        let store_id = self.store_id;
         let f = self.pd_client
-            .handle_region_heartbeat_response(self.store_id, move |mut resp| {
+            .handle_region_heartbeat_response(0, move |mut resp| {
                 PD_REQ_COUNTER_VEC
                     .with_label_values(&["heartbeat", "success"])
                     .inc();
@@ -385,14 +411,24 @@ impl<T: PdClient> Runner<T> {
                 }
             })
             .map_err(|e| panic!("unexpected error: {:?}", e))
-            .map(move |_| {
-                info!(
-                    "[store {}] region heartbeat response handler exit.",
-                    store_id
-                )
-            });
+            .map(move |_| info!("region heartbeat response handler exit.",));
         handle.spawn(f);
         self.is_hb_receiver_scheduled = true;
+    }
+
+    fn handle_coprocessor_flow_stats(&mut self, flow_stats: CopRequestStatistics) {
+        PD_REQ_COUNTER_VEC
+            .with_label_values(&["coprocessor read stats", "all"])
+            .inc();
+        for (region_id, stats) in flow_stats {
+            let mut peer_stat = self.region_peers
+                .entry(region_id)
+                .or_insert_with(PeerStat::default);
+            peer_stat.read_bytes += stats.read_bytes as u64;
+            peer_stat.read_keys += stats.read_keys as u64;
+            self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
+            self.store_stat.engine_total_keys_read += stats.read_keys as u64;
+        }
     }
 }
 
@@ -419,10 +455,18 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
-                read_bytes,
-                read_keys,
             } => {
                 let approximate_size = get_region_approximate_size(&self.db, &region).unwrap_or(0);
+                let (read_bytes, read_keys) = match self.region_peers.get_mut(&region.get_id()) {
+                    Some(peer_stat) => {
+                        let read_bytes = peer_stat.read_bytes - peer_stat.last_read_bytes;
+                        let read_keys = peer_stat.read_keys - peer_stat.last_read_bytes;
+                        peer_stat.last_read_bytes = peer_stat.read_bytes;
+                        peer_stat.last_read_keys = peer_stat.read_keys;
+                        (read_bytes, read_keys)
+                    }
+                    None => (0, 0),
+                };
                 self.handle_heartbeat(
                     handle,
                     region,
@@ -443,6 +487,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             }
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
+            Task::CopFlowStats { flow_stats } => self.handle_coprocessor_flow_stats(flow_stats),
         };
     }
 }

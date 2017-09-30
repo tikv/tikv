@@ -193,7 +193,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let pd_client = Arc::new(pd_client);
     let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
-    let pd_worker = FutureWorker::new("pd worker");
+    let pd_worker = FutureWorker::new("pd-worker");
     // Create Server
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
@@ -207,6 +207,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         snap_status_sender,
         resolver,
         snap_mgr.clone(),
+        pd_worker.scheduler(),
         Some(engines.clone()),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();

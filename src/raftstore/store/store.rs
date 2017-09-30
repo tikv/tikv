@@ -57,7 +57,7 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::{BatchCallback, Callback, CopFlowStatistics};
+use super::msg::{BatchCallback, Callback};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
@@ -547,7 +547,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(
-            self.store_id(),
             self.pd_client.clone(),
             self.sendch.clone(),
             self.kv_engine.clone(),
@@ -1707,8 +1706,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for peer in self.region_peers.values_mut() {
             peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
             peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
-            peer.peer_stat.last_read_bytes = peer.peer_stat.read_bytes;
-            peer.peer_stat.last_read_keys = peer.peer_stat.read_keys;
 
             self.store_stat
                 .region_bytes_written
@@ -1716,25 +1713,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.store_stat
                 .region_keys_written
                 .observe(peer.peer_stat.written_keys as f64);
-            self.store_stat
-                .region_bytes_read
-                .observe(peer.peer_stat.read_bytes as f64);
-            self.store_stat
-                .region_keys_read
-                .observe(peer.peer_stat.read_keys as f64);
         }
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
-        self.store_stat.region_bytes_read.flush();
-        self.store_stat.region_keys_read.flush();
     }
 
     fn on_update_store_flow(&mut self) {
         self.store_stat.engine_last_total_bytes_written =
             self.store_stat.engine_total_bytes_written;
         self.store_stat.engine_last_total_keys_written = self.store_stat.engine_total_keys_written;
-        self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
-        self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
     }
 
     #[allow(if_same_then_else)]
@@ -2055,12 +2042,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.store_stat.engine_total_keys_written -
                 self.store_stat.engine_last_total_keys_written,
         );
-        stats.set_bytes_read(
-            self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
-        );
-        stats.set_keys_read(
-            self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
-        );
+
         self.on_update_store_flow();
 
         stats.set_is_busy(self.is_busy);
@@ -2209,20 +2191,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
             peer.raft_group.report_unreachable(to_peer_id);
-        }
-    }
-
-    fn handle_coprocessor_msg(&mut self, request_stats: CopFlowStatistics) {
-        for (region_id, stats) in &request_stats {
-            if let Some(peer) = self.region_peers.get_mut(region_id) {
-                if !peer.is_leader() {
-                    continue;
-                }
-                peer.peer_stat.read_bytes += stats.read_bytes as u64;
-                peer.peer_stat.read_keys += stats.read_keys as u64;
-                self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
-                self.store_stat.engine_total_keys_read += stats.read_keys as u64;
-            }
         }
     }
 }
@@ -2541,7 +2509,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_unreachable(region_id, to_peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
-            Msg::CoprocessorStats { request_stats } => self.handle_coprocessor_msg(request_stats),
             Msg::ComputeHashResult {
                 region_id,
                 index,

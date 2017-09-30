@@ -1581,8 +1581,6 @@ impl Peer {
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.written_bytes - self.peer_stat.last_written_bytes,
             written_keys: self.peer_stat.written_keys - self.peer_stat.last_written_keys,
-            read_bytes: self.peer_stat.read_bytes - self.peer_stat.last_read_bytes,
-            read_keys: self.peer_stat.read_keys - self.peer_stat.last_read_keys,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

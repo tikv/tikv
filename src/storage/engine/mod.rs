@@ -186,11 +186,11 @@ pub struct CFStatistics {
     pub prev: usize,
     pub seek: usize,
     pub seek_for_prev: usize,
-    pub flow_stats: FlowStatistics,
     pub over_seek_bound: usize,
+    pub flow_stats: FlowStatistics,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct FlowStatistics {
     pub read_keys: usize,
     pub read_bytes: usize,

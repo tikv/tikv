@@ -23,29 +23,29 @@ lazy_static! {
 
     pub static ref PD_REQ_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_raftstore_pd_request_sent_total",
+            "tikv_pd_request_sent_total",
             "Total number of pd client request sent.",
             &["type", "status"]
         ).unwrap();
 
     pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_raftstore_pd_heartbeat_sent_total",
-            "Total number of raftstore pd client heartbeat sent.",
+            "tikv_pd_heartbeat_sent_total",
+            "Total number of pd client heartbeat sent.",
             &["type"]
         ).unwrap();
 
     pub static ref PD_VALIDATE_PEER_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_raftstore_pd_validate_peer_total",
-            "Total number of raftstore pd worker validate peer task.",
+            "tikv_pd_validate_peer_total",
+            "Total number of pd worker validate peer task.",
             &["type"]
         ).unwrap();
 
     pub static ref STORE_SIZE_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
-            "tikv_raftstore_store_size_bytes",
-            "Size of raftstore storage.",
+            "tikv_store_size_bytes",
+            "Size of storage.",
             &["type"]
         ).unwrap();
 }
