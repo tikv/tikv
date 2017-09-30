@@ -11,10 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
-use std::collections::btree_map::{BTreeMap, Entry as BTreeMapEntry};
-use std::{error, result};
-use std::sync::mpsc::{channel, Receiver};
+use std::{error, mem, result};
 
 use protobuf::RepeatedField;
 use grpc::Error as GrpcError;
@@ -27,7 +24,7 @@ use kvproto::{eraftpb, raft_serverpb};
 use raftstore::errors::Error as RaftstoreError;
 use raftstore::store::{keys, Engines, Iterable, Peekable};
 use raftstore::store::engine::IterOption;
-use storage::{is_short_value, CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::Key;
 use storage::mvcc::{Lock, Write, WriteType};
 
@@ -167,213 +164,234 @@ impl Debugger {
         }
     }
 
-    pub fn scan_mvcc<D, E>(&self, mut req: ScanMvccRequest, deal: &mut D) -> Result<()>
-    where
-        Error: ::std::convert::From<E>,
-        D: FnMut(Vec<u8>, MvccInfo) -> ::std::result::Result<(), E>,
-    {
+    pub fn scan_mvcc(&self, mut req: ScanMvccRequest) -> Result<MvccInfoIterator> {
         let from_key = req.take_from_key();
         let to_key = Some(req.take_to_key()).into_iter().find(|k| !k.is_empty());
         let limit = req.get_limit();
         if to_key.is_none() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
+        MvccInfoIterator::new(
+            &self.engines.kv_engine,
+            &from_key,
+            to_key.as_ref().map(Vec::as_slice),
+            limit,
+        )
+    }
+}
 
-        let lock_rx = self.mvcc_kvs(CF_LOCK, from_key.clone(), to_key.clone());
-        let default_rx = self.mvcc_kvs_grouped(CF_DEFAULT, from_key.clone(), to_key.clone());
-        let write_rx = self.mvcc_kvs_grouped(CF_WRITE, from_key.clone(), to_key.clone());
+pub struct MvccInfoIterator<'a> {
+    limit: u64,
 
-        // The indices in arrays: 0 for lock, 1 for default and 2 for write.
-        struct MvccInfoCollector(BTreeMap<Vec<u8>, (MvccInfo, [bool; 3])>);
-        impl MvccInfoCollector {
-            fn collect<F: FnOnce(&mut MvccInfo)>(&mut self, key: Vec<u8>, i: usize, update: F) {
-                match self.0.entry(key) {
-                    BTreeMapEntry::Vacant(ent) => {
-                        let mut mvcc_info = MvccInfo::default();
-                        update(&mut mvcc_info);
-                        let mut gots = [false; 3];
-                        gots[i] = true;
-                        ent.insert((mvcc_info, gots));
-                    }
-                    BTreeMapEntry::Occupied(mut ent) => {
-                        let mut mvcc_and_gots = ent.get_mut();
-                        update(&mut mvcc_and_gots.0);
-                        mvcc_and_gots.1[i] = true;
-                    }
+    // The indices in arrays: 0 for lock, 1 for default and 2 for write.
+    lock_iter: DBIterator<'a>,
+    default_iter: DBIterator<'a>,
+    write_iter: DBIterator<'a>,
+
+    // Current key and value vector when poping default and write.
+    default_cur: (Vec<u8>, Vec<Kv>),
+    write_cur: (Vec<u8>, Vec<Kv>),
+
+    // Collect key-prefix and MvccInfo respectively.
+    mvcc_infos: Vec<(Vec<u8>, MvccInfo, [bool; 3])>,
+    count: u64,
+
+    // 3 iter children are finished or not.
+    finished: [bool; 3],
+    // keys yield by 3 iter children latest.
+    cur_keys: [Option<Vec<u8>>; 3],
+}
+
+impl<'a> MvccInfoIterator<'a> {
+    fn new(db: &'a RocksDB, from: &[u8], to: Option<&[u8]>, limit: u64) -> Result<Self> {
+        let mut cf_iters = Vec::with_capacity(3);
+        for cf in &[CF_LOCK, CF_DEFAULT, CF_WRITE] {
+            let iter_option = IterOption::new(to.map(Vec::from), false);
+            let mut iter = box_try!(db.new_iterator_cf(cf, iter_option));
+            iter.seek(SeekKey::from(from));
+            cf_iters.push(iter);
+        }
+        Ok(MvccInfoIterator {
+            limit: limit,
+            lock_iter: cf_iters.remove(0),
+            default_iter: cf_iters.remove(0),
+            write_iter: cf_iters.remove(0),
+            default_cur: (Vec::new(), Vec::new()),
+            write_cur: (Vec::new(), Vec::new()),
+            mvcc_infos: Vec::new(),
+            count: 0,
+            finished: [false; 3],
+            cur_keys: [None, None, None],
+        })
+    }
+
+    fn next_lock(&mut self) -> Result<Option<(Vec<u8>, LockInfo)>> {
+        let mut iter = &mut self.lock_iter;
+        if let Some((key, value)) = (&mut iter).next() {
+            let lock = box_try!(Lock::parse(&value));
+            let mut lock_info = LockInfo::default();
+            lock_info.set_primary_lock(lock.primary);
+            lock_info.set_lock_version(lock.ts);
+            lock_info.set_lock_ttl(lock.ttl);
+            lock_info.set_key(key.clone());
+            return Ok(Some((key, lock_info)));
+        };
+        Ok(None)
+    }
+
+    fn next_default(&mut self) -> Result<Option<(Vec<u8>, Vec<ValueInfo>)>> {
+        let mut iter = &mut self.default_iter;
+        let next = try!(Self::next_grouped(&mut iter, &mut self.default_cur));
+        if let Some((prefix, vec_kv)) = next {
+            let mut values = Vec::with_capacity(vec_kv.len());
+            for (key, value) in vec_kv {
+                let mut value_info = ValueInfo::default();
+                value_info.set_is_short_value(is_short_value(&value));
+                value_info.set_value(value);
+                let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
+                value_info.set_ts(box_try!(encoded_key.decode_ts()));
+                values.push(value_info);
+            }
+            return Ok(Some((prefix, values)));
+        }
+        Ok(None)
+    }
+
+    fn next_write(&mut self) -> Result<Option<(Vec<u8>, Vec<WriteInfo>)>> {
+        let mut iter = &mut self.write_iter;
+        let next = try!(Self::next_grouped(&mut iter, &mut self.write_cur));
+        if let Some((prefix, vec_kv)) = next {
+            let mut writes = Vec::with_capacity(vec_kv.len());
+            for (key, value) in vec_kv {
+                let write = box_try!(Write::parse(&value));
+                let mut write_info = WriteInfo::default();
+                write_info.set_start_ts(write.start_ts);
+                match write.write_type {
+                    WriteType::Put => write_info.set_field_type(Op::Put),
+                    WriteType::Delete => write_info.set_field_type(Op::Del),
+                    WriteType::Lock => write_info.set_field_type(Op::Lock),
+                    WriteType::Rollback => write_info.set_field_type(Op::Rollback),
                 }
+                let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
+                write_info.set_commit_ts(box_try!(encoded_key.decode_ts()));
+                writes.push(write_info);
+            }
+            return Ok(Some((prefix, writes)));
+        }
+        Ok(None)
+    }
+
+    fn next_grouped(
+        mut iter: &mut DBIterator,
+        cur: &mut (Vec<u8>, Vec<Kv>),
+    ) -> Result<Option<(Vec<u8>, Vec<Kv>)>> {
+        let (mut cur_prefix, mut cur_kv) = (Vec::new(), Vec::new());
+        mem::swap(&mut cur_prefix, &mut cur.0);
+        mem::swap(&mut cur_kv, &mut cur.1);
+        while let Some((key, value)) = (&mut iter).next() {
+            if !cur_prefix.is_empty() {
+                if key.starts_with(&cur_prefix) {
+                    cur_kv.push((key, value));
+                } else {
+                    let new_prefix = box_try!(truncate_data_key(&key));
+                    let new_kv = vec![(key, value)];
+                    *cur = (new_prefix, new_kv);
+                    break;
+                }
+            } else {
+                cur_prefix = box_try!(truncate_data_key(&key));
+                cur_kv.push((key, value));
             }
         }
+        if !cur_prefix.is_empty() {
+            Ok(Some((cur_prefix, cur_kv)))
+        } else {
+            Ok(None)
+        }
+    }
 
-        let mut collector = MvccInfoCollector(BTreeMap::new());
-        // `wants[i] == true` means we want the component to construct the current MvccInfo.
-        let mut wants = [true; 3];
-        // `next_keys[i]` is the key of the component respectively in next MvccInfo.
-        let mut next_keys = [None, None, None];
+    fn collect<F: FnOnce(&mut MvccInfo)>(&mut self, key: Vec<u8>, i: usize, update: F) {
+        let occupied = self.mvcc_infos
+            .iter()
+            .enumerate()
+            .find(|&(_, elem)| elem.0 == key)
+            .map(|(i, _)| i);
+        if let Some(offset) = occupied {
+            update(&mut self.mvcc_infos[offset].1);
+            self.mvcc_infos[offset].2[i] = true;
+        } else {
+            let mut mvcc_info = (key, MvccInfo::default(), [false; 3]);
+            update(&mut mvcc_info.1);
+            mvcc_info.2[i] = true;
+            self.mvcc_infos.push(mvcc_info);
+        }
+    }
 
-        let mut count = 0;
-        loop {
-            if wants.iter().all(|want| !want) {
-                break;
-            }
-            if wants[0] {
-                if let Ok(kv) = lock_rx.recv() {
-                    let key = keys::origin_key(&kv.0).to_vec();
-                    let lock = box_try!(Lock::parse(&kv.1));
-                    let mut lock_info = LockInfo::default();
-                    lock_info.set_primary_lock(lock.primary);
-                    lock_info.set_lock_version(lock.ts);
-                    lock_info.set_key(kv.0.to_vec());
-                    lock_info.set_lock_ttl(lock.ttl);
-                    collector.collect(key.clone(), 0, move |mvcc| mvcc.set_lock(lock_info));
-                    next_keys[0] = Some(key);
-                }
-                wants[0] = false;
-            }
-            if wants[1] {
-                if let Ok(vec_kv) = default_rx.recv() {
-                    let key = box_try!(truncate_data_key(&vec_kv[0].0)).encoded().to_vec();
-                    let mut values = RepeatedField::new();
-                    for kv in vec_kv {
-                        let key = Key::from_encoded(keys::origin_key(&kv.0).to_owned());
-                        let mut value_info = ValueInfo::default();
-                        value_info.set_is_short_value(is_short_value(&kv.1));
-                        value_info.set_value(kv.1);
-                        value_info.set_ts(box_try!(key.decode_ts()));
-                        values.push(value_info);
-                    }
-                    collector.collect(key.clone(), 1, move |mvcc| mvcc.set_values(values));
-                    next_keys[1] = Some(key);
-                }
-                wants[1] = false;
-            }
-            if wants[2] {
-                if let Ok(vec_kv) = write_rx.recv() {
-                    let key = box_try!(truncate_data_key(&vec_kv[0].0)).encoded().to_vec();
-                    let mut writes = RepeatedField::new();
-                    for kv in vec_kv {
-                        let key = Key::from_encoded(keys::origin_key(&kv.0).to_owned());
-                        let write = box_try!(Write::parse(&kv.1));
-                        let mut write_info = WriteInfo::default();
-                        write_info.set_start_ts(write.start_ts);
-                        match write.write_type {
-                            WriteType::Put => write_info.set_field_type(Op::Put),
-                            WriteType::Delete => write_info.set_field_type(Op::Del),
-                            WriteType::Lock => write_info.set_field_type(Op::Lock),
-                            WriteType::Rollback => write_info.set_field_type(Op::Rollback),
-                        }
-                        write_info.set_commit_ts(box_try!(key.decode_ts()));
-                        writes.push(write_info);
-                    }
-                    collector.collect(key.clone(), 2, move |mvcc| mvcc.set_writes(writes));
-                    next_keys[2] = Some(key);
-                }
-                wants[2] = false;
-            }
-
-            #[allow(while_let_loop)]
-            loop {
-                let key = match collector.0.iter().next() {
-                    Some((k, _)) => k.to_owned(),
-                    None => break,
-                };
-                if let Some((mvcc, gots)) = collector.0.remove(&key) {
-                    let got_or_finished = gots.iter()
-                        .enumerate()
-                        .map(|(i, &got)| {
-                            got || next_keys[i].as_ref().map_or(true, |k| &key <= k)
-                        })
-                        .all(|elem_got_or_finished| elem_got_or_finished);
-                    if got_or_finished {
-                        for (i, _) in gots.iter().enumerate().filter(|&(_, got)| *got) {
-                            if let Some(next_key) = next_keys[i].take() {
-                                if key != next_key {
-                                    next_keys[i] = Some(next_key);
-                                    wants[i] = true;
-                                }
-                            }
-                        }
-                        try!(deal(key, mvcc).map_err(Error::from));
-                        count += 1;
-                        if limit != 0 && count >= limit {
-                            break;
-                        }
-                    } else {
-                        collector.0.insert(key, (mvcc, gots));
-                        break;
-                    }
-                }
+    fn pull(&mut self) -> Result<()> {
+        if !self.finished[0] && self.cur_keys[0].is_none() {
+            if let Some((prefix, lock)) = try!(self.next_lock()) {
+                self.collect(prefix.clone(), 0, move |mvcc| mvcc.set_lock(lock));
+                self.cur_keys[0] = Some(prefix);
+            } else {
+                self.finished[0] = true;
             }
         }
+        if !self.finished[1] && self.cur_keys[1].is_none() {
+            if let Some((prefix, values)) = try!(self.next_default()) {
+                let values = RepeatedField::from_vec(values);
+                self.collect(prefix.clone(), 1, move |mvcc| mvcc.set_values(values));
+                self.cur_keys[1] = Some(prefix);
+            } else {
+                self.finished[1] = true;
+            }
+        }
+        if !self.finished[2] && self.cur_keys[2].is_none() {
+            if let Some((prefix, writes)) = try!(self.next_write()) {
+                let writes = RepeatedField::from_vec(writes);
+                self.collect(prefix.clone(), 2, move |mvcc| mvcc.set_writes(writes));
+                self.cur_keys[2] = Some(prefix);
+            } else {
+                self.finished[2] = true;
+            }
+        }
+        self.mvcc_infos.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(())
     }
+}
 
-    fn mvcc_kvs(&self, cf: CfName, from: Vec<u8>, to: Option<Vec<u8>>) -> Receiver<Kv> {
-        let (tx, rx) = channel::<Kv>();
-        let db = self.engines.kv_engine.clone();
-        thread::Builder::new()
-            .name(thd_name!(format!("scan_mvcc_{}", cf)))
-            .spawn(move || -> Result<()> {
-                for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, from, to)) {
-                    box_try!(tx.send(kv));
-                }
-                Ok(())
-            })
-            .unwrap();
-        rx
-    }
+impl<'a> Iterator for MvccInfoIterator<'a> {
+    type Item = Result<(Vec<u8>, MvccInfo)>;
 
-    fn mvcc_kvs_grouped(
-        &self,
-        cf: CfName,
-        from: Vec<u8>,
-        to: Option<Vec<u8>>,
-    ) -> Receiver<Vec<Kv>> {
-        let (tx, rx) = channel::<Vec<Kv>>();
-        let db = self.engines.kv_engine.clone();
-        thread::Builder::new()
-            .name(thd_name!(format!("scan_mvcc_{}", cf)))
-            .spawn(move || -> Result<()> {
-                let (mut cur, mut cur_key): (_, Option<Key>) = (Vec::new(), None);
-                for kv in &mut try!(gen_mvcc_iter(db.as_ref(), cf, from, to)) {
-                    if let Some(key) = cur_key {
-                        if keys::origin_key(&kv.0).starts_with(key.encoded()) {
-                            cur_key = Some(key);
-                            cur.push(kv);
-                        } else {
-                            box_try!(tx.send(cur));
-                            cur_key = Some(box_try!(truncate_data_key(&kv.0)));
-                            cur = vec![kv];
-                        }
-                    } else {
-                        cur_key = Some(box_try!(truncate_data_key(&kv.0)));
-                        cur.push(kv);
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.limit != 0 && self.count >= self.limit {
+            return None;
+        }
+        if let Err(e) = self.pull() {
+            return Some(Err(e));
+        }
+        if !self.mvcc_infos.is_empty() {
+            let (key, mvcc_info, gots) = self.mvcc_infos.remove(0);
+            for (i, _) in gots.iter().enumerate().filter(|&(_, got)| *got) {
+                if let Some(cur_key) = self.cur_keys[i].take() {
+                    if key != cur_key {
+                        self.cur_keys[i] = Some(cur_key);
                     }
                 }
-                if !cur.is_empty() {
-                    box_try!(tx.send(cur));
-                }
-                Ok(())
-            })
-            .unwrap();
-        rx
+            }
+            self.count += 1;
+            return Some(Ok((key, mvcc_info)));
+        }
+        if !self.finished.iter().all(|t| *t) || !self.cur_keys.iter().all(|t| t.is_none()) {
+            return Some(Err(box_err!("MvccInfoIterator fail, it's a bug")));
+        }
+        None
     }
 }
 
-fn truncate_data_key(data_key: &[u8]) -> Result<Key> {
+fn truncate_data_key(data_key: &[u8]) -> Result<Vec<u8>> {
     let k = Key::from_encoded(keys::origin_key(data_key).to_owned());
-    k.truncate_ts().map_err(|e| box_err!(e))
-}
-
-fn gen_mvcc_iter(
-    db: &RocksDB,
-    cf: CfName,
-    from: Vec<u8>,
-    to: Option<Vec<u8>>,
-) -> Result<DBIterator> {
-    let iter_option = IterOption::new(to, false);
-    let mut iter = try!(db.new_iterator_cf(cf, iter_option).map_err(Error::from));
-    iter.seek(SeekKey::from(from.as_ref()));
-    Ok(iter)
+    let k = box_try!(k.truncate_ts());
+    Ok(keys::data_key(k.encoded()))
 }
 
 pub fn validate_db_and_cf(db: DB, cf: &str) -> Result<()> {
@@ -598,12 +616,10 @@ mod tests {
         scan_mvcc_req.set_to_key(keys::data_key(b"n"));
 
         let mut count = 0;
-        debugger
-            .scan_mvcc(scan_mvcc_req, &mut |_, _| -> Result<()> {
-                count += 1;
-                Ok(())
-            })
-            .unwrap();
+        for key_and_mvcc in debugger.scan_mvcc(scan_mvcc_req).unwrap() {
+            assert!(key_and_mvcc.is_ok());
+            count += 1;
+        }
         assert_eq!(count, 1);
     }
 }

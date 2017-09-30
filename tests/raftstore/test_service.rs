@@ -729,5 +729,5 @@ fn test_debug_scan_mvcc() {
     });
     let keys = future.wait().unwrap();
     assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0], b"meta_lock_1");
+    assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
 }

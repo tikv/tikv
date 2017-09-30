@@ -177,43 +177,44 @@ impl debugpb_grpc::Debug for Service {
 
     fn scan_mvcc(
         &self,
-        ctx: RpcContext,
+        _: RpcContext,
         req: ScanMvccRequest,
         sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
+        macro_rules! ok_or_close_sink {
+            ($result: expr, $sink: expr) => {
+                match $result {
+                    Ok(t) => (t, $sink),
+                    Err(e) => {
+                        let status = Service::error_to_status(e);
+                        return $sink.fail(status)
+                            .map_err(|e| Service::on_grpc_error("scan_mvcc", e))
+                            .wait();
+                    }
+                }
+            }
+        }
+
         let debugger = self.debugger.clone();
-        let deal_future = self.pool.spawn_fn(move || {
-            let mut opt_sink = Some(sink);
-            match debugger.scan_mvcc(req, &mut |key, mvcc| {
+        let deal_future = move || -> Result<(), ()> {
+            let (key_and_mvccs, mut sink) = ok_or_close_sink!(debugger.scan_mvcc(req), sink);
+            for key_and_mvcc in key_and_mvccs {
+                let ((key, mvcc), s) = ok_or_close_sink!(key_and_mvcc, sink);
                 let mut resp = ScanMvccResponse::new();
                 resp.set_key(key);
                 resp.set_info(mvcc);
-                let sink = try!(opt_sink.take().ok_or::<Error>(box_err!("Invalid sink")));
-                sink.send((resp, WriteFlags::default()))
-                    .wait()
-                    .map(|s| opt_sink = Some(s))
-                    .map_err(Error::from)
-            }) {
-                Ok(_) => Ok(opt_sink.unwrap()),
-                Err(e) => Err((opt_sink, e)),
+                match s.send((resp, WriteFlags::default())).wait() {
+                    Ok(s) => sink = s,
+                    Err(e) => {
+                        Service::on_grpc_error("scan_mvcc", e);
+                        return Ok(());
+                    }
+                }
             }
-        });
-
-        let finish_future = deal_future.then(|v| match v {
-            Ok(mut sink) => {
-                let f = future::poll_fn(move || sink.close())
-                    .map_err(|e| Service::on_grpc_error("scan_mvcc", e));
-                Box::new(f) as Box<Future<Item = (), Error = ()> + Send>
-            }
-            Err((opt_sink, e)) => if let Some(sink) = opt_sink {
-                let status = Service::error_to_status(e);
-                let f = sink.fail(status)
-                    .map_err(|e| Service::on_grpc_error("scan_mvcc", e));
-                Box::new(f) as Box<Future<Item = (), Error = ()> + Send>
-            } else {
-                Box::new(future::ok(())) as Box<Future<Item = (), Error = ()> + Send>
-            },
-        });
-        ctx.spawn(finish_future);
+            future::poll_fn(move || sink.close())
+                .map_err(|e| Service::on_grpc_error("scan_mvcc", e))
+                .wait()
+        };
+        self.pool.spawn_fn(deal_future).forget();
     }
 }
