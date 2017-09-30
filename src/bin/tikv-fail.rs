@@ -35,13 +35,14 @@ extern crate grpcio as grpc;
 extern crate protobuf;
 extern crate kvproto;
 
+use std::fs;
+use std::io::Read;
 use std::str;
 use std::time::Duration;
 use std::sync::Arc;
 
-use clap::{App, Arg, SubCommand};
+use clap::{App, Arg, ArgMatches, SubCommand};
 use grpc::{CallOption, ChannelBuilder, EnvBuilder};
-use protobuf::RepeatedField;
 use kvproto::debugpb;
 use kvproto::debugpb_grpc::DebugClient;
 
@@ -67,10 +68,16 @@ fn main() {
                         .help("Fail point name"),
                 )
                 .arg(
-                    Arg::with_name("action")
+                    Arg::with_name("actions")
                         .short("a")
                         .takes_value(true)
-                        .help("Actions that injects to the fail point"),
+                        .help("A list of fail point and action to inject"),
+                )
+                .arg(
+                    Arg::with_name("list")
+                        .short("l")
+                        .takes_value(true)
+                        .help("Recover a list of fail points"),
                 ),
         )
         .subcommand(
@@ -81,6 +88,12 @@ fn main() {
                         .short("f")
                         .takes_value(true)
                         .help("Fail point name"),
+                )
+                .arg(
+                    Arg::with_name("list")
+                        .short("l")
+                        .takes_value(true)
+                        .help("A list of fail point to inject"),
                 ),
         );
     let matches = app.clone().get_matches();
@@ -91,25 +104,57 @@ fn main() {
     let channel = ChannelBuilder::new(env).connect(addr);
     let client = DebugClient::new(channel);
 
-    let mut failures = vec![];
     if let Some(matches) = matches.subcommand_matches("inject") {
-        let mut failure = debugpb::Failure::new();
-        failure.set_field_type(debugpb::Failure_Type::INJECT);
-        failure.set_name(matches.value_of("failpoint").unwrap().to_owned());
-        failure.set_actions(matches.value_of("action").unwrap().to_owned());
-        failures.push(failure);
+        let mut list = read_list(matches);
+        if let (Some(name), Some(actions)) =
+            (matches.value_of("failpoint"), matches.value_of("actions"))
+        {
+            list.push((name.to_owned(), actions.to_owned()));
+        }
+
+        for (name, actions) in list {
+            let mut inject_req = debugpb::InjectFailPointRequest::new();
+            inject_req.set_name(name);
+            inject_req.set_actions(actions);
+
+            println!("Req {:?}", inject_req);
+            let option = CallOption::default().timeout(Duration::from_secs(10));
+            client.inject_fail_point_opt(inject_req, option).unwrap();
+            println!("Done!");
+        }
     } else if let Some(matches) = matches.subcommand_matches("recover") {
-        let mut failure = debugpb::Failure::new();
-        failure.set_field_type(debugpb::Failure_Type::RECOVER);
-        failure.set_name(matches.value_of("failpoint").unwrap().to_owned());
-        failures.push(failure);
+        let mut list = read_list(matches);
+        if let Some(name) = matches.value_of("failpoint") {
+            list.push((name.to_owned(), "".to_owned()));
+        }
+
+        for (name, _) in list {
+            let mut recover_req = debugpb::RecoverFailPointRequest::new();
+            recover_req.set_name(name);
+
+            println!("Req {:?}", recover_req);
+            let option = CallOption::default().timeout(Duration::from_secs(10));
+            client.recover_fail_point_opt(recover_req, option).unwrap();
+            println!("Done!");
+        }
     }
+}
 
-    let mut req = debugpb::FailPointRequest::new();
-    req.set_failures(RepeatedField::from_vec(failures));
-    println!("Req {:?}", req);
-
-    let option = CallOption::default().timeout(Duration::from_secs(10));
-    client.fail_point_opt(req.clone(), option).unwrap();
-    println!("Done!");
+fn read_list(matches: &ArgMatches) -> Vec<(String, String)> {
+    let mut list = vec![];
+    if let Some(list_path) = matches.value_of("list") {
+        let mut buffer = String::new();
+        fs::File::open(list_path)
+            .unwrap()
+            .read_to_string(&mut buffer)
+            .unwrap();
+        for line in buffer.lines() {
+            let mut parts = line.split('=');
+            list.push((
+                parts.next().unwrap().to_owned(),
+                parts.next().unwrap().to_owned(),
+            ))
+        }
+    }
+    list
 }

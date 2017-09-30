@@ -182,31 +182,44 @@ impl debugpb_grpc::Debug for Service {
         unimplemented!()
     }
 
-    fn fail_point(
+    fn inject_fail_point(
         &self,
         ctx: RpcContext,
-        req: FailPointRequest,
-        sink: UnarySink<FailPointResponse>,
+        mut req: InjectFailPointRequest,
+        sink: UnarySink<InjectFailPointResponse>,
     ) {
         const TAG: &'static str = "debug_region_size";
 
-        let f = future::ok(()).and_then(move |_| {
-            for failure in req.get_failures() {
-                match failure.get_field_type() {
-                    Failure_Type::INVALID => {
-                        return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
-                    }
-                    Failure_Type::INJECT => {
-                        if let Err(e) = fail::cfg(failure.get_name(), failure.get_actions()) {
-                            return Err(box_err!("{:?}", e));
-                        }
-                    }
-                    Failure_Type::RECOVER => {
-                        fail::remove(failure.get_name());
-                    }
-                }
+        let f = self.pool.spawn_fn(move || {
+            let name = req.take_name();
+            if name.is_empty() {
+                return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
             }
-            Ok(FailPointResponse::new())
+            let actions = req.get_actions();
+            if let Err(e) = fail::cfg(name, actions) {
+                return Err(box_err!("{:?}", e));
+            }
+            Ok(InjectFailPointResponse::new())
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn recover_fail_point(
+        &self,
+        ctx: RpcContext,
+        mut req: RecoverFailPointRequest,
+        sink: UnarySink<RecoverFailPointResponse>,
+    ) {
+        const TAG: &'static str = "debug_region_size";
+
+        let f = self.pool.spawn_fn(move || {
+            let name = req.take_name();
+            if name.is_empty() {
+                return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
+            }
+            fail::remove(name);
+            Ok(RecoverFailPointResponse::new())
         });
 
         self.handle_response(ctx, sink, f, TAG);
