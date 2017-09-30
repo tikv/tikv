@@ -357,7 +357,8 @@ pub fn compact_range(
     exclusive_manual: bool,
 ) {
     let mut compact_opts = CompactOptions::new();
-    // `exclusive_manual == false` means manual compaction can concurrently run with this.
+    // `exclusive_manual == false` means manual compaction can
+    // concurrently run with other backgroud compactions.
     compact_opts.set_exclusive_manual_compaction(exclusive_manual);
     db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
 }
