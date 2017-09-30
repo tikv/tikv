@@ -354,11 +354,11 @@ pub fn compact_range(
     handle: &CFHandle,
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
-    manual: bool,
+    exclusive_manual: bool,
 ) {
     let mut compact_opts = CompactOptions::new();
-    // manual compaction can concurrently run with background compaction threads.
-    compact_opts.set_exclusive_manual_compaction(manual);
+    // `exclusive_manual == false` means manual compaction can concurrently run with this.
+    compact_opts.set_exclusive_manual_compaction(exclusive_manual);
     db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
 }
 
