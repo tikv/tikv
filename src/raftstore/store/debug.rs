@@ -14,14 +14,12 @@
 use std::{error, mem, result};
 
 use protobuf::RepeatedField;
-use grpc::Error as GrpcError;
 
 use rocksdb::{DB as RocksDB, DBIterator, Kv, SeekKey};
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::*;
 use kvproto::{eraftpb, raft_serverpb};
 
-use raftstore::errors::Error as RaftstoreError;
 use raftstore::store::{keys, Engines, Iterable, Peekable};
 use raftstore::store::engine::IterOption;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -43,8 +41,6 @@ quick_error!{
         }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
-            from(e: RaftstoreError) -> (Box::new(e))
-            from(e: GrpcError) -> (Box::new(e))
             cause(err.as_ref())
             description(err.description())
             display("{:?}", err)
@@ -371,11 +367,9 @@ impl<'a> Iterator for MvccInfoIterator<'a> {
         }
         if !self.mvcc_infos.is_empty() {
             let (key, mvcc_info, gots) = self.mvcc_infos.remove(0);
-            for (i, _) in gots.iter().enumerate().filter(|&(_, got)| *got) {
-                if let Some(cur_key) = self.cur_keys[i].take() {
-                    if key != cur_key {
-                        self.cur_keys[i] = Some(cur_key);
-                    }
+            for (i, got) in gots.iter().enumerate() {
+                if *got && self.cur_keys[i].as_ref().map(Vec::as_slice) == Some(&key) {
+                    self.cur_keys[i] = None;
                 }
             }
             self.count += 1;
