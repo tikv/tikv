@@ -164,7 +164,7 @@ impl Debugger {
         let from_key = req.take_from_key();
         let to_key = Some(req.take_to_key()).into_iter().find(|k| !k.is_empty());
         let limit = req.get_limit();
-        if to_key.is_none() && limit == 0 {
+        if req.get_to_key().is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
         MvccInfoIterator::new(
@@ -179,7 +179,6 @@ impl Debugger {
 pub struct MvccInfoIterator<'a> {
     limit: u64,
 
-    // The indices in arrays: 0 for lock, 1 for default and 2 for write.
     lock_iter: DBIterator<'a>,
     default_iter: DBIterator<'a>,
     write_iter: DBIterator<'a>,
@@ -189,6 +188,7 @@ pub struct MvccInfoIterator<'a> {
     write_cur: (Vec<u8>, Vec<Kv>),
 
     // Collect key-prefix and MvccInfo respectively.
+    // The indices in arrays: 0 for lock, 1 for default and 2 for write.
     mvcc_infos: Vec<(Vec<u8>, MvccInfo, [bool; 3])>,
     count: u64,
 
@@ -200,18 +200,17 @@ pub struct MvccInfoIterator<'a> {
 
 impl<'a> MvccInfoIterator<'a> {
     fn new(db: &'a RocksDB, from: &[u8], to: Option<&[u8]>, limit: u64) -> Result<Self> {
-        let mut cf_iters = Vec::with_capacity(3);
-        for cf in &[CF_LOCK, CF_DEFAULT, CF_WRITE] {
+        let gen_iter = |cf: &str| -> Result<_> {
             let iter_option = IterOption::new(to.map(Vec::from), false);
             let mut iter = box_try!(db.new_iterator_cf(cf, iter_option));
             iter.seek(SeekKey::from(from));
-            cf_iters.push(iter);
-        }
+            Ok(iter)
+        };
         Ok(MvccInfoIterator {
             limit: limit,
-            lock_iter: cf_iters.remove(0),
-            default_iter: cf_iters.remove(0),
-            write_iter: cf_iters.remove(0),
+            lock_iter: try!(gen_iter(CF_LOCK)),
+            default_iter: try!(gen_iter(CF_DEFAULT)),
+            write_iter: try!(gen_iter(CF_WRITE)),
             default_cur: (Vec::new(), Vec::new()),
             write_cur: (Vec::new(), Vec::new()),
             mvcc_infos: Vec::new(),
