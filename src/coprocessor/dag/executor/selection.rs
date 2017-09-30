@@ -191,7 +191,7 @@ mod tests {
         let mut statistics = Statistics::default();
 
         let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
+            TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
 
         // selection executor
         let mut selection = Selection::new();
@@ -248,7 +248,7 @@ mod tests {
         let mut statistics = Statistics::default();
 
         let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
+            TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
 
         // selection executor
         let mut selection = Selection::new();
