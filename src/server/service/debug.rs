@@ -13,7 +13,7 @@
 
 use grpc::{Error as GrpcError, WriteFlags};
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use futures::{future, stream, Future, Sink};
+use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
@@ -49,7 +49,7 @@ impl Service {
                 sink.fail(status)
             }
         });
-        ctx.spawn(f.map_err(move |e| Service::on_grpc_error(tag, e)));
+        ctx.spawn(f.map_err(move |e| Service::on_grpc_error(tag, &e)));
     }
 
     fn error_to_status(e: Error) -> RpcStatus {
@@ -61,8 +61,15 @@ impl Service {
         RpcStatus::new(code, msg)
     }
 
-    fn on_grpc_error(tag: &'static str, e: GrpcError) {
+    fn on_grpc_error(tag: &'static str, e: &GrpcError) {
         error!("{} failed: {:?}", tag, e);
+    }
+
+    fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
+        let status = Service::error_to_status(e);
+        let e = GrpcError::RpcFailure(status);
+        Service::on_grpc_error(tag, &e);
+        e
     }
 }
 
@@ -182,43 +189,26 @@ impl debugpb_grpc::Debug for Service {
         sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
         let debugger = self.debugger.clone();
-        stream::iter(debugger.scan_mvcc(req))
-
-
-            let (key_and_mvccs, mut sink) = ok_or_close_sink!(debugger.scan_mvcc(req), sink);
-        macro_rules! ok_or_close_sink {
-            ($result: expr, $sink: expr) => {
-                match $result {
-                    Ok(t) => (t, $sink),
-                    Err(e) => {
-                        let status = Service::error_to_status(e);
-                        return $sink.fail(status)
-                            .map_err(|e| Service::on_grpc_error("scan_mvcc", e))
-                            .wait();
-                    }
-                }
-            }
-        }
-
-        let deal_future = move || -> Result<(), ()> {
-            let (key_and_mvccs, mut sink) = ok_or_close_sink!(debugger.scan_mvcc(req), sink);
-            for key_and_mvcc in key_and_mvccs {
-                let ((key, mvcc), s) = ok_or_close_sink!(key_and_mvcc, sink);
-                let mut resp = ScanMvccResponse::new();
-                resp.set_key(key);
-                resp.set_info(mvcc);
-                match s.send((resp, WriteFlags::default())).wait() {
-                    Ok(s) => sink = s,
-                    Err(e) => {
-                        Service::on_grpc_error("scan_mvcc", e);
-                        return Ok(());
-                    }
-                }
-            }
-            future::poll_fn(move || sink.close())
-                .map_err(|e| Service::on_grpc_error("scan_mvcc", e))
-                .wait()
+        let future = move || {
+            let result: Result<(), ()> = future::result(debugger.scan_mvcc(req))
+                .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
+                .and_then(|iter| {
+                    #[allow(deprecated)]
+                    stream::iter(iter)
+                        .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
+                        .map(|(key, mvcc_info)| {
+                            let mut resp = ScanMvccResponse::new();
+                            resp.set_key(key);
+                            resp.set_info(mvcc_info);
+                            (resp, WriteFlags::default())
+                        })
+                        .forward(sink)
+                        .map(|_| ())
+                })
+                .map_err(|e| Service::on_grpc_error("scan_mvcc", &e))
+                .wait();
+            result
         };
-        self.pool.spawn_fn(deal_future).forget();
+        self.pool.spawn_fn(future).forget();
     }
 }
