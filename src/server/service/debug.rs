@@ -13,7 +13,7 @@
 
 use grpc::{Error as GrpcError, WriteFlags};
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use futures::{future, Future, Sink};
+use futures::{future, stream, Future, Sink};
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
@@ -181,6 +181,11 @@ impl debugpb_grpc::Debug for Service {
         req: ScanMvccRequest,
         sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
+        let debugger = self.debugger.clone();
+        stream::iter(debugger.scan_mvcc(req))
+
+
+            let (key_and_mvccs, mut sink) = ok_or_close_sink!(debugger.scan_mvcc(req), sink);
         macro_rules! ok_or_close_sink {
             ($result: expr, $sink: expr) => {
                 match $result {
@@ -195,7 +200,6 @@ impl debugpb_grpc::Debug for Service {
             }
         }
 
-        let debugger = self.debugger.clone();
         let deal_future = move || -> Result<(), ()> {
             let (key_and_mvccs, mut sink) = ok_or_close_sink!(debugger.scan_mvcc(req), sink);
             for key_and_mvcc in key_and_mvccs {
