@@ -41,10 +41,14 @@ pub enum Tick {
     ConsistencyCheck,
 }
 
-pub struct SnapshotStatusMsg {
-    pub region_id: u64,
-    pub to_peer_id: u64,
-    pub status: SnapshotStatus,
+#[derive(Debug, PartialEq)]
+pub enum SignificantMsg {
+    SnapshotStatus {
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    },
+    Unreachable { region_id: u64, to_peer_id: u64 },
 }
 
 pub enum Msg {
@@ -74,8 +78,6 @@ pub enum Msg {
         callback: Option<Callback>,
     },
 
-    ReportUnreachable { region_id: u64, to_peer_id: u64 },
-
     // For snapshot stats.
     SnapshotStats,
 
@@ -96,15 +98,6 @@ impl fmt::Debug for Msg {
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
-            Msg::ReportUnreachable {
-                ref region_id,
-                ref to_peer_id,
-            } => write!(
-                fmt,
-                "peer {} for region {} is unreachable",
-                to_peer_id,
-                region_id
-            ),
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
             Msg::CoprocessorStats { .. } => write!(fmt, "Coperocessor stats"),
             Msg::ComputeHashResult {
