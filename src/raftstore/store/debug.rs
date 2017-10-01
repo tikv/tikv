@@ -12,11 +12,13 @@
 // limitations under the License.
 
 use std::{error, result};
-use kvproto::debugpb::*;
+use kvproto::debugpb::DB as DBType;
 use kvproto::{eraftpb, raft_serverpb};
 
+use rocksdb::DB;
 use raftstore::store::{keys, Engines, Iterable, Peekable};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use util::rocksdb::{compact_range, get_cf_handle};
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -50,13 +52,17 @@ impl Debugger {
         Debugger { engines }
     }
 
-    pub fn get(&self, db: DB, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
+    fn get_db_from_type(&self, db: DBType) -> Result<&DB> {
+        match db {
+            DBType::KV => Ok(&self.engines.kv_engine),
+            DBType::RAFT => Ok(&self.engines.raft_engine),
+            _ => Err(box_err!("invalid DBType type")),
+        }
+    }
+
+    pub fn get(&self, db: DBType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
         try!(validate_db_and_cf(db, cf));
-        let db = match db {
-            DB::KV => &self.engines.kv_engine,
-            DB::RAFT => &self.engines.raft_engine,
-            _ => unreachable!(),
-        };
+        let db = try!(self.get_db_from_type(db));
         match db.get_value_cf(cf, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
             Ok(None) => Err(Error::NotFound(
@@ -151,15 +157,26 @@ impl Debugger {
             Err(e) => Err(box_err!(e)),
         }
     }
+
+    /// Compact the cf[start..end) in the db **by manual**.
+    pub fn compact(&self, db: DBType, cf: &str, start: &[u8], end: &[u8]) -> Result<()> {
+        try!(validate_db_and_cf(db, cf));
+        let db = try!(self.get_db_from_type(db));
+        let handle = box_try!(get_cf_handle(db, cf));
+        let start = if start.is_empty() { None } else { Some(start) };
+        let end = if end.is_empty() { None } else { Some(end) };
+        compact_range(db, handle, start, end, false);
+        Ok(())
+    }
 }
 
-pub fn validate_db_and_cf(db: DB, cf: &str) -> Result<()> {
+pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     match (db, cf) {
-        (DB::KV, CF_DEFAULT) |
-        (DB::KV, CF_WRITE) |
-        (DB::KV, CF_LOCK) |
-        (DB::KV, CF_RAFT) |
-        (DB::RAFT, CF_DEFAULT) => Ok(()),
+        (DBType::KV, CF_DEFAULT) |
+        (DBType::KV, CF_WRITE) |
+        (DBType::KV, CF_LOCK) |
+        (DBType::KV, CF_RAFT) |
+        (DBType::RAFT, CF_DEFAULT) => Ok(()),
         _ => Err(Error::InvalidArgument(
             format!("invalid cf {:?} for db {:?}", cf, db),
         )),
@@ -171,7 +188,6 @@ mod tests {
     use std::sync::Arc;
 
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
-    use kvproto::debugpb::*;
     use kvproto::metapb;
     use tempdir::TempDir;
 
@@ -183,22 +199,22 @@ mod tests {
     #[test]
     fn test_validate_db_and_cf() {
         let valid_cases = vec![
-            (DB::KV, CF_DEFAULT),
-            (DB::KV, CF_WRITE),
-            (DB::KV, CF_LOCK),
-            (DB::KV, CF_RAFT),
-            (DB::RAFT, CF_DEFAULT),
+            (DBType::KV, CF_DEFAULT),
+            (DBType::KV, CF_WRITE),
+            (DBType::KV, CF_LOCK),
+            (DBType::KV, CF_RAFT),
+            (DBType::RAFT, CF_DEFAULT),
         ];
         for (db, cf) in valid_cases {
             validate_db_and_cf(db, cf).unwrap();
         }
 
         let invalid_cases = vec![
-            (DB::RAFT, CF_WRITE),
-            (DB::RAFT, CF_LOCK),
-            (DB::RAFT, CF_RAFT),
-            (DB::INVALID, CF_DEFAULT),
-            (DB::INVALID, "BAD_CF"),
+            (DBType::RAFT, CF_WRITE),
+            (DBType::RAFT, CF_LOCK),
+            (DBType::RAFT, CF_RAFT),
+            (DBType::INVALID, CF_DEFAULT),
+            (DBType::INVALID, "BAD_CF"),
         ];
         for (db, cf) in invalid_cases {
             validate_db_and_cf(db, cf).unwrap_err();
@@ -233,8 +249,10 @@ mod tests {
         engine.put(k, v).unwrap();
         assert_eq!(&*engine.get(k).unwrap().unwrap(), v);
 
-        assert_eq!(debugger.get(DB::KV, CF_DEFAULT, k).unwrap().as_slice(), v);
-        match debugger.get(DB::KV, CF_DEFAULT, b"foo") {
+        let got = debugger.get(DBType::KV, CF_DEFAULT, k).unwrap();
+        assert_eq!(&got, v);
+
+        match debugger.get(DBType::KV, CF_DEFAULT, b"foo") {
             Err(Error::NotFound(_)) => (),
             _ => panic!("expect Error::NotFound(_)"),
         }
