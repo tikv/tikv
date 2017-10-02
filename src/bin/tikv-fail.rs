@@ -13,8 +13,6 @@
 
 #![feature(plugin)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![allow(needless_pass_by_value)]
 
 /// Inject failures to `TikV`.
 ///
@@ -49,9 +47,7 @@ use kvproto::debugpb_grpc::DebugClient;
 fn main() {
     let app = App::new("TiKV fail point")
         .author("PingCAP")
-        .about(
-            "Distributed transactional key value database powered by Rust and Raft",
-        )
+        .about("A tool for injecting failures to TiKV and recovery")
         .arg(
             Arg::with_name("addr")
                 .short("a")
@@ -71,13 +67,13 @@ fn main() {
                     Arg::with_name("actions")
                         .short("a")
                         .takes_value(true)
-                        .help("A list of fail point and action to inject"),
+                        .help("Fail actions"),
                 )
                 .arg(
                     Arg::with_name("list")
                         .short("l")
                         .takes_value(true)
-                        .help("Recover a list of fail points"),
+                        .help("A list of fail point and action to inject"),
                 ),
         )
         .subcommand(
@@ -86,6 +82,7 @@ fn main() {
                 .arg(
                     Arg::with_name("failpoint")
                         .short("f")
+                        .multiple(true)
                         .takes_value(true)
                         .help("Fail point name"),
                 )
@@ -93,7 +90,7 @@ fn main() {
                     Arg::with_name("list")
                         .short("l")
                         .takes_value(true)
-                        .help("A list of fail point to inject"),
+                        .help("Recover a list of fail points"),
                 ),
         );
     let matches = app.clone().get_matches();
@@ -124,8 +121,10 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("recover") {
         let mut list = read_list(matches);
-        if let Some(name) = matches.value_of("failpoint") {
-            list.push((name.to_owned(), "".to_owned()));
+        if let Some(names) = matches.values_of("failpoint") {
+            for name in names {
+                list.push((name.to_owned(), "".to_owned()));
+            }
         }
 
         for (name, _) in list {
@@ -152,7 +151,7 @@ fn read_list(matches: &ArgMatches) -> Vec<(String, String)> {
             let mut parts = line.split('=');
             list.push((
                 parts.next().unwrap().to_owned(),
-                parts.next().unwrap().to_owned(),
+                parts.next().unwrap_or("").to_owned(),
             ))
         }
     }
