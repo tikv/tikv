@@ -239,7 +239,7 @@ impl<'a> MvccInfoIterator<'a> {
 
     fn next_lock(&mut self) -> Result<Option<(Vec<u8>, LockInfo)>> {
         let mut iter = &mut self.lock_iter;
-        if let Some((key, value)) = (&mut iter).next() {
+        if let Some((key, value)) = <&mut DBIterator as Iterator>::next(&mut iter) {
             let lock = box_try!(Lock::parse(&value));
             let mut lock_info = LockInfo::default();
             lock_info.set_primary_lock(lock.primary);
@@ -300,7 +300,7 @@ impl<'a> MvccInfoIterator<'a> {
         let (mut cur_prefix, mut cur_kv) = (Vec::new(), Vec::new());
         mem::swap(&mut cur_prefix, &mut cur.0);
         mem::swap(&mut cur_kv, &mut cur.1);
-        while let Some((key, value)) = (&mut iter).next() {
+        while let Some((key, value)) = <&mut DBIterator as Iterator>::next(&mut iter) {
             if !cur_prefix.is_empty() {
                 if key.starts_with(&cur_prefix) {
                     cur_kv.push((key, value));
