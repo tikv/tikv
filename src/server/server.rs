@@ -22,7 +22,7 @@ use kvproto::debugpb_grpc::create_debug;
 
 use util::worker::Worker;
 use storage::Storage;
-use raftstore::store::{CopFlowStatistics, Engines, Msg, SnapManager, SnapshotStatusMsg};
+use raftstore::store::{CopFlowStatistics, Engines, Msg, SignificantMsg, SnapManager};
 
 use super::{Config, Result};
 use coprocessor::{CopRequestStatistics, CopSender, EndPointHost, EndPointTask, Result as CopResult};
@@ -92,7 +92,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         region_split_size: usize,
         storage: Storage,
         raft_router: T,
-        snapshot_status_sender: Sender<SnapshotStatusMsg>,
+        significant_msg_sender: Sender<SignificantMsg>,
         resolver: S,
         snap_mgr: SnapManager,
         debug_engines: Option<Engines>,
@@ -142,7 +142,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_client,
             snap_worker.scheduler(),
             raft_router.clone(),
-            snapshot_status_sender,
+            significant_msg_sender,
             resolver,
         );
 
@@ -211,7 +211,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::sync::mpsc::{self, Sender};
     use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use super::super::{Config, Result};
@@ -221,6 +220,7 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
+    use raftstore::store::*;
     use raftstore::store::transport::Transport;
 
     #[derive(Clone)]
@@ -238,16 +238,6 @@ mod tests {
     #[derive(Clone)]
     struct TestRaftStoreRouter {
         tx: Sender<usize>,
-        report_unreachable_count: Arc<AtomicUsize>,
-    }
-
-    impl TestRaftStoreRouter {
-        fn new(tx: Sender<usize>) -> TestRaftStoreRouter {
-            TestRaftStoreRouter {
-                tx: tx,
-                report_unreachable_count: Arc::new(AtomicUsize::new(0)),
-            }
-        }
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
@@ -258,12 +248,6 @@ mod tests {
 
         fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
-            Ok(())
-        }
-
-        fn report_unreachable(&self, _: u64, _: u64, _: u64) -> RaftStoreResult<()> {
-            let count = self.report_unreachable_count.clone();
-            count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
     }
@@ -278,9 +262,8 @@ mod tests {
         storage.start(&storage_cfg).unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let router = TestRaftStoreRouter::new(tx);
-        let report_unreachable_count = router.report_unreachable_count.clone();
-        let (snapshot_status_sender, _) = mpsc::channel();
+        let router = TestRaftStoreRouter { tx };
+        let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
@@ -288,7 +271,7 @@ mod tests {
             1024,
             storage,
             router,
-            snapshot_status_sender,
+            significant_msg_sender,
             MockResolver { addr: addr.clone() },
             SnapManager::new("", None),
             None,
@@ -298,12 +281,15 @@ mod tests {
         server.start(&cfg).unwrap();
 
         let mut trans = server.transport();
-        for i in 0..10 {
-            if i % 2 == 1 {
-                trans.report_unreachable(RaftMessage::new());
+        trans.report_unreachable(RaftMessage::new());
+        assert_eq!(
+            significant_msg_receiver.try_recv().unwrap(),
+            SignificantMsg::Unreachable {
+                region_id: 0,
+                to_peer_id: 0,
             }
-            assert_eq!(report_unreachable_count.load(Ordering::SeqCst), (i + 1) / 2);
-        }
+        );
+
         let mut msg = RaftMessage::new();
         msg.set_region_id(1);
         trans.send(msg).unwrap();

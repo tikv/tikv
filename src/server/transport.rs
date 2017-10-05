@@ -22,7 +22,7 @@ use util::HandyRwLock;
 use util::worker::{Scheduler, Stopped};
 use util::collections::HashSet;
 use raft::SnapshotStatus;
-use raftstore::store::{BatchCallback, Callback, Msg as StoreMsg, SnapshotStatusMsg, Transport};
+use raftstore::store::{BatchCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
 use raftstore::Result as RaftStoreResult;
 use server::raft_client::RaftClient;
 use server::Result;
@@ -54,13 +54,6 @@ pub trait RaftStoreRouter: Send + Clone {
         on_finished: BatchCallback,
     ) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
-    }
-
-    fn report_unreachable(&self, region_id: u64, to_peer_id: u64, _: u64) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::ReportUnreachable {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-        })
     }
 }
 
@@ -101,22 +94,6 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     ) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
-
-    fn report_unreachable(
-        &self,
-        region_id: u64,
-        to_peer_id: u64,
-        to_store_id: u64,
-    ) -> RaftStoreResult<()> {
-        let store = to_store_id.to_string();
-        REPORT_FAILURE_MSG_COUNTER
-            .with_label_values(&["unreachable", &*store])
-            .inc();
-        self.try_send(StoreMsg::ReportUnreachable {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-        })
-    }
 }
 
 pub struct ServerTransport<T, S>
@@ -127,7 +104,7 @@ where
     raft_client: Arc<RwLock<RaftClient>>,
     snap_scheduler: Scheduler<SnapTask>,
     raft_router: T,
-    snapshot_status_sender: Sender<SnapshotStatusMsg>,
+    significant_msg_sender: Sender<SignificantMsg>,
     resolving: Arc<RwLock<HashSet<u64>>>,
     resolver: S,
 }
@@ -142,7 +119,7 @@ where
             raft_client: self.raft_client.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
             raft_router: self.raft_router.clone(),
-            snapshot_status_sender: self.snapshot_status_sender.clone(),
+            significant_msg_sender: self.significant_msg_sender.clone(),
             resolving: self.resolving.clone(),
             resolver: self.resolver.clone(),
         }
@@ -154,14 +131,14 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         raft_client: Arc<RwLock<RaftClient>>,
         snap_scheduler: Scheduler<SnapTask>,
         raft_router: T,
-        snapshot_status_sender: Sender<SnapshotStatusMsg>,
+        significant_msg_sender: Sender<SignificantMsg>,
         resolver: S,
     ) -> ServerTransport<T, S> {
         ServerTransport {
             raft_client: raft_client,
             snap_scheduler: snap_scheduler,
             raft_router: raft_router,
-            snapshot_status_sender: snapshot_status_sender,
+            significant_msg_sender: significant_msg_sender,
             resolving: Arc::new(RwLock::new(Default::default())),
             resolver: resolver,
         }
@@ -259,7 +236,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         let to_store_id = msg.get_to_peer().get_store_id();
 
         SnapshotReporter {
-            snapshot_status_sender: self.snapshot_status_sender.clone(),
+            significant_msg_sender: self.significant_msg_sender.clone(),
             region_id: region_id,
             to_peer_id: to_peer_id,
             to_store_id: to_store_id,
@@ -269,14 +246,18 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
     pub fn report_unreachable(&self, msg: RaftMessage) {
         let region_id = msg.get_region_id();
         let to_peer_id = msg.get_to_peer().get_id();
-        let to_store_id = msg.get_to_peer().get_store_id();
+        let store_id = msg.get_to_peer().get_store_id();
 
-        if let Err(e) = self.raft_router
-            .report_unreachable(region_id, to_peer_id, to_store_id)
-        {
-            error!(
-                "report peer {} unreachable for region {} failed {:?}",
+        if let Err(e) = self.significant_msg_sender.send(
+            SignificantMsg::Unreachable {
+                region_id,
                 to_peer_id,
+            },
+        ) {
+            error!(
+                "report peer {} on store {} unreachable for region {} failed {:?}",
+                to_peer_id,
+                store_id,
                 region_id,
                 e
             );
@@ -305,7 +286,7 @@ where
 }
 
 struct SnapshotReporter {
-    snapshot_status_sender: Sender<SnapshotStatusMsg>,
+    significant_msg_sender: Sender<SignificantMsg>,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
@@ -327,11 +308,13 @@ impl SnapshotReporter {
                 .inc();
         };
 
-        if let Err(e) = self.snapshot_status_sender.send(SnapshotStatusMsg {
-            region_id: self.region_id,
-            to_peer_id: self.to_peer_id,
-            status: status,
-        }) {
+        if let Err(e) = self.significant_msg_sender.send(
+            SignificantMsg::SnapshotStatus {
+                region_id: self.region_id,
+                to_peer_id: self.to_peer_id,
+                status: status,
+            },
+        ) {
             error!(
                 "report snapshot to peer {} in store {} with region {} err {:?}",
                 self.to_peer_id,

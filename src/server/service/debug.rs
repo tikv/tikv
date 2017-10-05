@@ -211,4 +211,19 @@ impl debugpb_grpc::Debug for Service {
         };
         self.pool.spawn_fn(future).forget();
     }
+
+    fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+        let debugger = self.debugger.clone();
+        let f = self.pool.spawn_fn(move || {
+            debugger
+                .compact(
+                    req.get_db(),
+                    req.get_cf(),
+                    req.get_from_key(),
+                    req.get_to_key(),
+                )
+                .map(|_| CompactResponse::default())
+        });
+        self.handle_response(ctx, sink, f, "debug_compact");
+    }
 }
