@@ -26,9 +26,8 @@ use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
 use util::worker::FutureWorker;
-
-use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SnapManager,
-                       SnapshotStatusMsg, Store, StoreChannel, Transport};
+use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg,
+                       SnapManager, Store, StoreChannel, Transport};
 use super::Result;
 use server::Config as ServerConfig;
 use storage::{Config as StorageConfig, RaftKv, Storage};
@@ -125,7 +124,7 @@ where
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        snap_status_receiver: Receiver<SnapshotStatusMsg>,
+        significant_msg_receiver: Receiver<SignificantMsg>,
         pd_work: FutureWorker<PdTask>,
     ) -> Result<()>
     where
@@ -163,7 +162,7 @@ where
             engines,
             trans,
             snap_mgr,
-            snap_status_receiver,
+            significant_msg_receiver,
             pd_work,
         ));
         Ok(())
@@ -328,7 +327,7 @@ where
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
+        significant_msg_receiver: Receiver<SignificantMsg>,
         pd_work: FutureWorker<PdTask>,
     ) -> Result<()>
     where
@@ -349,8 +348,8 @@ where
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
             let ch = StoreChannel {
-                sender: sender,
-                snapshot_status_receiver: snapshot_status_receiver,
+                sender,
+                significant_msg_receiver,
             };
             let mut store =
                 match Store::new(ch, store, cfg, engines, trans, pd_client, snap_mgr, pd_work) {

@@ -55,6 +55,10 @@
 # also should less than total cpu cores.
 # scheduler-worker-pool-size = 4
 
+# A write flow control mechanism. When concurrent running write count over
+# this threshold, will return too busy error.
+# scheduler-too-busy-threshold = 4000
+
 [pd]
 # pd endpoints
 # endpoints = []

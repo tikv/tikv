@@ -41,7 +41,7 @@ use super::transport_simulate::*;
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
-    snapshot_status_senders: HashMap<u64, Mutex<Sender<SnapshotStatusMsg>>>,
+    snapshot_status_senders: HashMap<u64, Mutex<Sender<SignificantMsg>>>,
 }
 
 #[derive(Clone)]
@@ -118,7 +118,7 @@ impl Channel<RaftMessage> for ChannelTransport {
                     core.snapshot_status_senders[&from_store]
                         .lock()
                         .unwrap()
-                        .send(SnapshotStatusMsg {
+                        .send(SignificantMsg::SnapshotStatus {
                             region_id: region_id,
                             to_peer_id: to_peer_id,
                             status: SnapshotStatus::Finish,

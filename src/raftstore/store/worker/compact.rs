@@ -14,8 +14,9 @@
 use util::worker::Runnable;
 use util::rocksdb;
 use util::escape;
+use util::rocksdb::compact_range;
 
-use rocksdb::{CompactOptions, DB};
+use rocksdb::DB;
 use std::sync::Arc;
 use std::fmt::{self, Display, Formatter};
 use std::error;
@@ -41,7 +42,7 @@ impl Display for Task {
 
 quick_error! {
     #[derive(Debug)]
-    enum Error {
+    pub enum Error {
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -60,26 +61,19 @@ impl Runner {
         Runner { engine: engine }
     }
 
-    fn compact_range_cf(
+    pub fn compact_range_cf(
         &mut self,
         cf_name: String,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
     ) -> Result<(), Error> {
-        let cf_handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
+        let handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[&cf_name])
             .start_coarse_timer();
-        let mut compact_opts = CompactOptions::new();
-        // manual compaction can concurrently run with background compaction threads.
-        compact_opts.set_exclusive_manual_compaction(false);
-        self.engine.compact_range_cf_opt(
-            cf_handle,
-            &compact_opts,
-            start_key.as_ref().map(Vec::as_slice),
-            end_key.as_ref().map(Vec::as_slice),
-        );
-
+        let start = start_key.as_ref().map(Vec::as_slice);
+        let end = end_key.as_ref().map(Vec::as_slice);
+        compact_range(&self.engine, handle, start, end, false);
         compact_range_timer.observe_duration();
         Ok(())
     }

@@ -98,7 +98,7 @@ mod test {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
 
         // init Limit meta
         let mut limit_meta = Limit::default();

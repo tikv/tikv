@@ -25,8 +25,8 @@ use std::sync::Arc;
 use std::str::FromStr;
 
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK};
-use rocksdb::{ColumnFamilyOptions, DBCompressionType, DBOptions, ReadOptions, SliceTransform,
-              Writable, WriteBatch, DB};
+use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, ReadOptions,
+              SliceTransform, Writable, WriteBatch, DB};
 use rocksdb::rocksdb::supported_compression;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
                                     ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
@@ -346,6 +346,21 @@ pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Resul
     }
 
     Ok(())
+}
+
+/// Compact the cf in the specified range by manual or not.
+pub fn compact_range(
+    db: &DB,
+    handle: &CFHandle,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+    exclusive_manual: bool,
+) {
+    let mut compact_opts = CompactOptions::new();
+    // `exclusive_manual == false` means manual compaction can
+    // concurrently run with other backgroud compactions.
+    compact_opts.set_exclusive_manual_compaction(exclusive_manual);
+    db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
 }
 
 #[cfg(test)]

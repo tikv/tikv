@@ -298,6 +298,19 @@ impl RowColsDict {
         self.value.append(value);
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
+
+    // get binary of cols, keep the origin order and return one slice.
+    pub fn get_column_values(&self) -> &[u8] {
+        let mut start = self.value.len();
+        let mut length = 0;
+        for meta in self.cols.values() {
+            if meta.offset < start {
+                start = meta.offset;
+            }
+            length += meta.length;
+        }
+        &self.value[start..start + length]
+    }
 }
 
 // `cut_row` cut encoded row into (col_id,offset,length)

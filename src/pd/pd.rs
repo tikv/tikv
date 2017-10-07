@@ -46,7 +46,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right region derive origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Option<Callback>,
     },
     Heartbeat {
         region: metapb::Region,
@@ -155,7 +155,7 @@ impl<T: PdClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Option<Callback>,
     ) {
         PD_REQ_COUNTER_VEC
             .with_label_values(&["ask split", "all"])
@@ -183,7 +183,7 @@ impl<T: PdClient> Runner<T> {
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(&ch, region_id, epoch, peer, req, Some(callback))
+                    send_admin_request(&ch, region_id, epoch, peer, req, callback)
                 }
                 Err(e) => {
                     debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
