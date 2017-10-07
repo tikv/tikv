@@ -137,7 +137,6 @@ impl Simulator for ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
-        let pd_worker = FutureWorker::new("pd worker");
 
         // Create node.
         let mut node = Node::new(

@@ -126,6 +126,7 @@ impl Display for Task {
 }
 
 pub struct Runner<T: PdClient> {
+    store_id: u64,
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
     db: Arc<DB>,
@@ -135,8 +136,9 @@ pub struct Runner<T: PdClient> {
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
+    pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
         Runner {
+            store_id: store_id,
             pd_client: pd_client,
             ch: ch,
             db: db,
@@ -368,8 +370,9 @@ impl<T: PdClient> Runner<T> {
 
     fn schedule_heartbeat_receiver(&mut self, handle: &Handle) {
         let ch = self.ch.clone();
+        let store_id = self.store_id;
         let f = self.pd_client
-            .handle_region_heartbeat_response(0, move |mut resp| {
+            .handle_region_heartbeat_response(self.store_id, move |mut resp| {
                 PD_REQ_COUNTER_VEC
                     .with_label_values(&["heartbeat", "success"])
                     .inc();
@@ -411,7 +414,12 @@ impl<T: PdClient> Runner<T> {
                 }
             })
             .map_err(|e| panic!("unexpected error: {:?}", e))
-            .map(move |_| info!("region heartbeat response handler exit.",));
+            .map(move |_| {
+                info!(
+                    "[store {}] region heartbeat response handler exit.",
+                    store_id
+                )
+            });
         handle.spawn(f);
         self.is_hb_receiver_scheduled = true;
     }

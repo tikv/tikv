@@ -547,6 +547,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(
+            self.store_id(),
             self.pd_client.clone(),
             self.sendch.clone(),
             self.kv_engine.clone(),
