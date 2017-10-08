@@ -22,7 +22,7 @@ use kvproto::debugpb_grpc::create_debug;
 
 use util::worker::{FutureScheduler, Worker};
 use storage::Storage;
-use raftstore::store::{Engines, Msg, SignificantMsg, SnapManager};
+use raftstore::store::{Engines, SignificantMsg, SnapManager};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};

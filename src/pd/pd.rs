@@ -34,7 +34,7 @@ use raftstore::store::Msg;
 use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use pd::metrics::*;
 use raftstore::store::store::StoreInfo;
-use raftstore::store::{Callback, PeerStat};
+use raftstore::store::Callback;
 use coprocessor::CopRequestStatistics;
 use util::collections::HashMap;
 
@@ -68,20 +68,23 @@ pub enum Task {
         region: metapb::Region,
         peer: metapb::Peer,
     },
-    CopFlowStats { flow_stats: CopRequestStatistics },
+    CopReadStats { read_stats: CopRequestStatistics },
 }
 
 #[derive(Default)]
-pub struct StoreStat {
-    pub engine_total_bytes_written: u64,
-    pub engine_total_keys_written: u64,
+pub struct StoreReadStat {
     pub engine_total_bytes_read: u64,
     pub engine_total_keys_read: u64,
-
-    pub engine_last_total_bytes_written: u64,
-    pub engine_last_total_keys_written: u64,
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
+}
+
+#[derive(Default)]
+pub struct PeerReadStat {
+    pub read_bytes: u64,
+    pub read_keys: u64,
+    pub last_read_bytes: u64,
+    pub last_read_keys: u64,
 }
 
 impl Display for Task {
@@ -118,8 +121,8 @@ impl Display for Task {
                 ref region,
                 ref peer,
             } => write!(f, "validate peer {:?} with region {:?}", peer, region),
-            Task::CopFlowStats { ref flow_stats } => {
-                write!(f, "coprocessor get statistics {:?}", flow_stats)
+            Task::CopReadStats { ref read_stats } => {
+                write!(f, "coprocessor get the read statistics {:?}", read_stats)
             }
         }
     }
@@ -130,8 +133,8 @@ pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
     db: Arc<DB>,
-    region_peers: HashMap<u64, PeerStat>,
-    store_stat: StoreStat,
+    region_peers: HashMap<u64, PeerReadStat>,
+    store_stat: StoreReadStat,
     is_hb_receiver_scheduled: bool,
 }
 
@@ -144,7 +147,7 @@ impl<T: PdClient> Runner<T> {
             db: db,
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
-            store_stat: StoreStat::default(),
+            store_stat: StoreReadStat::default(),
         }
     }
 
@@ -424,14 +427,14 @@ impl<T: PdClient> Runner<T> {
         self.is_hb_receiver_scheduled = true;
     }
 
-    fn handle_coprocessor_flow_stats(&mut self, flow_stats: CopRequestStatistics) {
+    fn handle_coprocessor_read_stats(&mut self, read_stats: CopRequestStatistics) {
         PD_REQ_COUNTER_VEC
             .with_label_values(&["coprocessor read stats", "all"])
             .inc();
-        for (region_id, stats) in flow_stats {
+        for (region_id, stats) in read_stats {
             let mut peer_stat = self.region_peers
                 .entry(region_id)
-                .or_insert_with(PeerStat::default);
+                .or_insert_with(PeerReadStat::default);
             peer_stat.read_bytes += stats.read_bytes as u64;
             peer_stat.read_keys += stats.read_keys as u64;
             self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
@@ -468,7 +471,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 let (read_bytes, read_keys) = match self.region_peers.get_mut(&region.get_id()) {
                     Some(peer_stat) => {
                         let read_bytes = peer_stat.read_bytes - peer_stat.last_read_bytes;
-                        let read_keys = peer_stat.read_keys - peer_stat.last_read_bytes;
+                        let read_keys = peer_stat.read_keys - peer_stat.last_read_keys;
                         peer_stat.last_read_bytes = peer_stat.read_bytes;
                         peer_stat.last_read_keys = peer_stat.read_keys;
                         (read_bytes, read_keys)
@@ -495,7 +498,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             }
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
-            Task::CopFlowStats { flow_stats } => self.handle_coprocessor_flow_stats(flow_stats),
+            Task::CopReadStats { read_stats } => self.handle_coprocessor_read_stats(read_stats),
         };
     }
 }

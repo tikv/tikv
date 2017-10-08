@@ -93,19 +93,13 @@ pub struct StoreChannel {
 pub struct StoreStat {
     pub region_bytes_written: LocalHistogram,
     pub region_keys_written: LocalHistogram,
-    pub region_bytes_read: LocalHistogram,
-    pub region_keys_read: LocalHistogram,
     pub lock_cf_bytes_written: u64,
 
     pub engine_total_bytes_written: u64,
     pub engine_total_keys_written: u64,
-    pub engine_total_bytes_read: u64,
-    pub engine_total_keys_read: u64,
 
     pub engine_last_total_bytes_written: u64,
     pub engine_last_total_keys_written: u64,
-    pub engine_last_total_bytes_read: u64,
-    pub engine_last_total_keys_read: u64,
 }
 
 impl Default for StoreStat {
@@ -113,18 +107,12 @@ impl Default for StoreStat {
         StoreStat {
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
-            region_bytes_read: REGION_READ_BYTES_HISTOGRAM.local(),
-            region_keys_read: REGION_READ_KEYS_HISTOGRAM.local(),
             lock_cf_bytes_written: 0,
             engine_total_bytes_written: 0,
             engine_total_keys_written: 0,
-            engine_total_bytes_read: 0,
-            engine_total_keys_read: 0,
 
             engine_last_total_bytes_written: 0,
             engine_last_total_keys_written: 0,
-            engine_last_total_bytes_read: 0,
-            engine_last_total_keys_read: 0,
         }
     }
 }

@@ -195,10 +195,6 @@ pub struct PeerStat {
     pub written_keys: u64,
     pub last_written_bytes: u64,
     pub last_written_keys: u64,
-    pub read_bytes: u64,
-    pub read_keys: u64,
-    pub last_read_bytes: u64,
-    pub last_read_keys: u64,
 }
 
 pub struct Peer {
