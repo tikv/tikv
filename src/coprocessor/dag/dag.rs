@@ -171,19 +171,19 @@ impl<'s> DAGContext<'s> {
                     exec.take_selection(),
                     self.eval_ctx.clone(),
                     self.columns.clone(),
-                    src
+                    src,
                 )?),
                 ExecType::TypeAggregation => Box::new(AggregationExecutor::new(
                     exec.take_aggregation(),
                     self.eval_ctx.clone(),
                     self.columns.clone(),
-                    src
+                    src,
                 )?),
                 ExecType::TypeTopN => Box::new(TopNExecutor::new(
                     exec.take_topN(),
                     self.eval_ctx.clone(),
                     self.columns.clone(),
-                    src
+                    src,
                 )?),
                 ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
             };

@@ -13,6 +13,7 @@
 
 use std::cmp::Ordering;
 use std::ascii::AsciiExt;
+use std::result;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, ScalarFuncSig};
@@ -23,8 +24,7 @@ use util::collections::{HashMap, HashMapEntry};
 
 use coprocessor::codec;
 use coprocessor::codec::datum::{Datum, DatumDecoder};
-use coprocessor::codec::mysql::{DecimalDecoder, Duration, ModifyType, PathExpression, Time,
-                                MAX_FSP};
+use coprocessor::codec::mysql::{DecimalDecoder, Duration, ModifyType, Time, MAX_FSP};
 use coprocessor::codec::mysql::json::{json_array, json_object};
 use super::{Error, Result};
 
@@ -184,7 +184,7 @@ impl Evaluator {
             d,
             expr.get_field_type().get_tp() as u8,
             expr.get_field_type().get_decimal() as i8,
-            &ctx.tz
+            &ctx.tz,
         )?;
         Ok(Datum::Time(t))
     }
@@ -512,8 +512,9 @@ impl Evaluator {
         }
         let mut children = children.into_iter();
         let mut json = children.next().unwrap().cast_as_json()?;
-        let path_extrs: Vec<PathExpression> =
-            children.map(|item| item.to_json_path_expr()).collect()?;
+        let path_extrs = children
+            .map(|item| item.to_json_path_expr())
+            .collect::<result::Result<Vec<_>, _>>()?;
         json.remove(&path_extrs)?;
         Ok(Datum::Json(json))
     }
@@ -542,8 +543,9 @@ impl Evaluator {
         }
         let mut children = children.into_iter();
         let json = children.next().unwrap().cast_as_json()?;
-        let path_extrs: Vec<PathExpression> =
-            children.map(|item| item.to_json_path_expr()).collect()?;
+        let path_extrs = children
+            .map(|item| item.to_json_path_expr())
+            .collect::<result::Result<Vec<_>, _>>()?;
         if let Some(data) = json.extract(&path_extrs) {
             Ok(Datum::Json(data))
         } else {

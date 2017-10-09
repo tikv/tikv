@@ -299,7 +299,7 @@ impl<T, C> Store<T, C> {
                         &self.kv_engine,
                         &self.raft_engine,
                         &raft_wb,
-                        region_id
+                        region_id,
                     )?;
                     applying_count += 1;
                     applying_regions.push(region.clone());
@@ -316,7 +316,7 @@ impl<T, C> Store<T, C> {
                 // in DB.
                 self.region_peers.insert(region_id, peer);
                 Ok(true)
-            }
+            },
         )?;
 
         if !kv_wb.is_empty() {

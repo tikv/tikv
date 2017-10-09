@@ -96,7 +96,7 @@ impl<'a> TopNExecutor<'a> {
                 &row.data,
                 self.cols.clone(),
                 &self.related_cols_offset,
-                row.handle
+                row.handle,
             )?;
             let ob_values = self.order_by.eval(&self.ctx, &cols)?;
             self.heap.as_mut().unwrap().try_add_row(
@@ -104,7 +104,7 @@ impl<'a> TopNExecutor<'a> {
                 row.data,
                 ob_values,
                 self.order_by.items.clone(),
-                self.ctx.clone()
+                self.ctx.clone(),
             )?;
         }
         Ok(())

@@ -36,10 +36,9 @@ struct AggrFuncExpr {
 
 impl AggrFuncExpr {
     fn batch_build(ctx: &EvalContext, expr: Vec<Expr>) -> Result<Vec<AggrFuncExpr>> {
-        let res: Vec<AggrFuncExpr> = expr.into_iter()
+        expr.into_iter()
             .map(|v| AggrFuncExpr::build(ctx, v))
-            .collect()?;
-        Ok(res)
+            .collect()
     }
 
     fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggrFuncExpr> {
@@ -134,7 +133,7 @@ impl<'a> AggregationExecutor<'a> {
                 &row.data,
                 self.cols.clone(),
                 &self.related_cols_offset,
-                row.handle
+                row.handle,
             )?;
             let group_key = Rc::new(self.get_group_key(&cols)?);
             match self.group_key_aggrs.entry(group_key.clone()) {

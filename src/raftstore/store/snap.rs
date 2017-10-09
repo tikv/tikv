@@ -714,7 +714,7 @@ impl Snap {
                         size += key.len() + value.len();
                         self.add_kv(key, value)?;
                         Ok(true)
-                    }
+                    },
                 )?;
                 (key_count, size)
             };
@@ -766,7 +766,7 @@ pub fn build_plain_cf_file<E: BytesEncoder>(
             encoder.encode_compact_bytes(key)?;
             encoder.encode_compact_bytes(value)?;
             Ok(true)
-        }
+        },
     )?;
     // use an empty byte array to indicate that cf reaches an end.
     box_try!(encoder.encode_compact_bytes(b""));
@@ -1202,7 +1202,7 @@ impl SnapManager {
             &core.base,
             key,
             core.snap_size.clone(),
-            Box::new(self.clone())
+            Box::new(self.clone()),
         )?;
         Ok(Box::new(s))
     }
@@ -1220,7 +1220,7 @@ impl SnapManager {
             key,
             snapshot_data.take_meta(),
             core.snap_size.clone(),
-            Box::new(self.clone())
+            Box::new(self.clone()),
         )?;
         Ok(Box::new(f))
     }
@@ -1231,7 +1231,7 @@ impl SnapManager {
             &core.base,
             key,
             core.snap_size.clone(),
-            Box::new(self.clone())
+            Box::new(self.clone()),
         )?;
         if !s.exists() {
             return Err(RaftStoreError::Other(From::from(

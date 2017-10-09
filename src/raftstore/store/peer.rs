@@ -316,7 +316,7 @@ impl Peer {
             region,
             sched,
             tag.clone(),
-            store.entry_cache_metries.clone()
+            store.entry_cache_metries.clone(),
         )?;
 
         let applied_index = ps.applied_index();

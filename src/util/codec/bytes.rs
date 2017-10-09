@@ -38,7 +38,7 @@ pub trait BytesEncoder: NumberEncoder {
                 self.write_all(adjust_bytes_order(
                     &key[index..index + ENC_GROUP_SIZE],
                     desc,
-                    &mut buf
+                    &mut buf,
                 ))?;
             } else {
                 pad = ENC_GROUP_SIZE - remain;
@@ -48,7 +48,7 @@ pub trait BytesEncoder: NumberEncoder {
             self.write_all(adjust_bytes_order(
                 &[ENC_MARKER - (pad as u8)],
                 desc,
-                &mut buf
+                &mut buf,
             ))?;
             index += ENC_GROUP_SIZE;
         }

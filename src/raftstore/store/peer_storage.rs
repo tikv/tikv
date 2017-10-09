@@ -349,7 +349,7 @@ impl InvokeContext {
         kv_wb.put_msg_cf(
             handle,
             &keys::snapshot_raft_state_key(self.region_id),
-            &snapshot_raft_state
+            &snapshot_raft_state,
         )?;
         Ok(())
     }
@@ -360,7 +360,7 @@ impl InvokeContext {
         kv_wb.put_msg_cf(
             handle,
             &keys::apply_state_key(self.region_id),
-            &self.apply_state
+            &self.apply_state,
         )?;
         Ok(())
     }
@@ -644,7 +644,7 @@ impl PeerStorage {
                     buf.push(entry);
                 }
                 Ok(!exceeded_max_size)
-            }
+            },
         )?;
 
         // If we get the correct number of entries, returns,
@@ -850,7 +850,7 @@ impl PeerStorage {
             }
             ready_ctx.raft_wb.put_msg(
                 &keys::raft_log_key(self.get_region_id(), entry.get_index()),
-                entry
+                entry,
             )?;
         }
 
@@ -937,7 +937,7 @@ impl PeerStorage {
             kv_wb,
             raft_wb,
             region_id,
-            &self.raft_state
+            &self.raft_state,
         )?;
         self.cache = EntryCache::default();
         Ok(())
@@ -1101,7 +1101,7 @@ impl PeerStorage {
                 &mut ctx,
                 &ready.snapshot,
                 &ready_ctx.kv_wb,
-                &ready_ctx.raft_wb
+                &ready_ctx.raft_wb,
             )?;
             last_index(&ctx.raft_state)
         };
@@ -1139,7 +1139,7 @@ impl PeerStorage {
 
         // only when apply snapshot
         if ctx.apply_state != self.apply_state {
-            ctx.save_apply_state_to(&self.kv_engine, &mut ready_ctx.kv_wb,)?;
+            ctx.save_apply_state_to(&self.kv_engine, &mut ready_ctx.kv_wb)?;
         }
 
         Ok(ctx)
@@ -1206,7 +1206,7 @@ pub fn clear_meta(
         &mut |key, _| {
             first_index = keys::raft_log_index(key).unwrap();
             Ok(false)
-        }
+        },
     )?;
     for id in first_index..last_index + 1 {
         raft_wb.delete(&keys::raft_log_key(region_id, id))?;
@@ -1259,11 +1259,9 @@ pub fn do_snapshot(
     defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
     let state: RegionLocalState = snap.get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
-        .and_then(|res| {
-            match res {
-                None => Err(box_err!("could not find region info")),
-                Some(state) => Ok(state),
-            }
+        .and_then(|res| match res {
+            None => Err(box_err!("could not find region info")),
+            Some(state) => Ok(state),
         })?;
 
     if state.get_state() != PeerState::Normal {
@@ -1293,7 +1291,7 @@ pub fn do_snapshot(
         state.get_region(),
         &mut snap_data,
         &mut stat,
-        Box::new(mgr.clone())
+        Box::new(mgr.clone()),
     )?;
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));

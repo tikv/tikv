@@ -178,7 +178,7 @@ fn check_and_open(
                 .find(|x| x.cf == cf)
                 .unwrap()
                 .options
-                .clone()
+                .clone(),
         )?;
     }
 

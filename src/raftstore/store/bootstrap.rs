@@ -48,7 +48,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
         &engines.raft_engine,
         CF_DEFAULT,
         keys::MIN_KEY,
-        keys::MAX_KEY
+        keys::MAX_KEY,
     )? {
         return Err(box_err!(
             "raft store is not empty and has already had data."

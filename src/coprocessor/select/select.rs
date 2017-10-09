@@ -164,7 +164,7 @@ impl<'a> SelectContext<'a> {
                 },
                 self.key_only(),
                 upper_bound,
-                self.statistics
+                self.statistics,
             )?;
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
@@ -243,7 +243,7 @@ impl<'a> SelectContext<'a> {
             },
             self.key_only(),
             upper_bound,
-            self.statistics
+            self.statistics,
         )?;
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {

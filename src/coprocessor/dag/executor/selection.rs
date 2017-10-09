@@ -61,7 +61,7 @@ impl<'a> Executor for SelectionExecutor<'a> {
                 &row.data,
                 self.cols.clone(),
                 &self.related_cols_offset,
-                row.handle
+                row.handle,
             )?;
             for filter in &self.conditions {
                 let val = box_try!(filter.eval(&self.ctx, &cols));

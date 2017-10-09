@@ -277,7 +277,7 @@ impl Time {
             h,
             minute,
             sec,
-            frac * TEN_POW[9 - fsp as usize]
+            frac * TEN_POW[9 - fsp as usize],
         )?;
         Time::new(t, types::DATETIME as u8, fsp as i8)
     }

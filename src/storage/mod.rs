@@ -684,7 +684,7 @@ impl Storage {
         self.engine.async_write(
             &ctx,
             modifies,
-            box |(_, res): (_, engine::Result<_>)| { callback(res.map_err(Error::from)) }
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
@@ -819,7 +819,7 @@ impl Storage {
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
-            box |(_, res): (_, engine::Result<_>)| { callback(res.map_err(Error::from)) }
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         RAWKV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete"])
