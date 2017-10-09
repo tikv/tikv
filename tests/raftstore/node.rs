@@ -31,6 +31,7 @@ use kvproto::eraftpb::MessageType;
 use tikv::config::TiKvConfig;
 use tikv::raftstore::{Error, Result};
 use tikv::util::HandyRwLock;
+use tikv::util::worker::FutureWorker;
 use tikv::util::transport::SendCh;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
@@ -164,6 +165,7 @@ impl Simulator for NodeCluster {
 
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
+        let pd_worker = FutureWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(
@@ -191,6 +193,7 @@ impl Simulator for NodeCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
+            pd_worker,
         ).unwrap();
         assert!(
             engines
