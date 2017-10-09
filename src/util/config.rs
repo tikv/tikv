@@ -62,7 +62,7 @@ pub mod compression_type_level_serde {
     where
         S: Serializer,
     {
-        let mut s = try!(serializer.serialize_seq(Some(ts.len())));
+        let mut s = serializer.serialize_seq(Some(ts.len()))?;
         for t in ts {
             let name = match *t {
                 DBCompressionType::No => "no",
@@ -75,7 +75,7 @@ pub mod compression_type_level_serde {
                 DBCompressionType::ZstdNotFinal => "zstd-not-final",
                 DBCompressionType::Disable => "disable",
             };
-            try!(s.serialize_element(name));
+            s.serialize_element(name)?;
         }
         s.end()
     }
@@ -98,7 +98,7 @@ pub mod compression_type_level_serde {
             {
                 let mut seqs = [DBCompressionType::No; 7];
                 let mut i = 0;
-                while let Some(value) = try!(seq.next_element::<String>()) {
+                while let Some(value) = seq.next_element::<String>()? {
                     if i == 7 {
                         return Err(S::Error::invalid_value(
                             Unexpected::Str(&value),
@@ -152,9 +152,9 @@ pub mod order_map_serde {
         K: Serialize + Hash + Eq,
         V: Serialize,
     {
-        let mut s = try!(serializer.serialize_map(Some(m.len())));
+        let mut s = serializer.serialize_map(Some(m.len()))?;
         for (k, v) in m {
-            try!(s.serialize_entry(k, v));
+            s.serialize_entry(k, v)?;
         }
         s.end()
     }
@@ -611,9 +611,9 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<E
         return Err(format!("{}/{} is not a directory!", path, sub_path).into());
     }
     if !p.exists() {
-        try!(fs::create_dir_all(p.as_path()));
+        fs::create_dir_all(p.as_path())?;
     }
-    Ok(format!("{}", try!(p.canonicalize()).display()))
+    Ok(format!("{}", p.canonicalize()?.display()))
 }
 
 #[cfg(unix)]
@@ -672,17 +672,18 @@ mod check_kernel {
         checker: Box<Checker>,
     ) -> Result<(), ConfigError> {
         let mut buffer = String::new();
-        try!(
-            fs::File::open(param_path)
-                .and_then(|mut f| f.read_to_string(&mut buffer))
-                .map_err(|e| {
-                    ConfigError::Limit(format!("check_kernel_params failed {}", e))
-                })
-        );
+        fs::File::open(param_path)
+            .and_then(|mut f| f.read_to_string(&mut buffer))
+            .map_err(|e| {
+                ConfigError::Limit(format!("check_kernel_params failed {}", e))
+            })?;
 
-        let got = try!(buffer.trim_matches('\n').parse::<i64>().map_err(|e| {
-            ConfigError::Limit(format!("check_kernel_params failed {}", e))
-        }));
+        let got = buffer
+            .trim_matches('\n')
+            .parse::<i64>()
+            .map_err(|e| {
+                ConfigError::Limit(format!("check_kernel_params failed {}", e))
+            })?;
 
         let mut param = String::new();
         // skip 3, ["", "proc", "sys", ...]
@@ -769,9 +770,11 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     }
 
     // Check Port.
-    let port: u16 = try!(parts[1].parse().map_err(|_| {
-        ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
-    }));
+    let port: u16 = parts[1]
+        .parse()
+        .map_err(|_| {
+            ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
+        })?;
     // Port = 0 is invalid.
     if port == 0 {
         return Err(ConfigError::Address(

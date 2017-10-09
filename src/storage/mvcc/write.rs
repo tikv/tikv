@@ -92,13 +92,14 @@ impl Write {
         if b.is_empty() {
             return Err(Error::BadFormatWrite);
         }
-        let write_type = try!(WriteType::from_u8(try!(b.read_u8())).ok_or(Error::BadFormatWrite));
-        let start_ts = try!(b.decode_var_u64());
+        let write_type = WriteType::from_u8(b.read_u8()?)
+            .ok_or(Error::BadFormatWrite)?;
+        let start_ts = b.decode_var_u64()?;
         if b.is_empty() {
             return Ok(Write::new(write_type, start_ts, None));
         }
 
-        let flag = try!(b.read_u8());
+        let flag = b.read_u8()?;
         assert_eq!(
             flag,
             SHORT_VALUE_PREFIX,
@@ -106,7 +107,7 @@ impl Write {
             flag
         );
 
-        let len = try!(b.read_u8());
+        let len = b.read_u8()?;
         if len as usize != b.len() {
             panic!(
                 "short value len [{}] not equal to content len [{}]",

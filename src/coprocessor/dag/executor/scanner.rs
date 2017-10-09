@@ -51,7 +51,7 @@ impl<'a> Scanner<'a> {
 
     pub fn next_row(&mut self, range: &KeyRange) -> Result<Option<(Vec<u8>, Value)>> {
         if self.seek_key.is_none() {
-            try!(self.init_with_range(range));
+            self.init_with_range(range)?;
         }
         let seek_key = self.seek_key.take().unwrap();
         if range.get_start() > range.get_end() {
@@ -59,9 +59,9 @@ impl<'a> Scanner<'a> {
         }
         let scanner = self.scanner.as_mut().unwrap();
         let kv = if self.scan_mode == ScanMode::Backward {
-            try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
+            scanner.reverse_seek(Key::from_raw(&seek_key))?
         } else {
-            try!(scanner.seek(Key::from_raw(&seek_key)))
+            scanner.seek(Key::from_raw(&seek_key))?
         };
 
         let (key, value) = match kv {
@@ -83,7 +83,7 @@ impl<'a> Scanner<'a> {
 
     pub fn get_row(&mut self, key: &[u8]) -> Result<Option<Value>> {
         let statistics = self.take_statistics();
-        let data = try!(self.store.get(&Key::from_raw(key), statistics));
+        let data = self.store.get(&Key::from_raw(key), statistics)?;
         self.statistics = Some(statistics);
         Ok(data)
     }
@@ -102,10 +102,8 @@ impl<'a> Scanner<'a> {
             Some(Key::from_raw(range.get_end()).encoded().to_vec())
         };
         let statistics = self.take_statistics();
-        let scanner = try!(
-            self.store
-                .scanner(self.scan_mode, self.key_only, upper_bound, statistics)
-        );
+        let scanner = self.store
+            .scanner(self.scan_mode, self.key_only, upper_bound, statistics)?;
         self.scanner = Some(scanner);
         Ok(())
     }

@@ -66,7 +66,7 @@ impl ExprColumnRefVisitor {
             self.cols_offset.insert(offset);
         } else {
             for sub_expr in expr.get_children() {
-                try!(self.visit(sub_expr));
+                self.visit(sub_expr)?;
             }
         }
         Ok(())
@@ -74,7 +74,7 @@ impl ExprColumnRefVisitor {
 
     pub fn batch_visit(&mut self, exprs: &[Expr]) -> Result<()> {
         for expr in exprs {
-            try!(self.visit(expr));
+            self.visit(expr)?;
         }
         Ok(())
     }

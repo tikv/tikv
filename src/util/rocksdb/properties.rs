@@ -83,12 +83,12 @@ impl MvccProperties {
 
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<MvccProperties> {
         let mut res = MvccProperties::new();
-        res.min_ts = try!(props.decode_u64(PROP_MIN_TS));
-        res.max_ts = try!(props.decode_u64(PROP_MAX_TS));
-        res.num_rows = try!(props.decode_u64(PROP_NUM_ROWS));
-        res.num_puts = try!(props.decode_u64(PROP_NUM_PUTS));
-        res.num_versions = try!(props.decode_u64(PROP_NUM_VERSIONS));
-        res.max_row_versions = try!(props.decode_u64(PROP_MAX_ROW_VERSIONS));
+        res.min_ts = props.decode_u64(PROP_MIN_TS)?;
+        res.max_ts = props.decode_u64(PROP_MAX_TS)?;
+        res.num_rows = props.decode_u64(PROP_NUM_ROWS)?;
+        res.num_puts = props.decode_u64(PROP_NUM_PUTS)?;
+        res.num_versions = props.decode_u64(PROP_NUM_VERSIONS)?;
+        res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
         Ok(res)
     }
 }
@@ -240,12 +240,12 @@ impl IndexHandles {
     fn decode(mut buf: &[u8]) -> Result<IndexHandles> {
         let mut res = BTreeMap::new();
         while !buf.is_empty() {
-            let klen = try!(buf.decode_u64());
+            let klen = buf.decode_u64()?;
             let mut k = vec![0; klen as usize];
-            try!(buf.read_exact(&mut k));
+            buf.read_exact(&mut k)?;
             let mut v = IndexHandle::default();
-            v.size = try!(buf.decode_u64());
-            v.offset = try!(buf.decode_u64());
+            v.size = buf.decode_u64()?;
+            v.offset = buf.decode_u64()?;
             res.insert(k, v);
         }
         Ok(IndexHandles(res))
@@ -289,8 +289,8 @@ pub struct RowsProperties {
 impl RowsProperties {
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RowsProperties> {
         let mut res = RowsProperties::default();
-        res.total_rows = try!(props.decode_u64(PROP_NUM_ROWS));
-        res.index_handles = try!(props.decode_handles(PROP_ROWS_INDEX));
+        res.total_rows = props.decode_u64(PROP_NUM_ROWS)?;
+        res.index_handles = props.decode_handles(PROP_ROWS_INDEX)?;
         Ok(res)
     }
 
@@ -316,8 +316,8 @@ impl SizeProperties {
 
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<SizeProperties> {
         let mut res = SizeProperties::default();
-        res.total_size = try!(props.decode_u64(PROP_TOTAL_SIZE));
-        res.index_handles = try!(props.decode_handles(PROP_SIZE_INDEX));
+        res.total_size = props.decode_u64(PROP_TOTAL_SIZE)?;
+        res.index_handles = props.decode_handles(PROP_SIZE_INDEX)?;
         Ok(res)
     }
 
@@ -421,12 +421,12 @@ pub trait DecodeProperties {
     fn decode(&self, k: &str) -> Result<&[u8]>;
 
     fn decode_u64(&self, k: &str) -> Result<u64> {
-        let mut buf = try!(self.decode(k));
+        let mut buf = self.decode(k)?;
         buf.decode_u64()
     }
 
     fn decode_handles(&self, k: &str) -> Result<IndexHandles> {
-        let buf = try!(self.decode(k));
+        let buf = self.decode(k)?;
         IndexHandles::decode(buf)
     }
 }

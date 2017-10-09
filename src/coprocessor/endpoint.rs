@@ -637,12 +637,7 @@ impl TiDbEndPoint {
     }
 
     fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let ctx = try!(SelectContext::new(
-            sel,
-            self.snap.as_ref(),
-            &mut t.statistics,
-            &t.ctx
-        ));
+        let ctx = SelectContext::new(sel, self.snap.as_ref(), &mut t.statistics, &t.ctx)?;
         let range = t.req.get_ranges().to_vec();
         ctx.handle_request(range)
     }

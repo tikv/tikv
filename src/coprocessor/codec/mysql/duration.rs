@@ -118,11 +118,11 @@ impl Duration {
     }
 
     pub fn new(dur: StdDuration, neg: bool, fsp: i8) -> Result<Duration> {
-        try!(check_dur(&dur));
+        check_dur(&dur)?;
         Ok(Duration {
             dur: dur,
             neg: neg,
-            fsp: try!(check_fsp(fsp)),
+            fsp: check_fsp(fsp)?,
         })
     }
 
@@ -130,7 +130,7 @@ impl Duration {
     // returns the duration type Time value.
     // See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(mut s: &[u8], fsp: i8) -> Result<Duration> {
-        let fsp = try!(check_fsp(fsp));
+        let fsp = check_fsp(fsp)?;
 
         let (mut neg, mut day, mut frac) = (false, None, 0);
 
@@ -144,7 +144,7 @@ impl Duration {
         let mut parts = s.splitn(2, |c| *c == b' ');
         s = parts.next().unwrap();
         if let Some(remain) = parts.next() {
-            let day_str = try!(str::from_utf8(s));
+            let day_str = str::from_utf8(s)?;
             day = Some(box_try!(u64::from_str_radix(day_str, 10)));
             s = remain;
         }
@@ -152,17 +152,17 @@ impl Duration {
         let mut parts = s.splitn(2, |c| *c == b'.');
         s = parts.next().unwrap();
         if let Some(frac_part) = parts.next() {
-            frac = try!(parse_frac(frac_part, fsp));
+            frac = parse_frac(frac_part, fsp)?;
             frac *= 10u32.pow(NANO_WIDTH - fsp as u32);
         }
 
         let mut parts = s.splitn(2, |c| *c == b':');
         s = parts.next().unwrap();
-        let s_str = try!(str::from_utf8(s));
+        let s_str = str::from_utf8(s)?;
         let mut secs;
         match parts.next() {
             Some(remain) => {
-                let remain_str = try!(str::from_utf8(remain));
+                let remain_str = str::from_utf8(remain)?;
                 let t = box_try!(match remain.len() {
                     5 => time::strptime(remain_str, "%M:%S"),
                     2 => time::strptime(remain_str, "%M"),
@@ -196,26 +196,26 @@ impl Duration {
     pub fn to_decimal(&self) -> Result<Decimal> {
         let mut buf = Vec::with_capacity(13);
         if self.neg {
-            try!(write!(buf, "-"));
+            write!(buf, "-")?;
         }
-        try!(write!(
+        write!(
             buf,
             "{:02}{:02}{:02}",
             self.hours(),
             self.minutes(),
             self.secs()
-        ));
+        )?;
         if self.fsp > 0 {
-            try!(write!(buf, "."));
+            write!(buf, ".")?;
             let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - self.fsp as u32));
-            try!(write!(buf, "{:01$}", nanos, self.fsp as usize));
+            write!(buf, "{:01$}", nanos, self.fsp as usize)?;
         }
-        let d = unsafe { try!(str::from_utf8_unchecked(&buf).parse()) };
+        let d = unsafe { str::from_utf8_unchecked(&buf).parse()? };
         Ok(d)
     }
 
     pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
-        let fsp = try!(check_fsp(fsp));
+        let fsp = check_fsp(fsp)?;
         if fsp >= self.fsp {
             self.fsp = fsp;
             return Ok(());
@@ -232,19 +232,19 @@ impl Duration {
 impl Display for Duration {
     fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
         if self.neg {
-            try!(write!(formatter, "-"));
+            write!(formatter, "-")?;
         }
-        try!(write!(
+        write!(
             formatter,
             "{:02}:{:02}:{:02}",
             self.hours(),
             self.minutes(),
             self.secs()
-        ));
+        )?;
         if self.fsp > 0 {
-            try!(write!(formatter, "."));
+            write!(formatter, ".")?;
             let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - self.fsp as u32));
-            try!(write!(formatter, "{:01$}", nanos, self.fsp as usize));
+            write!(formatter, "{:01$}", nanos, self.fsp as usize)?;
         }
         Ok(())
     }

@@ -191,14 +191,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     // Create pd client and pd work, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
+    let pd_worker = FutureWorker::new("pd worker");
     let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
-    let pd_worker = FutureWorker::new("pd worker");
-    // Create Server
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
     );
+
+    // Create server
     let mut server = Server::new(
         &cfg.server,
         cfg.raft_store.region_split_size.0 as usize,
@@ -442,8 +443,8 @@ fn main() {
                 .map_err::<Box<Error>, _>(|e| Box::new(e))
                 .and_then(|mut f| {
                     let mut s = String::new();
-                    try!(f.read_to_string(&mut s));
-                    let c = try!(toml::from_str(&s));
+                    f.read_to_string(&mut s)?;
+                    let c = toml::from_str(&s)?;
                     Ok(c)
                 })
                 .unwrap_or_else(|e| {

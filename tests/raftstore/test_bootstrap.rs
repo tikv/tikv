@@ -70,7 +70,7 @@ fn test_node_bootstrap_with_prepared_data() {
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
     let (_, snapshot_status_receiver) = mpsc::channel();
-    let pd_worker = FutureWorker::new("pd worker");
+    let pd_worker = FutureWorker::new("test-pd-worker");
 
 
     // assume there is a node has bootstrapped the cluster and add region in pd successfully

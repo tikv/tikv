@@ -83,7 +83,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
         );
-        let addr = try!(SocketAddr::from_str(&cfg.addr));
+        let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
@@ -100,12 +100,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             if let Some(engines) = debug_engines {
                 sb = sb.register_service(create_debug(DebugService::new(engines)));
             }
-            try!(sb.build())
+            sb.build()?
         };
 
         let addr = {
             let (ref host, port) = grpc_server.bind_addrs()[0];
-            SocketAddr::new(try!(IpAddr::from_str(host)), port as u16)
+            SocketAddr::new(IpAddr::from_str(host)?, port as u16)
         };
 
         let trans = ServerTransport::new(

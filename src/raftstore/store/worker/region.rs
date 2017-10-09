@@ -140,7 +140,7 @@ impl SnapContext {
 
     fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
-        try!(check_abort(&abort));
+        check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
             match box_try!(self.kv_db.get_msg_cf(CF_RAFT, &region_key)) {
@@ -157,9 +157,9 @@ impl SnapContext {
         let region = region_state.get_region().clone();
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
-        try!(check_abort(&abort));
+        check_abort(&abort)?;
         box_try!(util::delete_all_in_range(&self.kv_db, &start_key, &end_key));
-        try!(check_abort(&abort));
+        check_abort(&abort)?;
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
@@ -183,7 +183,7 @@ impl SnapContext {
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
-        try!(check_abort(&abort));
+        check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
             db: self.kv_db.clone(),
@@ -191,7 +191,7 @@ impl SnapContext {
             abort: abort.clone(),
             write_batch_size: self.batch_size,
         };
-        try!(s.apply(options));
+        s.apply(options)?;
 
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);

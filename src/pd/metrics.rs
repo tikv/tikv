@@ -48,4 +48,4 @@ lazy_static! {
             "Size of storage.",
             &["type"]
         ).unwrap();
- }
+}

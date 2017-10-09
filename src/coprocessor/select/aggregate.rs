@@ -118,7 +118,7 @@ impl Sum {
 
 impl AggrFunc for Sum {
     fn update(&mut self, ctx: &EvalContext, args: Vec<Datum>) -> Result<()> {
-        try!(self.add_asssign(ctx, args));
+        self.add_asssign(ctx, args)?;
         Ok(())
     }
 
@@ -141,7 +141,7 @@ struct Avg {
 
 impl AggrFunc for Avg {
     fn update(&mut self, ctx: &EvalContext, args: Vec<Datum>) -> Result<()> {
-        if try!(self.sum.add_asssign(ctx, args)) {
+        if self.sum.add_asssign(ctx, args)? {
             self.cnt += 1;
         }
         Ok(())

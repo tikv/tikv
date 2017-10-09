@@ -61,7 +61,7 @@ pub enum Json {
 pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     let mut a = Vec::with_capacity(elems.len());
     for elem in elems {
-        a.push(try!(elem.into_json()));
+        a.push(elem.into_json()?);
     }
     Ok(Json::Array(a))
 }
@@ -85,10 +85,10 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
                     "JSON documents may not contain NULL member names"
                 ));
             }
-            key = Some(try!(elem.into_string()));
+            key = Some(elem.into_string()?);
         } else {
             // take elem as value
-            let val = try!(elem.into_json());
+            let val = elem.into_json()?;
             map.insert(key.take().unwrap(), val);
         }
     }

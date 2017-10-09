@@ -39,18 +39,18 @@ fn download_and_extract_file(url: &str) -> io::Result<String> {
     let th = thread::spawn(move || -> io::Result<()> {
         let mut buf = vec![0; 4096];
         loop {
-            let nbytes = try!(dl_output.read(&mut buf));
+            let nbytes = dl_output.read(&mut buf)?;
             if nbytes > 0 {
-                try!(tar_input.write_all(&buf[0..nbytes]));
+                tar_input.write_all(&buf[0..nbytes])?;
                 continue;
             }
             return Ok(());
         }
     });
 
-    let output = try!(tar_child.wait_with_output());
-    try!(dl_child.wait());
-    try!(th.join().unwrap());
+    let output = tar_child.wait_with_output()?;
+    dl_child.wait()?;
+    th.join().unwrap()?;
     assert_eq!(output.status.code(), Some(0));
     Ok(String::from_utf8(output.stdout).unwrap())
 }

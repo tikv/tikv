@@ -43,7 +43,7 @@ impl RpcClient {
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        let (client, members) = try!(validate_endpoints(env.clone(), endpoints));
+        let (client, members) = validate_endpoints(env.clone(), endpoints)?;
 
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),
@@ -84,15 +84,11 @@ impl PdClient for RpcClient {
         req.set_store(stores);
         req.set_region(region);
 
-        let resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.bootstrap_opt(req.clone(), option)
-            }
-        ));
-        try!(check_resp_header(resp.get_header()));
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.bootstrap_opt(req.clone(), option)
+        })?;
+        check_resp_header(resp.get_header())?;
         Ok(())
     }
 
@@ -100,15 +96,11 @@ impl PdClient for RpcClient {
         let mut req = pdpb::IsBootstrappedRequest::new();
         req.set_header(self.header());
 
-        let resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.is_bootstrapped_opt(req.clone(), option)
-            }
-        ));
-        try!(check_resp_header(resp.get_header()));
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.is_bootstrapped_opt(req.clone(), option)
+        })?;
+        check_resp_header(resp.get_header())?;
 
         Ok(resp.get_bootstrapped())
     }
@@ -117,15 +109,11 @@ impl PdClient for RpcClient {
         let mut req = pdpb::AllocIDRequest::new();
         req.set_header(self.header());
 
-        let resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.alloc_id_opt(req.clone(), option)
-            }
-        ));
-        try!(check_resp_header(resp.get_header()));
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.alloc_id_opt(req.clone(), option)
+        })?;
+        check_resp_header(resp.get_header())?;
 
         Ok(resp.get_id())
     }
@@ -135,15 +123,11 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store(store);
 
-        let resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.put_store_opt(req.clone(), option)
-            }
-        ));
-        try!(check_resp_header(resp.get_header()));
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.put_store_opt(req.clone(), option)
+        })?;
+        check_resp_header(resp.get_header())?;
 
         Ok(())
     }
@@ -153,15 +137,11 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store_id(store_id);
 
-        let mut resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.get_store_opt(req.clone(), option)
-            }
-        ));
-        try!(check_resp_header(resp.get_header()));
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_store_opt(req.clone(), option)
+        })?;
+        check_resp_header(resp.get_header())?;
 
         Ok(resp.take_store())
     }
@@ -170,15 +150,11 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetClusterConfigRequest::new();
         req.set_header(self.header());
 
-        let mut resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.get_cluster_config_opt(req.clone(), option)
-            }
-        ));
-        try!(check_resp_header(resp.get_header()));
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_cluster_config_opt(req.clone(), option)
+        })?;
+        check_resp_header(resp.get_header())?;
 
         Ok(resp.take_cluster())
     }
@@ -188,15 +164,11 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_key(key.to_vec());
 
-        let mut resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.get_region_opt(req.clone(), option)
-            }
-        ));
-        try!(check_resp_header(resp.get_header()));
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_region_opt(req.clone(), option)
+        })?;
+        check_resp_header(resp.get_header())?;
 
         Ok(resp.take_region())
     }
@@ -210,7 +182,7 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.get_region_by_id_async_opt(req, option);
             Box::new(handler.map_err(Error::Grpc).and_then(|mut resp| {
-                try!(check_resp_header(resp.get_header()));
+                check_resp_header(resp.get_header())?;
                 if resp.has_region() {
                     Ok(Some(resp.take_region()))
                 } else {
@@ -296,7 +268,7 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.ask_split_async_opt(req, option);
             Box::new(handler.map_err(Error::Grpc).and_then(|resp| {
-                try!(check_resp_header(resp.get_header()));
+                check_resp_header(resp.get_header())?;
                 Ok(resp)
             })) as PdFuture<_>
         };
@@ -315,7 +287,7 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.store_heartbeat_async_opt(req, option);
             Box::new(handler.map_err(Error::Grpc).and_then(|resp| {
-                try!(check_resp_header(resp.get_header()));
+                check_resp_header(resp.get_header())?;
                 Ok(())
             })) as PdFuture<_>
         };
@@ -335,7 +307,7 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.report_split_async_opt(req, option);
             Box::new(handler.map_err(Error::Grpc).and_then(|resp| {
-                try!(check_resp_header(resp.get_header()));
+                check_resp_header(resp.get_header())?;
                 Ok(())
             })) as PdFuture<_>
         };
