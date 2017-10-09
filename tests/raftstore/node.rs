@@ -165,7 +165,7 @@ impl Simulator for NodeCluster {
 
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
-        let pd_worker = FutureWorker::new("pd worker");
+        let pd_worker = FutureWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(
