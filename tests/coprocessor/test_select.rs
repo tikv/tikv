@@ -682,7 +682,7 @@ fn init_data_with_engine_and_commit(
     let mut end_point = Worker::new("test select worker");
     let mut cfg = Config::default();
     cfg.end_point_concurrency = 1;
-    let pd_worker = FutureWorker::new("pd worker");
+    let pd_worker = FutureWorker::new("test pd worker");
     let runner = EndPointHost::new(
         store.get_engine(),
         end_point.scheduler(),
