@@ -36,11 +36,9 @@ struct AggrFuncExpr {
 
 impl AggrFuncExpr {
     fn batch_build(ctx: &EvalContext, expr: Vec<Expr>) -> Result<Vec<AggrFuncExpr>> {
-        let res: Vec<AggrFuncExpr> = try!(
-            expr.into_iter()
-                .map(|v| AggrFuncExpr::build(ctx, v))
-                .collect()
-        );
+        let res: Vec<AggrFuncExpr> = expr.into_iter()
+            .map(|v| AggrFuncExpr::build(ctx, v))
+            .collect()?;
         Ok(res)
     }
 
@@ -66,8 +64,8 @@ impl AggrFunc {
         expr: &AggrFuncExpr,
         row: &[Datum],
     ) -> Result<()> {
-        let vals = try!(expr.eval_args(ctx, row));
-        try!(self.update(ctx, vals));
+        let vals = expr.eval_args(ctx, row)?;
+        self.update(ctx, vals)?;
         Ok(())
     }
 }
@@ -95,15 +93,15 @@ impl<'a> AggregationExecutor<'a> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(columns.len());
         let group_by = meta.take_group_by().into_vec();
-        try!(visitor.batch_visit(&group_by));
+        visitor.batch_visit(&group_by)?;
         let aggr_func = meta.take_agg_func().into_vec();
-        try!(visitor.batch_visit(&aggr_func));
+        visitor.batch_visit(&aggr_func)?;
         COPR_EXECUTOR_COUNT
             .with_label_values(&["aggregation"])
             .inc();
         Ok(AggregationExecutor {
             group_by: box_try!(Expression::batch_build(ctx.as_ref(), group_by)),
-            aggr_func: try!(AggrFuncExpr::batch_build(ctx.as_ref(), aggr_func)),
+            aggr_func: AggrFuncExpr::batch_build(ctx.as_ref(), aggr_func)?,
             group_keys: vec![],
             group_key_aggrs: map![],
             cursor: 0,
@@ -130,21 +128,21 @@ impl<'a> AggregationExecutor<'a> {
     }
 
     fn aggregate(&mut self) -> Result<()> {
-        while let Some(row) = try!(self.src.next()) {
-            let cols = try!(inflate_with_col_for_dag(
+        while let Some(row) = self.src.next()? {
+            let cols = inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
                 self.cols.clone(),
                 &self.related_cols_offset,
                 row.handle
-            ));
-            let group_key = Rc::new(try!(self.get_group_key(&cols)));
+            )?;
+            let group_key = Rc::new(self.get_group_key(&cols)?);
             match self.group_key_aggrs.entry(group_key.clone()) {
                 Entry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
                     for expr in &self.aggr_func {
-                        let mut aggr = try!(aggregate::build_aggr_func(expr.tp));
-                        try!(aggr.update_with_expr(&self.ctx, expr, &cols));
+                        let mut aggr = aggregate::build_aggr_func(expr.tp)?;
+                        aggr.update_with_expr(&self.ctx, expr, &cols)?;
                         aggrs.push(aggr);
                     }
                     self.group_keys.push(group_key);
@@ -153,7 +151,7 @@ impl<'a> AggregationExecutor<'a> {
                 Entry::Occupied(e) => {
                     let aggrs = e.into_mut();
                     for (expr, aggr) in self.aggr_func.iter().zip(aggrs) {
-                        try!(aggr.update_with_expr(&self.ctx, expr, &cols));
+                        aggr.update_with_expr(&self.ctx, expr, &cols)?;
                     }
                 }
             }
@@ -165,7 +163,7 @@ impl<'a> AggregationExecutor<'a> {
 impl<'a> Executor for AggregationExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         if !self.executed {
-            try!(self.aggregate());
+            self.aggregate()?;
             self.executed = true;
         }
 
@@ -177,7 +175,7 @@ impl<'a> Executor for AggregationExecutor<'a> {
         let group_key = &self.group_keys[self.cursor];
         let mut aggrs = self.group_key_aggrs.remove(group_key).unwrap();
         for aggr in &mut aggrs {
-            try!(aggr.calc(&mut aggr_cols));
+            aggr.calc(&mut aggr_cols)?;
         }
         // construct row data
         let value_size = group_key.len() + approximate_size(&aggr_cols, false);

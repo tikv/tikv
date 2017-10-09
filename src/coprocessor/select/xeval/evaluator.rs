@@ -95,7 +95,7 @@ impl Evaluator {
     pub fn batch_eval(&mut self, ctx: &EvalContext, exprs: &[Expr]) -> Result<Vec<Datum>> {
         let mut res = Vec::with_capacity(exprs.len());
         for expr in exprs {
-            let r = try!(self.eval(ctx, expr));
+            let r = self.eval(ctx, expr)?;
             res.push(r);
         }
         Ok(res)
@@ -153,44 +153,44 @@ impl Evaluator {
     }
 
     fn eval_int(&self, expr: &Expr) -> Result<Datum> {
-        let i = try!(expr.get_val().decode_i64());
+        let i = expr.get_val().decode_i64()?;
         Ok(Datum::I64(i))
     }
 
     fn eval_uint(&self, expr: &Expr) -> Result<Datum> {
-        let u = try!(expr.get_val().decode_u64());
+        let u = expr.get_val().decode_u64()?;
         Ok(Datum::U64(u))
     }
 
     fn eval_float(&self, expr: &Expr) -> Result<Datum> {
-        let f = try!(expr.get_val().decode_f64());
+        let f = expr.get_val().decode_f64()?;
         Ok(Datum::F64(f))
     }
 
     fn eval_duration(&self, expr: &Expr) -> Result<Datum> {
-        let n = try!(expr.get_val().decode_i64());
-        let dur = try!(Duration::from_nanos(n, MAX_FSP));
+        let n = expr.get_val().decode_i64()?;
+        let dur = Duration::from_nanos(n, MAX_FSP)?;
         Ok(Datum::Dur(dur))
     }
 
     fn eval_decimal(&self, expr: &Expr) -> Result<Datum> {
-        let d = try!(expr.get_val().decode_decimal());
+        let d = expr.get_val().decode_decimal()?;
         Ok(Datum::Dec(d))
     }
 
     fn eval_time(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let d = try!(expr.get_val().decode_u64());
-        let t = try!(Time::from_packed_u64(
+        let d = expr.get_val().decode_u64()?;
+        let t = Time::from_packed_u64(
             d,
             expr.get_field_type().get_tp() as u8,
             expr.get_field_type().get_decimal() as i8,
             &ctx.tz
-        ));
+        )?;
         Ok(Datum::Time(t))
     }
 
     fn eval_column_ref(&self, expr: &Expr) -> Result<Datum> {
-        let i = try!(expr.get_val().decode_i64());
+        let i = expr.get_val().decode_i64()?;
         self.row
             .get(&i)
             .cloned()
@@ -198,43 +198,43 @@ impl Evaluator {
     }
 
     fn eval_lt(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+        let cmp = self.cmp_children(ctx, expr)?;
         Ok(cmp.map(|c| c < Ordering::Equal).into())
     }
 
     fn eval_le(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+        let cmp = self.cmp_children(ctx, expr)?;
         Ok(cmp.map(|c| c <= Ordering::Equal).into())
     }
 
     fn eval_eq(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+        let cmp = self.cmp_children(ctx, expr)?;
         Ok(cmp.map(|c| c == Ordering::Equal).into())
     }
 
     fn eval_ne(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+        let cmp = self.cmp_children(ctx, expr)?;
         Ok(cmp.map(|c| c != Ordering::Equal).into())
     }
 
     fn eval_ge(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+        let cmp = self.cmp_children(ctx, expr)?;
         Ok(cmp.map(|c| c >= Ordering::Equal).into())
     }
 
     fn eval_gt(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+        let cmp = self.cmp_children(ctx, expr)?;
         Ok(cmp.map(|c| c > Ordering::Equal).into())
     }
 
     fn eval_null_eq(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
-        let cmp = try!(left.cmp(ctx, &right));
+        let (left, right) = self.eval_two_children(ctx, expr)?;
+        let cmp = left.cmp(ctx, &right)?;
         Ok((cmp == Ordering::Equal).into())
     }
 
     fn cmp_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Option<Ordering>> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+        let (left, right) = self.eval_two_children(ctx, expr)?;
         if left == Datum::Null || right == Datum::Null {
             return Ok(None);
         }
@@ -264,14 +264,14 @@ impl Evaluator {
     }
 
     fn eval_one_child(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let child_expr = try!(self.get_one_child(expr));
+        let child_expr = self.get_one_child(expr)?;
         self.eval(ctx, child_expr)
     }
 
     fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
-        let (left_expr, right_expr) = try!(self.get_two_children(expr));
-        let left = try!(self.eval(ctx, left_expr));
-        let right = try!(self.eval(ctx, right_expr));
+        let (left_expr, right_expr) = self.get_two_children(expr)?;
+        let left = self.eval(ctx, left_expr)?;
+        let right = self.eval(ctx, right_expr)?;
         Ok((left, right))
     }
 
@@ -299,21 +299,21 @@ impl Evaluator {
                 format!("expect 1 operand, got {}", children_cnt),
             ));
         }
-        let d = try!(self.eval(ctx, &expr.get_children()[0]));
+        let d = self.eval(ctx, &expr.get_children()[0])?;
         if d == Datum::Null {
             return Ok(Datum::Null);
         }
-        let b = try!(d.into_bool(ctx));
+        let b = d.into_bool(ctx)?;
         Ok((b.map(|v| !v)).into())
     }
 
     fn eval_like(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let (target, pattern) = try!(self.eval_two_children(ctx, expr));
+        let (target, pattern) = self.eval_two_children(ctx, expr)?;
         if Datum::Null == target || Datum::Null == pattern {
             return Ok(Datum::Null);
         }
-        let mut target_str = try!(target.into_string());
-        let mut pattern_str = try!(pattern.into_string());
+        let mut target_str = target.into_string()?;
+        let mut pattern_str = pattern.into_string()?;
         if pattern_str
             .chars()
             .any(|x| x.is_ascii() && x.is_alphabetic())
@@ -344,7 +344,7 @@ impl Evaluator {
             )));
         }
         let children = expr.get_children();
-        let target = try!(self.eval(ctx, &children[0]));
+        let target = self.eval(ctx, &children[0])?;
         if let Datum::Null = target {
             return Ok(target);
         }
@@ -354,8 +354,8 @@ impl Evaluator {
                 "the second child should be of the value list type".to_owned(),
             ));
         }
-        let decoded = try!(self.decode_value_list(value_list_expr));
-        if try!(check_in(ctx, target, decoded)) {
+        let decoded = self.decode_value_list(value_list_expr)?;
+        if check_in(ctx, target, decoded)? {
             return Ok(true.into());
         }
         if decoded.first().map_or(false, |d| *d == Datum::Null) {
@@ -369,7 +369,7 @@ impl Evaluator {
         let decoded = match self.cached_value_list.entry(p) {
             HashMapEntry::Occupied(entry) => entry.into_mut(),
             HashMapEntry::Vacant(entry) => {
-                let default = try!(value_list_expr.get_val().decode());
+                let default = value_list_expr.get_val().decode()?;
                 entry.insert(default)
             }
         };
@@ -380,18 +380,18 @@ impl Evaluator {
     where
         F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>,
     {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+        let (left, right) = self.eval_two_children(ctx, expr)?;
         eval_arith(ctx, left, right, f)
     }
 
     fn eval_case_when(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         for chunk in expr.get_children().chunks(2) {
-            let res = try!(self.eval(ctx, &chunk[0]));
+            let res = self.eval(ctx, &chunk[0])?;
             if chunk.len() == 1 {
                 // else statement
                 return Ok(res);
             }
-            if !try!(res.into_bool(ctx)).unwrap_or(false) {
+            if !res.into_bool(ctx)?.unwrap_or(false) {
                 continue;
             }
             return self.eval(ctx, &chunk[1]).map_err(From::from);
@@ -406,17 +406,17 @@ impl Evaluator {
                 format!("expect 3 operands, got {}", children.len()),
             ));
         }
-        let cond = try!(self.eval(ctx, &children[0]));
-        let d = match try!(cond.into_bool(ctx)) {
-            Some(true) => try!(self.eval(ctx, &children[1])),
-            _ => try!(self.eval(ctx, &children[2])),
+        let cond = self.eval(ctx, &children[0])?;
+        let d = match cond.into_bool(ctx)? {
+            Some(true) => self.eval(ctx, &children[1])?,
+            _ => self.eval(ctx, &children[2])?,
         };
         Ok(d)
     }
 
     fn eval_coalesce(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         for child in expr.get_children() {
-            match try!(self.eval(ctx, child)) {
+            match self.eval(ctx, child)? {
                 Datum::Null => {}
                 res => return Ok(res),
             }
@@ -431,9 +431,9 @@ impl Evaluator {
                 format!("expect 2 operands, got {}", children.len()),
             ));
         }
-        let left = try!(self.eval(ctx, &children[0]));
+        let left = self.eval(ctx, &children[0])?;
         if left == Datum::Null {
-            Ok(try!(self.eval(ctx, &children[1])))
+            Ok(self.eval(ctx, &children[1])?)
         } else {
             Ok(left)
         }
@@ -446,16 +446,16 @@ impl Evaluator {
                 format!("expect 1 operand, got {}", children.len()),
             ));
         }
-        let d = try!(self.eval(ctx, &children[0]));
+        let d = self.eval(ctx, &children[0])?;
         Ok((d == Datum::Null).into())
     }
 
     fn eval_null_if(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+        let (left, right) = self.eval_two_children(ctx, expr)?;
         if left == Datum::Null || right == Datum::Null {
             return Ok(left);
         }
-        if let Ordering::Equal = try!(left.cmp(ctx, &right)) {
+        if let Ordering::Equal = left.cmp(ctx, &right)? {
             Ok(Datum::Null)
         } else {
             Ok(left)
@@ -468,7 +468,7 @@ impl Evaluator {
         expr: &Expr,
         mt: ModifyType,
     ) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 2));
+        let children = self.eval_more_children(ctx, expr, 2)?;
         if is_even(children.len()) {
             return Err(Error::Expr(format!(
                 "expect odd number of operands, got {}",
@@ -491,35 +491,35 @@ impl Evaluator {
 
         let kv_len = children.len() / 2;
         let mut children = children.into_iter();
-        let mut json = try!(children.next().unwrap().cast_as_json());
+        let mut json = children.next().unwrap().cast_as_json()?;
         let mut keys = Vec::with_capacity(kv_len);
         let mut values = Vec::with_capacity(kv_len);
         while let Some(item) = children.next() {
-            let key = try!(item.to_json_path_expr());
-            let value = try!(children.next().unwrap().into_json());
+            let key = item.to_json_path_expr()?;
+            let value = children.next().unwrap().into_json()?;
             keys.push(key);
             values.push(value);
         }
 
-        try!(json.modify(&keys, values, mt));
+        json.modify(&keys, values, mt)?;
         Ok(Datum::Json(json))
     }
 
     fn eval_json_remove(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 2));
+        let children = self.eval_more_children(ctx, expr, 2)?;
         if children.iter().any(|item| *item == Datum::Null) {
             return Ok(Datum::Null);
         }
         let mut children = children.into_iter();
-        let mut json = try!(children.next().unwrap().cast_as_json());
+        let mut json = children.next().unwrap().cast_as_json()?;
         let path_extrs: Vec<PathExpression> =
-            try!(children.map(|item| item.to_json_path_expr()).collect());
-        try!(json.remove(&path_extrs));
+            children.map(|item| item.to_json_path_expr()).collect()?;
+        json.remove(&path_extrs)?;
         Ok(Datum::Json(json))
     }
 
     fn eval_json_unquote(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let child = try!(self.eval_one_child(ctx, expr));
+        let child = self.eval_one_child(ctx, expr)?;
         if child == Datum::Null {
             return Ok(Datum::Null);
         }
@@ -530,20 +530,20 @@ impl Evaluator {
         // +------------------------------+
         // | {"a":   "b"}                 |
         // +------------------------------+
-        let json = try!(child.into_json());
-        let unquote_data = try!(json.unquote());
+        let json = child.into_json()?;
+        let unquote_data = json.unquote()?;
         Ok(Datum::Bytes(unquote_data.into_bytes()))
     }
 
     fn eval_json_extract(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 2));
+        let children = self.eval_more_children(ctx, expr, 2)?;
         if children.iter().any(|item| *item == Datum::Null) {
             return Ok(Datum::Null);
         }
         let mut children = children.into_iter();
-        let json = try!(children.next().unwrap().cast_as_json());
+        let json = children.next().unwrap().cast_as_json()?;
         let path_extrs: Vec<PathExpression> =
-            try!(children.map(|item| item.to_json_path_expr()).collect());
+            children.map(|item| item.to_json_path_expr()).collect()?;
         if let Some(data) = json.extract(&path_extrs) {
             Ok(Datum::Json(data))
         } else {
@@ -552,38 +552,38 @@ impl Evaluator {
     }
 
     fn eval_json_type(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let child = try!(self.eval_one_child(ctx, expr));
+        let child = self.eval_one_child(ctx, expr)?;
         if Datum::Null == child {
             return Ok(Datum::Null);
         }
-        let json = try!(child.cast_as_json());
+        let json = child.cast_as_json()?;
         let json_type = json.json_type().to_vec();
         Ok(Datum::Bytes(json_type))
     }
 
     fn eval_json_merge(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 2));
+        let children = self.eval_more_children(ctx, expr, 2)?;
         if children.iter().any(|item| *item == Datum::Null) {
             return Ok(Datum::Null);
         }
         let mut children = children.into_iter();
-        let mut res = try!(children.next().unwrap().cast_as_json());
+        let mut res = children.next().unwrap().cast_as_json()?;
         for item in children {
-            let j = try!(item.cast_as_json());
+            let j = item.cast_as_json()?;
             res = res.merge(j);
         }
         Ok(Datum::Json(res))
     }
 
     fn eval_json_object(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 0));
-        let obj = try!(json_object(children));
+        let children = self.eval_more_children(ctx, expr, 0)?;
+        let obj = json_object(children)?;
         Ok(Datum::Json(obj))
     }
 
     fn eval_json_array(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 0));
-        let arr = try!(json_array(children));
+        let children = self.eval_more_children(ctx, expr, 0)?;
+        let arr = json_array(children)?;
         Ok(Datum::Json(arr))
     }
 
@@ -608,14 +608,14 @@ impl Evaluator {
     where
         F: FnOnce(Option<bool>, Option<bool>) -> Datum,
     {
-        let (left_expr, right_expr) = try!(self.get_two_children(expr));
-        let left_datum = try!(self.eval(ctx, left_expr));
-        let left = try!(left_datum.into_bool(ctx));
+        let (left_expr, right_expr) = self.get_two_children(expr)?;
+        let left_datum = self.eval(ctx, left_expr)?;
+        let left = left_datum.into_bool(ctx)?;
         if left == break_res {
             return Ok(left.into());
         }
-        let right_datum = try!(self.eval(ctx, right_expr));
-        let right = try!(right_datum.into_bool(ctx));
+        let right_datum = self.eval(ctx, right_expr)?;
+        let right = right_datum.into_bool(ctx)?;
         if right == break_res {
             return Ok(right.into());
         }
@@ -646,10 +646,10 @@ pub fn eval_arith<F>(ctx: &EvalContext, left: Datum, right: Datum, f: F) -> Resu
 where
     F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>,
 {
-    let left = try!(left.into_arith(ctx));
-    let right = try!(right.into_arith(ctx));
+    let left = left.into_arith(ctx)?;
+    let right = right.into_arith(ctx)?;
 
-    let (left, right) = try!(Datum::coerce(left, right));
+    let (left, right) = Datum::coerce(left, right)?;
     if left == Datum::Null || right == Datum::Null {
         return Ok(Datum::Null);
     }

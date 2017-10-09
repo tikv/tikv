@@ -59,22 +59,19 @@ impl<'s> DAGContext<'s> {
     }
 
     pub fn handle_request(mut self, statistics: &'s mut Statistics) -> Result<Response> {
-        try!(self.validate_dag());
-        let mut exec = try!(self.build_dag(statistics));
+        self.validate_dag()?;
+        let mut exec = self.build_dag(statistics)?;
         let mut chunks = vec![];
         loop {
             match exec.next() {
                 Ok(Some(row)) => {
-                    try!(self.req_ctx.check_if_outdated());
+                    self.req_ctx.check_if_outdated()?;
                     let chunk = get_chunk(&mut chunks);
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
-                        let value = try!(inflate_cols(
-                            &row,
-                            &self.columns,
-                            self.req.get_output_offsets()
-                        ));
+                        let value =
+                            inflate_cols(&row, &self.columns, self.req.get_output_offsets())?;
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                 }
@@ -102,11 +99,9 @@ impl<'s> DAGContext<'s> {
 
     fn validate_dag(&mut self) -> Result<()> {
         let execs = self.req.get_executors();
-        let first = try!(
-            execs
-                .first()
-                .ok_or_else(|| Error::Other(box_err!("has no executor")))
-        );
+        let first = execs
+            .first()
+            .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
         // check whether first exec is *scan and get the column info
         match first.get_tp() {
             ExecType::TypeTableScan => {
@@ -172,24 +167,24 @@ impl<'s> DAGContext<'s> {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"))
                 }
-                ExecType::TypeSelection => Box::new(try!(SelectionExecutor::new(
+                ExecType::TypeSelection => Box::new(SelectionExecutor::new(
                     exec.take_selection(),
                     self.eval_ctx.clone(),
                     self.columns.clone(),
                     src
-                ))),
-                ExecType::TypeAggregation => Box::new(try!(AggregationExecutor::new(
+                )?),
+                ExecType::TypeAggregation => Box::new(AggregationExecutor::new(
                     exec.take_aggregation(),
                     self.eval_ctx.clone(),
                     self.columns.clone(),
                     src
-                ))),
-                ExecType::TypeTopN => Box::new(try!(TopNExecutor::new(
+                )?),
+                ExecType::TypeTopN => Box::new(TopNExecutor::new(
                     exec.take_topN(),
                     self.eval_ctx.clone(),
                     self.columns.clone(),
                     src
-                ))),
+                )?),
                 ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
             };
             src = curr;

@@ -91,7 +91,7 @@ pub trait NumberEncoder: Write {
     /// Note that the encoded result is not memcomparable.
     fn encode_var_u64(&mut self, mut v: u64) -> Result<()> {
         while v >= 0x80 {
-            try!(self.write_u8(v as u8 | 0x80));
+            self.write_u8(v as u8 | 0x80)?;
             v >>= 7;
         }
         self.write_u8(v as u8).map_err(From::from)
@@ -152,13 +152,13 @@ pub trait NumberDecoder: Read {
 
     /// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
     fn decode_u64_desc(&mut self) -> Result<u64> {
-        let v = try!(self.read_u64::<BigEndian>());
+        let v = self.read_u64::<BigEndian>()?;
         Ok(!v)
     }
 
     /// `decode_var_i64` decodes value encoded by `encode_var_i64` before.
     fn decode_var_i64(&mut self) -> Result<i64> {
-        let v = try!(self.decode_var_u64());
+        let v = self.decode_var_u64()?;
         let mut vx = v >> 1;
         if v & 1 != 0 {
             vx = !vx;
@@ -170,7 +170,7 @@ pub trait NumberDecoder: Read {
     fn decode_var_u64(&mut self) -> Result<u64> {
         let (mut x, mut s, mut i) = (0, 0, 0);
         loop {
-            let b = try!(self.read_u8());
+            let b = self.read_u8()?;
             if b < 0x80 {
                 if i > 9 || i == 9 && b > 1 {
                     return Err(Error::Io(

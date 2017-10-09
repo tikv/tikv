@@ -60,7 +60,7 @@ impl<'a> SelectContext<'a> {
             req_ctx.fill_cache,
         );
         Ok(SelectContext {
-            core: try!(SelectContextCore::new(sel)),
+            core: SelectContextCore::new(sel)?,
             snap: snap,
             statistics: statistics,
             req_ctx: req_ctx,
@@ -103,14 +103,14 @@ impl<'a> SelectContext<'a> {
                 break;
             }
             let timer = Instant::now_coarse();
-            let row_cnt = try!(self.get_rows_from_range(ran));
+            let row_cnt = self.get_rows_from_range(ran)?;
             debug!(
                 "fetch {} rows takes {} ms",
                 row_cnt,
                 duration_to_ms(timer.elapsed())
             );
             collected += row_cnt;
-            try!(self.req_ctx.check_if_outdated());
+            self.req_ctx.check_if_outdated()?;
         }
         if self.core.topn {
             self.core.collect_topn_rows()
@@ -132,10 +132,9 @@ impl<'a> SelectContext<'a> {
         let mut row_count = 0;
         if is_point(&range) {
             CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
-            let value = match try!(
-                self.snap
-                    .get(&Key::from_raw(range.get_start()), &mut self.statistics)
-            ) {
+            let value = match self.snap
+                .get(&Key::from_raw(range.get_start()), &mut self.statistics)?
+            {
                 None => return Ok(0),
                 Some(v) => v,
             };
@@ -144,7 +143,7 @@ impl<'a> SelectContext<'a> {
                 box_try!(table::cut_row(value, ids))
             };
             let h = box_try!(table::decode_handle(range.get_start()));
-            row_count += try!(self.core.handle_row(h, values));
+            row_count += self.core.handle_row(h, values)?;
         } else {
             CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
             let mut seek_key = if self.core.desc_scan {
@@ -157,7 +156,7 @@ impl<'a> SelectContext<'a> {
             } else {
                 None
             };
-            let mut scanner = try!(self.snap.scanner(
+            let mut scanner = self.snap.scanner(
                 if self.core.desc_scan {
                     ScanMode::Backward
                 } else {
@@ -166,15 +165,15 @@ impl<'a> SelectContext<'a> {
                 self.key_only(),
                 upper_bound,
                 self.statistics
-            ));
+            )?;
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
-                    try!(self.req_ctx.check_if_outdated());
+                    self.req_ctx.check_if_outdated()?;
                 }
                 let kv = if self.core.desc_scan {
-                    try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
+                    scanner.reverse_seek(Key::from_raw(&seek_key))?
                 } else {
-                    try!(scanner.seek(Key::from_raw(&seek_key)))
+                    scanner.seek(Key::from_raw(&seek_key))?
                 };
                 let (key, value) = match kv {
                     Some((key, value)) => (box_try!(key.raw()), value),
@@ -194,7 +193,7 @@ impl<'a> SelectContext<'a> {
                     let ids = self.core.cols.as_ref().left().unwrap();
                     box_try!(table::cut_row(value, ids))
                 };
-                row_count += try!(self.core.handle_row(h, row_data));
+                row_count += self.core.handle_row(h, row_data)?;
                 seek_key = if self.core.desc_scan {
                     box_try!(table::truncate_as_row_key(&key)).to_vec()
                 } else {
@@ -211,8 +210,8 @@ impl<'a> SelectContext<'a> {
             if collected >= self.core.limit {
                 break;
             }
-            collected += try!(self.get_idx_row_from_range(r));
-            try!(self.req_ctx.check_if_outdated());
+            collected += self.get_idx_row_from_range(r)?;
+            self.req_ctx.check_if_outdated()?;
         }
         if self.core.topn {
             self.core.collect_topn_rows()
@@ -236,7 +235,7 @@ impl<'a> SelectContext<'a> {
         } else {
             None
         };
-        let mut scanner = try!(self.snap.scanner(
+        let mut scanner = self.snap.scanner(
             if self.core.desc_scan {
                 ScanMode::Backward
             } else {
@@ -245,15 +244,15 @@ impl<'a> SelectContext<'a> {
             self.key_only(),
             upper_bound,
             self.statistics
-        ));
+        )?;
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
-                try!(self.req_ctx.check_if_outdated());
+                self.req_ctx.check_if_outdated()?;
             }
             let nk = if self.core.desc_scan {
-                try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
+                scanner.reverse_seek(Key::from_raw(&seek_key))?
             } else {
-                try!(scanner.seek(Key::from_raw(&seek_key)))
+                scanner.seek(Key::from_raw(&seek_key))?
             };
             let (key, val) = match nk {
                 Some((key, val)) => (box_try!(key.raw()), val),
@@ -296,7 +295,7 @@ impl<'a> SelectContext<'a> {
                     let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
                     values.append(pk_col.get_column_id(), &mut bytes);
                 }
-                row_cnt += try!(self.core.handle_row(handle, values));
+                row_cnt += self.core.handle_row(handle, values)?;
             }
         }
         Ok(row_cnt)
@@ -341,22 +340,14 @@ impl SelectContextCore {
             let mut cond_col_map = HashMap::default();
             if sel.has_field_where() {
                 COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
-                try!(collect_col_in_expr(
-                    &mut cond_col_map,
-                    select_cols,
-                    sel.get_field_where()
-                ));
+                collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where())?;
             }
             let mut aggr_cols_map = HashMap::default();
             for aggr in sel.get_aggregates() {
-                try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, aggr));
+                collect_col_in_expr(&mut aggr_cols_map, select_cols, aggr)?;
             }
             for item in sel.get_group_by() {
-                try!(collect_col_in_expr(
-                    &mut aggr_cols_map,
-                    select_cols,
-                    item.get_expr()
-                ));
+                collect_col_in_expr(&mut aggr_cols_map, select_cols, item.get_expr())?;
             }
             if !aggr_cols_map.is_empty() {
                 for cond_col in cond_col_map.keys() {
@@ -369,11 +360,7 @@ impl SelectContextCore {
             // get topn cols
             let mut topn_col_map = HashMap::default();
             for item in sel.get_order_by() {
-                try!(collect_col_in_expr(
-                    &mut topn_col_map,
-                    select_cols,
-                    item.get_expr()
-                ))
+                collect_col_in_expr(&mut topn_col_map, select_cols, item.get_expr())?
             }
             topn_cols = topn_col_map.into_iter().map(|(_, v)| v).collect();
             order_by_cols.extend_from_slice(sel.get_order_by())
@@ -445,7 +432,7 @@ impl SelectContextCore {
             topn: topn,
             topn_heap: {
                 if topn {
-                    Some(try!(TopNHeap::new(limit)))
+                    Some(TopNHeap::new(limit)?)
                 } else {
                     None
                 }
@@ -459,19 +446,19 @@ impl SelectContextCore {
     fn handle_row(&mut self, h: i64, row_data: RowColsDict) -> Result<usize> {
         // clear all dirty values.
         self.eval.row.clear();
-        if try!(self.should_skip(h, &row_data)) {
+        if self.should_skip(h, &row_data)? {
             return Ok(0);
         }
 
         // topn & aggr won't appear together
         if self.topn {
-            try!(self.collect_topn_row(h, row_data));
+            self.collect_topn_row(h, row_data)?;
             Ok(0)
         } else if self.aggr {
-            try!(self.aggregate(h, &row_data));
+            self.aggregate(h, &row_data)?;
             Ok(0)
         } else {
-            try!(self.get_row(h, row_data));
+            self.get_row(h, row_data)?;
             Ok(1)
         }
     }
@@ -480,26 +467,14 @@ impl SelectContextCore {
         if !self.sel.has_field_where() {
             return Ok(false);
         }
-        try!(inflate_with_col(
-            &mut self.eval,
-            &self.ctx,
-            values,
-            &self.cond_cols,
-            h
-        ));
+        inflate_with_col(&mut self.eval, &self.ctx, values, &self.cond_cols, h)?;
         let res = box_try!(self.eval.eval(&self.ctx, self.sel.get_field_where()));
         let b = box_try!(res.into_bool(&self.ctx));
         Ok(b.map_or(true, |v| !v))
     }
 
     fn collect_topn_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
-        try!(inflate_with_col(
-            &mut self.eval,
-            &self.ctx,
-            &values,
-            &self.topn_cols,
-            h
-        ));
+        inflate_with_col(&mut self.eval, &self.ctx, &values, &self.topn_cols, h)?;
         let mut sort_keys = Vec::with_capacity(self.sel.get_order_by().len());
         // parse order by
         for col in self.sel.get_order_by() {
@@ -572,14 +547,8 @@ impl SelectContextCore {
     }
 
     fn aggregate(&mut self, h: i64, values: &RowColsDict) -> Result<()> {
-        try!(inflate_with_col(
-            &mut self.eval,
-            &self.ctx,
-            values,
-            &self.aggr_cols,
-            h
-        ));
-        let gk = Rc::new(try!(self.get_group_key()));
+        inflate_with_col(&mut self.eval, &self.ctx, values, &self.aggr_cols, h)?;
+        let gk = Rc::new(self.get_group_key()?);
         let aggr_exprs = self.sel.get_aggregates();
         match self.gk_aggrs.entry(gk.clone()) {
             Entry::Occupied(e) => {
@@ -587,15 +556,15 @@ impl SelectContextCore {
                 for (expr, func) in aggr_exprs.iter().zip(funcs) {
                     // TODO: cache args
                     let args = box_try!(self.eval.batch_eval(&self.ctx, expr.get_children()));
-                    try!(func.update(&self.ctx, args));
+                    func.update(&self.ctx, args)?;
                 }
             }
             Entry::Vacant(e) => {
                 let mut aggrs = Vec::with_capacity(aggr_exprs.len());
                 for expr in aggr_exprs {
-                    let mut aggr = try!(aggregate::build_aggr_func(expr.get_tp()));
+                    let mut aggr = aggregate::build_aggr_func(expr.get_tp())?;
                     let args = box_try!(self.eval.batch_eval(&self.ctx, expr.get_children()));
-                    try!(aggr.update(&self.ctx, args));
+                    aggr.update(&self.ctx, args)?;
                     aggrs.push(aggr);
                 }
                 self.gks.push(gk);
@@ -606,9 +575,9 @@ impl SelectContextCore {
     }
 
     fn collect_topn_rows(&mut self) -> Result<()> {
-        let sorted_data = try!(self.topn_heap.take().unwrap().into_sorted_vec());
+        let sorted_data = self.topn_heap.take().unwrap().into_sorted_vec()?;
         for row in sorted_data {
-            try!(self.get_row(row.handle, row.data));
+            self.get_row(row.handle, row.data)?;
         }
         Ok(())
     }
@@ -632,7 +601,7 @@ impl SelectContextCore {
             // The first column is group key.
             row_data.push(Datum::Bytes(Rc::try_unwrap(gk).unwrap()));
             for mut aggr in aggrs {
-                try!(aggr.calc(&mut row_data));
+                aggr.calc(&mut row_data)?;
             }
             let last_len = chunk.get_rows_data().len();
             box_try!(datum::encode_to(chunk.mut_rows_data(), &row_data, false));
@@ -663,7 +632,7 @@ fn collect_col_in_expr(
         }
     }
     for c in expr.get_children() {
-        try!(collect_col_in_expr(cols, col_meta, c));
+        collect_col_in_expr(cols, col_meta, c)?;
     }
     Ok(())
 }

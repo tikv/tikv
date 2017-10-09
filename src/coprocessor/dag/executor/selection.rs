@@ -40,7 +40,7 @@ impl<'a> SelectionExecutor<'a> {
     ) -> Result<SelectionExecutor<'a>> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
-        try!(visitor.batch_visit(&conditions));
+        visitor.batch_visit(&conditions)?;
         COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
         Ok(SelectionExecutor {
             conditions: box_try!(Expression::batch_build(ctx.as_ref(), conditions)),
@@ -55,14 +55,14 @@ impl<'a> SelectionExecutor<'a> {
 #[allow(never_loop)]
 impl<'a> Executor for SelectionExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
-        'next: while let Some(row) = try!(self.src.next()) {
-            let cols = try!(inflate_with_col_for_dag(
+        'next: while let Some(row) = self.src.next()? {
+            let cols = inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
                 self.cols.clone(),
                 &self.related_cols_offset,
                 row.handle
-            ));
+            )?;
             for filter in &self.conditions {
                 let val = box_try!(filter.eval(&self.ctx, &cols));
                 if !box_try!(val.into_bool(&self.ctx)).unwrap_or(false) {

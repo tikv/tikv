@@ -121,7 +121,7 @@ fn send_snap(
 
     let key = {
         let snap = msg.get_message().get_snapshot();
-        try!(SnapKey::from_snap(snap))
+        SnapKey::from_snap(snap)?
     };
     mgr.register(key.clone(), SnapEntry::Sending);
     defer!({
@@ -131,7 +131,7 @@ fn send_snap(
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
-    let total_size = try!(s.total_size());
+    let total_size = s.total_size()?;
 
     // snapshot file has been validated when created, so no need to validate again.
     let s = Arc::new(RwLock::new(s));
