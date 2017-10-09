@@ -68,7 +68,7 @@ pub enum Task {
         region: metapb::Region,
         peer: metapb::Peer,
     },
-    CopReadStats { read_stats: CopRequestStatistics },
+    ReadStats { read_stats: CopRequestStatistics },
 }
 
 #[derive(Default)]
@@ -121,8 +121,8 @@ impl Display for Task {
                 ref region,
                 ref peer,
             } => write!(f, "validate peer {:?} with region {:?}", peer, region),
-            Task::CopReadStats { ref read_stats } => {
-                write!(f, "coprocessor get the read statistics {:?}", read_stats)
+            Task::ReadStats { ref read_stats } => {
+                write!(f, "get the read statistics {:?}", read_stats)
             }
         }
     }
@@ -427,9 +427,9 @@ impl<T: PdClient> Runner<T> {
         self.is_hb_receiver_scheduled = true;
     }
 
-    fn handle_coprocessor_read_stats(&mut self, read_stats: CopRequestStatistics) {
+    fn handle_read_stats(&mut self, read_stats: CopRequestStatistics) {
         PD_REQ_COUNTER_VEC
-            .with_label_values(&["coprocessor read stats", "all"])
+            .with_label_values(&["read stats", "all"])
             .inc();
         for (region_id, stats) in read_stats {
             let mut peer_stat = self.region_peers
@@ -498,7 +498,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             }
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
-            Task::CopReadStats { read_stats } => self.handle_coprocessor_read_stats(read_stats),
+            Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
         };
     }
 }
