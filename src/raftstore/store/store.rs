@@ -187,7 +187,9 @@ where
 {
     let mut config = EventLoopBuilder::new();
     // To make raft base tick more accurate, timer tick should be small enough.
-    config.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval.as_millis() / MIO_TICK_RATIO));
+    config.timer_tick(Duration::from_millis(
+        cfg.raft_base_tick_interval.as_millis() / MIO_TICK_RATIO,
+    ));
     config.notify_capacity(cfg.notify_capacity);
     config.messages_per_tick(cfg.messages_per_tick);
     let event_loop = try!(config.build());
