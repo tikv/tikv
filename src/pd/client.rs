@@ -80,7 +80,7 @@ macro_rules! check_and_observe_resp {
             Ok(_) => "ok",
             Err(_) => "err",
         };
-        PD_REQUEST_HISTOGRAM
+        PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&[$label, result_label])
             .observe(duration_to_sec($timer.elapsed()));
         try!(result)
@@ -97,21 +97,17 @@ impl PdClient for RpcClient {
     fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()> {
         let label = "bootstrap_cluster";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::BootstrapRequest::new();
         req.set_header(self.header());
         req.set_store(stores);
         req.set_region(region);
 
-        let resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.bootstrap_opt(req.clone(), option)
-            }
-        ));
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.bootstrap_opt(req.clone(), option)
+        })?;
 
         check_and_observe_resp!(resp, label, timer);
         Ok(())
@@ -120,19 +116,15 @@ impl PdClient for RpcClient {
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
         let label = "is_cluster_bootstrapped";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::IsBootstrappedRequest::new();
         req.set_header(self.header());
 
-        let resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.is_bootstrapped_opt(req.clone(), option)
-            }
-        ));
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.is_bootstrapped_opt(req.clone(), option)
+        })?;
 
         check_and_observe_resp!(resp, label, timer);
         Ok(resp.get_bootstrapped())
@@ -141,19 +133,15 @@ impl PdClient for RpcClient {
     fn alloc_id(&self) -> Result<u64> {
         let label = "alloc_id";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::AllocIDRequest::new();
         req.set_header(self.header());
 
-        let resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.alloc_id_opt(req.clone(), option)
-            }
-        ));
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.alloc_id_opt(req.clone(), option)
+        })?;
 
         check_and_observe_resp!(resp, label, timer);
         Ok(resp.get_id())
@@ -162,20 +150,16 @@ impl PdClient for RpcClient {
     fn put_store(&self, store: metapb::Store) -> Result<()> {
         let label = "put_store";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::PutStoreRequest::new();
         req.set_header(self.header());
         req.set_store(store);
 
-        let resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.put_store_opt(req.clone(), option)
-            }
-        ));
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.put_store_opt(req.clone(), option)
+        })?;
 
         check_and_observe_resp!(resp, label, timer);
         Ok(())
@@ -184,20 +168,16 @@ impl PdClient for RpcClient {
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
         let label = "get_store";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::GetStoreRequest::new();
         req.set_header(self.header());
         req.set_store_id(store_id);
 
-        let mut resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.get_store_opt(req.clone(), option)
-            }
-        ));
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_store_opt(req.clone(), option)
+        })?;
 
         check_and_observe_resp!(resp, label, timer);
         Ok(resp.take_store())
@@ -206,19 +186,15 @@ impl PdClient for RpcClient {
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
         let label = "get_cluster_config";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::GetClusterConfigRequest::new();
         req.set_header(self.header());
 
-        let mut resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.get_cluster_config_opt(req.clone(), option)
-            }
-        ));
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_cluster_config_opt(req.clone(), option)
+        })?;
 
         check_and_observe_resp!(resp, label, timer);
         Ok(resp.take_cluster())
@@ -227,20 +203,16 @@ impl PdClient for RpcClient {
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
         let label = "get_region";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::GetRegionRequest::new();
         req.set_header(self.header());
         req.set_region_key(key.to_vec());
 
-        let mut resp = try!(sync_request(
-            &self.leader_client,
-            LEADER_CHANGE_RETRY,
-            |client| {
-                let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-                client.get_region_opt(req.clone(), option)
-            }
-        ));
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_region_opt(req.clone(), option)
+        })?;
 
         check_and_observe_resp!(resp, label, timer);
         Ok(resp.take_region())
@@ -249,7 +221,7 @@ impl PdClient for RpcClient {
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         let label = "get_region_by_id";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::GetRegionByIDRequest::new();
         req.set_header(self.header());
@@ -280,7 +252,7 @@ impl PdClient for RpcClient {
         region_stat: RegionStat,
     ) -> PdFuture<()> {
         let label = "region_heartbeat";
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::RegionHeartbeatRequest::new();
         req.set_header(self.header());
@@ -342,7 +314,7 @@ impl PdClient for RpcClient {
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
         let label = "ask_split";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::AskSplitRequest::new();
         req.set_header(self.header());
@@ -365,7 +337,7 @@ impl PdClient for RpcClient {
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
         let label = "store_heartbeat";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::StoreHeartbeatRequest::new();
         req.set_header(self.header());
@@ -388,7 +360,7 @@ impl PdClient for RpcClient {
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()> {
         let label = "report_split";
         let timer = Instant::now();
-        PD_REQUEST_COUNTER.with_label_values(&[label]).inc();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let mut req = pdpb::ReportSplitRequest::new();
         req.set_header(self.header());

@@ -14,14 +14,14 @@
 use prometheus::*;
 
 lazy_static! {
-    pub static ref PD_REQUEST_COUNTER: CounterVec =
+    pub static ref PD_REQUEST_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_pd_request_total",
             "Total number of PD requests handled",
             &["type"]
         ).unwrap();
 
-    pub static ref PD_REQUEST_HISTOGRAM: HistogramVec =
+    pub static ref PD_REQUEST_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_pd_request_duration_seconds",
             "Bucketed histogram of PD request duration",

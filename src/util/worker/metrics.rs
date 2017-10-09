@@ -11,13 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::GaugeVec;
+use prometheus::*;
 
 lazy_static! {
-    pub static ref PENDING_TASKS: GaugeVec =
+    pub static ref WORKER_PENDING_TASKS_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_worker_pending_task_total",
             "Pending task count of a worker.",
+            &["name"]
+        ).unwrap();
+
+    pub static ref WORKER_TASK_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_worker_task_duration_seconds",
+            "Bucketed histogram of worker task run duration",
             &["name"]
         ).unwrap();
 }

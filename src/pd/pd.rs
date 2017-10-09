@@ -349,6 +349,8 @@ impl<T: PdClient> Runner<T> {
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     send_admin_request(&ch, region_id, epoch, peer, req, None)
+                } else {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
             })
             .map_err(|e| panic!("unexpected error: {:?}", e))

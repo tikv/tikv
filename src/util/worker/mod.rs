@@ -109,7 +109,9 @@ impl<T: Display> Scheduler<T> {
             return Err(Stopped(t));
         }
         self.counter.fetch_add(1, Ordering::SeqCst);
-        PENDING_TASKS.with_label_values(&[&self.name]).inc();
+        WORKER_PENDING_TASKS_VEC
+            .with_label_values(&[&self.name])
+            .inc();
         Ok(())
     }
 
@@ -170,7 +172,7 @@ where
             }
         }
         counter.fetch_sub(buffer.len(), Ordering::SeqCst);
-        PENDING_TASKS
+        WORKER_PENDING_TASKS_VEC
             .with_label_values(&[&name])
             .sub(buffer.len() as f64);
         runner.run_batch(&mut buffer);
