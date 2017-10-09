@@ -106,12 +106,12 @@ impl Channel<RaftMessage> for ChannelTransport {
                     .deregister(&key, &SnapEntry::Receiving);
             });
 
-            try!(copy_snapshot(from, to));
+            copy_snapshot(from, to)?;
         }
 
         match self.core.rl().routers.get(&to_store) {
             Some(h) => {
-                try!(h.send_raft_msg(msg));
+                h.send_raft_msg(msg)?;
                 if is_snapshot {
                     // should report snapshot finish.
                     let core = self.rl();

@@ -104,7 +104,7 @@ impl Key {
             Err(codec::Error::KeyLength)
         } else {
             let mut ts = &self.0[len - number::U64_SIZE..];
-            Ok(try!(ts.decode_u64_desc()))
+            Ok(ts.decode_u64_desc()?)
         }
     }
 
@@ -156,7 +156,7 @@ pub fn split_encoded_key_on_ts(key: &[u8]) -> Result<(&[u8], u64), codec::Error>
         let pos = key.len() - number::U64_SIZE;
         let k = &key[..pos];
         let mut ts = &key[pos..];
-        Ok((k, try!(ts.decode_u64_desc())))
+        Ok((k, ts.decode_u64_desc()?))
     }
 }
 

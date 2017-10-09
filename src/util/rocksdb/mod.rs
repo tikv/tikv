@@ -114,12 +114,12 @@ fn check_and_open(
             cfs_v.push(x.cf);
             cf_opts_v.push(x.options.clone());
         }
-        let mut db = try!(DB::open_cf(db_opt, path, cfs_v, cf_opts_v));
+        let mut db = DB::open_cf(db_opt, path, cfs_v, cf_opts_v)?;
         for x in cfs_opts {
             if x.cf == CF_DEFAULT {
                 continue;
             }
-            try!(db.create_cf(x.cf, x.options));
+            db.create_cf(x.cf, x.options)?;
         }
 
         return Ok(db);
@@ -128,7 +128,7 @@ fn check_and_open(
     db_opt.create_if_missing(false);
 
     // List all column families in current db.
-    let cfs_list = try!(DB::list_column_families(&db_opt, path));
+    let cfs_list = DB::list_column_families(&db_opt, path)?;
     let existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
     let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
 
@@ -165,23 +165,21 @@ fn check_and_open(
     for cf in cfs_diff(&existed, &needed) {
         // Never drop default column families.
         if cf != CF_DEFAULT {
-            try!(db.drop_cf(cf));
+            db.drop_cf(cf)?;
         }
     }
 
     // Create needed column families not existed yet.
     for cf in cfs_diff(&needed, &existed) {
-        try!(
-            db.create_cf(
-                cf,
-                cfs_opts
-                    .iter()
-                    .find(|x| x.cf == cf)
-                    .unwrap()
-                    .options
-                    .clone()
-            )
-        );
+        db.create_cf(
+            cf,
+            cfs_opts
+                .iter()
+                .find(|x| x.cf == cf)
+                .unwrap()
+                .options
+                .clone(),
+        )?;
     }
 
     Ok(db)
@@ -324,7 +322,7 @@ pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Resul
     }
 
     for cf in db.cf_names() {
-        let handle = try!(get_cf_handle(db, cf));
+        let handle = get_cf_handle(db, cf)?;
         if cf == CF_LOCK {
             // Todo: use delete_files_in_range after rocksdb support [start, end) semantics.
             let mut iter_opt = ReadOptions::new();
@@ -334,14 +332,14 @@ pub fn roughly_cleanup_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Resul
             iter.seek(start_key.into());
             let wb = WriteBatch::new();
             while iter.valid() {
-                try!(wb.delete_cf(handle, iter.key()));
+                wb.delete_cf(handle, iter.key())?;
                 iter.next();
             }
             if wb.count() > 0 {
-                try!(db.write(wb));
+                db.write(wb)?;
             }
         } else {
-            try!(db.delete_file_in_range_cf(handle, start_key, end_key));
+            db.delete_file_in_range_cf(handle, start_key, end_key)?;
         }
     }
 
