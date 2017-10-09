@@ -19,11 +19,11 @@ use coprocessor::codec::mysql::Decimal;
 
 impl FnCall {
     pub fn logical_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
+        let arg0 = self.children[0].eval_int(ctx, row)?;
         if arg0.map_or(false, |v| v == 0) {
             return Ok(Some(0));
         }
-        let arg1 = try!(self.children[1].eval_int(ctx, row));
+        let arg1 = self.children[1].eval_int(ctx, row)?;
         if arg1.map_or(false, |v| v == 0) {
             return Ok(Some(0));
         }
@@ -34,7 +34,7 @@ impl FnCall {
     }
 
     pub fn logical_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg0 = try!(self.children[0].eval_int(ctx, row));
+        let arg0 = self.children[0].eval_int(ctx, row)?;
         if arg0.map_or(false, |v| v != 0) {
             return Ok(Some(1));
         }
@@ -53,34 +53,34 @@ impl FnCall {
     }
 
     pub fn int_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let v = try!(self.children[0].eval_int(ctx, row));
+        let v = self.children[0].eval_int(ctx, row)?;
         let ret = v.map_or(0, |v| (v != 0) as i64);
         Ok(Some(ret))
     }
 
     pub fn real_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try!(self.children[0].eval_real(ctx, row));
+        let input = self.children[0].eval_real(ctx, row)?;
         Ok(Some(input.map_or(0, |i| (i != 0f64) as i64)))
     }
 
     pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try!(self.children[0].eval_decimal(ctx, row));
+        let input = self.children[0].eval_decimal(ctx, row)?;
         Ok(Some(input.map_or(0, |dec| !dec.is_zero() as i64)))
     }
 
     pub fn int_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try!(self.children[0].eval_int(ctx, row));
+        let input = self.children[0].eval_int(ctx, row)?;
         Ok(Some(input.map_or(0, |i| (i == 0) as i64)))
     }
 
     pub fn real_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let v = try!(self.children[0].eval_real(ctx, row));
+        let v = self.children[0].eval_real(ctx, row)?;
         let ret = v.map_or(0, |v| (v == 0f64) as i64);
         Ok(Some(ret))
     }
 
     pub fn decimal_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let v = try!(self.children[0].eval_decimal(ctx, row));
+        let v = self.children[0].eval_decimal(ctx, row)?;
         let ret = v.map_or(0, |v| v.is_zero() as i64);
         Ok(Some(ret))
     }
@@ -120,37 +120,37 @@ impl FnCall {
     }
 
     pub fn decimal_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try!(self.children[0].eval_decimal(ctx, row));
+        let arg = self.children[0].eval_decimal(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
     pub fn int_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try!(self.children[0].eval_int(ctx, row));
+        let arg = self.children[0].eval_int(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
     pub fn real_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try!(self.children[0].eval_real(ctx, row));
+        let arg = self.children[0].eval_real(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
     pub fn string_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try!(self.children[0].eval_string(ctx, row));
+        let arg = self.children[0].eval_string(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
     pub fn time_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try!(self.children[0].eval_time(ctx, row));
+        let arg = self.children[0].eval_time(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
     pub fn duration_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try!(self.children[0].eval_duration(ctx, row));
+        let arg = self.children[0].eval_duration(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
     pub fn json_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try!(self.children[0].eval_json(ctx, row));
+        let arg = self.children[0].eval_json(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 

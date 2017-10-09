@@ -90,7 +90,7 @@ impl<'a> IndexScanExecutor<'a> {
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
-        let kv = try!(self.scanner.next_row(range));
+        let kv = self.scanner.next_row(range)?;
         let (key, value) = match kv {
             Some((key, value)) => (key, value),
             None => return Ok(None),
@@ -128,7 +128,7 @@ impl<'a> IndexScanExecutor<'a> {
 impl<'a> Executor for IndexScanExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         while self.cursor < self.key_ranges.len() {
-            let data = try!(self.get_row_from_range());
+            let data = self.get_row_from_range()?;
             if data.is_none() {
                 CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 self.scanner.set_seek_key(None);

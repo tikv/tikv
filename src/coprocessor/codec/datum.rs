@@ -103,7 +103,7 @@ impl Datum {
             if let Datum::Json(_) = *datum {
             } else {
                 // reverse compare when self is json while datum not.
-                let order = try!(datum.cmp(ctx, self));
+                let order = datum.cmp(ctx, self)?;
                 return Ok(order.reverse());
             }
         }
@@ -165,11 +165,11 @@ impl Datum {
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
             Datum::Bytes(ref bs) => {
-                let ff = try!(convert::bytes_to_f64(ctx, bs));
+                let ff = convert::bytes_to_f64(ctx, bs)?;
                 cmp_f64(ff, f)
             }
             Datum::Dec(ref d) => {
-                let ff = try!(d.as_f64());
+                let ff = d.as_f64()?;
                 cmp_f64(ff, f)
             }
             Datum::Dur(ref d) => {
@@ -177,7 +177,7 @@ impl Datum {
                 cmp_f64(ff, f)
             }
             Datum::Time(ref t) => {
-                let ff = try!(t.to_f64());
+                let ff = t.to_f64()?;
                 cmp_f64(ff, f)
             }
             Datum::Json(ref json) => Datum::F64(f).cmp_json(json),
@@ -190,21 +190,21 @@ impl Datum {
             Datum::Max => Ok(Ordering::Greater),
             Datum::Bytes(ref bss) => Ok((bss as &[u8]).cmp(bs)),
             Datum::Dec(ref d) => {
-                let s = try!(str::from_utf8(bs));
-                let d2 = try!(s.parse());
+                let s = str::from_utf8(bs)?;
+                let d2 = s.parse()?;
                 Ok(d.cmp(&d2))
             }
             Datum::Time(ref t) => {
-                let s = try!(str::from_utf8(bs));
-                let t2 = try!(Time::parse_datetime(s, DEFAULT_FSP, &ctx.tz));
+                let s = str::from_utf8(bs)?;
+                let t2 = Time::parse_datetime(s, DEFAULT_FSP, &ctx.tz)?;
                 Ok(t.cmp(&t2))
             }
             Datum::Dur(ref d) => {
-                let d2 = try!(Duration::parse(bs, MAX_FSP));
+                let d2 = Duration::parse(bs, MAX_FSP)?;
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = try!(convert::bytes_to_f64(ctx, bs));
+                let f = convert::bytes_to_f64(ctx, bs)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -214,12 +214,12 @@ impl Datum {
         match *self {
             Datum::Dec(ref d) => Ok(d.cmp(dec)),
             Datum::Bytes(ref bs) => {
-                let s = try!(str::from_utf8(bs));
-                let d = try!(s.parse::<Decimal>());
+                let s = str::from_utf8(bs)?;
+                let d = s.parse::<Decimal>()?;
                 Ok(d.cmp(dec))
             }
             _ => {
-                let f = try!(dec.as_f64());
+                let f = dec.as_f64()?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -229,7 +229,7 @@ impl Datum {
         match *self {
             Datum::Dur(ref d2) => Ok(d2.cmp(d)),
             Datum::Bytes(ref bs) => {
-                let d2 = try!(Duration::parse(bs, MAX_FSP));
+                let d2 = Duration::parse(bs, MAX_FSP)?;
                 Ok(d2.cmp(d))
             }
             _ => self.cmp_f64(ctx, d.to_secs()),
@@ -239,13 +239,13 @@ impl Datum {
     fn cmp_time(&self, ctx: &EvalContext, time: &Time) -> Result<Ordering> {
         match *self {
             Datum::Bytes(ref bs) => {
-                let s = try!(str::from_utf8(bs));
-                let t = try!(Time::parse_datetime(s, DEFAULT_FSP, &ctx.tz));
+                let s = str::from_utf8(bs)?;
+                let t = Time::parse_datetime(s, DEFAULT_FSP, &ctx.tz)?;
                 Ok(t.cmp(time))
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
             _ => {
-                let f = try!(time.to_f64());
+                let f = time.to_f64()?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -258,11 +258,11 @@ impl Datum {
             Datum::U64(d) => Json::U64(d).cmp(json),
             Datum::F64(d) => Json::Double(d).cmp(json),
             Datum::Dec(ref d) => {
-                let ff = try!(d.as_f64());
+                let ff = d.as_f64()?;
                 Json::Double(ff).cmp(json)
             }
             Datum::Bytes(ref d) => {
-                let data = try!(str::from_utf8(d));
+                let data = str::from_utf8(d)?;
                 Json::String(String::from(data)).cmp(json)
             }
             _ => {
@@ -280,12 +280,10 @@ impl Datum {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => {
-                Some(!bs.is_empty() && try!(convert::bytes_to_int(ctx, bs)) != 0)
-            }
+            Datum::Bytes(ref bs) => Some(!bs.is_empty() && convert::bytes_to_int(ctx, bs)? != 0),
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_empty()),
-            Datum::Dec(d) => Some(try!(d.as_f64()).round() != 0f64),
+            Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {:?} to bool", self)),
         };
@@ -297,7 +295,7 @@ impl Datum {
             Datum::I64(i) => format!("{}", i),
             Datum::U64(u) => format!("{}", u),
             Datum::F64(f) => format!("{}", f),
-            Datum::Bytes(ref bs) => try!(String::from_utf8(bs.to_vec())),
+            Datum::Bytes(ref bs) => String::from_utf8(bs.to_vec())?,
             Datum::Time(ref t) => format!("{}", t),
             Datum::Dur(ref d) => format!("{}", d),
             Datum::Dec(ref d) => format!("{}", d),
@@ -311,7 +309,7 @@ impl Datum {
     /// source function name is `ToString`.
     pub fn into_string(self) -> Result<String> {
         if let Datum::Bytes(bs) = self {
-            let data = try!(String::from_utf8(bs));
+            let data = String::from_utf8(bs)?;
             Ok(data)
         } else {
             self.to_string()
@@ -327,11 +325,11 @@ impl Datum {
             Datum::F64(f) => Ok(f),
             Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs),
             Datum::Time(t) => {
-                let d = try!(t.to_decimal());
+                let d = t.to_decimal()?;
                 d.as_f64()
             }
             Datum::Dur(d) => {
-                let d = try!(d.to_decimal());
+                let d = d.to_decimal()?;
                 d.as_f64()
             }
             Datum::Dec(d) => d.as_f64(),
@@ -375,14 +373,14 @@ impl Datum {
             Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
-                let dec = try!(t.to_decimal());
+                let dec = t.to_decimal()?;
                 if t.get_fsp() == 0 {
                     return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
                 Ok(Datum::Dec(dec))
             }
             Datum::Dur(d) => {
-                let dec = try!(d.to_decimal());
+                let dec = d.to_decimal()?;
                 if d.get_fsp() == 0 {
                     return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
@@ -397,7 +395,7 @@ impl Datum {
         match self {
             Datum::Time(t) => t.to_decimal().map_err(From::from),
             Datum::Dur(d) => d.to_decimal().map_err(From::from),
-            d => match try!(d.coerce_to_dec()) {
+            d => match d.coerce_to_dec()? {
                 Datum::Dec(d) => Ok(d),
                 d => Err(box_err!("failed to conver {} to decimal", d)),
             },
@@ -417,19 +415,19 @@ impl Datum {
         match self {
             Datum::Bytes(ref bs) => {
                 let s = box_try!(str::from_utf8(bs));
-                let json: Json = try!(s.parse());
+                let json: Json = s.parse()?;
                 Ok(json)
             }
             Datum::I64(d) => Ok(Json::I64(d)),
             Datum::U64(d) => Ok(Json::U64(d)),
             Datum::F64(d) => Ok(Json::Double(d)),
             Datum::Dec(d) => {
-                let ff = try!(d.as_f64());
+                let ff = d.as_f64()?;
                 Ok(Json::Double(ff))
             }
             Datum::Json(d) => Ok(d),
             _ => {
-                let s = try!(self.into_string());
+                let s = self.into_string()?;
                 Ok(Json::String(s))
             }
         }
@@ -442,7 +440,7 @@ impl Datum {
         match self {
             Datum::Null => Ok(Json::None),
             Datum::Bytes(bs) => {
-                let s = try!(String::from_utf8(bs));
+                let s = String::from_utf8(bs)?;
                 Ok(Json::String(s))
             }
             _ => self.cast_as_json(),
@@ -451,7 +449,7 @@ impl Datum {
 
     pub fn to_json_path_expr(&self) -> Result<PathExpression> {
         let v = match *self {
-            Datum::Bytes(ref bs) => try!(str::from_utf8(bs)),
+            Datum::Bytes(ref bs) => str::from_utf8(bs)?,
             _ => "",
         };
         parse_json_path_expr(v)
@@ -463,10 +461,10 @@ impl Datum {
         let dec = match self {
             Datum::I64(i) => i.into(),
             Datum::U64(u) => u.into(),
-            Datum::F64(f) => try!(Decimal::from_f64(f)),
+            Datum::F64(f) => Decimal::from_f64(f)?,
             Datum::Bytes(ref bs) => {
                 let s = box_try!(str::from_utf8(bs));
-                try!(Decimal::from_str(s))
+                Decimal::from_str(s)?
             }
             d @ Datum::Dec(_) => return Ok(d),
             _ => return Err(box_err!("failed to convert {} to decimal", self)),
@@ -480,7 +478,7 @@ impl Datum {
             Datum::I64(i) => Ok(Datum::F64(i as f64)),
             Datum::U64(u) => Ok(Datum::F64(u as f64)),
             Datum::Dec(d) => {
-                let f = try!(d.as_f64());
+                let f = d.as_f64()?;
                 Ok(Datum::F64(f))
             }
             a => Ok(a),
@@ -494,10 +492,10 @@ impl Datum {
     pub fn coerce(left: Datum, right: Datum) -> Result<(Datum, Datum)> {
         let res = match (left, right) {
             a @ (Datum::Dec(_), Datum::Dec(_)) | a @ (Datum::F64(_), Datum::F64(_)) => a,
-            (l @ Datum::F64(_), r) => (l, try!(r.coerce_to_f64())),
-            (l, r @ Datum::F64(_)) => (try!(l.coerce_to_f64()), r),
-            (l @ Datum::Dec(_), r) => (l, try!(r.coerce_to_dec())),
-            (l, r @ Datum::Dec(_)) => (try!(l.coerce_to_dec()), r),
+            (l @ Datum::F64(_), r) => (l, r.coerce_to_f64()?),
+            (l, r @ Datum::F64(_)) => (l.coerce_to_f64()?, r),
+            (l @ Datum::Dec(_), r) => (l, r.coerce_to_dec()?),
+            (l, r @ Datum::Dec(_)) => (l.coerce_to_dec()?, r),
             p => p,
         };
         Ok(res)
@@ -506,19 +504,19 @@ impl Datum {
     pub fn checked_div(self, ctx: &EvalContext, d: Datum) -> Result<Datum> {
         match (self, d) {
             (Datum::F64(f), d) => {
-                let f2 = try!(d.into_f64(ctx));
+                let f2 = d.into_f64(ctx)?;
                 if f2 == 0f64 {
                     return Ok(Datum::Null);
                 }
                 Ok(Datum::F64(f / f2))
             }
             (a, b) => {
-                let a = try!(a.into_dec());
-                let b = try!(b.into_dec());
+                let a = a.into_dec()?;
+                let b = b.into_dec()?;
                 match a / b {
                     None => Ok(Datum::Null),
                     Some(res) => {
-                        let d = try!(res.into_result());
+                        let d = res.into_result()?;
                         Ok(Datum::Dec(d))
                     }
                 }
@@ -543,7 +541,7 @@ impl Datum {
                 }
             }
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
-                let dec = try!((l + r).into_result());
+                let dec = (l + r).into_result()?;
                 return Ok(Datum::Dec(dec));
             }
             (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
@@ -571,7 +569,7 @@ impl Datum {
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_sub(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l - r)),
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
-                let dec = try!((l - r).into_result());
+                let dec = (l - r).into_result()?;
                 return Ok(Datum::Dec(dec));
             }
             (l, r) => return Err(invalid_type!("{:?} can't minus {:?}", l, r)),
@@ -624,7 +622,7 @@ impl Datum {
             (Datum::Dec(l), Datum::Dec(r)) => match l % r {
                 None => Ok(Datum::Null),
                 Some(res) => {
-                    let d = try!(res.into_result());
+                    let d = res.into_result()?;
                     Ok(Datum::Dec(d))
                 }
             },
@@ -663,8 +661,8 @@ impl Datum {
             },
             (Datum::U64(l), Datum::U64(r)) => Ok(Datum::U64(l / r)),
             (l, r) => {
-                let a = try!(l.into_dec());
-                let b = try!(r.into_dec());
+                let a = l.into_dec()?;
+                let b = r.into_dec()?;
                 match a / b {
                     None => Ok(Datum::Null),
                     Some(res) => {
@@ -765,7 +763,7 @@ impl From<Json> for Datum {
 pub trait DatumDecoder: DecimalDecoder + JsonDecoder {
     /// `decode_datum` decodes on a datum from a byte slice generated by tidb.
     fn decode_datum(&mut self) -> Result<Datum> {
-        let flag = try!(self.read_u8());
+        let flag = self.read_u8()?;
         match flag {
             INT_FLAG => self.decode_i64().map(Datum::I64),
             UINT_FLAG => self.decode_u64().map(Datum::U64),
@@ -774,8 +772,8 @@ pub trait DatumDecoder: DecimalDecoder + JsonDecoder {
             NIL_FLAG => Ok(Datum::Null),
             FLOAT_FLAG => self.decode_f64().map(Datum::F64),
             DURATION_FLAG => {
-                let nanos = try!(self.decode_i64());
-                let dur = try!(Duration::from_nanos(nanos, MAX_FSP));
+                let nanos = self.decode_i64()?;
+                let dur = Duration::from_nanos(nanos, MAX_FSP)?;
                 Ok(Datum::Dur(dur))
             }
             DECIMAL_FLAG => self.decode_decimal().map(Datum::Dec),
@@ -791,7 +789,7 @@ pub trait DatumDecoder: DecimalDecoder + JsonDecoder {
         let mut res = vec![];
 
         while self.remaining() > 0 {
-            let v = try!(self.decode_datum());
+            let v = self.decode_datum()?;
             res.push(v);
         }
 
@@ -813,52 +811,52 @@ pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
             }
             match *v {
                 Datum::I64(i) => if comparable {
-                    try!(self.write_u8(INT_FLAG));
-                    try!(self.encode_i64(i));
+                    self.write_u8(INT_FLAG)?;
+                    self.encode_i64(i)?;
                 } else {
-                    try!(self.write_u8(VAR_INT_FLAG));
-                    try!(self.encode_var_i64(i));
+                    self.write_u8(VAR_INT_FLAG)?;
+                    self.encode_var_i64(i)?;
                 },
                 Datum::U64(u) => if comparable {
-                    try!(self.write_u8(UINT_FLAG));
-                    try!(self.encode_u64(u));
+                    self.write_u8(UINT_FLAG)?;
+                    self.encode_u64(u)?;
                 } else {
-                    try!(self.write_u8(VAR_UINT_FLAG));
-                    try!(self.encode_var_u64(u));
+                    self.write_u8(VAR_UINT_FLAG)?;
+                    self.encode_var_u64(u)?;
                 },
                 Datum::Bytes(ref bs) => if comparable {
-                    try!(self.write_u8(BYTES_FLAG));
-                    try!(self.encode_bytes(bs, false));
+                    self.write_u8(BYTES_FLAG)?;
+                    self.encode_bytes(bs, false)?;
                 } else {
-                    try!(self.write_u8(COMPACT_BYTES_FLAG));
-                    try!(self.encode_compact_bytes(bs));
+                    self.write_u8(COMPACT_BYTES_FLAG)?;
+                    self.encode_compact_bytes(bs)?;
                 },
                 Datum::F64(f) => {
-                    try!(self.write_u8(FLOAT_FLAG));
-                    try!(self.encode_f64(f));
+                    self.write_u8(FLOAT_FLAG)?;
+                    self.encode_f64(f)?;
                 }
-                Datum::Null => try!(self.write_u8(NIL_FLAG)),
+                Datum::Null => self.write_u8(NIL_FLAG)?,
                 Datum::Min => {
-                    try!(self.write_u8(BYTES_FLAG)); // for backward compatibility
+                    self.write_u8(BYTES_FLAG)?; // for backward compatibility
                     find_min = true;
                 }
-                Datum::Max => try!(self.write_u8(MAX_FLAG)),
+                Datum::Max => self.write_u8(MAX_FLAG)?,
                 Datum::Time(ref t) => {
-                    try!(self.write_u8(UINT_FLAG));
-                    try!(self.encode_u64(t.to_packed_u64()));
+                    self.write_u8(UINT_FLAG)?;
+                    self.encode_u64(t.to_packed_u64())?;
                 }
                 Datum::Dur(ref d) => {
-                    try!(self.write_u8(DURATION_FLAG));
-                    try!(self.encode_i64(d.to_nanos()));
+                    self.write_u8(DURATION_FLAG)?;
+                    self.encode_i64(d.to_nanos())?;
                 }
                 Datum::Dec(ref d) => {
-                    try!(self.write_u8(DECIMAL_FLAG));
+                    self.write_u8(DECIMAL_FLAG)?;
                     let (prec, frac) = d.prec_and_frac();
-                    try!(self.encode_decimal(d, prec, frac));
+                    self.encode_decimal(d, prec, frac)?;
                 }
                 Datum::Json(ref j) => {
-                    try!(self.write_u8(JSON_FLAG));
-                    try!(self.encode_json(j));
+                    self.write_u8(JSON_FLAG)?;
+                    self.encode_json(j)?;
                 }
             }
         }
@@ -905,7 +903,7 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
 
 pub fn encode(values: &[Datum], comparable: bool) -> Result<Vec<u8>> {
     let mut buf = vec![];
-    try!(encode_to(&mut buf, values, comparable));
+    encode_to(&mut buf, values, comparable)?;
     buf.shrink_to_fit();
     Ok(buf)
 }
@@ -920,7 +918,7 @@ pub fn encode_value(values: &[Datum]) -> Result<Vec<u8>> {
 
 pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Result<()> {
     buf.reserve(approximate_size(values, comparable));
-    try!(buf.encode(values, comparable));
+    buf.encode(values, comparable)?;
     Ok(())
 }
 
@@ -939,23 +937,23 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         NIL_FLAG => 0,
         FLOAT_FLAG => number::F64_SIZE,
         DURATION_FLAG => number::I64_SIZE,
-        DECIMAL_FLAG => try!(mysql::dec_encoded_len(&buf[1..])),
+        DECIMAL_FLAG => mysql::dec_encoded_len(&buf[1..])?,
         VAR_INT_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            try!(v.decode_var_i64());
+            v.decode_var_i64()?;
             l - v.len()
         }
         VAR_UINT_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            try!(v.decode_var_u64());
+            v.decode_var_u64()?;
             l - v.len()
         }
         JSON_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            try!(v.decode_json());
+            v.decode_json()?;
             l - v.len()
         }
         f => return Err(invalid_type!("unsupported data type `{}`", f)),

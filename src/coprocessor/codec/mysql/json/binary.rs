@@ -94,7 +94,7 @@ impl Json {
 
 pub trait JsonEncoder: NumberEncoder {
     fn encode_json(&mut self, data: &Json) -> Result<()> {
-        try!(self.write_u8(data.get_type_code()));
+        self.write_u8(data.get_type_code())?;
         self.encode_json_body(data)
     }
 
@@ -103,7 +103,7 @@ pub trait JsonEncoder: NumberEncoder {
             Json::Object(ref d) => self.encode_obj(d),
             Json::Array(ref d) => self.encode_array(d),
             Json::Boolean(_) | Json::None => {
-                let v = try!(data.as_literal());
+                let v = data.as_literal()?;
                 self.encode_literal(v)
             }
             Json::I64(d) => self.encode_json_i64(d),
@@ -125,9 +125,9 @@ pub trait JsonEncoder: NumberEncoder {
         let mut key_offset = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len;
         for key in data.keys() {
             let encode_key = key.as_bytes();
-            let key_len = try!(encode_keys.write(encode_key));
-            try!(key_entries.encode_u32_le(key_offset as u32));
-            try!(key_entries.encode_u16_le(key_len as u16));
+            let key_len = encode_keys.write(encode_key)?;
+            key_entries.encode_u32_le(key_offset as u32)?;
+            key_entries.encode_u16_le(key_len as u16)?;
             key_offset += key_len;
         }
 
@@ -135,16 +135,17 @@ pub trait JsonEncoder: NumberEncoder {
         let mut value_entries = Vec::with_capacity(value_entries_len);
         let mut encode_values = vec![];
         for value in data.values() {
-            try!(value_entries.encode_json_item(value, &mut value_offset, &mut encode_values));
+            value_entries
+                .encode_json_item(value, &mut value_offset, &mut encode_values)?;
         }
         let size = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len +
             encode_keys.len() + encode_values.len();
-        try!(self.encode_u32_le(element_count as u32));
-        try!(self.encode_u32_le(size as u32));
-        try!(self.write_all(key_entries.as_mut()));
-        try!(self.write_all(value_entries.as_mut()));
-        try!(self.write_all(encode_keys.as_mut()));
-        try!(self.write_all(encode_values.as_mut()));
+        self.encode_u32_le(element_count as u32)?;
+        self.encode_u32_le(size as u32)?;
+        self.write_all(key_entries.as_mut())?;
+        self.write_all(value_entries.as_mut())?;
+        self.write_all(encode_keys.as_mut())?;
+        self.write_all(encode_values.as_mut())?;
         Ok(())
     }
 
@@ -156,18 +157,19 @@ pub trait JsonEncoder: NumberEncoder {
         let mut value_entries = Vec::with_capacity(value_entries_len);
         let mut encode_values = vec![];
         for value in data {
-            try!(value_entries.encode_json_item(value, &mut value_offset, &mut encode_values));
+            value_entries
+                .encode_json_item(value, &mut value_offset, &mut encode_values)?;
         }
         let total_size = ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + encode_values.len();
-        try!(self.encode_u32_le(element_count as u32));
-        try!(self.encode_u32_le(total_size as u32));
-        try!(self.write_all(value_entries.as_mut()));
-        try!(self.write_all(encode_values.as_mut()));
+        self.encode_u32_le(element_count as u32)?;
+        self.encode_u32_le(total_size as u32)?;
+        self.write_all(value_entries.as_mut())?;
+        self.write_all(encode_values.as_mut())?;
         Ok(())
     }
 
     fn encode_literal(&mut self, data: u8) -> Result<()> {
-        try!(self.write_u8(data));
+        self.write_u8(data)?;
         Ok(())
     }
 
@@ -186,8 +188,8 @@ pub trait JsonEncoder: NumberEncoder {
     fn encode_str(&mut self, data: &str) -> Result<()> {
         let bytes = data.as_bytes();
         let bytes_len = bytes.len() as u64;
-        try!(self.encode_var_u64(bytes_len));
-        try!(self.write_all(bytes));
+        self.encode_var_u64(bytes_len)?;
+        self.write_all(bytes)?;
         Ok(())
     }
 
@@ -198,22 +200,22 @@ pub trait JsonEncoder: NumberEncoder {
         data_buf: &mut Vec<u8>,
     ) -> Result<()> {
         let code = data.get_type_code();
-        try!(self.write_u8(code));
+        self.write_u8(code)?;
         match *data {
             // If the data has length in (0, 4], it could be inline here.
             // And padding 0x00 to 4 bytes if needed.
             Json::Boolean(_) | Json::None => {
-                let v = try!(data.as_literal());
-                try!(self.write_u8(v));
+                let v = data.as_literal()?;
+                self.write_u8(v)?;
                 let left = U32_LEN - LITERAL_LEN;
                 for _ in 0..left {
-                    try!(self.write_u8(JSON_LITERAL_NIL));
+                    self.write_u8(JSON_LITERAL_NIL)?;
                 }
             }
             _ => {
-                try!(self.encode_u32_le(*offset));
+                self.encode_u32_le(*offset)?;
                 let start_len = data_buf.len();
-                try!(data_buf.encode_json_body(data));
+                data_buf.encode_json_body(data)?;
                 *offset += (data_buf.len() - start_len) as u32;
             }
         };
@@ -225,7 +227,7 @@ impl<T: Write> JsonEncoder for T {}
 
 pub trait JsonDecoder: NumberDecoder {
     fn decode_json(&mut self) -> Result<Json> {
-        let code = try!(self.read_u8());
+        let code = self.read_u8()?;
         self.decode_json_body(code)
     }
 
@@ -244,11 +246,11 @@ pub trait JsonDecoder: NumberDecoder {
 
     fn decode_json_obj(&mut self) -> Result<Json> {
         // count size key_entries value_entries keys values
-        let element_count = try!(self.decode_u32_le()) as usize;
-        let total_size = try!(self.decode_u32_le()) as usize;
+        let element_count = self.decode_u32_le()? as usize;
+        let total_size = self.decode_u32_le()? as usize;
         let left_size = total_size - ELEMENT_COUNT_LEN - SIZE_LEN;
         let mut data = vec![0; left_size];
-        try!(self.read_exact(&mut data));
+        self.read_exact(&mut data)?;
         let mut obj = BTreeMap::new();
         if element_count == 0 {
             return Ok(Json::Object(obj));
@@ -262,12 +264,12 @@ pub trait JsonDecoder: NumberDecoder {
         let mut value_entries_data = &data[key_entries_len..(key_entries_len + value_entries_len)];
         let mut key_offset = key_entries_len + value_entries_len;
         for _ in 0..element_count {
-            let key_real_offset = try!(key_entries_data.decode_u32_le());
-            let key_len = try!(key_entries_data.decode_u16_le());
+            let key_real_offset = key_entries_data.decode_u32_le()?;
+            let key_len = key_entries_data.decode_u16_le()?;
             let key_data = &data[key_offset..(key_offset + key_len as usize)];
             let key = String::from(str::from_utf8(key_data).unwrap());
-            let value =
-                try!(value_entries_data.decode_json_item(&data[key_offset..], key_real_offset));
+            let value = value_entries_data
+                .decode_json_item(&data[key_offset..], key_real_offset)?;
             obj.insert(key, value);
             key_offset += key_len as usize;
         }
@@ -276,34 +278,35 @@ pub trait JsonDecoder: NumberDecoder {
 
     fn decode_json_array(&mut self) -> Result<Json> {
         // count size value_entries values
-        let element_count = try!(self.decode_u32_le()) as usize;
-        let total_size = try!(self.decode_u32_le());
+        let element_count = self.decode_u32_le()? as usize;
+        let total_size = self.decode_u32_le()?;
         // already removed count and size
         let left_size = total_size as usize - ELEMENT_COUNT_LEN - SIZE_LEN;
         let mut data = vec![0; left_size];
-        try!(self.read_exact(&mut data));
+        self.read_exact(&mut data)?;
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let mut value_entries_data = &data[0..value_entries_len];
         let values_data = &data[value_entries_len..];
         let mut array_data = Vec::with_capacity(element_count);
         let data_start_offset = (U32_LEN + U32_LEN + value_entries_len) as u32;
         for _ in 0..element_count {
-            let value = try!(value_entries_data.decode_json_item(values_data, data_start_offset));
+            let value = value_entries_data
+                .decode_json_item(values_data, data_start_offset)?;
             array_data.push(value);
         }
         Ok(Json::Array(array_data))
     }
 
     fn decode_json_str(&mut self) -> Result<Json> {
-        let length = try!(self.decode_var_u64());
+        let length = self.decode_var_u64()?;
         let mut encode_value = vec![0; length as usize];
-        try!(self.read_exact(&mut encode_value));
-        let value = try!(String::from_utf8(encode_value));
+        self.read_exact(&mut encode_value)?;
+        let value = String::from_utf8(encode_value)?;
         Ok(Json::String(value))
     }
 
     fn decode_json_literal(&mut self) -> Result<Json> {
-        match try!(self.read_u8()) {
+        match self.read_u8()? {
             JSON_LITERAL_TRUE => Ok(Json::Boolean(true)),
             JSON_LITERAL_FALSE => Ok(Json::Boolean(false)),
             _ => Ok(Json::None),
@@ -311,25 +314,25 @@ pub trait JsonDecoder: NumberDecoder {
     }
 
     fn decode_json_double(&mut self) -> Result<Json> {
-        let value = try!(self.decode_f64_le());
+        let value = self.decode_f64_le()?;
         Ok(Json::Double(value))
     }
 
     fn decode_json_i64(&mut self) -> Result<Json> {
-        let value = try!(self.decode_i64_le());
+        let value = self.decode_i64_le()?;
         Ok(Json::I64(value))
     }
 
     fn decode_json_u64(&mut self) -> Result<Json> {
-        let value = try!(self.decode_u64_le());
+        let value = self.decode_u64_le()?;
         Ok(Json::U64(value))
     }
 
     fn decode_json_item(&mut self, values_data: &[u8], data_start_position: u32) -> Result<Json> {
         let mut entry = vec![0; VALUE_ENTRY_LEN];
-        try!(self.read_exact(&mut entry));
+        self.read_exact(&mut entry)?;
         let mut entry = entry.as_slice();
-        let code = try!(entry.read_u8());
+        let code = entry.read_u8()?;
         match code {
             TYPE_CODE_LITERAL => entry.decode_json_body(code),
             _ => {

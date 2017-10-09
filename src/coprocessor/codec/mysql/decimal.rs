@@ -1089,7 +1089,7 @@ impl Decimal {
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && ret != tmp {
             // TODO handle InInsertStmt in ctx
-            try!(convert::handle_truncate(ctx, true));
+            convert::handle_truncate(ctx, true)?;
         }
         Ok(ret)
     }
@@ -1468,7 +1468,7 @@ impl Decimal {
     /// `as_i64_with_ctx` returns int part of the decimal.
     pub fn as_i64_with_ctx(&self, ctx: &EvalContext) -> ::std::result::Result<i64, ExprError> {
         let res = self.as_i64();
-        try!(convert::handle_truncate(ctx, res.is_truncated()));
+        convert::handle_truncate(ctx, res.is_truncated())?;
         res.into()
     }
 
@@ -1596,7 +1596,7 @@ impl Decimal {
         }
 
         if end_idx + 1 < bs.len() && (bs[end_idx] == b'e' || bs[end_idx] == b'E') {
-            let exp = try!(convert::bytes_to_int_without_context(&bs[end_idx + 1..]));
+            let exp = convert::bytes_to_int_without_context(&bs[end_idx + 1..])?;
             if exp > i32::MAX as i64 / 2 {
                 d.reset_to_zero();
                 return Ok(Res::Overflow(d.unwrap()));
@@ -1701,7 +1701,7 @@ impl FromStr for Decimal {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Decimal> {
-        match try!(Decimal::from_bytes(s.as_bytes())) {
+        match Decimal::from_bytes(s.as_bytes())? {
             Res::Ok(d) => Ok(d),
             Res::Overflow(_) => Err(box_err!("parsing {} will overflow", s)),
             Res::Truncated(_) => Err(box_err!("parsing {} will truncated", s)),
@@ -1781,7 +1781,7 @@ pub trait DecimalEncoder: Write {
     // TODO: resolve following warnings.
     #[allow(cyclomatic_complexity)]
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
-        try!(self.write_all(&[prec, frac]));
+        self.write_all(&[prec, frac])?;
         let mut mask = if d.negative { u32::MAX } else { 0 };
         let mut int_cnt = prec - frac;
         let int_word_cnt = int_cnt / DIGITS_PER_WORD;
@@ -1897,8 +1897,8 @@ pub trait DecimalDecoder: BytesDecoder {
             return Err(box_err!("decimal too short: {} < 3", self.remaining()));
         }
 
-        let prec = try!(self.read_u8());
-        let frac_cnt = try!(self.read_u8());
+        let prec = self.read_u8()?;
+        let frac_cnt = self.read_u8()?;
 
         if prec < frac_cnt {
             return Err(box_err!(

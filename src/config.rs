@@ -420,7 +420,7 @@ impl DbConfig {
 
     fn validate(&mut self) -> Result<(), Box<Error>> {
         if !self.backup_dir.is_empty() {
-            self.backup_dir = try!(config::canonicalize_path(&self.backup_dir));
+            self.backup_dir = config::canonicalize_path(&self.backup_dir)?;
         }
         Ok(())
     }
@@ -592,7 +592,7 @@ impl PdConfig {
             return Err("please specify pd.endpoints.".into());
         }
         for addr in &self.endpoints {
-            try!(config::check_addr(addr));
+            config::check_addr(addr)?;
         }
         Ok(())
     }
@@ -664,7 +664,7 @@ impl Default for TiKvConfig {
 
 impl TiKvConfig {
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
-        try!(self.storage.validate());
+        self.storage.validate()?;
         if self.rocksdb.backup_dir.is_empty() && self.storage.data_dir != DEFAULT_DATA_DIR {
             self.rocksdb.backup_dir = format!(
                 "{}",
@@ -673,18 +673,13 @@ impl TiKvConfig {
         }
 
         self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
-            try!(config::canonicalize_sub_path(
-                &self.storage.data_dir,
-                "raft"
-            ))
+            config::canonicalize_sub_path(&self.storage.data_dir, "raft")?
         } else {
-            try!(config::canonicalize_path(&self.raft_store.raftdb_path))
+            config::canonicalize_path(&self.raft_store.raftdb_path)?
         };
 
-        let kv_db_path = try!(config::canonicalize_sub_path(
-            &self.storage.data_dir,
-            DEFAULT_ROCKSDB_SUB_DIR
-        ));
+        let kv_db_path =
+            config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
 
         if kv_db_path == self.raft_store.raftdb_path {
             return Err(
@@ -698,10 +693,10 @@ impl TiKvConfig {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
-        try!(self.rocksdb.validate());
-        try!(self.server.validate());
-        try!(self.raft_store.validate());
-        try!(self.pd.validate());
+        self.rocksdb.validate()?;
+        self.server.validate()?;
+        self.raft_store.validate()?;
+        self.pd.validate()?;
         Ok(())
     }
 }

@@ -52,7 +52,7 @@ fn open_log_file(path: &str) -> io::Result<File> {
     let p = Path::new(path);
     let parent = p.parent().unwrap();
     if !parent.is_dir() {
-        try!(fs::create_dir_all(parent))
+        fs::create_dir_all(parent)?
     }
     OpenOptions::new().append(true).create(true).open(path)
 }
@@ -65,7 +65,7 @@ struct RotatingFileLoggerCore {
 
 impl RotatingFileLoggerCore {
     fn new(path: &str) -> io::Result<RotatingFileLoggerCore> {
-        let file = try!(open_log_file(path));
+        let file = open_log_file(path)?;
         let file_attr = fs::metadata(path).unwrap();
         let file_modified_time = file_attr.modified().unwrap();
         let rollover_time = compute_rollover_time(systemtime_to_tm(file_modified_time));
@@ -115,7 +115,7 @@ pub struct RotatingFileLogger {
 
 impl RotatingFileLogger {
     pub fn new(file_path: &str) -> io::Result<RotatingFileLogger> {
-        let core = try!(RotatingFileLoggerCore::new(file_path));
+        let core = RotatingFileLoggerCore::new(file_path)?;
         let ret = RotatingFileLogger {
             core: Mutex::new(core),
         };

@@ -70,12 +70,12 @@ impl ServerRaftStoreRouter {
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        try!(self.ch.try_send(msg));
+        self.ch.try_send(msg)?;
         Ok(())
     }
 
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        try!(self.ch.send(msg));
+        self.ch.send(msg)?;
         Ok(())
     }
 
