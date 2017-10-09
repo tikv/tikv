@@ -69,8 +69,8 @@ impl<T: PdClient> Runner<T> {
             }
         }
 
-        let addr = try!(self.get_address(store_id));
-        let sock = try!(util::to_socket_addr(addr.as_str()));
+        let addr = self.get_address(store_id)?;
+        let sock = util::to_socket_addr(addr.as_str())?;
 
         let cache = StoreAddr {
             sock: sock,

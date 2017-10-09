@@ -138,7 +138,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
                 flags |= PATH_EXPRESSION_CONTAINS_ASTERISK;
             } else if key.chars().next().unwrap() == '"' {
                 // We need to unquote the origin string.
-                key = try!(unquote_string(&key[1..key.len() - 1]));
+                key = unquote_string(&key[1..key.len() - 1])?;
             }
             legs.push(PathLeg::Key(key))
         } else {

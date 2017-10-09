@@ -61,8 +61,8 @@ impl Debugger {
     }
 
     pub fn get(&self, db: DBType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
-        try!(validate_db_and_cf(db, cf));
-        let db = try!(self.get_db_from_type(db));
+        validate_db_and_cf(db, cf)?;
+        let db = self.get_db_from_type(db)?;
         match db.get_value_cf(cf, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
             Ok(None) => Err(Error::NotFound(
@@ -160,8 +160,8 @@ impl Debugger {
 
     /// Compact the cf[start..end) in the db **by manual**.
     pub fn compact(&self, db: DBType, cf: &str, start: &[u8], end: &[u8]) -> Result<()> {
-        try!(validate_db_and_cf(db, cf));
-        let db = try!(self.get_db_from_type(db));
+        validate_db_and_cf(db, cf)?;
+        let db = self.get_db_from_type(db)?;
         let handle = box_try!(get_cf_handle(db, cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };

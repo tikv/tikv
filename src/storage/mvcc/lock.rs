@@ -102,20 +102,16 @@ impl Lock {
         if b.is_empty() {
             return Err(Error::BadFormatLock);
         }
-        let lock_type = try!(LockType::from_u8(try!(b.read_u8())).ok_or(Error::BadFormatLock));
-        let primary = try!(b.decode_compact_bytes());
-        let ts = try!(b.decode_var_u64());
-        let ttl = if b.is_empty() {
-            0
-        } else {
-            try!(b.decode_var_u64())
-        };
+        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
+        let primary = b.decode_compact_bytes()?;
+        let ts = b.decode_var_u64()?;
+        let ttl = if b.is_empty() { 0 } else { b.decode_var_u64()? };
 
         if b.is_empty() {
             return Ok(Lock::new(lock_type, primary, ts, ttl, None));
         }
 
-        let flag = try!(b.read_u8());
+        let flag = b.read_u8()?;
         assert_eq!(
             flag,
             SHORT_VALUE_PREFIX,
@@ -123,7 +119,7 @@ impl Lock {
             flag
         );
 
-        let len = try!(b.read_u8());
+        let len = b.read_u8()?;
         if len as usize != b.len() {
             panic!(
                 "short value len [{}] not equal to content len [{}]",

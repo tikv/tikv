@@ -43,7 +43,7 @@ impl<'a> Executor for LimitExecutor<'a> {
         if self.cursor >= self.limit {
             return Ok(None);
         }
-        if let Some(row) = try!(self.src.next()) {
+        if let Some(row) = self.src.next()? {
             self.cursor += 1;
             Ok(Some(row))
         } else {

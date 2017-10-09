@@ -329,9 +329,9 @@ fn find_mvcc_infos_by_key(
 ) -> Result<MultipleReturnValue> {
     let mut writes = vec![];
     let mut values = vec![];
-    let lock = try!(reader.load_lock(key));
+    let lock = reader.load_lock(key)?;
     loop {
-        let opt = try!(reader.seek_write(key, ts));
+        let opt = reader.seek_write(key, ts)?;
         let short_value: Option<Value>;
         match opt {
             Some((commit_ts, mut write)) => {
@@ -350,7 +350,7 @@ fn find_mvcc_infos_by_key(
             values.push((write.start_ts, true, v));
         }
     }
-    for (ts, v) in try!(reader.scan_values_in_default(key)) {
+    for (ts, v) in reader.scan_values_in_default(key)? {
         values.push((ts, false, v));
     }
     Ok((lock, writes, values))
@@ -567,7 +567,7 @@ fn process_read(
                         let mut lock_info = LockInfo::new();
                         lock_info.set_primary_lock(lock.primary);
                         lock_info.set_lock_version(lock.ts);
-                        lock_info.set_key(try!(key.raw()));
+                        lock_info.set_key(key.raw()?);
                         locks.push(lock_info);
                     }
                     KV_COMMAND_KEYREAD_HISTOGRAM_VEC
@@ -726,8 +726,8 @@ fn process_rawscan(
     limit: usize,
     stats: &mut Statistics,
 ) -> Result<Vec<StorageResult<KvPair>>> {
-    let mut cursor = try!(snapshot.iter(IterOption::default(), ScanMode::Forward));
-    if !try!(cursor.seek(start_key, &mut stats.data)) {
+    let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Forward)?;
+    if !cursor.seek(start_key, &mut stats.data)? {
         return Ok(vec![]);
     }
     let mut pairs = vec![];
@@ -830,7 +830,7 @@ fn process_write_impl(
             );
             let rows = keys.len();
             for k in keys {
-                try!(txn.commit(k, commit_ts));
+                txn.commit(k, commit_ts)?;
             }
 
             let pr = ProcessResult::Res;
@@ -850,7 +850,7 @@ fn process_write_impl(
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
-            try!(txn.rollback(key));
+            txn.rollback(key)?;
 
             let pr = ProcessResult::Res;
             (pr, txn.modifies(), 1)
@@ -871,7 +871,7 @@ fn process_write_impl(
             );
             let rows = keys.len();
             for k in keys {
-                try!(txn.rollback(k));
+                txn.rollback(k)?;
             }
 
             let pr = ProcessResult::Res;
@@ -904,8 +904,8 @@ fn process_write_impl(
             let rows = keys.len();
             for k in keys {
                 match commit_ts {
-                    Some(ts) => try!(txn.commit(k, ts)),
-                    None => try!(txn.rollback(k)),
+                    Some(ts) => txn.commit(k, ts)?,
+                    None => txn.rollback(k)?,
                 }
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(k.to_owned());
@@ -945,7 +945,7 @@ fn process_write_impl(
             );
             let rows = keys.len();
             for k in keys {
-                try!(txn.gc(k, safe_point));
+                txn.gc(k, safe_point)?;
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(k.to_owned());
                     break;

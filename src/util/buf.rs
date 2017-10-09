@@ -276,8 +276,8 @@ impl PipeBuffer {
     pub fn write_all_to<W: Write>(&mut self, w: &mut W) -> Result<()> {
         {
             let (left, right) = self.slice();
-            try!(w.write_all(left));
-            try!(w.write_all(right));
+            w.write_all(left)?;
+            w.write_all(right)?;
         }
         self.end = self.start;
         Ok(())

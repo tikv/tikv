@@ -35,25 +35,21 @@ pub trait BytesEncoder: NumberEncoder {
             let remain = len - index;
             let mut pad: usize = 0;
             if remain > ENC_GROUP_SIZE {
-                try!(self.write_all(adjust_bytes_order(
+                self.write_all(adjust_bytes_order(
                     &key[index..index + ENC_GROUP_SIZE],
                     desc,
-                    &mut buf
-                )));
+                    &mut buf,
+                ))?;
             } else {
                 pad = ENC_GROUP_SIZE - remain;
-                try!(self.write_all(
-                    adjust_bytes_order(&key[index..], desc, &mut buf)
-                ));
-                try!(self.write_all(
-                    adjust_bytes_order(&ENC_PADDING[..pad], desc, &mut buf)
-                ));
+                self.write_all(adjust_bytes_order(&key[index..], desc, &mut buf))?;
+                self.write_all(adjust_bytes_order(&ENC_PADDING[..pad], desc, &mut buf))?;
             }
-            try!(self.write_all(adjust_bytes_order(
+            self.write_all(adjust_bytes_order(
                 &[ENC_MARKER - (pad as u8)],
                 desc,
-                &mut buf
-            )));
+                &mut buf,
+            ))?;
             index += ENC_GROUP_SIZE;
         }
         Ok(())
@@ -63,7 +59,7 @@ pub trait BytesEncoder: NumberEncoder {
     /// efficient in both space and time compare to `encode_bytes`. Note that the encoded
     /// result is not memcomparable.
     fn encode_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
-        try!(self.encode_var_i64(data.len() as i64));
+        self.encode_var_i64(data.len() as i64)?;
         self.write_all(data).map_err(From::from)
     }
 }
@@ -119,9 +115,9 @@ pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
 pub trait CompactBytesDecoder: NumberDecoder {
     /// `decode_compact_bytes` decodes bytes which is encoded by `encode_compact_bytes` before.
     fn decode_compact_bytes(&mut self) -> Result<Vec<u8>> {
-        let vn = try!(self.decode_var_i64()) as usize;
+        let vn = self.decode_var_i64()? as usize;
         let mut data = vec![0; vn];
-        try!(self.read_exact(&mut data));
+        self.read_exact(&mut data)?;
         Ok(data)
     }
 }
@@ -156,7 +152,7 @@ pub trait BytesDecoder: NumberDecoder + CompactBytesDecoder {
         let mut key = Vec::with_capacity(self.remaining());
         let mut chunk = [0; ENC_GROUP_SIZE + 1];
         loop {
-            try!(self.read_exact(&mut chunk));
+            self.read_exact(&mut chunk)?;
             let (&marker, bytes) = chunk.split_last().unwrap();
             let pad_size = if desc {
                 marker as usize

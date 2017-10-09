@@ -145,16 +145,16 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
 /// `bytes_to_int` converts a byte arrays to an i64 in best effort.
 /// TODO: handle overflow properly.
 pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
-    let s = try!(str::from_utf8(bytes)).trim();
-    let vs = try!(get_valid_int_prefix(ctx, s));
+    let s = str::from_utf8(bytes)?.trim();
+    let vs = get_valid_int_prefix(ctx, s)?;
     bytes_to_int_without_context(vs.as_bytes())
 }
 
 /// `bytes_to_uint` converts a byte arrays to an u64 in best effort.
 /// TODO: handle overflow properly.
 pub fn bytes_to_uint(ctx: &EvalContext, bytes: &[u8]) -> Result<u64> {
-    let s = try!(str::from_utf8(bytes)).trim();
-    let vs = try!(get_valid_int_prefix(ctx, s));
+    let s = str::from_utf8(bytes)?.trim();
+    let vs = get_valid_int_prefix(ctx, s)?;
     bytes_to_uint_without_context(vs.as_bytes())
 }
 
@@ -177,8 +177,8 @@ fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
 
 /// `bytes_to_f64` converts a byte array to a float64 in best effort.
 pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
-    let s = try!(str::from_utf8(bytes)).trim();
-    let vs = try!(get_valid_float_prefix(ctx, s));
+    let s = str::from_utf8(bytes)?.trim();
+    let vs = get_valid_float_prefix(ctx, s)?;
 
     bytes_to_f64_without_context(vs.as_bytes())
 }
@@ -198,7 +198,7 @@ pub fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
 }
 
 fn get_valid_int_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
-    let vs = try!(get_valid_float_prefix(ctx, s));
+    let vs = get_valid_float_prefix(ctx, s)?;
     float_str_to_int_string(vs)
 }
 
@@ -241,7 +241,7 @@ fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> 
         }
     }
 
-    try!(handle_truncate(ctx, valid_len < s.len()));
+    handle_truncate(ctx, valid_len < s.len())?;
     if valid_len == 0 {
         Ok("0")
     } else {

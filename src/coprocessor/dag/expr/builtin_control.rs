@@ -21,7 +21,7 @@ fn if_null<F, T>(f: F) -> Result<Option<T>>
 where
     F: Fn(usize) -> Result<Option<T>>,
 {
-    let arg0 = try!(f(0));
+    let arg0 = f(0)?;
     if !arg0.is_none() {
         return Ok(arg0);
     }
@@ -37,7 +37,7 @@ fn if_condition<F, T>(
 where
     F: Fn(usize) -> Result<Option<T>>,
 {
-    let arg0 = try!(expr.children[0].eval_int(ctx, row));
+    let arg0 = expr.children[0].eval_int(ctx, row)?;
     if arg0.map_or(false, |arg| arg != 0) {
         f(1)
     } else {
@@ -60,7 +60,7 @@ where
             // else statement
             return f(&chunk[0]);
         }
-        let cond = try!(chunk[0].eval_int(ctx, row));
+        let cond = chunk[0].eval_int(ctx, row)?;
         if cond.unwrap_or(0) == 0 {
             continue;
         }

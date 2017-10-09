@@ -44,16 +44,14 @@ impl MetricsFlusher {
         let (tx, rx) = mpsc::channel();
         let interval = self.interval;
         self.sender = Some(tx);
-        let h = try!(
-            Builder::new()
-                .name(thd_name!("rocksb-metrics-flusher"))
-                .spawn(move || {
-                    while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                        flush_metrics(&db, "kv");
-                        flush_metrics(&raft_db, "raft");
-                    }
-                })
-        );
+        let h = Builder::new()
+            .name(thd_name!("rocksb-metrics-flusher"))
+            .spawn(move || {
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
+                    flush_metrics(&db, "kv");
+                    flush_metrics(&raft_db, "raft");
+                }
+            })?;
 
         self.handle = Some(h);
         Ok(())

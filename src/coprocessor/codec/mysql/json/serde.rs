@@ -48,16 +48,16 @@ impl Serialize for Json {
             Json::Boolean(d) => serializer.serialize_bool(d),
             Json::String(ref s) => serializer.serialize_str(s),
             Json::Object(ref obj) => {
-                let mut map = try!(serializer.serialize_map(Some(obj.len())));
+                let mut map = serializer.serialize_map(Some(obj.len()))?;
                 for (k, v) in obj {
-                    try!(map.serialize_entry(k, v));
+                    map.serialize_entry(k, v)?;
                 }
                 map.end()
             }
             Json::Array(ref array) => {
-                let mut tup = try!(serializer.serialize_tuple(array.len()));
+                let mut tup = serializer.serialize_tuple(array.len())?;
                 for item in array {
-                    try!(tup.serialize_element(item));
+                    tup.serialize_element(item)?;
                 }
                 tup.end()
             }
