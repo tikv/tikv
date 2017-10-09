@@ -190,7 +190,10 @@ impl debugpb_grpc::Debug for Service {
     ) {
         let debugger = self.debugger.clone();
         let future = move || {
-            let result: Result<(), ()> = future::result(debugger.scan_mvcc(req))
+            let from = req.get_from_key();
+            let to = req.get_to_key();
+            let limit = req.get_limit();
+            let result: Result<_, _> = future::result(debugger.scan_mvcc(from, to, limit))
                 .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
                 .and_then(|iter| {
                     #[allow(deprecated)]

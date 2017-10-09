@@ -17,7 +17,6 @@ use protobuf::RepeatedField;
 
 use rocksdb::{DBIterator, Kv, SeekKey, DB};
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
-use kvproto::debugpb::*;
 use kvproto::debugpb::DB as DBType;
 use kvproto::{eraftpb, raft_serverpb};
 
@@ -166,19 +165,11 @@ impl Debugger {
         }
     }
 
-    pub fn scan_mvcc(&self, mut req: ScanMvccRequest) -> Result<MvccInfoIterator> {
-        let from_key = req.take_from_key();
-        let to_key = Some(req.take_to_key()).into_iter().find(|k| !k.is_empty());
-        let limit = req.get_limit();
-        if req.get_to_key().is_empty() && limit == 0 {
+    pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIterator> {
+        if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
-        MvccInfoIterator::new(
-            &self.engines.kv_engine,
-            &from_key,
-            to_key.as_ref().map(Vec::as_slice),
-            limit,
-        )
+        MvccInfoIterator::new(&self.engines.kv_engine, start, end, limit)
     }
 
     /// Compact the cf[start..end) in the db.
@@ -216,8 +207,9 @@ pub struct MvccInfoIterator<'a> {
 }
 
 impl<'a> MvccInfoIterator<'a> {
-    fn new(db: &'a DB, from: &[u8], to: Option<&[u8]>, limit: u64) -> Result<Self> {
+    fn new(db: &'a DB, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
         let gen_iter = |cf: &str| -> Result<_> {
+            let to = if to.is_empty() { None } else { Some(to) };
             let iter_option = IterOption::new(to.map(Vec::from), false);
             let mut iter = box_try!(db.new_iterator_cf(cf, iter_option));
             iter.seek(SeekKey::from(from));
@@ -622,12 +614,11 @@ mod tests {
         let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
 
-        let mut scan_mvcc_req = ScanMvccRequest::new();
-        scan_mvcc_req.set_from_key(keys::data_key(b"m"));
-        scan_mvcc_req.set_to_key(keys::data_key(b"n"));
+        let from = keys::data_key(b"m");
+        let to = keys::data_key(b"n");
 
         let mut count = 0;
-        for key_and_mvcc in debugger.scan_mvcc(scan_mvcc_req).unwrap() {
+        for key_and_mvcc in debugger.scan_mvcc(&from, &to, 0).unwrap() {
             assert!(key_and_mvcc.is_ok());
             count += 1;
         }
