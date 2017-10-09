@@ -14,27 +14,6 @@
 use prometheus::{exponential_buckets, CounterVec, Histogram, HistogramVec};
 
 lazy_static! {
-    pub static ref PD_REQ_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_raftstore_pd_request_sent_total",
-            "Total number of pd client request sent.",
-            &["type", "status"]
-        ).unwrap();
-
-    pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_raftstore_pd_heartbeat_sent_total",
-            "Total number of raftstore pd client heartbeat sent.",
-            &["type"]
-        ).unwrap();
-
-    pub static ref PD_VALIDATE_PEER_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_raftstore_pd_validate_peer_total",
-            "Total number of raftstore pd worker validate peer task.",
-            &["type"]
-        ).unwrap();
-
     pub static ref SNAP_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_raftstore_snapshot_total",

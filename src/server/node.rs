@@ -20,11 +20,12 @@ use std::process;
 use mio::EventLoop;
 use rocksdb::DB;
 
-use pd::{Error as PdError, PdClient, INVALID_ID};
+use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
+use util::worker::FutureWorker;
 use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg,
                        SnapManager, Store, StoreChannel, Transport};
 use super::Result;
@@ -124,6 +125,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
+        pd_worker: FutureWorker<PdTask>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -161,6 +163,7 @@ where
             trans,
             snap_mgr,
             significant_msg_receiver,
+            pd_worker,
         )?;
         Ok(())
     }
@@ -304,6 +307,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
+    #[allow(too_many_arguments)]
     fn start_store<T>(
         &mut self,
         mut event_loop: EventLoop<Store<T, C>>,
@@ -312,6 +316,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
+        pd_worker: FutureWorker<PdTask>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -334,7 +339,16 @@ where
                 sender,
                 significant_msg_receiver,
             };
-            let mut store = match Store::new(ch, store, cfg, engines, trans, pd_client, snap_mgr) {
+            let mut store = match Store::new(
+                ch,
+                store,
+                cfg,
+                engines,
+                trans,
+                pd_client,
+                snap_mgr,
+                pd_worker,
+            ) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };
