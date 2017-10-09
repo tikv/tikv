@@ -14,24 +14,25 @@
 use prometheus::*;
 
 lazy_static! {
-    pub static ref PD_SEND_MSG_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_pd_msg_send_duration_seconds",
-            "Bucketed histogram of PD message send duration",
-             exponential_buckets(0.0005, 10.0, 7).unwrap()
+    pub static ref PD_REQUEST_COUNTER: CounterVec =
+        register_counter_vec!(
+            "tikv_pd_request_total",
+            "Total number of PD requests handled",
+            &["type"]
         ).unwrap();
 
-    pub static ref PD_REQ_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_pd_request_sent_total",
-            "Total number of pd client request sent.",
-            &["type", "status"]
+    pub static ref PD_REQUEST_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_pd_request_duration_seconds",
+            "Bucketed histogram of PD request duration",
+            &["type", "result"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_pd_heartbeat_sent_total",
-            "Total number of pd client heartbeat sent.",
+            "tikv_pd_heartbeat_received_total",
+            "Total number of PD heartbeat received.",
             &["type"]
         ).unwrap();
 
