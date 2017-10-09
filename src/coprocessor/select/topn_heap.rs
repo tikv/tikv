@@ -56,7 +56,7 @@ impl SortRow {
 
     fn cmp_and_check(&self, right: &SortRow) -> Result<Ordering> {
         // check err
-        try!(self.check_err());
+        self.check_err()?;
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.as_ref().iter().zip(values) {
             match v1.cmp(self.ctx.as_ref(), v2) {
@@ -71,7 +71,7 @@ impl SortRow {
                 }
                 Err(err) => {
                     self.set_err(format!("cmp failed with:{:?}", err));
-                    try!(self.check_err());
+                    self.check_err()?;
                 }
             }
         }
@@ -133,7 +133,7 @@ impl TopNHeap {
         } else {
             // swap top value with row when heap is full and current row is less than top data
             let mut top_data = self.rows.peek_mut().unwrap();
-            let order = try!(row.cmp_and_check(&top_data));
+            let order = row.cmp_and_check(&top_data)?;
             if Ordering::Less == order {
                 *top_data = row;
             }

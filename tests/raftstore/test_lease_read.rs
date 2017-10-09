@@ -71,7 +71,7 @@ fn read_on_peer<T: Simulator>(
         false,
     );
     request.mut_header().set_peer(peer);
-    let mut resp = try!(cluster.call_command(request, timeout));
+    let mut resp = cluster.call_command(request, timeout)?;
     if resp.get_header().has_error() {
         return Err(Error::Other(
             box_err!(resp.mut_header().take_error().take_message()),

@@ -245,7 +245,7 @@ impl Cluster {
         let cur_region = self.get_region_by_id(region.get_id()).unwrap().unwrap();
 
         let cur_conf_ver = cur_region.get_region_epoch().get_conf_ver();
-        try!(check_stale_region(&cur_region, &region));
+        check_stale_region(&cur_region, &region)?;
 
         let region_peer_len = region.get_peers().len();
         let cur_region_peer_len = cur_region.get_peers().len();
@@ -355,7 +355,7 @@ impl Cluster {
             self.pending_peers.insert(p.get_id(), p);
         }
 
-        try!(self.handle_heartbeat_version(region.clone()));
+        self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
     }
 }
@@ -618,18 +618,18 @@ impl PdClient for TestPdClient {
     }
 
     fn put_store(&self, store: metapb::Store) -> Result<()> {
-        try!(self.check_bootstrap());
+        self.check_bootstrap()?;
         self.cluster.wl().put_store(store)
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        try!(self.check_bootstrap());
+        self.check_bootstrap()?;
         self.cluster.rl().get_store(store_id)
     }
 
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
-        try!(self.check_bootstrap());
+        self.check_bootstrap()?;
         if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
             if check_key_in_region(key, &region).is_ok() {
                 return Ok(region);
@@ -650,7 +650,7 @@ impl PdClient for TestPdClient {
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
-        try!(self.check_bootstrap());
+        self.check_bootstrap()?;
         Ok(self.cluster.rl().meta.clone())
     }
 

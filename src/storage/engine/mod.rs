@@ -299,7 +299,7 @@ impl<'a> Cursor<'a> {
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
-            try!(self.iter.validate_key(key));
+            self.iter.validate_key(key)?;
             return Ok(false);
         }
 
@@ -311,7 +311,7 @@ impl<'a> Cursor<'a> {
 
         statistics.seek += 1;
 
-        if !try!(self.iter.seek(key)) {
+        if !self.iter.seek(key)? {
             self.max_key = Some(key.encoded().to_owned());
             return Ok(false);
         }
@@ -334,7 +334,7 @@ impl<'a> Cursor<'a> {
             return Ok(true);
         }
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
-            try!(self.iter.validate_key(key));
+            self.iter.validate_key(key)?;
             return Ok(false);
         }
         if ord == Ordering::Greater {
@@ -372,12 +372,12 @@ impl<'a> Cursor<'a> {
     /// around `key`, otherwise you should `seek` first.
     pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
         if self.scan_mode != ScanMode::Backward {
-            if try!(self.near_seek(key, statistics)) && self.iter.key() == &**key.encoded() {
+            if self.near_seek(key, statistics)? && self.iter.key() == &**key.encoded() {
                 return Ok(Some(self.iter.value()));
             }
             return Ok(None);
         }
-        if try!(self.near_seek_for_prev(key, statistics)) && self.iter.key() == &**key.encoded() {
+        if self.near_seek_for_prev(key, statistics)? && self.iter.key() == &**key.encoded() {
             return Ok(Some(self.iter.value()));
         }
         Ok(None)
@@ -386,7 +386,7 @@ impl<'a> Cursor<'a> {
     fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
-            try!(self.iter.validate_key(key));
+            self.iter.validate_key(key)?;
             return Ok(false);
         }
 
@@ -397,7 +397,7 @@ impl<'a> Cursor<'a> {
         }
 
         statistics.seek_for_prev += 1;
-        if !try!(self.iter.seek_for_prev(key)) {
+        if !self.iter.seek_for_prev(key)? {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);
         }
@@ -418,7 +418,7 @@ impl<'a> Cursor<'a> {
         }
 
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
-            try!(self.iter.validate_key(key));
+            self.iter.validate_key(key)?;
             return Ok(false);
         }
 
@@ -452,7 +452,7 @@ impl<'a> Cursor<'a> {
     }
 
     pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        if !try!(self.seek_for_prev(key, statistics)) {
+        if !self.seek_for_prev(key, statistics)? {
             return Ok(false);
         }
 
@@ -470,7 +470,7 @@ impl<'a> Cursor<'a> {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
     pub fn near_reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        if !try!(self.near_seek_for_prev(key, statistics)) {
+        if !self.near_seek_for_prev(key, statistics)? {
             return Ok(false);
         }
 

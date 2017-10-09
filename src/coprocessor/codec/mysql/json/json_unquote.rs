@@ -61,11 +61,11 @@ pub fn unquote_string(s: &str) -> Result<String> {
                     if b.len() < ESCAPED_UNICODE_BYTES_SIZE {
                         return Err(box_err!("Invalid unicode, byte len too short: {:?}", b));
                     }
-                    let unicode = try!(str::from_utf8(&b[0..ESCAPED_UNICODE_BYTES_SIZE]));
+                    let unicode = str::from_utf8(&b[0..ESCAPED_UNICODE_BYTES_SIZE])?;
                     if unicode.len() != ESCAPED_UNICODE_BYTES_SIZE {
                         return Err(box_err!("Invalid unicode, char len too short: {}", unicode));
                     }
-                    let utf8 = try!(decode_escaped_unicode(unicode));
+                    let utf8 = decode_escaped_unicode(unicode)?;
                     ret.push(utf8);
                     for _ in 0..ESCAPED_UNICODE_BYTES_SIZE {
                         chars.next();

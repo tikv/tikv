@@ -161,7 +161,7 @@ impl LeaderClient {
 
             let start = Instant::now();
             (
-                try!(try_connect_leader(inner.env.clone(), &inner.members)),
+                try_connect_leader(inner.env.clone(), &inner.members)?,
                 start,
             )
         };
@@ -365,7 +365,7 @@ pub fn validate_endpoints(
 
     match members {
         Some(members) => {
-            let (client, members) = try!(try_connect_leader(env.clone(), &members));
+            let (client, members) = try_connect_leader(env.clone(), &members)?;
             info!("All PD endpoints are consistent: {:?}", endpoints);
             Ok((client, members))
         }

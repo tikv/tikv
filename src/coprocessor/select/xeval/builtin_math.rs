@@ -28,8 +28,8 @@ pub fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
 
 impl Evaluator {
     pub fn abs_int(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let child = try!(self.get_one_child(expr));
-        let d = try!(self.eval(ctx, child));
+        let child = self.get_one_child(expr)?;
+        let d = self.eval(ctx, child)?;
         match d {
             Datum::I64(i) => if i >= 0 {
                 Ok(Datum::I64(i))
@@ -42,8 +42,8 @@ impl Evaluator {
     }
 
     pub fn abs_real(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let child = try!(self.get_one_child(expr));
-        let d = try!(self.eval(ctx, child));
+        let child = self.get_one_child(expr)?;
+        let d = self.eval(ctx, child)?;
         match d {
             Datum::F64(f) => Ok(Datum::F64(f.abs())),
             Datum::Null => Ok(Datum::Null),
@@ -52,8 +52,8 @@ impl Evaluator {
     }
 
     pub fn ceil_int(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let child = try!(self.get_one_child(expr));
-        let d = try!(self.eval(ctx, child));
+        let child = self.get_one_child(expr)?;
+        let d = self.eval(ctx, child)?;
         match d {
             Datum::F64(i) => {
                 let result = i.ceil() as i64;
@@ -65,8 +65,8 @@ impl Evaluator {
     }
 
     pub fn ceil_real(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let child = try!(self.get_one_child(expr));
-        let d = try!(self.eval(ctx, child));
+        let child = self.get_one_child(expr)?;
+        let d = self.eval(ctx, child)?;
         match d {
             Datum::F64(f) => Ok(Datum::F64(f.ceil())),
             Datum::Null => Ok(Datum::Null),

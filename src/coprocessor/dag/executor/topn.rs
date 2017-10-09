@@ -74,13 +74,13 @@ impl<'a> TopNExecutor<'a> {
 
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
         for by_item in &order_by {
-            try!(visitor.visit(by_item.get_expr()));
+            visitor.visit(by_item.get_expr())?;
         }
 
         COPR_EXECUTOR_COUNT.with_label_values(&["topn"]).inc();
         Ok(TopNExecutor {
-            order_by: try!(OrderBy::new(&ctx, order_by)),
-            heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),
+            order_by: OrderBy::new(&ctx, order_by)?,
+            heap: Some(TopNHeap::new(meta.get_limit() as usize)?),
             cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
             iter: None,
@@ -90,22 +90,22 @@ impl<'a> TopNExecutor<'a> {
     }
 
     fn fetch_all(&mut self) -> Result<()> {
-        while let Some(row) = try!(self.src.next()) {
-            let cols = try!(inflate_with_col_for_dag(
+        while let Some(row) = self.src.next()? {
+            let cols = inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
                 self.cols.clone(),
                 &self.related_cols_offset,
-                row.handle
-            ));
-            let ob_values = try!(self.order_by.eval(&self.ctx, &cols));
-            try!(self.heap.as_mut().unwrap().try_add_row(
+                row.handle,
+            )?;
+            let ob_values = self.order_by.eval(&self.ctx, &cols)?;
+            self.heap.as_mut().unwrap().try_add_row(
                 row.handle,
                 row.data,
                 ob_values,
                 self.order_by.items.clone(),
-                self.ctx.clone()
-            ));
+                self.ctx.clone(),
+            )?;
         }
         Ok(())
     }
@@ -114,10 +114,8 @@ impl<'a> TopNExecutor<'a> {
 impl<'a> Executor for TopNExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         if self.iter.is_none() {
-            try!(self.fetch_all());
-            self.iter = Some(
-                try!(self.heap.take().unwrap().into_sorted_vec()).into_iter(),
-            );
+            self.fetch_all()?;
+            self.iter = Some(self.heap.take().unwrap().into_sorted_vec()?.into_iter());
         }
         let iter = self.iter.as_mut().unwrap();
         match iter.next() {

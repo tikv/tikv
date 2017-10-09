@@ -437,8 +437,8 @@ fn main() {
                 .map_err::<Box<Error>, _>(|e| Box::new(e))
                 .and_then(|mut f| {
                     let mut s = String::new();
-                    try!(f.read_to_string(&mut s));
-                    let c = try!(toml::from_str(&s));
+                    f.read_to_string(&mut s)?;
+                    let c = toml::from_str(&s)?;
                     Ok(c)
                 })
                 .unwrap_or_else(|e| {

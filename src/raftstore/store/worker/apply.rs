@@ -674,7 +674,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ExecContext,
     ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-        try!(check_epoch(&self.region, ctx.req));
+        check_epoch(&self.region, ctx.req)?;
         if ctx.req.has_admin_request() {
             self.exec_admin_cmd(ctx)
         } else {
@@ -696,7 +696,7 @@ impl ApplyDelegate {
             ctx.index
         );
 
-        let (mut response, exec_result) = try!(match cmd_type {
+        let (mut response, exec_result) = match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
@@ -704,7 +704,7 @@ impl ApplyDelegate {
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
-        });
+        }?;
         response.set_cmd_type(cmd_type);
 
         let mut resp = RaftCmdResponse::new();
@@ -854,7 +854,7 @@ impl ApplyDelegate {
             return Err(box_err!("invalid split request: {:?}", split_req));
         }
 
-        try!(util::check_key_in_region(split_key, &region));
+        util::check_key_in_region(split_key, &region)?;
 
         info!(
             "{} split at key: {}, region: {:?}",
@@ -984,12 +984,7 @@ impl ApplyDelegate {
         }
 
         // compact failure is safe to be omitted, no need to assert.
-        try!(compact_raft_log(
-            &self.tag,
-            &mut ctx.apply_state,
-            compact_index,
-            compact_term
-        ));
+        compact_raft_log(&self.tag, &mut ctx.apply_state, compact_index, compact_term)?;
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["compact", "success"])
@@ -1014,7 +1009,7 @@ impl ApplyDelegate {
         let mut ranges = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
-            let mut resp = try!(match cmd_type {
+            let mut resp = match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::DeleteRange => self.handle_delete_range(req, &mut ranges),
@@ -1029,7 +1024,7 @@ impl ApplyDelegate {
                 CmdType::Prewrite | CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
-            });
+            }?;
 
             resp.set_cmd_type(cmd_type);
 
@@ -1050,7 +1045,7 @@ impl ApplyDelegate {
 
     fn handle_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
-        try!(check_data_key(key, &self.region));
+        check_data_key(key, &self.region)?;
 
         let resp = Response::new();
         let key = keys::data_key(key);
@@ -1092,7 +1087,7 @@ impl ApplyDelegate {
 
     fn handle_delete(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
-        try!(check_data_key(key, &self.region));
+        check_data_key(key, &self.region)?;
 
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
@@ -1133,7 +1128,7 @@ impl ApplyDelegate {
                 e_key
             ));
         }
-        try!(check_data_key(s_key, &self.region));
+        check_data_key(s_key, &self.region)?;
         let end_key = keys::data_end_key(e_key);
         let region_end_key = keys::data_end_key(self.region.get_end_key());
         if end_key > region_end_key {
@@ -1197,7 +1192,7 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 
 fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
     // region key range has no data prefix, so we must use origin key to check.
-    try!(util::check_key_in_region(key, region));
+    util::check_key_in_region(key, region)?;
 
     Ok(())
 }
@@ -1205,7 +1200,7 @@ fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
 pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Result<Response> {
     // TODO: the get_get looks wried, maybe we should figure out a better name later.
     let key = req.get_get().get_key();
-    try!(check_data_key(key, region));
+    check_data_key(key, region)?;
 
     let mut resp = Response::new();
     let res = if req.get_get().has_cf() {

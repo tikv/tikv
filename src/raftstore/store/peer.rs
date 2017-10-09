@@ -312,14 +312,14 @@ impl Peer {
         let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
-        let ps = try!(PeerStorage::new(
+        let ps = PeerStorage::new(
             store.kv_engine(),
             store.raft_engine(),
             region,
             sched,
             tag.clone(),
-            store.entry_cache_metries.clone()
-        ));
+            store.entry_cache_metries.clone(),
+        )?;
 
         let applied_index = ps.applied_index();
 
@@ -337,7 +337,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = try!(RawNode::new(&raft_cfg, ps, &[]));
+        let raft_group = RawNode::new(&raft_cfg, ps, &[])?;
 
         let mut peer = Peer {
             kv_engine: store.kv_engine(),
@@ -374,7 +374,7 @@ impl Peer {
 
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
-            try!(peer.raft_group.campaign());
+            peer.raft_group.campaign()?;
         }
 
         Ok(peer)
@@ -401,18 +401,13 @@ impl Peer {
         // Set Tombstone state explicitly
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        try!(self.mut_store().clear_meta(&kv_wb, &raft_wb));
-        try!(write_peer_state(
-            &self.kv_engine,
-            &kv_wb,
-            &region,
-            PeerState::Tombstone
-        ));
+        self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
+        write_peer_state(&self.kv_engine, &kv_wb, &region, PeerState::Tombstone)?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(self.cfg.sync_log);
-        try!(self.kv_engine.write_opt(kv_wb, &write_opts));
-        try!(self.raft_engine.write_opt(raft_wb, &write_opts));
+        self.kv_engine.write_opt(kv_wb, &write_opts)?;
+        self.raft_engine.write_opt(raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -511,7 +506,7 @@ impl Peer {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
 
-            try!(self.send_raft_message(msg, trans));
+            self.send_raft_message(msg, trans)?;
 
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
@@ -545,7 +540,7 @@ impl Peer {
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
         }
-        try!(self.raft_group.step(m));
+        self.raft_group.step(m)?;
         Ok(())
     }
 
@@ -1366,8 +1361,8 @@ impl Peer {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        try!(self.coprocessor_host.pre_propose(self.region(), &mut req));
-        let data = try!(req.write_to_bytes());
+        self.coprocessor_host.pre_propose(self.region(), &mut req)?;
+        let data = req.write_to_bytes()?;
 
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
@@ -1379,7 +1374,7 @@ impl Peer {
 
         let sync_log = get_sync_log_from_request(&req);
         let propose_index = self.next_proposal_index();
-        try!(self.raft_group.propose(data, sync_log));
+        self.raft_group.propose(data, sync_log)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -1433,11 +1428,11 @@ impl Peer {
             ));
         }
 
-        try!(self.check_conf_change(&req));
+        self.check_conf_change(&req)?;
 
         metrics.conf_change += 1;
 
-        let data = try!(req.write_to_bytes());
+        let data = req.write_to_bytes()?;
 
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
@@ -1457,7 +1452,7 @@ impl Peer {
         );
 
         let propose_index = self.next_proposal_index();
-        try!(self.raft_group.propose_conf_change(cc));
+        self.raft_group.propose_conf_change(cc)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -1668,7 +1663,7 @@ impl Peer {
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
-        try!(check_epoch(self.region(), req));
+        check_epoch(self.region(), req)?;
         let mut snap = None;
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
@@ -1680,14 +1675,9 @@ impl Peer {
                     if snap.is_none() {
                         snap = Some(Snapshot::new(self.kv_engine.clone()));
                     }
-                    try!(apply::do_get(
-                        &self.tag,
-                        self.region(),
-                        snap.as_ref().unwrap(),
-                        req
-                    ))
+                    apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req)?
                 }
-                CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
+                CmdType::Snap => apply::do_snap(self.region().to_owned())?,
                 CmdType::Prewrite |
                 CmdType::Put |
                 CmdType::Delete |
