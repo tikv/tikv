@@ -609,19 +609,50 @@ mod tests {
         let debugger = new_debugger();
         let engine = &debugger.engines.kv_engine;
 
-        let k = keys::data_key(b"meta_lock");
-        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None).to_bytes();
-        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+        let cf_default_data = vec![(b"k1", b"v", 5), (b"k2", b"x", 10), (b"k3", b"y", 15)];
+        for &(prefix, value, ts) in &cf_default_data {
+            let encoded_key = Key::from_raw(prefix).append_ts(ts);
+            let key = keys::data_key(encoded_key.encoded().as_slice());
+            engine.put(key.as_slice(), value).unwrap();
+        }
 
-        let from = keys::data_key(b"m");
-        let to = keys::data_key(b"n");
+        let lock_cf = engine.cf_handle(CF_LOCK).unwrap();
+        let cf_lock_data = vec![
+            (b"k1", LockType::Put, b"v", 5),
+            (b"k4", LockType::Lock, b"x", 10),
+            (b"k5", LockType::Delete, b"y", 15),
+        ];
+        for &(prefix, tp, value, version) in &cf_lock_data {
+            let encoded_key = Key::from_raw(prefix);
+            let key = keys::data_key(encoded_key.encoded().as_slice());
+            let lock = Lock::new(tp, value.to_vec(), version, 0, None);
+            let value = lock.to_bytes();
+            engine
+                .put_cf(lock_cf, key.as_slice(), value.as_slice())
+                .unwrap();
+        }
+
+        let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+        let cf_write_data = vec![
+            (b"k2", WriteType::Put, 5, 10),
+            (b"k6", WriteType::Lock, 20, 30),
+            (b"k7", WriteType::Rollback, 35, 40),
+        ];
+        for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
+            let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
+            let key = keys::data_key(encoded_key.encoded().as_slice());
+            let write = Write::new(tp, start_ts, None);
+            let value = write.to_bytes();
+            engine
+                .put_cf(write_cf, key.as_slice(), value.as_slice())
+                .unwrap();
+        }
 
         let mut count = 0;
-        for key_and_mvcc in debugger.scan_mvcc(&from, &to, 0).unwrap() {
+        for key_and_mvcc in debugger.scan_mvcc(b"z", &[], 10).unwrap() {
             assert!(key_and_mvcc.is_ok());
             count += 1;
         }
-        assert_eq!(count, 1);
+        assert_eq!(count, 7);
     }
 }
