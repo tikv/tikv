@@ -15,7 +15,7 @@ use test::Bencher;
 use std::thread;
 use std::sync::mpsc::channel;
 
-use mio::{EventLoop, Handler, Sender};
+use mio::deprecated::{EventLoop, Handler, Sender};
 
 struct CountHandler {
     n: usize,
