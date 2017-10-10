@@ -13,7 +13,7 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use protobuf::RepeatedField;
 use futures::{future, Future, Sink, Stream};
@@ -23,9 +23,11 @@ use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 
 use util::{Either, HandyRwLock};
+use util::time::duration_to_sec;
 use pd::PdFuture;
 use super::{Error, PdClient, RegionStat, Result, REQUEST_TIMEOUT};
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
+use super::metrics::*;
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &'static str = "pd";
@@ -71,6 +73,20 @@ impl fmt::Debug for RpcClient {
     }
 }
 
+macro_rules! check_and_observe_resp {
+    ($resp:expr, $label:expr, $timer:expr) => {
+        let result = check_resp_header($resp.get_header());
+        let result_label = match result {
+            Ok(_) => "ok",
+            Err(_) => "err",
+        };
+        PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&[$label, result_label])
+            .observe(duration_to_sec($timer.elapsed()));
+        try!(result)
+    }
+}
+
 const LEADER_CHANGE_RETRY: usize = 10;
 
 impl PdClient for RpcClient {
@@ -79,6 +95,10 @@ impl PdClient for RpcClient {
     }
 
     fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()> {
+        let label = "bootstrap_cluster";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::BootstrapRequest::new();
         req.set_header(self.header());
         req.set_store(stores);
@@ -88,11 +108,16 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             client.bootstrap_opt(req.clone(), option)
         })?;
-        check_resp_header(resp.get_header())?;
+
+        check_and_observe_resp!(resp, label, timer);
         Ok(())
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
+        let label = "is_cluster_bootstrapped";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::IsBootstrappedRequest::new();
         req.set_header(self.header());
 
@@ -100,12 +125,16 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             client.is_bootstrapped_opt(req.clone(), option)
         })?;
-        check_resp_header(resp.get_header())?;
 
+        check_and_observe_resp!(resp, label, timer);
         Ok(resp.get_bootstrapped())
     }
 
     fn alloc_id(&self) -> Result<u64> {
+        let label = "alloc_id";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::AllocIDRequest::new();
         req.set_header(self.header());
 
@@ -113,12 +142,16 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             client.alloc_id_opt(req.clone(), option)
         })?;
-        check_resp_header(resp.get_header())?;
 
+        check_and_observe_resp!(resp, label, timer);
         Ok(resp.get_id())
     }
 
     fn put_store(&self, store: metapb::Store) -> Result<()> {
+        let label = "put_store";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::PutStoreRequest::new();
         req.set_header(self.header());
         req.set_store(store);
@@ -127,12 +160,16 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             client.put_store_opt(req.clone(), option)
         })?;
-        check_resp_header(resp.get_header())?;
 
+        check_and_observe_resp!(resp, label, timer);
         Ok(())
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
+        let label = "get_store";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::GetStoreRequest::new();
         req.set_header(self.header());
         req.set_store_id(store_id);
@@ -141,12 +178,16 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             client.get_store_opt(req.clone(), option)
         })?;
-        check_resp_header(resp.get_header())?;
 
+        check_and_observe_resp!(resp, label, timer);
         Ok(resp.take_store())
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
+        let label = "get_cluster_config";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::GetClusterConfigRequest::new();
         req.set_header(self.header());
 
@@ -154,12 +195,16 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             client.get_cluster_config_opt(req.clone(), option)
         })?;
-        check_resp_header(resp.get_header())?;
 
+        check_and_observe_resp!(resp, label, timer);
         Ok(resp.take_cluster())
     }
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+        let label = "get_region";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::GetRegionRequest::new();
         req.set_header(self.header());
         req.set_region_key(key.to_vec());
@@ -168,21 +213,25 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             client.get_region_opt(req.clone(), option)
         })?;
-        check_resp_header(resp.get_header())?;
 
+        check_and_observe_resp!(resp, label, timer);
         Ok(resp.take_region())
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
+        let label = "get_region_by_id";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::GetRegionByIDRequest::new();
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let executor = |client: &RwLock<Inner>, req: pdpb::GetRegionByIDRequest| {
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIDRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.get_region_by_id_async_opt(req, option);
-            Box::new(handler.map_err(Error::Grpc).and_then(|mut resp| {
-                check_resp_header(resp.get_header())?;
+            Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
+                check_and_observe_resp!(resp, label, timer);
                 if resp.has_region() {
                     Ok(Some(resp.take_region()))
                 } else {
@@ -202,6 +251,9 @@ impl PdClient for RpcClient {
         leader: metapb::Peer,
         region_stat: RegionStat,
     ) -> PdFuture<()> {
+        let label = "region_heartbeat";
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::RegionHeartbeatRequest::new();
         req.set_header(self.header());
         req.set_region(region);
@@ -260,15 +312,19 @@ impl PdClient for RpcClient {
     }
 
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+        let label = "ask_split";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::AskSplitRequest::new();
         req.set_header(self.header());
         req.set_region(region);
 
-        let executor = |client: &RwLock<Inner>, req: pdpb::AskSplitRequest| {
+        let executor = move |client: &RwLock<Inner>, req: pdpb::AskSplitRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.ask_split_async_opt(req, option);
-            Box::new(handler.map_err(Error::Grpc).and_then(|resp| {
-                check_resp_header(resp.get_header())?;
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                check_and_observe_resp!(resp, label, timer);
                 Ok(resp)
             })) as PdFuture<_>
         };
@@ -279,15 +335,19 @@ impl PdClient for RpcClient {
     }
 
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+        let label = "store_heartbeat";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::StoreHeartbeatRequest::new();
         req.set_header(self.header());
         req.set_stats(stats);
 
-        let executor = |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
+        let executor = move |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.store_heartbeat_async_opt(req, option);
-            Box::new(handler.map_err(Error::Grpc).and_then(|resp| {
-                check_resp_header(resp.get_header())?;
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                check_and_observe_resp!(resp, label, timer);
                 Ok(())
             })) as PdFuture<_>
         };
@@ -298,16 +358,20 @@ impl PdClient for RpcClient {
     }
 
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()> {
+        let label = "report_split";
+        let timer = Instant::now();
+        PD_REQUEST_COUNTER_VEC.with_label_values(&[label]).inc();
+
         let mut req = pdpb::ReportSplitRequest::new();
         req.set_header(self.header());
         req.set_left(left);
         req.set_right(right);
 
-        let executor = |client: &RwLock<Inner>, req: pdpb::ReportSplitRequest| {
+        let executor = move |client: &RwLock<Inner>, req: pdpb::ReportSplitRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client.rl().client.report_split_async_opt(req, option);
-            Box::new(handler.map_err(Error::Grpc).and_then(|resp| {
-                check_resp_header(resp.get_header())?;
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                check_and_observe_resp!(resp, label, timer);
                 Ok(())
             })) as PdFuture<_>
         };
