@@ -83,13 +83,13 @@ where
     let handle = core.handle();
     {
         let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
-            let _t = WORKER_TASK_HISTOGRAM_VEC
-                .with_label_values(&[&name])
-                .start_coarse_timer();
             runner.run(t.unwrap(), &handle);
             WORKER_PENDING_TASKS_VEC
                 .with_label_values(&[&name])
                 .sub(1.0);
+            WORKER_HANDLED_TASKS_VEC
+                .with_label_values(&[&name])
+                .inc();
             Ok(())
         });
         // `UnboundedReceiver` never returns an error.

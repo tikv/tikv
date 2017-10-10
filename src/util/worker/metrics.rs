@@ -17,14 +17,14 @@ lazy_static! {
     pub static ref WORKER_PENDING_TASKS_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_worker_pending_task_total",
-            "Pending task count of a worker.",
+            "Total number of worker pending tasks.",
             &["name"]
         ).unwrap();
 
-    pub static ref WORKER_TASK_HISTOGRAM_VEC: HistogramVec =
-        register_histogram_vec!(
-            "tikv_worker_task_duration_seconds",
-            "Bucketed histogram of worker task run duration",
+    pub static ref WORKER_HANDLED_TASKS_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_worker_handled_task_total",
+            "Total number of worker handled tasks.",
             &["name"]
         ).unwrap();
 }

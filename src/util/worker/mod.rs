@@ -175,6 +175,10 @@ where
         WORKER_PENDING_TASKS_VEC
             .with_label_values(&[&name])
             .sub(buffer.len() as f64);
+        WORKER_HANDLED_TASKS_VEC
+            .with_label_values(&[&name])
+            .inc_by(buffer.len() as f64)
+            .unwrap();
         runner.run_batch(&mut buffer);
         buffer.clear();
     }
