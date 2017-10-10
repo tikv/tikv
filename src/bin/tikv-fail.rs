@@ -90,7 +90,8 @@ fn main() {
                         .takes_value(true)
                         .help("Recover from a file of fail points"),
                 ),
-        );
+        )
+        .subcommand(SubCommand::with_name("list").about("List all fail points"));
     let matches = app.clone().get_matches();
     let addr = matches.value_of("addr").unwrap();
     let addr = addr.trim_left_matches("http://");
@@ -130,6 +131,11 @@ fn main() {
             let option = CallOption::default().timeout(Duration::from_secs(10));
             client.recover_fail_point_opt(recover_req, option).unwrap();
         }
+    } else if matches.is_present("list") {
+        let list_req = debugpb::ListFailPointsRequest::new();
+        let option = CallOption::default().timeout(Duration::from_secs(10));
+        let resp = client.list_fail_points_opt(list_req, option).unwrap();
+        println!("{:?}", resp.get_entries());
     }
 }
 

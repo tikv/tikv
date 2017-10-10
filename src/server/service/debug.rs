@@ -203,7 +203,7 @@ impl debugpb_grpc::Debug for Service {
         mut req: InjectFailPointRequest,
         sink: UnarySink<InjectFailPointResponse>,
     ) {
-        const TAG: &'static str = "debug_region_size";
+        const TAG: &'static str = "debug_inject_fail_point";
 
         let f = self.pool.spawn_fn(move || {
             let name = req.take_name();
@@ -226,7 +226,7 @@ impl debugpb_grpc::Debug for Service {
         mut req: RecoverFailPointRequest,
         sink: UnarySink<RecoverFailPointResponse>,
     ) {
-        const TAG: &'static str = "debug_region_size";
+        const TAG: &'static str = "debug_recover_fail_point";
 
         let f = self.pool.spawn_fn(move || {
             let name = req.take_name();
@@ -235,6 +235,29 @@ impl debugpb_grpc::Debug for Service {
             }
             fail::remove(name);
             Ok(RecoverFailPointResponse::new())
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn list_fail_points(
+        &self,
+        ctx: RpcContext,
+        _: ListFailPointsRequest,
+        sink: UnarySink<ListFailPointsResponse>,
+    ) {
+        const TAG: &'static str = "debug_list_fail_points";
+
+        let f = self.pool.spawn_fn(move || {
+            let list = fail::list().into_iter().map(|(name, actions)| {
+                let mut entry = ListFailPointsResponse_Entry::new();
+                entry.set_name(name);
+                entry.set_actions(actions);
+                entry
+            });
+            let mut resp = ListFailPointsResponse::new();
+            resp.set_entries(list.collect());
+            Ok(resp)
         });
 
         self.handle_response(ctx, sink, f, TAG);
