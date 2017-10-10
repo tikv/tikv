@@ -34,7 +34,7 @@ use raftstore::store::Msg;
 use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use raftstore::store::store::StoreInfo;
 use raftstore::store::Callback;
-use coprocessor::CopRequestStatistics;
+use storage::FlowStatistics;
 use util::collections::HashMap;
 use super::metrics::*;
 
@@ -68,7 +68,7 @@ pub enum Task {
         region: metapb::Region,
         peer: metapb::Peer,
     },
-    ReadStats { read_stats: CopRequestStatistics },
+    ReadStats { read_stats: HashMap<u64, FlowStatistics>, },
 }
 
 #[derive(Default)]
@@ -432,7 +432,7 @@ impl<T: PdClient> Runner<T> {
         self.is_hb_receiver_scheduled = true;
     }
 
-    fn handle_read_stats(&mut self, read_stats: CopRequestStatistics) {
+    fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
         PD_REQ_COUNTER_VEC
             .with_label_values(&["read stats", "all"])
             .inc();
