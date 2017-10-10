@@ -173,10 +173,10 @@ impl<S: RaftStoreRouter> RaftKv<S> {
     fn call_command(&self, req: RaftCmdRequest, cb: Callback<CmdRes>) -> Result<()> {
         let l = req.get_requests().len();
         let db = self.db.clone();
-        try!(self.router.send_command(req, box move |resp| {
+        self.router.send_command(req, box move |resp| {
             let (cb_ctx, res) = on_result(resp, l, db);
             cb((cb_ctx, res.map_err(Error::into)));
-        }));
+        })?;
         Ok(())
     }
 
@@ -223,7 +223,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             on_finished(cmd_resps);
         };
 
-        try!(self.router.send_batch_commands(batch, on_finished));
+        self.router.send_batch_commands(batch, on_finished)?;
         Ok(())
     }
 
@@ -489,7 +489,7 @@ impl Snapshot for RegionSnapshot {
         mode: ScanMode,
     ) -> engine::Result<Cursor<'b>> {
         Ok(Cursor::new(
-            try!(RegionSnapshot::iter_cf(self, cf, iter_opt)),
+            RegionSnapshot::iter_cf(self, cf, iter_opt)?,
             mode,
         ))
     }

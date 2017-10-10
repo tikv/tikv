@@ -288,7 +288,7 @@ impl Expression {
     pub fn batch_build(ctx: &StatementContext, exprs: Vec<Expr>) -> Result<Vec<Self>> {
         let mut data = Vec::with_capacity(exprs.len());
         for expr in exprs {
-            let ex = try!(Expression::build(ctx, expr));
+            let ex = Expression::build(ctx, expr)?;
             data.push(ex);
         }
         Ok(data)
@@ -342,10 +342,7 @@ impl Expression {
                 .map(|e| Expression::new_const(e, tp))
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
-                try!(FnCall::check_args(
-                    expr.get_sig(),
-                    expr.get_children().len()
-                ));
+                FnCall::check_args(expr.get_sig(), expr.get_children().len())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
@@ -359,7 +356,7 @@ impl Expression {
                     })
             }
             ExprType::ColumnRef => {
-                let offset = try!(expr.get_val().decode_i64().map_err(Error::from)) as usize;
+                let offset = expr.get_val().decode_i64().map_err(Error::from)? as usize;
                 let column = Column {
                     offset: offset,
                     tp: tp,

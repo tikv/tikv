@@ -120,7 +120,7 @@ impl Time {
         Ok(Time {
             time: time,
             tp: tp,
-            fsp: try!(check_fsp(fsp)),
+            fsp: check_fsp(fsp)?,
         })
     }
 
@@ -202,7 +202,7 @@ impl Time {
     }
 
     pub fn parse_datetime(s: &str, fsp: i8, tz: &FixedOffset) -> Result<Time> {
-        let fsp = try!(check_fsp(fsp));
+        let fsp = check_fsp(fsp)?;
         let mut frac_str = "";
         let mut need_adjust = false;
         let parts = Time::parse_datetime_format(s);
@@ -211,7 +211,7 @@ impl Time {
                 [s1] => {
                     need_adjust = s1.len() == 12 || s1.len() == 6;
                     match s1.len() {
-                        14 | 12 | 8 | 6 => try!(split_ymd_hms(s1.as_bytes())),
+                        14 | 12 | 8 | 6 => split_ymd_hms(s1.as_bytes())?,
                         _ => return Err(box_err!("invalid datetime: {}", s)),
                     }
                 }
@@ -219,7 +219,7 @@ impl Time {
                     frac_str = frac;
                     need_adjust = s1.len() == 12;
                     match s1.len() {
-                        14 | 12 => try!(split_ymd_hms(s1.as_bytes())),
+                        14 | 12 => split_ymd_hms(s1.as_bytes())?,
                         _ => return Err(box_err!("invalid datetime: {}", s)),
                     }
                 }
@@ -261,7 +261,7 @@ impl Time {
             }
         }
 
-        let frac = try!(parse_frac(frac_str.as_bytes(), fsp));
+        let frac = parse_frac(frac_str.as_bytes(), fsp)?;
         if y == 0 && m == 0 && d == 0 && h == 0 && minute == 0 && sec == 0 {
             return Ok(zero_datetime(tz));
         }
@@ -269,7 +269,7 @@ impl Time {
         if y < 0 || y > 9999 {
             return Err(box_err!("unsupport year: {}", y));
         }
-        let t = try!(ymd_hms_nanos(
+        let t = ymd_hms_nanos(
             tz,
             y,
             m,
@@ -277,8 +277,8 @@ impl Time {
             h,
             minute,
             sec,
-            frac * TEN_POW[9 - fsp as usize]
-        ));
+            frac * TEN_POW[9 - fsp as usize],
+        )?;
         Time::new(t, types::DATETIME as u8, fsp as i8)
     }
 
@@ -289,7 +289,7 @@ impl Time {
         if u == 0 {
             return Time::new(zero_time(tz), tp, fsp);
         }
-        let fsp = try!(mysql::check_fsp(fsp));
+        let fsp = mysql::check_fsp(fsp)?;
         let ymdhms = u >> 24;
         let ymd = ymdhms >> 17;
         let day = (ymd & ((1 << 5) - 1)) as u32;
@@ -302,28 +302,10 @@ impl Time {
         let hour = (hms >> 12) as u32;
         let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
         let t = if tp == types::TIMESTAMP {
-            let t = try!(ymd_hms_nanos(
-                &Utc,
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-                nanosec
-            ));
+            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanosec)?;
             tz.from_utc_datetime(&t.naive_utc())
         } else {
-            try!(ymd_hms_nanos(
-                tz,
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-                nanosec
-            ))
+            ymd_hms_nanos(tz, year, month, day, hour, minute, second, nanosec)?
         };
         Time::new(t, tp, fsp as i8)
     }
@@ -386,7 +368,7 @@ impl Time {
             // date type has no fsp
             return Ok(());
         }
-        let fsp = try!(check_fsp(fsp));
+        let fsp = check_fsp(fsp)?;
         if fsp == self.fsp {
             return Ok(());
         }
@@ -446,14 +428,14 @@ impl Display for Time {
         }
 
         if self.is_zero() {
-            try!(f.write_str(ZERO_DATETIME_STR));
+            f.write_str(ZERO_DATETIME_STR)?;
         } else {
-            try!(write!(f, "{}", self.time.format("%Y-%m-%d %H:%M:%S")));
+            write!(f, "{}", self.time.format("%Y-%m-%d %H:%M:%S"))?;
         }
         if self.fsp > 0 {
             // Do we need to round the result?
             let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
-            try!(write!(f, ".{0:01$}", nanos, self.fsp as usize));
+            write!(f, ".{0:01$}", nanos, self.fsp as usize)?;
         }
         Ok(())
     }

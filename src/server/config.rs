@@ -115,8 +115,8 @@ impl Config {
         }
 
         for (k, v) in &self.labels {
-            try!(validate_label(k, "key"));
-            try!(validate_label(v, "value"));
+            validate_label(k, "key")?;
+            validate_label(v, "value")?;
         }
 
         Ok(())

@@ -87,7 +87,7 @@ impl<'a> AnalyzeContext<'a> {
             self.statistics,
         );
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
-        while let Some(row) = try!(scanner.next()) {
+        while let Some(row) = scanner.next()? {
             let bytes = row.data.get_column_values();
             hist.append(bytes);
         }
@@ -102,14 +102,9 @@ impl<'a> AnalyzeContext<'a> {
     // collectors for each column value.
     fn handle_column(mut self) -> Result<Vec<u8>> {
         let col_req = self.req.take_col_req();
-        let builder = try!(SampleBuilder::new(
-            col_req,
-            self.snap,
-            self.ranges,
-            &mut self.statistics
-        ));
+        let builder = SampleBuilder::new(col_req, self.snap, self.ranges, &mut self.statistics)?;
 
-        let (collectors, pk_builder) = try!(builder.collect_samples_and_estimate_ndvs());
+        let (collectors, pk_builder) = builder.collect_samples_and_estimate_ndvs()?;
         let pk_hist = pk_builder.into_proto();
         let cols: Vec<analyze::SampleCollector> =
             collectors.into_iter().map(|col| col.into_proto()).collect();
@@ -175,8 +170,8 @@ impl<'a> SampleBuilder<'a> {
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors =
             vec![SampleCollector::new(self.max_sample_size, self.max_sketch_size); self.col_len];
-        while let Some(row) = try!(self.data.next()) {
-            let cols = try!(row.get_binary_cols(&self.cols));
+        while let Some(row) = self.data.next()? {
+            let cols = row.get_binary_cols(&self.cols)?;
             let retreive_len = cols.len();
             let mut cols_iter = cols.into_iter();
             if self.col_len != retreive_len {

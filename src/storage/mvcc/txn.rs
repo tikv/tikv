@@ -124,7 +124,7 @@ impl<'a> MvccTxn<'a> {
     ) -> Result<()> {
         let key = mutation.key();
         if !options.skip_constraint_check {
-            if let Some((commit, _)) = try!(self.reader.seek_write(key, u64::max_value())) {
+            if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
                 // Abort on writes after our start timestamp ...
                 if commit >= self.start_ts {
                     MVCC_CONFLICT_COUNTER
@@ -140,10 +140,10 @@ impl<'a> MvccTxn<'a> {
             }
         }
         // ... or locks at any timestamp.
-        if let Some(lock) = try!(self.reader.load_lock(key)) {
+        if let Some(lock) = self.reader.load_lock(key)? {
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
-                    key: try!(key.raw()),
+                    key: key.raw()?,
                     primary: lock.primary,
                     ts: lock.ts,
                     ttl: lock.ttl,
@@ -186,12 +186,12 @@ impl<'a> MvccTxn<'a> {
     }
 
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
-        let (lock_type, short_value) = match try!(self.reader.load_lock(key)) {
+        let (lock_type, short_value) = match self.reader.load_lock(key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 (lock.lock_type, lock.short_value.take())
             }
             _ => {
-                return match try!(self.reader.get_txn_commit_info(key, self.start_ts)) {
+                return match self.reader.get_txn_commit_info(key, self.start_ts)? {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER
                             .with_label_values(&["commit_lock_not_found"])
@@ -228,7 +228,7 @@ impl<'a> MvccTxn<'a> {
     }
 
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
-        match try!(self.reader.load_lock(key)) {
+        match self.reader.load_lock(key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
                 // If prewrite type is DEL or LOCK, it is no need to delete value.
                 if lock.short_value.is_none() && lock.lock_type == LockType::Put {
@@ -236,7 +236,7 @@ impl<'a> MvccTxn<'a> {
                 }
             }
             _ => {
-                return match try!(self.reader.get_txn_commit_info(key, self.start_ts)) {
+                return match self.reader.get_txn_commit_info(key, self.start_ts)? {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
@@ -277,7 +277,7 @@ impl<'a> MvccTxn<'a> {
         let mut versions = 0;
         let mut delete_versions = 0;
         let mut latest_delete = None;
-        while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
+        while let Some((commit, write)) = self.reader.seek_write(key, ts)? {
             ts = commit - 1;
             versions += 1;
 
