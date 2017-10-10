@@ -231,7 +231,7 @@ impl Snapshot for RocksSnapshot {
     }
 }
 
-impl<'a> EngineIterator for DBIterator<'a> {
+impl<'a> EngineIterator for DBIterator<&'a DB> {
     fn next(&mut self) -> bool {
         DBIterator::next(self)
     }
