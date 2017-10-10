@@ -39,7 +39,7 @@ use std::str;
 use std::time::Duration;
 use std::sync::Arc;
 
-use clap::{App, Arg, ArgMatches, SubCommand};
+use clap::{App, Arg, SubCommand};
 use grpc::{CallOption, ChannelBuilder, EnvBuilder};
 use kvproto::debugpb;
 use kvproto::debugpb_grpc::DebugClient;
@@ -70,10 +70,9 @@ fn main() {
                         .help("Fail actions"),
                 )
                 .arg(
-                    Arg::with_name("list")
-                        .short("l")
+                    Arg::with_name("file")
                         .takes_value(true)
-                        .help("A list of fail point and action to inject"),
+                        .help("Read a file of fail points and actions to inject"),
                 ),
         )
         .subcommand(
@@ -87,10 +86,9 @@ fn main() {
                         .help("Fail point name"),
                 )
                 .arg(
-                    Arg::with_name("list")
-                        .short("l")
+                    Arg::with_name("file")
                         .takes_value(true)
-                        .help("Recover a list of fail points"),
+                        .help("Recover from a file of fail points"),
                 ),
         );
     let matches = app.clone().get_matches();
@@ -102,7 +100,7 @@ fn main() {
     let client = DebugClient::new(channel);
 
     if let Some(matches) = matches.subcommand_matches("inject") {
-        let mut list = read_list(matches);
+        let mut list = matches.value_of("file").map_or_else(Vec::new, read_file);
         if let (Some(name), Some(actions)) =
             (matches.value_of("failpoint"), matches.value_of("actions"))
         {
@@ -114,13 +112,11 @@ fn main() {
             inject_req.set_name(name);
             inject_req.set_actions(actions);
 
-            println!("Req {:?}", inject_req);
             let option = CallOption::default().timeout(Duration::from_secs(10));
             client.inject_fail_point_opt(inject_req, option).unwrap();
-            println!("Done!");
         }
     } else if let Some(matches) = matches.subcommand_matches("recover") {
-        let mut list = read_list(matches);
+        let mut list = matches.value_of("file").map_or_else(Vec::new, read_file);
         if let Some(names) = matches.values_of("failpoint") {
             for name in names {
                 list.push((name.to_owned(), "".to_owned()));
@@ -131,29 +127,25 @@ fn main() {
             let mut recover_req = debugpb::RecoverFailPointRequest::new();
             recover_req.set_name(name);
 
-            println!("Req {:?}", recover_req);
             let option = CallOption::default().timeout(Duration::from_secs(10));
             client.recover_fail_point_opt(recover_req, option).unwrap();
-            println!("Done!");
         }
     }
 }
 
-fn read_list(matches: &ArgMatches) -> Vec<(String, String)> {
+fn read_file(path: &str) -> Vec<(String, String)> {
     let mut list = vec![];
-    if let Some(list_path) = matches.value_of("list") {
-        let mut buffer = String::new();
-        fs::File::open(list_path)
-            .unwrap()
-            .read_to_string(&mut buffer)
-            .unwrap();
-        for line in buffer.lines() {
-            let mut parts = line.split('=');
-            list.push((
-                parts.next().unwrap().to_owned(),
-                parts.next().unwrap_or("").to_owned(),
-            ))
-        }
+    let mut buffer = String::new();
+    fs::File::open(path)
+        .unwrap()
+        .read_to_string(&mut buffer)
+        .unwrap();
+    for line in buffer.lines() {
+        let mut parts = line.split('=');
+        list.push((
+            parts.next().unwrap().to_owned(),
+            parts.next().unwrap_or("").to_owned(),
+        ))
     }
     list
 }
