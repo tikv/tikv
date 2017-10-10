@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Deref;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
@@ -231,7 +232,7 @@ impl Snapshot for RocksSnapshot {
     }
 }
 
-impl<'a> EngineIterator for DBIterator<&'a DB> {
+impl<D: Deref<Target = DB>> EngineIterator for DBIterator<D> {
     fn next(&mut self) -> bool {
         DBIterator::next(self)
     }
