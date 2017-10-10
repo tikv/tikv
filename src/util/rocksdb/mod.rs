@@ -175,13 +175,17 @@ fn check_and_open(
 
     // Create needed column families not existed yet.
     for cf in cfs_diff(&needed, &existed) {
-        if let Some(opts) = cfs_opts.iter().find(|x| x.cf == cf) {
-            let opt = opts.options.clone();
-            db.create_cf((cf, opt))?;
-        } else {
-            return Err(format!("can't find cf: {}", cf));
-        }
+        db.create_cf((
+            cf,
+            cfs_opts
+                .iter()
+                .find(|x| x.cf == cf)
+                .unwrap()
+                .options
+                .clone(),
+        ))?;
     }
+
     Ok(db)
 }
 
