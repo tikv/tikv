@@ -274,6 +274,11 @@ impl<T: PdClient> Runner<T> {
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
 
+        for peer in self.region_peers.values() {
+            REGION_READ_BYTES_HISTOGRAM.observe((peer.read_bytes - peer.last_read_bytes) as f64);
+            REGION_READ_KEYS_HISTOGRAM.observe((peer.read_keys - peer.last_read_keys) as f64);
+        }
+
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
             .set(capacity as f64);
@@ -432,7 +437,7 @@ impl<T: PdClient> Runner<T> {
             .with_label_values(&["read stats", "all"])
             .inc();
         for (region_id, stats) in read_stats {
-            let mut peer_stat = self.region_peers
+            let peer_stat = self.region_peers
                 .entry(region_id)
                 .or_insert_with(PeerReadStat::default);
             peer_stat.read_bytes += stats.read_bytes as u64;

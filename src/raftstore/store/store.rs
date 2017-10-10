@@ -1679,15 +1679,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_update_region_flow(&mut self) {
         for peer in self.region_peers.values_mut() {
+            self.store_stat.region_bytes_written.observe(
+                (peer.peer_stat.written_bytes - peer.peer_stat.last_written_bytes) as f64,
+            );
+            self.store_stat.region_keys_written.observe(
+                (peer.peer_stat.written_keys - peer.peer_stat.last_written_keys) as f64,
+            );
+
             peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
             peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
-
-            self.store_stat
-                .region_bytes_written
-                .observe(peer.peer_stat.written_bytes as f64);
-            self.store_stat
-                .region_keys_written
-                .observe(peer.peer_stat.written_keys as f64);
         }
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
