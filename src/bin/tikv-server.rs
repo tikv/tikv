@@ -163,8 +163,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let mut event_loop = store::create_event_loop(&cfg.raft_store)
         .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
     let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
-    let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
     let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
+    let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
 
     // Create kv engine, storage.
     let kv_db_opts = cfg.rocksdb.build_opt();
@@ -201,7 +201,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         cfg.raft_store.region_split_size.0 as usize,
         storage.clone(),
         raft_router,
-        significant_msg_sender,
         resolver,
         snap_mgr.clone(),
         Some(engines.clone()),

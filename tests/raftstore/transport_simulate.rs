@@ -14,7 +14,7 @@
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{Error, Result};
-use tikv::raftstore::store::{Msg as StoreMsg, Transport};
+use tikv::raftstore::store::{Msg as StoreMsg, SignificantMsg, Transport};
 use tikv::server::transport::*;
 use tikv::server::StoreAddrResolver;
 use tikv::util::{transport, Either, HandyRwLock};
@@ -29,6 +29,9 @@ use std::sync::atomic::*;
 
 pub trait Channel<M>: Send + Clone {
     fn send(&self, m: M) -> Result<()>;
+    fn significant_send(&self, _: SignificantMsg) -> Result<()> {
+        unimplemented!()
+    }
     fn flush(&mut self) {}
 }
 
@@ -49,6 +52,10 @@ where
 impl Channel<StoreMsg> for ServerRaftStoreRouter {
     fn send(&self, m: StoreMsg) -> Result<()> {
         RaftStoreRouter::try_send(self, m)
+    }
+
+    fn significant_send(&self, msg: SignificantMsg) -> Result<()> {
+        RaftStoreRouter::significant_send(self, msg)
     }
 }
 
@@ -188,6 +195,10 @@ impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {
 
     fn try_send(&self, m: StoreMsg) -> Result<()> {
         Channel::send(self, m)
+    }
+
+    fn significant_send(&self, m: SignificantMsg) -> Result<()> {
+        self.ch.significant_send(m)
     }
 }
 
