@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
 use std::net::SocketAddr;
 use kvproto::raft_serverpb::RaftMessage;
@@ -85,9 +85,7 @@ pub trait RaftStoreRouter: Send + Clone {
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
     pub ch: SendCh<StoreMsg>,
-    // Some tests need Sync for ServerRaftStoreRouter, so here we use Arc + Mutex here.
-    // TODO: refactor the test and remove the limitation later.
-    pub significant_msg_sender: Arc<Mutex<Sender<SignificantMsg>>>,
+    pub significant_msg_sender: Sender<SignificantMsg>,
 }
 
 impl ServerRaftStoreRouter {
@@ -97,7 +95,7 @@ impl ServerRaftStoreRouter {
     ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
             ch: ch,
-            significant_msg_sender: Arc::new(Mutex::new(significant_msg_sender)),
+            significant_msg_sender: significant_msg_sender,
         }
     }
 }
@@ -130,7 +128,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {
-        if let Err(e) = self.significant_msg_sender.lock().unwrap().send(msg) {
+        if let Err(e) = self.significant_msg_sender.send(msg) {
             return Err(box_err!("failed to sendsignificant msg {:?}", e));
         }
 

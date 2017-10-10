@@ -121,14 +121,14 @@ impl<M> Filter<M> for DelayFilter {
 
 pub struct SimulateTransport<M, C: Channel<M>> {
     filters: Arc<RwLock<Vec<Box<Filter<M>>>>>,
-    ch: C,
+    ch: Arc<Mutex<C>>,
 }
 
 impl<M, C: Channel<M>> SimulateTransport<M, C> {
     pub fn new(ch: C) -> SimulateTransport<M, C> {
         SimulateTransport {
             filters: Arc::new(RwLock::new(vec![])),
-            ch: ch,
+            ch: Arc::new(Mutex::new(ch)),
         }
     }
 
@@ -156,7 +156,7 @@ impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
         }
         if res.is_ok() {
             for msg in msgs {
-                res = self.ch.send(msg);
+                res = self.ch.lock().unwrap().send(msg);
                 if res.is_err() {
                     break;
                 }
@@ -184,7 +184,7 @@ impl<C: Channel<RaftMessage>> Transport for SimulateTransport<RaftMessage, C> {
     }
 
     fn flush(&mut self) {
-        self.ch.flush();
+        self.ch.lock().unwrap().flush();
     }
 }
 
@@ -198,7 +198,7 @@ impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {
     }
 
     fn significant_send(&self, m: SignificantMsg) -> Result<()> {
-        self.ch.significant_send(m)
+        self.ch.lock().unwrap().significant_send(m)
     }
 }
 
