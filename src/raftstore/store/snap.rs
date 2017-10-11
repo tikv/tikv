@@ -616,7 +616,7 @@ impl Snap {
     fn add_kv(&mut self, k: &[u8], v: &[u8]) -> io::Result<()> {
         let cf_file = &mut self.cf_files[self.cf_index];
         let writer = cf_file.sst_writer.as_mut().unwrap();
-        if let Err(e) = writer.add(k, v) {
+        if let Err(e) = writer.put(k, v) {
             return Err(io::Error::new(ErrorKind::Other, e));
         }
         cf_file.kv_count += 1;
