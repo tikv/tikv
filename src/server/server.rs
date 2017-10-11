@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::sync::{Arc, RwLock};
-use std::sync::mpsc::Sender;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
@@ -22,7 +21,7 @@ use kvproto::debugpb_grpc::create_debug;
 
 use util::worker::Worker;
 use storage::Storage;
-use raftstore::store::{CopFlowStatistics, Engines, Msg, SignificantMsg, SnapManager};
+use raftstore::store::{CopFlowStatistics, Engines, Msg, SnapManager};
 
 use super::{Config, Result};
 use coprocessor::{CopRequestStatistics, CopSender, EndPointHost, EndPointTask, Result as CopResult};
@@ -92,7 +91,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         region_split_size: usize,
         storage: Storage,
         raft_router: T,
-        significant_msg_sender: Sender<SignificantMsg>,
         resolver: S,
         snap_mgr: SnapManager,
         debug_engines: Option<Engines>,
@@ -142,7 +140,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_client,
             snap_worker.scheduler(),
             raft_router.clone(),
-            significant_msg_sender,
             resolver,
         );
 
@@ -238,6 +235,7 @@ mod tests {
     #[derive(Clone)]
     struct TestRaftStoreRouter {
         tx: Sender<usize>,
+        significant_msg_sender: Sender<SignificantMsg>,
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
@@ -248,6 +246,11 @@ mod tests {
 
         fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
+            Ok(())
+        }
+
+        fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {
+            self.significant_msg_sender.send(msg).unwrap();
             Ok(())
         }
     }
@@ -262,8 +265,11 @@ mod tests {
         storage.start(&storage_cfg).unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let router = TestRaftStoreRouter { tx };
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
+        let router = TestRaftStoreRouter {
+            tx: tx,
+            significant_msg_sender: significant_msg_sender,
+        };
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
@@ -271,7 +277,6 @@ mod tests {
             1024,
             storage,
             router,
-            significant_msg_sender,
             MockResolver { addr: addr.clone() },
             SnapManager::new("", None),
             None,

@@ -21,6 +21,7 @@ use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use tokio_core::reactor::{Core, Handle};
 
 use super::Stopped;
+use super::metrics::*;
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T, handle: &Handle);
@@ -49,6 +50,9 @@ impl<T: Display> Scheduler<T> {
         if let Err(err) = self.sender.unbounded_send(Some(task)) {
             return Err(Stopped(err.into_inner().unwrap()));
         }
+        WORKER_PENDING_TASK_VEC
+            .with_label_values(&[&self.name])
+            .inc();
         Ok(())
     }
 }
@@ -75,11 +79,14 @@ where
     R: Runnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
+    let name = thread::current().name().unwrap().to_owned();
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     {
         let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
             runner.run(t.unwrap(), &handle);
+            WORKER_PENDING_TASK_VEC.with_label_values(&[&name]).sub(1.0);
+            WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]).inc();
             Ok(())
         });
         // `UnboundedReceiver` never returns an error.
