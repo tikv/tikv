@@ -14,24 +14,17 @@
 use prometheus::*;
 
 lazy_static! {
-    pub static ref PD_SEND_MSG_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_pd_msg_send_duration_seconds",
-            "Bucketed histogram of PD message send duration",
-             exponential_buckets(0.0005, 10.0, 7).unwrap()
-        ).unwrap();
-
-    pub static ref PD_REQ_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_pd_request_sent_total",
-            "Total number of pd client request sent.",
-            &["type", "status"]
+    pub static ref PD_REQUEST_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_pd_request_duration_seconds",
+            "Bucketed histogram of PD requests duration",
+            &["type"]
         ).unwrap();
 
     pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_pd_heartbeat_sent_total",
-            "Total number of pd client heartbeat sent.",
+            "tikv_pd_heartbeat_message_total",
+            "Total number of PD heartbeat messages.",
             &["type"]
         ).unwrap();
 
@@ -48,6 +41,7 @@ lazy_static! {
             "Size of storage.",
             &["type"]
         ).unwrap();
+
     pub static ref REGION_READ_KEYS_HISTOGRAM: Histogram =
         register_histogram!(
            "tikv_region_read_keys",
@@ -55,7 +49,7 @@ lazy_static! {
            exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
-     pub static ref REGION_READ_BYTES_HISTOGRAM: Histogram =
+    pub static ref REGION_READ_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_region_read_bytes",
             "Histogram of bytes written for regions",

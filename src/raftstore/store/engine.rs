@@ -236,8 +236,8 @@ impl Default for IterOption {
 
 // TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator;
-    fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator>;
+    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB>;
+    fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
@@ -280,7 +280,7 @@ pub trait Iterable {
     }
 }
 
-fn scan_impl<F>(mut it: DBIterator, start_key: &[u8], f: &mut F) -> Result<()>
+fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], f: &mut F) -> Result<()>
 where
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
@@ -310,11 +310,11 @@ impl Peekable for DB {
 }
 
 impl Iterable for DB {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
+    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB> {
         self.iter_opt(iter_opt.build_read_opts())
     }
 
-    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
+    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
         let handle = rocksdb::get_cf_handle(self, cf)?;
         let readopts = iter_opt.build_read_opts();
         Ok(DBIterator::new_cf(self, handle, readopts))
@@ -343,7 +343,7 @@ impl Peekable for Snapshot {
 }
 
 impl Iterable for Snapshot {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
+    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB> {
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -351,7 +351,7 @@ impl Iterable for Snapshot {
         DBIterator::new(&self.db, opt)
     }
 
-    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
+    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
         let handle = rocksdb::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();
         unsafe {

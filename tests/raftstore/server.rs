@@ -107,9 +107,9 @@ impl Simulator for ServerCluster {
         // Initialize raftstore channels.
         let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
         let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
-        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
-        let sim_router = SimulateTransport::new(raft_router);
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
+        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender);
+        let sim_router = SimulateTransport::new(raft_router);
 
         // Create storage.
         let mut store =
@@ -127,7 +127,6 @@ impl Simulator for ServerCluster {
             cfg.raft_store.region_split_size.0 as usize,
             store.clone(),
             sim_router.clone(),
-            snap_status_sender,
             resolver,
             snap_mgr.clone(),
             pd_worker.scheduler(),
