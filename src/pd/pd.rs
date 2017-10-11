@@ -218,9 +218,6 @@ impl<T: PdClient> Runner<T> {
         peer: metapb::Peer,
         region_stat: RegionStat,
     ) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["heartbeat", "all"])
-            .inc();
         self.store_stat
             .region_bytes_written
             .observe(region_stat.written_bytes as f64);
@@ -439,9 +436,6 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["read stats", "all"])
-            .inc();
         for (region_id, stats) in read_stats {
             let peer_stat = self.region_peers
                 .entry(region_id)
