@@ -13,8 +13,7 @@
 
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::sync::mpsc::Sender;
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
@@ -41,7 +40,6 @@ use super::transport_simulate::*;
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
-    snapshot_status_senders: HashMap<u64, Mutex<Sender<SignificantMsg>>>,
 }
 
 #[derive(Clone)]
@@ -55,7 +53,6 @@ impl ChannelTransport {
             core: Arc::new(RwLock::new(ChannelTransportCore {
                 snap_paths: HashMap::new(),
                 routers: HashMap::new(),
-                snapshot_status_senders: HashMap::new(),
             })),
         }
     }
@@ -115,14 +112,8 @@ impl Channel<RaftMessage> for ChannelTransport {
                 if is_snapshot {
                     // should report snapshot finish.
                     let core = self.rl();
-                    core.snapshot_status_senders[&from_store]
-                        .lock()
-                        .unwrap()
-                        .send(SignificantMsg::SnapshotStatus {
-                            region_id: region_id,
-                            to_peer_id: to_peer_id,
-                            status: SnapshotStatus::Finish,
-                        })
+                    core.routers[&from_store]
+                        .report_snapshot_status(region_id, to_peer_id, SnapshotStatus::Finish)
                         .unwrap();
                 }
                 Ok(())
@@ -217,15 +208,11 @@ impl Simulator for NodeCluster {
         }
 
         let node_id = node.id();
-        let router = ServerRaftStoreRouter::new(node.get_sendch());
+        let router = ServerRaftStoreRouter::new(node.get_sendch(), snap_status_sender.clone());
         self.trans
             .wl()
             .routers
             .insert(node_id, SimulateTransport::new(router));
-        self.trans
-            .wl()
-            .snapshot_status_senders
-            .insert(node_id, Mutex::new(snap_status_sender));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 
