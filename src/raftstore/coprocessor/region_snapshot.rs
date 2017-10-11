@@ -149,7 +149,7 @@ impl Peekable for RegionSnapshot {
 /// iterate in the region. It behaves as if underlying
 /// db only contains one region.
 pub struct RegionIterator<'a> {
-    iter: DBIterator<'a>,
+    iter: DBIterator<&'a DB>,
     valid: bool,
     region: Arc<Region>,
     start_key: Vec<u8>,
