@@ -185,32 +185,30 @@ impl debugpb_grpc::Debug for Service {
     fn scan_mvcc(
         &self,
         _: RpcContext,
-        req: ScanMvccRequest,
+        mut req: ScanMvccRequest,
         sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
         let debugger = self.debugger.clone();
-        let future = move || {
-            let from = req.get_from_key();
-            let to = req.get_to_key();
-            let limit = req.get_limit();
-            future::result(debugger.scan_mvcc(from, to, limit))
-                .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
-                .and_then(|iter| {
-                    #[allow(deprecated)]
-                    stream::iter(iter)
-                        .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
-                        .map(|(key, mvcc_info)| {
-                            let mut resp = ScanMvccResponse::new();
-                            resp.set_key(key);
-                            resp.set_info(mvcc_info);
-                            (resp, WriteFlags::default())
-                        })
-                        .forward(sink)
-                        .map(|_| ())
-                })
-                .map_err(|e| Service::on_grpc_error("scan_mvcc", &e))
-        };
-        self.pool.spawn_fn(future).forget();
+        let from = req.take_from_key();
+        let to = req.take_to_key();
+        let limit = req.get_limit();
+        let future = future::result(debugger.scan_mvcc(&from, &to, limit))
+            .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
+            .and_then(|iter| {
+                #[allow(deprecated)]
+                stream::iter(iter)
+                    .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
+                    .map(|(key, mvcc_info)| {
+                        let mut resp = ScanMvccResponse::new();
+                        resp.set_key(key);
+                        resp.set_info(mvcc_info);
+                        (resp, WriteFlags::default())
+                    })
+                    .forward(sink)
+                    .map(|_| ())
+            })
+            .map_err(|e| Service::on_grpc_error("scan_mvcc", &e));
+        self.pool.spawn(future).forget();
     }
 
     fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {

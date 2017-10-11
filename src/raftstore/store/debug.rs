@@ -12,10 +12,11 @@
 // limitations under the License.
 
 use std::{error, mem, result};
+use std::sync::Arc;
 
 use protobuf::RepeatedField;
 
-use rocksdb::{DBIterator, Kv, SeekKey, DB};
+use rocksdb::{Kv, SeekKey, DB};
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::{eraftpb, raft_serverpb};
@@ -28,6 +29,7 @@ use storage::mvcc::{Lock, Write, WriteType};
 use util::rocksdb::{compact_range, get_cf_handle};
 
 pub type Result<T> = result::Result<T, Error>;
+type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
 
 quick_error!{
     #[derive(Debug)]
@@ -184,12 +186,12 @@ impl Debugger {
     }
 }
 
-pub struct MvccInfoIterator<'a> {
+pub struct MvccInfoIterator {
     limit: u64,
 
-    lock_iter: DBIterator<'a>,
-    default_iter: DBIterator<'a>,
-    write_iter: DBIterator<'a>,
+    lock_iter: DBIterator,
+    default_iter: DBIterator,
+    write_iter: DBIterator,
 
     // Current key and value vector when poping default and write.
     default_cur: (Vec<u8>, Vec<Kv>),
@@ -206,20 +208,23 @@ pub struct MvccInfoIterator<'a> {
     cur_keys: [Option<Vec<u8>>; 3],
 }
 
-impl<'a> MvccInfoIterator<'a> {
-    fn new(db: &'a DB, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
+impl MvccInfoIterator {
+    fn new(db: &Arc<DB>, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
         let gen_iter = |cf: &str| -> Result<_> {
             let to = if to.is_empty() { None } else { Some(to) };
-            let iter_option = IterOption::new(to.map(Vec::from), false);
-            let mut iter = box_try!(db.new_iterator_cf(cf, iter_option));
+            let readopts = IterOption::new(to.map(Vec::from), false).build_read_opts();
+            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
+            let mut iter = DBIterator::new_cf(db.clone(), handle, readopts);
+            // TODO: create DBIterator from Arc.
+            // let mut iter = box_try!(db.new_iterator_cf(cf, iter_option));
             iter.seek(SeekKey::from(from));
             Ok(iter)
         };
         Ok(MvccInfoIterator {
             limit: limit,
-            lock_iter: try!(gen_iter(CF_LOCK)),
-            default_iter: try!(gen_iter(CF_DEFAULT)),
-            write_iter: try!(gen_iter(CF_WRITE)),
+            lock_iter: gen_iter(CF_LOCK)?,
+            default_iter: gen_iter(CF_DEFAULT)?,
+            write_iter: gen_iter(CF_WRITE)?,
             default_cur: (Vec::new(), Vec::new()),
             write_cur: (Vec::new(), Vec::new()),
             mvcc_infos: Vec::new(),
@@ -245,7 +250,7 @@ impl<'a> MvccInfoIterator<'a> {
 
     fn next_default(&mut self) -> Result<Option<(Vec<u8>, Vec<ValueInfo>)>> {
         let mut iter = &mut self.default_iter;
-        let next = try!(Self::next_grouped(&mut iter, &mut self.default_cur));
+        let next = Self::next_grouped(&mut iter, &mut self.default_cur)?;
         if let Some((prefix, vec_kv)) = next {
             let mut values = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
@@ -263,7 +268,7 @@ impl<'a> MvccInfoIterator<'a> {
 
     fn next_write(&mut self) -> Result<Option<(Vec<u8>, Vec<WriteInfo>)>> {
         let mut iter = &mut self.write_iter;
-        let next = try!(Self::next_grouped(&mut iter, &mut self.write_cur));
+        let next = Self::next_grouped(&mut iter, &mut self.write_cur)?;
         if let Some((prefix, vec_kv)) = next {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
@@ -333,7 +338,7 @@ impl<'a> MvccInfoIterator<'a> {
 
     fn pull(&mut self) -> Result<()> {
         if !self.finished[0] && self.cur_keys[0].is_none() {
-            if let Some((prefix, lock)) = try!(self.next_lock()) {
+            if let Some((prefix, lock)) = self.next_lock()? {
                 self.collect(prefix.clone(), 0, move |mvcc| mvcc.set_lock(lock));
                 self.cur_keys[0] = Some(prefix);
             } else {
@@ -341,7 +346,7 @@ impl<'a> MvccInfoIterator<'a> {
             }
         }
         if !self.finished[1] && self.cur_keys[1].is_none() {
-            if let Some((prefix, values)) = try!(self.next_default()) {
+            if let Some((prefix, values)) = self.next_default()? {
                 let values = RepeatedField::from_vec(values);
                 self.collect(prefix.clone(), 1, move |mvcc| mvcc.set_values(values));
                 self.cur_keys[1] = Some(prefix);
@@ -350,7 +355,7 @@ impl<'a> MvccInfoIterator<'a> {
             }
         }
         if !self.finished[2] && self.cur_keys[2].is_none() {
-            if let Some((prefix, writes)) = try!(self.next_write()) {
+            if let Some((prefix, writes)) = self.next_write()? {
                 let writes = RepeatedField::from_vec(writes);
                 self.collect(prefix.clone(), 2, move |mvcc| mvcc.set_writes(writes));
                 self.cur_keys[2] = Some(prefix);
@@ -363,7 +368,7 @@ impl<'a> MvccInfoIterator<'a> {
     }
 }
 
-impl<'a> Iterator for MvccInfoIterator<'a> {
+impl Iterator for MvccInfoIterator {
     type Item = Result<(Vec<u8>, MvccInfo)>;
 
     fn next(&mut self) -> Option<Self::Item> {
