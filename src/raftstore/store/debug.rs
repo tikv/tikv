@@ -193,9 +193,6 @@ pub struct MvccInfoIterator {
     lock_iter: DBIterator,
     default_iter: DBIterator,
     write_iter: DBIterator,
-    cur_lock: Option<(Vec<u8>, LockInfo)>,
-    cur_writes: Option<(Vec<u8>, RepeatedField<WriteInfo>)>,
-    cur_values: Option<(Vec<u8>, RepeatedField<ValueInfo>)>,
 }
 
 impl MvccInfoIterator {
@@ -214,9 +211,6 @@ impl MvccInfoIterator {
             lock_iter: gen_iter(CF_LOCK)?,
             default_iter: gen_iter(CF_DEFAULT)?,
             write_iter: gen_iter(CF_WRITE)?,
-            cur_lock: None,
-            cur_writes: None,
-            cur_values: None,
         })
     }
 
@@ -235,7 +229,7 @@ impl MvccInfoIterator {
     }
 
     fn next_default(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<ValueInfo>)>> {
-        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.default_iter)? {
+        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.default_iter) {
             let mut values = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
                 let mut value_info = ValueInfo::default();
@@ -251,7 +245,7 @@ impl MvccInfoIterator {
     }
 
     fn next_write(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<WriteInfo>)>> {
-        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter)? {
+        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
                 let write = box_try!(Write::parse(&value));
@@ -272,85 +266,76 @@ impl MvccInfoIterator {
         Ok(None)
     }
 
-    fn next_grouped(iter: &mut DBIterator) -> Result<Option<(Vec<u8>, Vec<Kv>)>> {
+    fn next_grouped(iter: &mut DBIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
         if iter.valid() {
-            let prefix = box_try!(truncate_data_key(iter.key()));
+            let prefix = keys::truncate_ts(iter.key()).to_vec();
             let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
             while iter.next() && iter.key().starts_with(&prefix) {
                 kvs.push((iter.key().to_vec(), iter.value().to_vec()));
             }
-            return Ok(Some((prefix, kvs)));
+            return Some((prefix, kvs));
         }
-        Ok(None)
+        None
     }
 
-    fn pull(&mut self) -> Result<()> {
-        if self.cur_lock.is_none() {
-            self.cur_lock = self.next_lock()?;
+    fn next_item(&mut self) -> Result<Option<(Vec<u8>, MvccInfo)>> {
+        if self.limit != 0 && self.count >= self.limit {
+            return Ok(None);
         }
-        if self.cur_writes.is_none() {
-            self.cur_writes = self.next_write()?;
+
+        let mut mvcc_info = MvccInfo::new();
+        let mut min_prefix = Vec::new();
+
+        let (lock_ok, writes_ok) = match (self.lock_iter.valid(), self.write_iter.valid()) {
+            (false, false) => return Ok(None),
+            (true, true) => {
+                let prefix1 = self.lock_iter.key();
+                let prefix2 = keys::truncate_ts(self.write_iter.key());
+                match prefix1.cmp(prefix2) {
+                    Ordering::Less => (true, false),
+                    Ordering::Equal => (true, true),
+                    _ => (false, true),
+                }
+            }
+            valid_pair => valid_pair,
+        };
+
+        if lock_ok {
+            if let Some((prefix, lock)) = self.next_lock()? {
+                mvcc_info.set_lock(lock);
+                min_prefix = prefix;
+            }
         }
-        if self.cur_values.is_none() {
-            self.cur_values = self.next_default()?;
+        if writes_ok {
+            if let Some((prefix, writes)) = self.next_write()? {
+                mvcc_info.set_writes(writes);
+                min_prefix = prefix;
+            }
         }
-        Ok(())
+        if self.default_iter.valid() {
+            match keys::truncate_ts(self.default_iter.key()).cmp(&min_prefix) {
+                Ordering::Equal => if let Some((_, values)) = self.next_default()? {
+                    mvcc_info.set_values(values);
+                },
+                Ordering::Greater => {}
+                _ => unreachable!(),
+            }
+        }
+        self.count += 1;
+        Ok(Some((min_prefix, mvcc_info)))
     }
 }
 
 impl Iterator for MvccInfoIterator {
     type Item = Result<(Vec<u8>, MvccInfo)>;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.limit != 0 && self.count >= self.limit {
-            return None;
+    fn next(&mut self) -> Option<Result<(Vec<u8>, MvccInfo)>> {
+        match self.next_item() {
+            Ok(Some(item)) => Some(Ok(item)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
         }
-
-        if let Err(e) = self.pull() {
-            return Some(Err(e));
-        }
-
-        let (lock_ok, writes_ok) = match (self.cur_lock.as_ref(), self.cur_writes.as_ref()) {
-            (None, None) => return None,
-            (Some(_), None) => (true, false),
-            (None, Some(_)) => (false, true),
-            (Some(&(ref prefix1, _)), Some(&(ref prefix2, _))) => match prefix1.cmp(prefix2) {
-                Ordering::Less => (true, false),
-                Ordering::Equal => (true, true),
-                _ => (false, true),
-            },
-        };
-
-        let mut mvcc_info = MvccInfo::new();
-        let mut min_prefix = Vec::new();
-        if lock_ok {
-            if let Some((prefix, lock)) = self.cur_lock.take() {
-                mvcc_info.set_lock(lock);
-                min_prefix = prefix;
-            }
-        }
-        if writes_ok {
-            if let Some((prefix, writes)) = self.cur_writes.take() {
-                mvcc_info.set_writes(writes);
-                min_prefix = prefix;
-            }
-        }
-        if let Some((prefix, values)) = self.cur_values.take() {
-            match prefix.cmp(&min_prefix) {
-                Ordering::Equal => mvcc_info.set_values(values),
-                Ordering::Greater => self.cur_values = Some((prefix, values)),
-                _ => unreachable!(),
-            }
-        }
-        self.count += 1;
-        Some(Ok((min_prefix, mvcc_info)))
     }
-}
-
-fn truncate_data_key(data_key: &[u8]) -> Result<Vec<u8>> {
-    let k = Key::from_encoded(keys::origin_key(data_key).to_owned());
-    let k = box_try!(k.truncate_ts());
-    Ok(keys::data_key(k.encoded()))
 }
 
 pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {

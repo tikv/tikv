@@ -20,6 +20,7 @@ use std::u64;
 use util::{codec, escape};
 use util::codec::number::{self, NumberDecoder, NumberEncoder};
 use util::codec::bytes::BytesDecoder;
+use raftstore::store::keys::truncate_ts;
 
 use storage::mvcc::{Lock, Write};
 
@@ -117,7 +118,7 @@ impl Key {
             // TODO: (the same as above)
             return Err(codec::Error::KeyLength);
         }
-        Ok(Key::from_encoded(self.0[..len - number::U64_SIZE].to_vec()))
+        Ok(Key::from_encoded(truncate_ts(&self.0).to_vec()))
     }
 }
 
