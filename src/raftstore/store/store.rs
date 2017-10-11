@@ -1963,7 +1963,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_approximate_region_size(&mut self, region_id: u64, region_size: u64) {
-        let mut peer = match self.region_peers.get_mut(&region_id) {
+        let peer = match self.region_peers.get_mut(&region_id) {
             Some(peer) => peer,
             None => {
                 warn!(
