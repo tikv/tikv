@@ -78,7 +78,7 @@ impl Ord for KeyEntry {
 }
 
 struct MergedIterator<'a> {
-    iters: Vec<DBIterator<'a>>,
+    iters: Vec<DBIterator<&'a DB>>,
     heap: BinaryHeap<KeyEntry>,
 }
 
