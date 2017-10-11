@@ -36,6 +36,7 @@ use raftstore::store::store::StoreInfo;
 use raftstore::store::Callback;
 use storage::FlowStatistics;
 use util::collections::HashMap;
+use prometheus::local::LocalHistogram;
 use super::metrics::*;
 
 // Use an asynchronous thread to tell pd something.
@@ -71,12 +72,32 @@ pub enum Task {
     ReadStats { read_stats: HashMap<u64, FlowStatistics>, },
 }
 
-#[derive(Default)]
 pub struct StoreReadStat {
     pub engine_total_bytes_read: u64,
     pub engine_total_keys_read: u64,
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
+
+    pub region_bytes_read: LocalHistogram,
+    pub region_keys_read: LocalHistogram,
+    pub region_bytes_written: LocalHistogram,
+    pub region_keys_written: LocalHistogram,
+}
+
+impl Default for StoreReadStat {
+    fn default() -> StoreReadStat {
+        StoreReadStat {
+            region_bytes_read: REGION_READ_BYTES_HISTOGRAM.local(),
+            region_keys_read: REGION_READ_KEYS_HISTOGRAM.local(),
+            region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
+            region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
+
+            engine_total_bytes_read: 0,
+            engine_total_keys_read: 0,
+            engine_last_total_bytes_read: 0,
+            engine_last_total_keys_read: 0,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -207,6 +228,18 @@ impl<T: PdClient> Runner<T> {
         PD_REQ_COUNTER_VEC
             .with_label_values(&["heartbeat", "all"])
             .inc();
+        self.store_stat
+            .region_bytes_written
+            .observe(region_stat.written_bytes as f64);
+        self.store_stat
+            .region_keys_written
+            .observe(region_stat.written_keys as f64);
+        self.store_stat
+            .region_bytes_read
+            .observe(region_stat.read_bytes as f64);
+        self.store_stat
+            .region_keys_read
+            .observe(region_stat.read_keys as f64);
 
         // Now we use put region protocol for heartbeat.
         let f = self.pd_client
@@ -274,10 +307,10 @@ impl<T: PdClient> Runner<T> {
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
 
-        for peer in self.region_peers.values() {
-            REGION_READ_BYTES_HISTOGRAM.observe((peer.read_bytes - peer.last_read_bytes) as f64);
-            REGION_READ_KEYS_HISTOGRAM.observe((peer.read_keys - peer.last_read_keys) as f64);
-        }
+        self.store_stat.region_bytes_written.flush();
+        self.store_stat.region_keys_written.flush();
+        self.store_stat.region_bytes_read.flush();
+        self.store_stat.region_keys_read.flush();
 
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])

@@ -62,7 +62,6 @@ use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::local_metrics::RaftMetrics;
-use prometheus::local::LocalHistogram;
 
 type Key = Vec<u8>;
 
@@ -91,8 +90,6 @@ pub struct StoreChannel {
 }
 
 pub struct StoreStat {
-    pub region_bytes_written: LocalHistogram,
-    pub region_keys_written: LocalHistogram,
     pub lock_cf_bytes_written: u64,
 
     pub engine_total_bytes_written: u64,
@@ -105,8 +102,6 @@ pub struct StoreStat {
 impl Default for StoreStat {
     fn default() -> StoreStat {
         StoreStat {
-            region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
-            region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
             lock_cf_bytes_written: 0,
             engine_total_bytes_written: 0,
             engine_total_keys_written: 0,
@@ -1679,18 +1674,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_update_region_flow(&mut self) {
         for peer in self.region_peers.values_mut() {
-            self.store_stat.region_bytes_written.observe(
-                (peer.peer_stat.written_bytes - peer.peer_stat.last_written_bytes) as f64,
-            );
-            self.store_stat.region_keys_written.observe(
-                (peer.peer_stat.written_keys - peer.peer_stat.last_written_keys) as f64,
-            );
-
             peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
             peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
         }
-        self.store_stat.region_bytes_written.flush();
-        self.store_stat.region_keys_written.flush();
     }
 
     fn on_update_store_flow(&mut self) {

@@ -61,4 +61,18 @@ lazy_static! {
             "Histogram of bytes written for regions",
             exponential_buckets(256.0, 2.0, 20).unwrap()
         ).unwrap();
+
+    pub static ref REGION_WRITTEN_BYTES_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_region_written_bytes",
+            "Histogram of bytes written for regions",
+             exponential_buckets(256.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref REGION_WRITTEN_KEYS_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_region_written_keys",
+            "Histogram of keys written for regions",
+             exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
 }
