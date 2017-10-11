@@ -215,8 +215,6 @@ impl MvccInfoIterator {
             let readopts = IterOption::new(to.map(Vec::from), false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(db.clone(), handle, readopts);
-            // TODO: create DBIterator from Arc.
-            // let mut iter = box_try!(db.new_iterator_cf(cf, iter_option));
             iter.seek(SeekKey::from(from));
             Ok(iter)
         };
