@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, mem, result};
+use std::{error, result};
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use protobuf::RepeatedField;
@@ -188,24 +189,13 @@ impl Debugger {
 
 pub struct MvccInfoIterator {
     limit: u64,
-
+    count: u64,
     lock_iter: DBIterator,
     default_iter: DBIterator,
     write_iter: DBIterator,
-
-    // Current key and value vector when poping default and write.
-    default_cur: (Vec<u8>, Vec<Kv>),
-    write_cur: (Vec<u8>, Vec<Kv>),
-
-    // Collect key-prefix and MvccInfo respectively.
-    // The indices in arrays: 0 for lock, 1 for default and 2 for write.
-    mvcc_infos: Vec<(Vec<u8>, MvccInfo, [bool; 3])>,
-    count: u64,
-
-    // 3 iter children are finished or not.
-    finished: [bool; 3],
-    // keys yield by 3 iter children latest.
-    cur_keys: [Option<Vec<u8>>; 3],
+    cur_lock: Option<(Vec<u8>, LockInfo)>,
+    cur_writes: Option<(Vec<u8>, RepeatedField<WriteInfo>)>,
+    cur_values: Option<(Vec<u8>, RepeatedField<ValueInfo>)>,
 }
 
 impl MvccInfoIterator {
@@ -220,15 +210,13 @@ impl MvccInfoIterator {
         };
         Ok(MvccInfoIterator {
             limit: limit,
+            count: 0,
             lock_iter: gen_iter(CF_LOCK)?,
             default_iter: gen_iter(CF_DEFAULT)?,
             write_iter: gen_iter(CF_WRITE)?,
-            default_cur: (Vec::new(), Vec::new()),
-            write_cur: (Vec::new(), Vec::new()),
-            mvcc_infos: Vec::new(),
-            count: 0,
-            finished: [false; 3],
-            cur_keys: [None, None, None],
+            cur_lock: None,
+            cur_writes: None,
+            cur_values: None,
         })
     }
 
@@ -246,10 +234,8 @@ impl MvccInfoIterator {
         Ok(None)
     }
 
-    fn next_default(&mut self) -> Result<Option<(Vec<u8>, Vec<ValueInfo>)>> {
-        let mut iter = &mut self.default_iter;
-        let next = Self::next_grouped(&mut iter, &mut self.default_cur)?;
-        if let Some((prefix, vec_kv)) = next {
+    fn next_default(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<ValueInfo>)>> {
+        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.default_iter)? {
             let mut values = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
                 let mut value_info = ValueInfo::default();
@@ -259,15 +245,13 @@ impl MvccInfoIterator {
                 value_info.set_ts(box_try!(encoded_key.decode_ts()));
                 values.push(value_info);
             }
-            return Ok(Some((prefix, values)));
+            return Ok(Some((prefix, RepeatedField::from_vec(values))));
         }
         Ok(None)
     }
 
-    fn next_write(&mut self) -> Result<Option<(Vec<u8>, Vec<WriteInfo>)>> {
-        let mut iter = &mut self.write_iter;
-        let next = Self::next_grouped(&mut iter, &mut self.write_cur)?;
-        if let Some((prefix, vec_kv)) = next {
+    fn next_write(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<WriteInfo>)>> {
+        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter)? {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
                 let write = box_try!(Write::parse(&value));
@@ -283,85 +267,33 @@ impl MvccInfoIterator {
                 write_info.set_commit_ts(box_try!(encoded_key.decode_ts()));
                 writes.push(write_info);
             }
-            return Ok(Some((prefix, writes)));
+            return Ok(Some((prefix, RepeatedField::from_vec(writes))));
         }
         Ok(None)
     }
 
-    fn next_grouped(
-        mut iter: &mut DBIterator,
-        cur: &mut (Vec<u8>, Vec<Kv>),
-    ) -> Result<Option<(Vec<u8>, Vec<Kv>)>> {
-        let (mut cur_prefix, mut cur_kv) = (Vec::new(), Vec::new());
-        mem::swap(&mut cur_prefix, &mut cur.0);
-        mem::swap(&mut cur_kv, &mut cur.1);
-        while let Some((key, value)) = <&mut DBIterator as Iterator>::next(&mut iter) {
-            if !cur_prefix.is_empty() {
-                if key.starts_with(&cur_prefix) {
-                    cur_kv.push((key, value));
-                } else {
-                    let new_prefix = box_try!(truncate_data_key(&key));
-                    let new_kv = vec![(key, value)];
-                    *cur = (new_prefix, new_kv);
-                    break;
-                }
-            } else {
-                cur_prefix = box_try!(truncate_data_key(&key));
-                cur_kv.push((key, value));
+    fn next_grouped(iter: &mut DBIterator) -> Result<Option<(Vec<u8>, Vec<Kv>)>> {
+        if iter.valid() {
+            let prefix = box_try!(truncate_data_key(iter.key()));
+            let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
+            while iter.next() && iter.key().starts_with(&prefix) {
+                kvs.push((iter.key().to_vec(), iter.value().to_vec()));
             }
+            return Ok(Some((prefix, kvs)));
         }
-        if !cur_prefix.is_empty() {
-            Ok(Some((cur_prefix, cur_kv)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn collect<F: FnOnce(&mut MvccInfo)>(&mut self, key: Vec<u8>, i: usize, update: F) {
-        let occupied = self.mvcc_infos
-            .iter()
-            .enumerate()
-            .find(|&(_, elem)| elem.0 == key)
-            .map(|(i, _)| i);
-        if let Some(offset) = occupied {
-            update(&mut self.mvcc_infos[offset].1);
-            self.mvcc_infos[offset].2[i] = true;
-        } else {
-            let mut mvcc_info = (key, MvccInfo::default(), [false; 3]);
-            update(&mut mvcc_info.1);
-            mvcc_info.2[i] = true;
-            self.mvcc_infos.push(mvcc_info);
-        }
+        Ok(None)
     }
 
     fn pull(&mut self) -> Result<()> {
-        if !self.finished[0] && self.cur_keys[0].is_none() {
-            if let Some((prefix, lock)) = self.next_lock()? {
-                self.collect(prefix.clone(), 0, move |mvcc| mvcc.set_lock(lock));
-                self.cur_keys[0] = Some(prefix);
-            } else {
-                self.finished[0] = true;
-            }
+        if self.cur_lock.is_none() {
+            self.cur_lock = self.next_lock()?;
         }
-        if !self.finished[1] && self.cur_keys[1].is_none() {
-            if let Some((prefix, values)) = self.next_default()? {
-                let values = RepeatedField::from_vec(values);
-                self.collect(prefix.clone(), 1, move |mvcc| mvcc.set_values(values));
-                self.cur_keys[1] = Some(prefix);
-            } else {
-                self.finished[1] = true;
-            }
+        if self.cur_writes.is_none() {
+            self.cur_writes = self.next_write()?;
         }
-        if !self.finished[2] && self.cur_keys[2].is_none() {
-            if let Some((prefix, writes)) = self.next_write()? {
-                let writes = RepeatedField::from_vec(writes);
-                self.collect(prefix.clone(), 2, move |mvcc| mvcc.set_writes(writes));
-                self.cur_keys[2] = Some(prefix);
-            } else {
-                self.finished[2] = true;
-            }
+        if self.cur_values.is_none() {
+            self.cur_values = self.next_default()?;
         }
-        self.mvcc_infos.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(())
     }
 }
@@ -373,23 +305,45 @@ impl Iterator for MvccInfoIterator {
         if self.limit != 0 && self.count >= self.limit {
             return None;
         }
+
         if let Err(e) = self.pull() {
             return Some(Err(e));
         }
-        if !self.mvcc_infos.is_empty() {
-            let (key, mvcc_info, gots) = self.mvcc_infos.remove(0);
-            for (i, got) in gots.iter().enumerate() {
-                if *got && self.cur_keys[i].as_ref().map(Vec::as_slice) == Some(&key) {
-                    self.cur_keys[i] = None;
-                }
+
+        let (lock_ok, writes_ok) = match (self.cur_lock.as_ref(), self.cur_writes.as_ref()) {
+            (None, None) => return None,
+            (Some(_), None) => (true, false),
+            (None, Some(_)) => (false, true),
+            (Some(&(ref prefix1, _)), Some(&(ref prefix2, _))) => match prefix1.cmp(prefix2) {
+                Ordering::Less => (true, false),
+                Ordering::Equal => (true, true),
+                _ => (false, true),
+            },
+        };
+
+        let mut mvcc_info = MvccInfo::new();
+        let mut min_prefix = Vec::new();
+        if lock_ok {
+            if let Some((prefix, lock)) = self.cur_lock.take() {
+                mvcc_info.set_lock(lock);
+                min_prefix = prefix;
             }
-            self.count += 1;
-            return Some(Ok((key, mvcc_info)));
         }
-        if !self.finished.iter().all(|t| *t) || !self.cur_keys.iter().all(|t| t.is_none()) {
-            return Some(Err(box_err!("MvccInfoIterator fail, it's a bug")));
+        if writes_ok {
+            if let Some((prefix, writes)) = self.cur_writes.take() {
+                mvcc_info.set_writes(writes);
+                min_prefix = prefix;
+            }
         }
-        None
+        if let Some((prefix, values)) = self.cur_values.take() {
+            match prefix.cmp(&min_prefix) {
+                Ordering::Equal => mvcc_info.set_values(values),
+                Ordering::Greater => self.cur_values = Some((prefix, values)),
+                _ => unreachable!(),
+            }
+        }
+        self.count += 1;
+        Some(Ok((min_prefix, mvcc_info)))
     }
 }
 
@@ -638,7 +592,8 @@ mod tests {
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
         let cf_write_data = vec![
             (b"k2", WriteType::Put, 5, 10),
-            (b"k6", WriteType::Lock, 20, 30),
+            (b"k3", WriteType::Put, 15, 20),
+            (b"k6", WriteType::Lock, 25, 30),
             (b"k7", WriteType::Rollback, 35, 40),
         ];
         for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
