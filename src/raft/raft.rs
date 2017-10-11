@@ -183,6 +183,7 @@ pub struct Raft<T: Storage> {
     pub max_inflight: usize,
     pub max_msg_size: u64,
     pub prs: FlatMap<u64, Progress>,
+    prs_ids: Option<Vec<u64>>,
 
     pub state: StateRole,
 
@@ -289,6 +290,7 @@ impl<T: Storage> Raft<T> {
             max_inflight: c.max_inflight_msgs,
             max_msg_size: c.max_size_per_msg,
             prs: FlatMap::with_capacity(peers.len()),
+            prs_ids: None,
             state: StateRole::Follower,
             check_quorum: c.check_quorum,
             pre_vote: c.pre_vote,
@@ -312,6 +314,8 @@ impl<T: Storage> Raft<T> {
         for p in peers {
             r.prs.insert(*p, new_progress(1, r.max_inflight));
         }
+        r.reset_progress_ids();
+
         if rs.hard_state != HardState::new() {
             r.load_state(rs.hard_state);
         }
@@ -569,14 +573,14 @@ impl<T: Storage> Raft<T> {
     // bcast_append sends RPC, with entries to all peers that are not up-to-date
     // according to the progress recorded in r.prs.
     pub fn bcast_append(&mut self) {
-        // TODO: avoid copy
-        let ids: Vec<_> = self.prs.keys().cloned().collect();
-        for id in ids {
-            if id == self.id {
+        let ids = self.prs_ids.take().unwrap();
+        for id in &ids {
+            if *id == self.id {
                 continue;
             }
-            self.send_append(id);
+            self.send_append(*id);
         }
+        self.prs_ids = Some(ids);
     }
 
     // bcast_heartbeat sends RPC, without entries to all the peers.
@@ -586,14 +590,14 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn bcast_heartbeat_with_ctx(&mut self, ctx: Option<Vec<u8>>) {
-        // TODO: avoid copy
-        let ids: Vec<_> = self.prs.keys().cloned().collect();
-        for id in ids {
-            if id == self.id {
+        let ids = self.prs_ids.take().unwrap();
+        for id in &ids {
+            if *id == self.id {
                 continue;
             }
-            self.send_heartbeat(id, ctx.clone());
+            self.send_heartbeat(*id, ctx.clone());
         }
+        self.prs_ids = Some(ids);
     }
 
     // maybe_commit attempts to advance the commit index. Returns true if
@@ -1782,10 +1786,17 @@ impl<T: Storage> Raft<T> {
         let mut p = new_progress(next_idx, self.max_inflight);
         p.matched = matched;
         self.prs.insert(id, p);
+        self.reset_progress_ids();
     }
 
     fn del_progress(&mut self, id: u64) {
         self.prs.remove(&id);
+        self.reset_progress_ids();
+    }
+
+    #[inline]
+    fn reset_progress_ids(&mut self) {
+        self.prs_ids = Some(self.prs.keys().cloned().collect());
     }
 
     // TODO: revoke pub when there is a better way to test.
