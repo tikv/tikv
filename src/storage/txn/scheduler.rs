@@ -1030,6 +1030,7 @@ impl Scheduler {
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
+        SCHED_WRITING_KVS_GAUGE.set(self.running_write_kvs_count as f64);
         SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
     }
 
@@ -1042,6 +1043,7 @@ impl Scheduler {
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = false;
         }
+        SCHED_WRITING_KVS_GAUGE.set(self.running_write_kvs_count as f64);
         SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
         ctx
     }
