@@ -436,8 +436,8 @@ impl Command {
 
     pub fn kvs_count(&self) -> usize {
         match *self {
-            Command::ScanLock { .. } |
             Command::Pause { .. } => 0,
+            Command::ScanLock { .. } |
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } |
             Command::Get { .. } |
