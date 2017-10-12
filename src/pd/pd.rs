@@ -480,28 +480,23 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     Some(size) => size,
                     None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
                 };
-                let (
-                    read_bytes_interval,
-                    read_keys_interval,
-                    written_bytes_interval,
-                    written_keys_interval,
-                ) = {
+                let (read_bytes_delta, read_keys_delta, written_bytes_delta, written_keys_delta) = {
                     let peer_stat = self.region_peers
                         .entry(region.get_id())
                         .or_insert_with(PeerStat::default);
-                    let read_bytes_interval = peer_stat.read_bytes - peer_stat.last_read_bytes;
-                    let read_keys_interval = peer_stat.read_keys - peer_stat.last_read_keys;
-                    let written_bytes_interval = written_bytes - peer_stat.last_written_bytes;
-                    let written_keys_interval = written_keys - peer_stat.last_written_keys;
+                    let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
+                    let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
+                    let written_bytes_delta = written_bytes - peer_stat.last_written_bytes;
+                    let written_keys_delta = written_keys - peer_stat.last_written_keys;
                     peer_stat.last_written_bytes = written_bytes;
                     peer_stat.last_written_keys = written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
                     (
-                        read_bytes_interval,
-                        read_keys_interval,
-                        written_bytes_interval,
-                        written_keys_interval,
+                        read_bytes_delta,
+                        read_keys_delta,
+                        written_bytes_delta,
+                        written_keys_delta,
                     )
                 };
                 self.handle_heartbeat(
@@ -511,10 +506,10 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     RegionStat::new(
                         down_peers,
                         pending_peers,
-                        written_bytes_interval,
-                        written_keys_interval,
-                        read_bytes_interval,
-                        read_keys_interval,
+                        written_bytes_delta,
+                        written_keys_delta,
+                        read_bytes_delta,
+                        read_keys_delta,
                         approximate_size,
                     ),
                 )
