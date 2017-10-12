@@ -11,13 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::GaugeVec;
+use prometheus::*;
 
 lazy_static! {
-    pub static ref PENDING_TASKS: GaugeVec =
+    pub static ref WORKER_PENDING_TASK_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_worker_pending_task_total",
-            "Pending task count of a worker.",
+            "Total number of worker pending tasks.",
+            &["name"]
+        ).unwrap();
+
+    pub static ref WORKER_HANDLED_TASK_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_worker_handled_task_total",
+            "Total number of worker handled tasks.",
             &["name"]
         ).unwrap();
 }

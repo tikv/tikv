@@ -55,6 +55,7 @@ pub enum Task {
         written_keys: u64,
         read_bytes: u64,
         read_keys: u64,
+        region_size: Option<u64>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -136,10 +137,6 @@ impl<T: PdClient> Runner<T> {
         right_derive: bool,
         callback: Option<Callback>,
     ) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["ask split", "all"])
-            .inc();
-
         let ch = self.ch.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
             match resp {
@@ -150,9 +147,6 @@ impl<T: PdClient> Runner<T> {
                         resp.get_new_region_id(),
                         region
                     );
-                    PD_REQ_COUNTER_VEC
-                        .with_label_values(&["ask split", "success"])
-                        .inc();
 
                     let req = new_split_region_request(
                         split_key,
@@ -180,10 +174,6 @@ impl<T: PdClient> Runner<T> {
         peer: metapb::Peer,
         region_stat: RegionStat,
     ) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["heartbeat", "all"])
-            .inc();
-
         // Now we use put region protocol for heartbeat.
         let f = self.pd_client
             .region_heartbeat(region.clone(), peer.clone(), region_stat)
@@ -256,22 +246,8 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_report_split(&self, handle: &Handle, left: metapb::Region, right: metapb::Region) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["report split", "all"])
-            .inc();
-
-        let f = self.pd_client.report_split(left, right).then(move |resp| {
-            match resp {
-                Ok(_) => {
-                    PD_REQ_COUNTER_VEC
-                        .with_label_values(&["report split", "success"])
-                        .inc();
-                }
-                Err(e) => {
-                    error!("report split failed {:?}", e);
-                }
-            }
-            Ok(())
+        let f = self.pd_client.report_split(left, right).map_err(|e| {
+            debug!("report split failed {:?}", e);
         });
         handle.spawn(f);
     }
@@ -282,15 +258,10 @@ impl<T: PdClient> Runner<T> {
         local_region: metapb::Region,
         peer: metapb::Peer,
     ) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["get region", "all"])
-            .inc();
-
         let ch = self.ch.clone();
         let f = self.pd_client.get_region_by_id(local_region.get_id()).then(move |resp| {
             match resp {
                 Ok(Some(pd_region)) => {
-                    PD_REQ_COUNTER_VEC.with_label_values(&["get region", "success"]).inc();
                     if is_epoch_stale(pd_region.get_region_epoch(),
                                       local_region.get_region_epoch()) {
                         // The local region epoch is fresher than region epoch in PD
@@ -344,9 +315,6 @@ impl<T: PdClient> Runner<T> {
         let store_id = self.store_id;
         let f = self.pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
-                PD_REQ_COUNTER_VEC
-                    .with_label_values(&["heartbeat", "success"])
-                    .inc();
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
@@ -382,6 +350,8 @@ impl<T: PdClient> Runner<T> {
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     send_admin_request(&ch, region_id, epoch, peer, req, None)
+                } else {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
             })
             .map_err(|e| panic!("unexpected error: {:?}", e))
@@ -421,8 +391,12 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 written_keys,
                 read_bytes,
                 read_keys,
+                region_size,
             } => {
-                let approximate_size = get_region_approximate_size(&self.db, &region).unwrap_or(0);
+                let approximate_size = match region_size {
+                    Some(size) => size,
+                    None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
+                };
                 self.handle_heartbeat(
                     handle,
                     region,

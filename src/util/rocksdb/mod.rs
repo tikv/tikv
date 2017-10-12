@@ -72,7 +72,8 @@ pub fn open_opt(
     cfs: Vec<&str>,
     cfs_opts: Vec<ColumnFamilyOptions>,
 ) -> Result<DB, String> {
-    DB::open_cf(opts, path, cfs, cfs_opts)
+    let cfds = cfs.into_iter().zip(cfs_opts).collect();
+    DB::open_cf(opts, path, cfds)
 }
 
 pub struct CFOptions<'a> {
@@ -114,12 +115,13 @@ fn check_and_open(
             cfs_v.push(x.cf);
             cf_opts_v.push(x.options.clone());
         }
-        let mut db = DB::open_cf(db_opt, path, cfs_v, cf_opts_v)?;
+        let cfds = cfs_v.into_iter().zip(cf_opts_v).collect();
+        let mut db = DB::open_cf(db_opt, path, cfds)?;
         for x in cfs_opts {
             if x.cf == CF_DEFAULT {
                 continue;
             }
-            db.create_cf(x.cf, x.options)?;
+            db.create_cf((x.cf, x.options))?;
         }
 
         return Ok(db);
@@ -141,7 +143,8 @@ fn check_and_open(
             cfs_opts_v.push(x.options);
         }
 
-        return DB::open_cf(db_opt, path, cfs_v, cfs_opts_v);
+        let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
+        return DB::open_cf(db_opt, path, cfds);
     }
 
     // Open db.
@@ -158,7 +161,8 @@ fn check_and_open(
             }
         }
     }
-    let mut db = DB::open_cf(db_opt, path, cfs_v, cfs_opts_v).unwrap();
+    let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
+    let mut db = DB::open_cf(db_opt, path, cfds).unwrap();
 
     // Drop discarded column families.
     //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
@@ -171,7 +175,7 @@ fn check_and_open(
 
     // Create needed column families not existed yet.
     for cf in cfs_diff(&needed, &existed) {
-        db.create_cf(
+        db.create_cf((
             cf,
             cfs_opts
                 .iter()
@@ -179,9 +183,8 @@ fn check_and_open(
                 .unwrap()
                 .options
                 .clone(),
-        )?;
+        ))?;
     }
-
     Ok(db)
 }
 

@@ -309,11 +309,7 @@ impl<T, C> Store<T, C> {
                     return Ok(true);
                 }
 
-                let mut peer = Peer::create(self, region)?;
-                if self.cfg.region_split_check_after_initialization {
-                    // Check if it needs to split ASAP.
-                    peer.size_diff_hint = self.cfg.region_split_check_diff.0;
-                }
+                let peer = Peer::create(self, region)?;
                 self.region_ranges.insert(enc_end_key(region), region_id);
                 // No need to check duplicated here, because we use region id as the key
                 // in DB.
@@ -1831,16 +1827,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if !peer.is_leader() {
                 continue;
             }
-
-            if peer.size_diff_hint < self.cfg.region_split_check_diff.0 {
+            // When restart, the approximate size will be None. The
+            // split check will first check the region size, and then
+            // check whether the region should split.  This should
+            // work even if we change the region max size.
+            if peer.approximate_size.is_some() &&
+                peer.size_diff_hint < self.cfg.region_split_check_diff.0
+            {
                 continue;
             }
-            info!(
-                "{} region's size diff {} >= {}, need to check whether should split",
-                peer.tag,
-                peer.size_diff_hint,
-                self.cfg.region_split_check_diff.0
-            );
             let task = SplitCheckTask::new(peer.region());
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
@@ -1967,6 +1962,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             ));
         }
         Ok(())
+    }
+
+    fn on_approximate_region_size(&mut self, region_id: u64, region_size: u64) {
+        let peer = match self.region_peers.get_mut(&region_id) {
+            Some(peer) => peer,
+            None => {
+                warn!(
+                    "[region {}] receive stale approximate size {}",
+                    region_id,
+                    region_size,
+                );
+                return;
+            }
+        };
+        peer.approximate_size = Some(region_size);
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -2524,6 +2534,10 @@ impl<T: Transport, C: PdClient> Handler for Store<T, C> {
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_key, callback);
             }
+            Msg::ApproximateRegionSize {
+                region_id,
+                region_size,
+            } => self.on_approximate_region_size(region_id, region_size),
         }
     }
 
