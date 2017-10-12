@@ -29,6 +29,8 @@ use rocksdb::DBIterator;
 use util::escape;
 use util::transport::{RetryableSendCh, Sender};
 use util::worker::Runnable;
+use util::codec::table;
+use storage::types::Key;
 use storage::{CfName, LARGE_CFS};
 
 use super::metrics::*;
@@ -149,6 +151,7 @@ pub struct Runner<C> {
     ch: RetryableSendCh<Msg, C>,
     region_max_size: u64,
     split_size: u64,
+    split_table: bool,
 }
 
 impl<C> Runner<C> {
@@ -157,12 +160,14 @@ impl<C> Runner<C> {
         ch: RetryableSendCh<Msg, C>,
         region_max_size: u64,
         split_size: u64,
+        split_table: bool,
     ) -> Runner<C> {
         Runner {
             engine: engine,
             ch: ch,
             region_max_size: region_max_size,
             split_size: split_size,
+            split_table: split_table,
         }
     }
 }
@@ -205,9 +210,21 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
 
         let mut size = 0;
         let mut split_key = vec![];
+        let mut prev_key: Option<Vec<u8>> = None;
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
             .map(|mut iter| while let Some(e) = iter.next() {
+                if self.split_table {
+                    if let (Some(ref prev_key), &Some(ref current_key)) = (prev_key, &e.key) {
+                        if let Some(key) = cross_table(prev_key, current_key) {
+                            info!("[region {}] split table, split key {:?}", region_id, key);
+                            split_key = key;
+                            break;
+                        }
+                    }
+                    prev_key = e.key.clone();
+                }
+
                 size += e.len() as u64;
                 if split_key.is_empty() && size > self.split_size {
                     split_key = e.key.unwrap();
@@ -224,7 +241,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
 
         timer.observe_duration();
 
-        if size < self.region_max_size {
+        if size < self.region_max_size && !self.split_table {
             debug!(
                 "[region {}] no need to send for {} < {}",
                 region_id,
@@ -246,6 +263,30 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
         CHECK_SPILT_COUNTER_VEC
             .with_label_values(&["success"])
             .inc();
+    }
+}
+
+fn cross_table(prev_key: &[u8], current_key: &[u8]) -> Option<Vec<u8>> {
+    let origin_current_key = keys::origin_key(current_key);
+    let raw_current_key = match Key::from_encoded(origin_current_key.to_vec()).raw() {
+        Ok(k) => k,
+        Err(_) => return None,
+    };
+
+    let origin_prev_key = keys::origin_key(prev_key);
+    let raw_prev_key = match Key::from_encoded(origin_prev_key.to_vec()).raw() {
+        Ok(k) => k,
+        Err(_) => return None,
+    };
+
+    if let Ok(false) = table::is_same_table(&raw_prev_key, &raw_current_key) {
+        Some(keys::data_key(
+            Key::from_raw(&table::gen_table_prefix(
+                table::decode_table_id(&raw_current_key),
+            )).encoded(),
+        ))
+    } else {
+        None
     }
 }
 
@@ -289,7 +330,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
-        let mut runnable = Runner::new(engine.clone(), ch, 100, 60);
+        let mut runnable = Runner::new(engine.clone(), ch, 100, 60, false);
 
         // so split key will be z0006
         for i in 0..7 {
@@ -359,5 +400,87 @@ mod tests {
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(Task::new(&region));
+    }
+
+    #[test]
+    fn test_split_table() {
+        let path = TempDir::new("test-raftstore").unwrap();
+        let engine = Arc::new(
+            rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
+        );
+
+        let mut region = Region::new();
+        region.set_id(1);
+        region.mut_peers().push(Peer::new());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (table_tx, table_rx) = mpsc::sync_channel(100);
+        let table_ch = RetryableSendCh::new(table_tx, "test-split-table");
+        let mut table_runnable = Runner::new(engine.clone(), table_ch, 100, 60, true);
+
+        let check = |msg: Msg, key: Vec<u8>| match msg {
+            Msg::SplitRegion { split_key, .. } => {
+                assert_eq!(&split_key, Key::from_raw(&key).encoded())
+            }
+            others => panic!("expect split check result, but got {:?}", others),
+        };
+
+        // arbitrary padding.
+        let padding = b"_r00000005";
+
+        // Put some data
+        // t1_xx, t3_xx, t5_xx
+        for i in 1..6 {
+            if i % 2 == 0 {
+                // leave some space.
+                continue;
+            }
+
+            let mut key = table::gen_table_prefix(i);
+            key.extend_from_slice(padding);
+            let s = keys::data_key(Key::from_raw(&key).encoded());
+            engine.put(&s, &s).unwrap();
+        }
+        engine.flush(true).unwrap();
+
+        // ["", "") => t3
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        table_runnable.run(Task::new(&region));
+        check(table_rx.try_recv().unwrap(), table::gen_table_prefix(3));
+
+        // ["t1", "") => t3
+        region.set_start_key(Key::from_raw(&table::gen_table_prefix(1)).encoded().clone());
+        region.set_end_key(vec![]);
+        table_runnable.run(Task::new(&region));
+        check(table_rx.try_recv().unwrap(), table::gen_table_prefix(3));
+
+        // ["t1", "t5") => t3
+        region.set_start_key(Key::from_raw(&table::gen_table_prefix(1)).encoded().clone());
+        region.set_end_key(Key::from_raw(&table::gen_table_prefix(5)).encoded().clone());
+        table_runnable.run(Task::new(&region));
+        check(table_rx.try_recv().unwrap(), table::gen_table_prefix(3));
+
+        // Put some data to table 3.
+        for i in 0..3 {
+            // Each kv entry takes about 56 bytes.
+            let mut key = table::gen_table_prefix(3);
+            key.extend_from_slice(format!("_r0000000{}", i).as_bytes());
+            let s = keys::data_key(Key::from_raw(&key).encoded());
+            engine.put(&s, &s).unwrap();
+        }
+        // Since region_max_size = 100, split_size = 60
+        // for ["t3", ""), the split key should be in table 3.
+        region.set_start_key(Key::from_raw(&table::gen_table_prefix(3)).encoded().clone());
+        region.set_end_key(vec![]);
+        table_runnable.run(Task::new(&region));
+        match table_rx.try_recv() {
+            Ok(Msg::SplitRegion { split_key, .. }) => {
+                let key = Key::from_encoded(split_key).raw().unwrap();
+                assert_eq!(table::decode_table_id(&key), 3);
+            }
+            others => panic!("expect split check result, but got {:?}", others),
+        }
     }
 }
