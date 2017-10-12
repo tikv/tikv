@@ -1672,19 +1672,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn on_update_region_flow(&mut self) {
-        for peer in self.region_peers.values_mut() {
-            peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
-            peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
-        }
-    }
-
-    fn on_update_store_flow(&mut self) {
-        self.store_stat.engine_last_total_bytes_written =
-            self.store_stat.engine_total_bytes_written;
-        self.store_stat.engine_last_total_keys_written = self.store_stat.engine_total_keys_written;
-    }
-
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let mut total_gc_logs = 0;
@@ -1940,7 +1927,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer.heartbeat_pd(&self.pd_worker);
             }
         }
-        self.on_update_region_flow();
         STORE_PD_HEARTBEAT_GAUGE_VEC
             .with_label_values(&["leader"])
             .set(leader_count as f64);
@@ -2003,7 +1989,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.store_stat.engine_total_keys_written -
                 self.store_stat.engine_last_total_keys_written,
         );
-        self.on_update_store_flow();
+        self.store_stat.engine_last_total_bytes_written =
+            self.store_stat.engine_total_bytes_written;
+        self.store_stat.engine_last_total_keys_written = self.store_stat.engine_total_keys_written;
 
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;

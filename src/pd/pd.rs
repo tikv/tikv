@@ -101,11 +101,13 @@ impl Default for StoreReadStat {
 }
 
 #[derive(Default)]
-pub struct PeerReadStat {
+pub struct PeerStat {
     pub read_bytes: u64,
     pub read_keys: u64,
     pub last_read_bytes: u64,
     pub last_read_keys: u64,
+    pub last_written_bytes: u64,
+    pub last_written_keys: u64,
 }
 
 impl Display for Task {
@@ -154,7 +156,7 @@ pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
     db: Arc<DB>,
-    region_peers: HashMap<u64, PeerReadStat>,
+    region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreReadStat,
     is_hb_receiver_scheduled: bool,
 }
@@ -439,7 +441,7 @@ impl<T: PdClient> Runner<T> {
         for (region_id, stats) in read_stats {
             let peer_stat = self.region_peers
                 .entry(region_id)
-                .or_insert_with(PeerReadStat::default);
+                .or_insert_with(PeerStat::default);
             peer_stat.read_bytes += stats.read_bytes as u64;
             peer_stat.read_keys += stats.read_keys as u64;
             self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
@@ -473,15 +475,29 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 written_keys,
             } => {
                 let approximate_size = get_region_approximate_size(&self.db, &region).unwrap_or(0);
-                let (read_bytes, read_keys) = match self.region_peers.get_mut(&region.get_id()) {
-                    Some(peer_stat) => {
-                        let read_bytes = peer_stat.read_bytes - peer_stat.last_read_bytes;
-                        let read_keys = peer_stat.read_keys - peer_stat.last_read_keys;
-                        peer_stat.last_read_bytes = peer_stat.read_bytes;
-                        peer_stat.last_read_keys = peer_stat.read_keys;
-                        (read_bytes, read_keys)
-                    }
-                    None => (0, 0),
+                let (
+                    read_bytes_interval,
+                    read_keys_interval,
+                    written_bytes_interval,
+                    written_keys_interval,
+                ) = {
+                    let peer_stat = self.region_peers
+                        .entry(region.get_id())
+                        .or_insert_with(PeerStat::default);
+                    let read_bytes_interval = peer_stat.read_bytes - peer_stat.last_read_bytes;
+                    let read_keys_interval = peer_stat.read_keys - peer_stat.last_read_keys;
+                    let written_bytes_interval = written_bytes - peer_stat.last_written_bytes;
+                    let written_keys_interval = written_keys - peer_stat.last_written_keys;
+                    peer_stat.last_written_bytes = written_bytes;
+                    peer_stat.last_written_keys = written_keys;
+                    peer_stat.last_read_bytes = peer_stat.read_bytes;
+                    peer_stat.last_read_keys = peer_stat.read_keys;
+                    (
+                        read_bytes_interval,
+                        read_keys_interval,
+                        written_bytes_interval,
+                        written_keys_interval,
+                    )
                 };
                 self.handle_heartbeat(
                     handle,
@@ -490,10 +506,10 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     RegionStat::new(
                         down_peers,
                         pending_peers,
-                        written_bytes,
-                        written_keys,
-                        read_bytes,
-                        read_keys,
+                        written_bytes_interval,
+                        written_keys_interval,
+                        read_bytes_interval,
+                        read_keys_interval,
                         approximate_size,
                     ),
                 )

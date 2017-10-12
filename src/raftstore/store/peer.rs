@@ -193,8 +193,6 @@ enum RequestPolicy {
 pub struct PeerStat {
     pub written_bytes: u64,
     pub written_keys: u64,
-    pub last_written_bytes: u64,
-    pub last_written_keys: u64,
 }
 
 pub struct Peer {
@@ -1570,8 +1568,8 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.peer_stat.written_bytes - self.peer_stat.last_written_bytes,
-            written_keys: self.peer_stat.written_keys - self.peer_stat.last_written_keys,
+            written_bytes: self.peer_stat.written_bytes,
+            written_keys: self.peer_stat.written_keys,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
