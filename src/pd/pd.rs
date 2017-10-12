@@ -55,6 +55,7 @@ pub enum Task {
         written_keys: u64,
         read_bytes: u64,
         read_keys: u64,
+        region_size: Option<u64>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -390,8 +391,12 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 written_keys,
                 read_bytes,
                 read_keys,
+                region_size,
             } => {
-                let approximate_size = get_region_approximate_size(&self.db, &region).unwrap_or(0);
+                let approximate_size = match region_size {
+                    Some(size) => size,
+                    None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
+                };
                 self.handle_heartbeat(
                     handle,
                     region,
