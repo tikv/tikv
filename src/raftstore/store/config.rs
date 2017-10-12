@@ -58,9 +58,6 @@ pub struct Config {
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_diff: ReadableSize,
-    /// Set it to true will check regions if they need to spilt right after
-    /// initialization. It is useful when we adjust the region size.
-    pub region_split_check_after_initialization: bool,
     /// When it is true, it will try to split a region with table prefix if
     // that region crosses tables.
     pub region_split_table: bool,
@@ -125,8 +122,7 @@ impl Default for Config {
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_max_size: split_size / 2 * 3,
             region_split_size: split_size,
-            region_split_check_diff: split_size / 8,
-            region_split_check_after_initialization: false,
+            region_split_check_diff: split_size / 16,
             region_split_table: false,
             // Disable manual compaction by default.
             region_compact_check_interval: ReadableDuration::secs(0),
