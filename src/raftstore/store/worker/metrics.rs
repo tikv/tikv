@@ -62,4 +62,11 @@ lazy_static! {
             "Proposal count of all regions in a mio tick",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
+
+    pub static ref REGION_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_region_size",
+            "Bucketed histogram of approximate region size.",
+            exponential_buckets(4096.0, 2.0, 20).unwrap()
+        ).unwrap();
 }
