@@ -254,18 +254,6 @@ impl DebugExecutor {
         }
     }
 
-    fn tombstone(&self, region: u64, conf_ver: u64) {
-        match *self {
-            DebugExecutor::Remote(_) => {
-                eprintln!("This command is only for local mode");
-                process::exit(-1);
-            }
-            DebugExecutor::Local(ref debugger) => debugger
-                .tombstone_region(region, conf_ver)
-                .unwrap_or_else(Self::report_and_exit),
-        }
-    }
-
     fn report_and_exit<E: Error, T>(e: E) -> T {
         eprintln!("{}", e);
         process::exit(-1);
@@ -627,22 +615,6 @@ fn main() {
                         .takes_value(true)
                         .help("set the end raw key, in escaped form"),
                 ),
-        )
-        .subcommand(
-            SubCommand::with_name("tombstone")
-                .about("set a region on the node to tombstone by manual")
-                .arg(
-                    Arg::with_name("region")
-                        .short("r")
-                        .takes_value(true)
-                        .help("the target region"),
-                )
-                .arg(
-                    Arg::with_name("conf_ver")
-                        .short("v")
-                        .takes_value(true)
-                        .help("the conf_ver set to the region"),
-                ),
         );
     let matches = app.clone().get_matches();
 
@@ -727,10 +699,6 @@ fn main() {
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
         debug_executor.compact(db_type, cf, from_key, to_key);
-    } else if let Some(matches) = matches.subcommand_matches("tombstone") {
-        let region = matches.value_of("region").unwrap().parse().unwrap();
-        let conf_ver = matches.value_of("conf_ver").unwrap().parse().unwrap();
-        debug_executor.tombstone(region, conf_ver);
     } else {
         let _ = app.print_help();
     }

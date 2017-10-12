@@ -24,8 +24,7 @@ use kvproto::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
 use raftstore::store::{keys, Engines, Iterable, Peekable};
-use raftstore::store::util::remove_peer;
-use raftstore::store::engine::{IterOption, Mutable};
+use raftstore::store::engine::IterOption;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
@@ -218,38 +217,6 @@ impl Debugger {
         let end = if end.is_empty() { None } else { Some(end) };
         compact_range(db, handle, start, end, false);
         Ok(())
-    }
-
-    /// Set a region to tombstone by manual.
-    pub fn tombstone_region(&self, region: u64, conf_ver: u64) -> Result<()> {
-        let db = &self.engines.kv_engine;
-        let key = keys::region_state_key(region);
-        match box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)) {
-            Some(mut region_state) => {
-                region_state.set_state(PeerState::Tombstone);
-                remove_peer(region_state.mut_region(), self.get_kv_store_id()?);
-                region_state
-                    .mut_region()
-                    .mut_region_epoch()
-                    .set_conf_ver(conf_ver);
-                if let Some(cf_raft) = db.cf_handle(CF_RAFT) {
-                    box_try!(db.put_msg_cf(cf_raft, &key, &region_state));
-                    Ok(())
-                } else {
-                    Err(box_err!("can't get raft cf"))
-                }
-            }
-            None => Err(box_err!("not a valid region")),
-        }
-    }
-
-    fn get_kv_store_id(&self) -> Result<u64> {
-        let db = &self.engines.kv_engine;
-        let key = keys::store_ident_key();
-        match box_try!(db.get_msg::<StoreIdent>(&key)) {
-            Some(ident) => Ok(ident.get_store_id()),
-            None => Err(box_err!("can't get kv store id")),
-        }
     }
 }
 
