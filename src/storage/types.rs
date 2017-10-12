@@ -20,7 +20,6 @@ use std::u64;
 use util::{codec, escape};
 use util::codec::number::{self, NumberDecoder, NumberEncoder};
 use util::codec::bytes::BytesDecoder;
-use raftstore::store::keys::truncate_ts;
 
 use storage::mvcc::{Lock, Write};
 
@@ -42,6 +41,11 @@ pub struct MvccInfo {
     pub writes: Vec<(u64, Write)>,
     /// start_ts and value
     pub values: Vec<(u64, bool, Value)>,
+}
+
+/// The caller should ensure the key is a timestamped key.
+pub fn truncate_ts(key: &[u8]) -> &[u8] {
+    &key[..key.len() - number::U64_SIZE]
 }
 
 /// Key type.

@@ -15,7 +15,6 @@ use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
 use raftstore::Result;
 use util::escape;
-use util::codec::number;
 use kvproto::metapb::Region;
 use std::mem;
 
@@ -198,11 +197,6 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
 pub fn origin_key(key: &[u8]) -> &[u8] {
     assert!(validate_data_key(key));
     &key[DATA_PREFIX_KEY.len()..]
-}
-
-/// The caller should ensure the key is a timestamped key.
-pub fn truncate_ts(key: &[u8]) -> &[u8] {
-    &key[..key.len() - number::U64_SIZE]
 }
 
 /// Get the `start_key` of current region in encoded form.

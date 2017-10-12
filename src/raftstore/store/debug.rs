@@ -25,8 +25,9 @@ use kvproto::{eraftpb, raft_serverpb};
 use raftstore::store::{keys, Engines, Iterable, Peekable};
 use raftstore::store::engine::IterOption;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use storage::types::Key;
+use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
+use util::escape;
 use util::rocksdb::{compact_range, get_cf_handle};
 
 pub type Result<T> = result::Result<T, Error>;
@@ -268,7 +269,7 @@ impl MvccInfoIterator {
 
     fn next_grouped(iter: &mut DBIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
         if iter.valid() {
-            let prefix = keys::truncate_ts(iter.key()).to_vec();
+            let prefix = truncate_ts(iter.key()).to_vec();
             let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
             while iter.next() && iter.key().starts_with(&prefix) {
                 kvs.push((iter.key().to_vec(), iter.value().to_vec()));
@@ -290,7 +291,7 @@ impl MvccInfoIterator {
             (false, false) => return Ok(None),
             (true, true) => {
                 let prefix1 = self.lock_iter.key();
-                let prefix2 = keys::truncate_ts(self.write_iter.key());
+                let prefix2 = truncate_ts(self.write_iter.key());
                 match prefix1.cmp(prefix2) {
                     Ordering::Less => (true, false),
                     Ordering::Equal => (true, true),
@@ -313,12 +314,19 @@ impl MvccInfoIterator {
             }
         }
         if self.default_iter.valid() {
-            match keys::truncate_ts(self.default_iter.key()).cmp(&min_prefix) {
+            match truncate_ts(self.default_iter.key()).cmp(&min_prefix) {
                 Ordering::Equal => if let Some((_, values)) = self.next_default()? {
                     mvcc_info.set_values(values);
                 },
                 Ordering::Greater => {}
-                _ => unreachable!(),
+                _ => {
+                    let err_msg = format!(
+                        "scan_mvcc CF_DEFAULT corrupt: want {}, got {}",
+                        escape(&min_prefix),
+                        escape(truncate_ts(self.default_iter.key()))
+                    );
+                    return Err(box_err!(err_msg));
+                }
             }
         }
         self.count += 1;
