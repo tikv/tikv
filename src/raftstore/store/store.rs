@@ -33,7 +33,7 @@ use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
-use pd::PdClient;
+use pd::{PdClient, PdRunner, PdTask};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
                           StatusCmdType, StatusResponse};
 use protobuf::Message;
@@ -48,9 +48,8 @@ use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
-                    ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, PdTask,
-                    RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
-                    SplitCheckTask};
+                    ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
+                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -195,6 +194,7 @@ where
 }
 
 impl<T, C> Store<T, C> {
+    #[allow(too_many_arguments)]
     pub fn new(
         ch: StoreChannel,
         meta: metapb::Store,
@@ -203,6 +203,7 @@ impl<T, C> Store<T, C> {
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
+        pd_worker: FutureWorker<PdTask>,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -229,7 +230,7 @@ impl<T, C> Store<T, C> {
             region_worker: Worker::new("snapshot worker"),
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
-            pd_worker: FutureWorker::new("pd worker"),
+            pd_worker: pd_worker,
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,

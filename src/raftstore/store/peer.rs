@@ -33,7 +33,7 @@ use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateR
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::Config;
-use raftstore::store::worker::{apply, PdTask, Proposal, RegionProposal};
+use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 
 use coprocessor::cache::DISTSQL_CACHE;
@@ -44,7 +44,7 @@ use util::Either;
 use util::time::monotonic_raw_now;
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
-use pd::INVALID_ID;
+use pd::{PdTask, INVALID_ID};
 
 use super::store::{Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
