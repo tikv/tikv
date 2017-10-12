@@ -72,7 +72,7 @@ pub enum Task {
     ReadStats { read_stats: HashMap<u64, FlowStatistics>, },
 }
 
-pub struct StoreReadStat {
+pub struct StoreStat {
     pub engine_total_bytes_read: u64,
     pub engine_total_keys_read: u64,
     pub engine_last_total_bytes_read: u64,
@@ -84,9 +84,9 @@ pub struct StoreReadStat {
     pub region_keys_written: LocalHistogram,
 }
 
-impl Default for StoreReadStat {
-    fn default() -> StoreReadStat {
-        StoreReadStat {
+impl Default for StoreStat {
+    fn default() -> StoreStat {
+        StoreStat {
             region_bytes_read: REGION_READ_BYTES_HISTOGRAM.local(),
             region_keys_read: REGION_READ_KEYS_HISTOGRAM.local(),
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
@@ -157,7 +157,7 @@ pub struct Runner<T: PdClient> {
     ch: SendCh<Msg>,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
-    store_stat: StoreReadStat,
+    store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
 }
 
@@ -170,7 +170,7 @@ impl<T: PdClient> Runner<T> {
             db: db,
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
-            store_stat: StoreReadStat::default(),
+            store_stat: StoreStat::default(),
         }
     }
 
