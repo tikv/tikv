@@ -30,6 +30,7 @@ extern crate rustc_serialize;
 use std::{process, str, u64};
 use std::error::Error;
 use std::sync::Arc;
+use std::path::PathBuf;
 use rustc_serialize::hex::{FromHex, ToHex};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
@@ -74,8 +75,10 @@ impl DebugExecutor {
                 let raft_db = if let Some(raftdb_path) = matches.value_of("raftdb") {
                     Arc::new(util::rocksdb::open(raftdb_path, &[CF_DEFAULT]).unwrap())
                 } else {
-                    let raftdb_path = path.to_string() + "../raft";
-                    Arc::new(util::rocksdb::open(&raftdb_path, &[CF_DEFAULT]).unwrap())
+                    let raftdb_path = PathBuf::from(path).join("../raft");
+                    Arc::new(
+                        util::rocksdb::open(raftdb_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
+                    )
                 };
                 DebugExecutor::Local(Debugger::new(Engines::new(db, raft_db)))
             }
@@ -137,7 +140,7 @@ impl DebugExecutor {
     }
 
     fn all_region_size(&self, cfs: Vec<&str>) {
-        let all_regions = self.get_all_regions(DBType::KV, CF_RAFT);
+        let all_regions = self.get_all_regions(CF_RAFT);
         for region in all_regions {
             self.region_size(region, cfs.clone());
         }
@@ -149,7 +152,7 @@ impl DebugExecutor {
     }
 
     fn all_region_info(&self, skip_tombstone: bool) {
-        let all_regions = self.get_all_regions(DBType::KV, CF_RAFT);
+        let all_regions = self.get_all_regions(CF_RAFT);
         for region in all_regions {
             self.region_info(region, skip_tombstone);
         }
@@ -268,11 +271,11 @@ impl DebugExecutor {
         process::exit(-1);
     }
 
-    fn get_all_regions(&self, db: DBType, cf: &str) -> Vec<u64> {
+    fn get_all_regions(&self, cf: &str) -> Vec<u64> {
         match *self {
             DebugExecutor::Remote(_) => unimplemented!(),
             DebugExecutor::Local(ref debugger) => debugger
-                .get_all_regions(db, cf)
+                .get_all_regions(cf)
                 .unwrap_or_else(Self::report_and_exit),
         }
     }
@@ -281,15 +284,15 @@ impl DebugExecutor {
         match *self {
             DebugExecutor::Remote(ref client) => {
                 let resp_to_region_info = |mut resp: RegionInfoResponse| {
-                    let mut region_info = RegionInfo(None, None, None);
+                    let mut region_info = RegionInfo::default();
                     if resp.has_raft_local_state() {
-                        region_info.0 = Some(resp.take_raft_local_state());
+                        region_info.raft_local_state = Some(resp.take_raft_local_state());
                     }
                     if resp.has_raft_apply_state() {
-                        region_info.1 = Some(resp.take_raft_apply_state());
+                        region_info.raft_apply_state = Some(resp.take_raft_apply_state());
                     }
                     if resp.has_region_local_state() {
-                        region_info.2 = Some(resp.take_region_local_state());
+                        region_info.region_local_state = Some(resp.take_region_local_state());
                     }
                     region_info
                 };
@@ -320,7 +323,7 @@ impl DebugExecutor {
 
     fn show_region_info(id: u64, r: RegionInfo, skip_tomb: bool) {
         if skip_tomb {
-            let region_state = r.2.as_ref();
+            let region_state = r.region_local_state.as_ref();
             if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
                 return;
             }
@@ -329,19 +332,19 @@ impl DebugExecutor {
         let raft_state_key = keys::raft_state_key(id);
         let apply_state_key = keys::apply_state_key(id);
         println!("region state key: {}", escape(&region_state_key));
-        println!("region state: {:?}", r.2);
+        println!("region state: {:?}", r.region_local_state);
         println!("raft state key: {}", escape(&raft_state_key));
-        println!("raft state: {:?}", r.0);
+        println!("raft state: {:?}", r.raft_local_state);
         println!("apply state key: {}", escape(&apply_state_key));
-        println!("apply state: {:?}", r.1);
+        println!("apply state: {:?}", r.raft_apply_state);
     }
 
     fn show_diff_region(id: u64, r1: RegionInfo, r2: RegionInfo) {
         println!("region id: {}", id);
-        println!("db1 region state: {:?}", r1.2);
-        println!("db2 region state: {:?}", r2.2);
-        println!("db1 apply state: {:?}", r1.1);
-        println!("db2 apply state: {:?}", r2.2);
+        println!("db1 region state: {:?}", r1.region_local_state);
+        println!("db2 region state: {:?}", r2.region_local_state);
+        println!("db1 apply state: {:?}", r1.raft_apply_state);
+        println!("db2 apply state: {:?}", r2.raft_apply_state);
     }
 
     fn show_raft_log(id: u64, index: u64, mut entry: eraftpb::Entry) {

@@ -55,12 +55,26 @@ quick_error!{
     }
 }
 
-#[derive(PartialEq, Debug)]
-pub struct RegionInfo(
-    pub Option<RaftLocalState>,
-    pub Option<RaftApplyState>,
-    pub Option<RegionLocalState>,
-);
+#[derive(PartialEq, Debug, Default)]
+pub struct RegionInfo {
+    pub raft_local_state: Option<RaftLocalState>,
+    pub raft_apply_state: Option<RaftApplyState>,
+    pub region_local_state: Option<RegionLocalState>,
+}
+
+impl RegionInfo {
+    fn new(
+        raft_local: Option<RaftLocalState>,
+        raft_apply: Option<RaftApplyState>,
+        region_local: Option<RegionLocalState>,
+    ) -> Self {
+        RegionInfo {
+            raft_local_state: raft_local,
+            raft_apply_state: raft_apply,
+            region_local_state: region_local,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Debugger {
@@ -72,13 +86,9 @@ impl Debugger {
         Debugger { engines }
     }
 
-    pub fn get_all_regions(&self, db: DBType, cf: &str) -> Result<Vec<u64>> {
-        validate_db_and_cf(db, cf)?;
-        let db = match db {
-            DBType::KV => &self.engines.kv_engine,
-            DBType::RAFT => &self.engines.raft_engine,
-            _ => unreachable!(),
-        };
+    /// Get all region id in the specified CF, only used for KV rocksdb.
+    pub fn get_all_regions(&self, cf: &str) -> Result<Vec<u64>> {
+        let db = &self.engines.kv_engine;
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
@@ -151,7 +161,7 @@ impl Debugger {
         match (raft_state, apply_state, region_state) {
             (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
             (raft_state, apply_state, region_state) => {
-                Ok(RegionInfo(raft_state, apply_state, region_state))
+                Ok(RegionInfo::new(raft_state, apply_state, region_state))
             }
         }
     }
@@ -565,7 +575,7 @@ mod tests {
 
         assert_eq!(
             debugger.region_info(region_id).unwrap(),
-            RegionInfo(Some(raft_state), Some(apply_state), Some(region_state))
+            RegionInfo::new(Some(raft_state), Some(apply_state), Some(region_state))
         );
         match debugger.region_info(region_id + 1) {
             Err(Error::NotFound(_)) => (),
