@@ -433,6 +433,27 @@ impl Command {
             Command::MvccByStartTs { ref mut ctx, .. } => ctx,
         }
     }
+
+    pub fn kvs_count(&self) -> usize {
+        match *self {
+            Command::ScanLock { .. } |
+            Command::Pause { .. } => 0,
+            Command::MvccByKey { .. } |
+            Command::MvccByStartTs { .. } |
+            Command::Get { .. } |
+            Command::RawGet { .. } |
+            Command::RawScan { .. } |
+            Command::Cleanup { .. } |
+            Command::DeleteRange { .. } => 1,
+            Command::Scan { limit, .. } => limit,
+            Command::Gc { ref keys, .. } |
+            Command::BatchGet { ref keys, .. } |
+            Command::Commit { ref keys, .. } |
+            Command::Rollback { ref keys, .. } |
+            Command::ResolveLock { ref keys, .. } => keys.len(),
+            Command::Prewrite { ref mutations, .. } => mutations.len(),
+        }
+    }
 }
 
 use util::transport::SyncSendCh;

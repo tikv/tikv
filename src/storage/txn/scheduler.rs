@@ -179,6 +179,7 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
 pub struct RunningCtx {
     cid: u64,
     cmd: Option<Command>,
+    kvs_count: usize,
     lock: Lock,
     callback: Option<StorageCb>,
     tag: &'static str,
@@ -195,9 +196,11 @@ impl RunningCtx {
         let tag = cmd.tag();
         let ts = cmd.ts();
         let region_id = cmd.get_context().get_region_id();
+        let kvs_count = cmd.kvs_count();
         RunningCtx {
             cid: cid,
             cmd: Some(cmd),
+            kvs_count: kvs_count,
             lock: lock,
             callback: Some(cb),
             tag: tag,
@@ -305,6 +308,8 @@ pub struct Scheduler {
     // write concurrency control
     latches: Latches,
 
+    // TODO: Dynamically calculate this value according to processing
+    // speed of recent write requests.
     sched_too_busy_threshold: usize,
 
     // worker pool
@@ -316,7 +321,7 @@ pub struct Scheduler {
     has_gc_command: bool,
 
     // used to control write flow
-    running_write_count: usize,
+    running_write_kvs_count: usize,
 }
 
 // Make clippy happy.
@@ -383,7 +388,7 @@ impl Scheduler {
                 thd_name!("sched-high-pri-pool"),
             ).build(),
             has_gc_command: false,
-            running_write_count: 0,
+            running_write_kvs_count: 0,
         }
     }
 }
@@ -1016,7 +1021,7 @@ impl Scheduler {
 
     fn insert_ctx(&mut self, ctx: RunningCtx) {
         if ctx.lock.is_write_lock() {
-            self.running_write_count += 1;
+            self.running_write_kvs_count += ctx.kvs_count;
         }
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = true;
@@ -1032,7 +1037,7 @@ impl Scheduler {
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
         if ctx.lock.is_write_lock() {
-            self.running_write_count -= 1;
+            self.running_write_kvs_count -= ctx.kvs_count;
         }
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = false;
@@ -1138,7 +1143,7 @@ impl Scheduler {
     }
 
     fn too_busy(&self) -> bool {
-        self.running_write_count >= self.sched_too_busy_threshold
+        self.running_write_kvs_count >= self.sched_too_busy_threshold
     }
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
