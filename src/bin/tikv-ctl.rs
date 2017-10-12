@@ -501,13 +501,13 @@ fn main() {
                     Arg::with_name("from")
                         .short("f")
                         .takes_value(true)
-                        .help("set the scan from encoded key, in escaped format"),
+                        .help("set the scan from raw key, in escaped format"),
                 )
                 .arg(
                     Arg::with_name("to")
                         .short("t")
                         .takes_value(true)
-                        .help("set the scan end encoded key, in escaped format"),
+                        .help("set the scan end raw key, in escaped format"),
                 )
                 .arg(
                     Arg::with_name("limit")
