@@ -83,6 +83,9 @@ pub enum Msg {
         index: u64,
         hash: Vec<u8>,
     },
+
+    // For region size
+    ApproximateRegionSize { region_id: u64, region_size: u64 },
 }
 
 impl fmt::Debug for Msg {
@@ -109,6 +112,15 @@ impl fmt::Debug for Msg {
                 ref split_key,
                 ..
             } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
+            Msg::ApproximateRegionSize {
+                region_id,
+                region_size,
+            } => write!(
+                fmt,
+                "Approximate region size [region_id: {}, region_size: {}]",
+                region_id,
+                region_size
+            ),
         }
     }
 }

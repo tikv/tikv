@@ -185,7 +185,6 @@ fn check_and_open(
                 .clone(),
         ))?;
     }
-
     Ok(db)
 }
 
