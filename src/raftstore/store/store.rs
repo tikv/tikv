@@ -520,7 +520,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.sendch.clone(),
             self.cfg.region_max_size.0,
             self.cfg.region_split_size.0,
-            false,
+            self.cfg.region_split_table,
         );
         box_try!(self.split_check_worker.start(split_check_runner));
 

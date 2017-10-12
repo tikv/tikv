@@ -88,6 +88,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(12),
         region_split_check_diff: ReadableSize::mb(12),
         region_split_check_after_initialization: true,
+        region_split_table: true,
         region_compact_check_interval: ReadableDuration::secs(12),
         region_compact_delete_keys_count: 1_234,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),

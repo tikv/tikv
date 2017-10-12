@@ -54,6 +54,7 @@ region-max-size = "12MB"
 region-split-size = "12MB"
 region-split-check-diff = "12MB"
 region-split-check-after-initialization = true
+region-split-table = true
 region-compact-check-interval = "12s"
 region-compact-delete-keys-count = 1234
 pd-heartbeat-tick-interval = "12m"
