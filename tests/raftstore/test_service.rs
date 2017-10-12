@@ -712,9 +712,21 @@ fn test_debug_fail_point() {
     inject_req.set_actions(act.to_owned());
     debug_client.inject_fail_point(inject_req).unwrap();
 
+    let resp = debug_client.list_fail_points(debugpb::ListFailPointsRequest::new()).unwrap();
+    let entries = resp.get_entries();
+    assert_eq!(entries.len(), 1);
+    for e in entries {
+        assert_eq!(e.get_name(), fp);
+        assert_eq!(e.get_actions(), act);
+    }
+
     let mut recover_req = debugpb::RecoverFailPointRequest::new();
     recover_req.set_name(fp.to_owned());
     debug_client.recover_fail_point(recover_req).unwrap();
+
+    let resp = debug_client.list_fail_points(debugpb::ListFailPointsRequest::new()).unwrap();
+    let entries = resp.get_entries();
+    assert_eq!(entries.len(), 0);
 }
 
 #[test]
