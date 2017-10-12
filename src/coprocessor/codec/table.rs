@@ -35,6 +35,7 @@ pub const RECORD_PREFIX_SEP: &'static [u8] = b"_r";
 pub const INDEX_PREFIX_SEP: &'static [u8] = b"_i";
 pub const SEP_LEN: usize = 2;
 pub const TABLE_PREFIX_LEN: usize = 1;
+const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 
 
 trait TableEncoder: NumberEncoder {
@@ -52,6 +53,37 @@ trait TableEncoder: NumberEncoder {
 }
 
 impl<T: Write> TableEncoder for T {}
+
+/// Composes table record and index prefix: `t[table_id]`.
+pub fn gen_table_prefix(table_id: i64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(TABLE_PREFIX_KEY_LEN);
+    buf.write_all(TABLE_PREFIX).unwrap();
+    buf.encode_i64(table_id).unwrap();
+    buf
+}
+
+/// Decodes the table ID of the key.
+pub fn decode_table_id(key: &[u8]) -> Result<i64> {
+    if key.len() < TABLE_PREFIX_KEY_LEN || !key.starts_with(TABLE_PREFIX) {
+        Err(box_err!("table key expected, but got {}", escape(key)))
+    } else {
+        let mut key = &key[TABLE_PREFIX_LEN..TABLE_PREFIX_KEY_LEN];
+        key.decode_i64()
+    }
+}
+
+/// Test if the left and right are in the same table.
+pub fn in_same_table(left: &[u8], right: &[u8]) -> Result<bool> {
+    if left.len() < TABLE_PREFIX_KEY_LEN || !left.starts_with(TABLE_PREFIX) {
+        Err(box_err!("table key expected, but got {}", escape(left)))
+    } else if right.len() < TABLE_PREFIX_KEY_LEN || !right.starts_with(TABLE_PREFIX) {
+        Err(box_err!("table key expected, but got {}", escape(right)))
+    } else if left[..TABLE_PREFIX_KEY_LEN] == right[..TABLE_PREFIX_KEY_LEN] {
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
 
 pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
@@ -560,5 +592,42 @@ mod test {
         res = cut_idx_key_as_owned(&bs, &[]);
         assert!(res.0.is_empty());
         assert!(res.1.is_none());
+    }
+
+    #[test]
+    fn test_encode_and_decode_table_perfix() {
+        let good = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
+        for t in good {
+            let key = gen_table_prefix(t);
+            assert_eq!(decode_table_id(&key).unwrap(), t);
+        }
+
+        assert!(decode_table_id(&[]).is_err());
+        assert!(decode_table_id(TABLE_PREFIX).is_err());
+        assert!(decode_table_id(b"t123").is_err());
+    }
+
+    #[test]
+    fn test_in_same_table() {
+        let (mut left, mut right) = (gen_table_prefix(1), gen_table_prefix(1));
+        left.extend_from_slice(b"foo");
+        right.extend_from_slice(b"bar");
+        assert_eq!(in_same_table(&left, &right).unwrap(), true);
+
+        assert_eq!(
+            in_same_table(&gen_table_prefix(1), &gen_table_prefix(1)).unwrap(),
+            true
+        );
+
+        assert_eq!(
+            in_same_table(&gen_table_prefix(1), &gen_table_prefix(2)).unwrap(),
+            false
+        );
+
+        let vacant = vec![];
+        let empty = vacant.as_slice();
+        assert!(in_same_table(empty, &gen_table_prefix(1)).is_err());
+        assert!(in_same_table(&gen_table_prefix(1), empty).is_err());
+        assert!(in_same_table(empty, empty).is_err());
     }
 }

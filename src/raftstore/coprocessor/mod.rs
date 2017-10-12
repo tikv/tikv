@@ -19,6 +19,10 @@ mod error;
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 
+use raftstore::store::keys;
+use coprocessor::codec::table;
+use storage::types::Key;
+
 use kvproto::raft_cmdpb::{AdminRequest, Request};
 use kvproto::metapb::Region;
 use protobuf::RepeatedField;
@@ -69,4 +73,51 @@ pub trait RegionObserver: Coprocessor {
     ///
     /// Please note that improper implementation can lead to data inconsistency.
     fn pre_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) {}
+}
+
+/// If `left_key` and `right_key` are in different tables,
+/// it returns the `right_key`'s table prefix.
+pub fn cross_table(left_key: &[u8], right_key: &[u8]) -> Option<Vec<u8>> {
+    if !keys::validate_data_key(left_key) || !keys::validate_data_key(right_key) {
+        return None;
+    }
+    let origin_right_key = keys::origin_key(right_key);
+    let raw_right_key = match Key::from_encoded(origin_right_key.to_vec()).raw() {
+        Ok(k) => k,
+        Err(_) => return None,
+    };
+
+    let origin_left_key = keys::origin_key(left_key);
+    let raw_left_key = match Key::from_encoded(origin_left_key.to_vec()).raw() {
+        Ok(k) => k,
+        Err(_) => return None,
+    };
+
+    if let Ok(false) = table::in_same_table(&raw_left_key, &raw_right_key) {
+        let table_id = match table::decode_table_id(&raw_right_key) {
+            Ok(id) => id,
+            _ => return None,
+        };
+
+        Some(keys::data_key(
+            Key::from_raw(&table::gen_table_prefix(table_id)).encoded(),
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_cross_table() {
+        let t1 = keys::data_key(Key::from_raw(&table::gen_table_prefix(1)).encoded());
+        let t5 = keys::data_key(Key::from_raw(&table::gen_table_prefix(5)).encoded());
+
+        assert_eq!(cross_table(&t1, &t5).unwrap(), t5);
+        assert_eq!(cross_table(&t5, &t5), None);
+        assert_eq!(cross_table(b"foo", b"bar"), None);
+    }
 }

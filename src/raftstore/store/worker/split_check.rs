@@ -21,6 +21,7 @@ use rocksdb::DB;
 use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
 
+use raftstore::coprocessor::cross_table;
 use raftstore::store::{keys, Msg};
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::util;
@@ -29,8 +30,6 @@ use rocksdb::DBIterator;
 use util::escape;
 use util::transport::{RetryableSendCh, Sender};
 use util::worker::Runnable;
-use util::codec::table;
-use storage::types::Key;
 use storage::{CfName, LARGE_CFS};
 
 use super::metrics::*;
@@ -271,30 +270,6 @@ impl<C: Sender<Msg>> Runner<C> {
     }
 }
 
-fn cross_table(prev_key: &[u8], current_key: &[u8]) -> Option<Vec<u8>> {
-    let origin_current_key = keys::origin_key(current_key);
-    let raw_current_key = match Key::from_encoded(origin_current_key.to_vec()).raw() {
-        Ok(k) => k,
-        Err(_) => return None,
-    };
-
-    let origin_prev_key = keys::origin_key(prev_key);
-    let raw_prev_key = match Key::from_encoded(origin_prev_key.to_vec()).raw() {
-        Ok(k) => k,
-        Err(_) => return None,
-    };
-
-    if let Ok(false) = table::is_same_table(&raw_prev_key, &raw_current_key) {
-        Some(keys::data_key(
-            Key::from_raw(&table::gen_table_prefix(
-                table::decode_table_id(&raw_current_key),
-            )).encoded(),
-        ))
-    } else {
-        None
-    }
-}
-
 impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
         let region = &task.region;
@@ -336,6 +311,8 @@ mod tests {
     use storage::ALL_CFS;
     use util::rocksdb::{new_engine, new_engine_opt, CFOptions};
     use util::properties::SizePropertiesCollectorFactory;
+    use coprocessor::codec::table;
+    use storage::types::Key;
     use super::*;
 
     #[test]
@@ -522,7 +499,7 @@ mod tests {
         match table_rx.try_recv() {
             Ok(Msg::SplitRegion { split_key, .. }) => {
                 let key = Key::from_encoded(split_key).raw().unwrap();
-                assert_eq!(table::decode_table_id(&key), 3);
+                assert_eq!(table::decode_table_id(&key).unwrap(), 3);
             }
             others => panic!("expect split check result, but got {:?}", others),
         }

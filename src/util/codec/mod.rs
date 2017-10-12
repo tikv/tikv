@@ -14,7 +14,6 @@
 
 pub mod bytes;
 pub mod number;
-pub mod table;
 
 use std::io;
 use std::str::Utf8Error;
