@@ -77,7 +77,7 @@ impl CoprocessorHost {
         H: FnMut(&RegionObserver, &mut ObserverContext, &mut Q) -> Result<()>,
     {
         for entry in &self.registry.observers {
-            try!(hook(entry.observer.as_ref(), &mut ctx, req));
+            hook(entry.observer.as_ref(), &mut ctx, req)?;
             if ctx.bypass {
                 break;
             }

@@ -98,24 +98,24 @@ pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<
     }
 
     for cf in db.cf_names() {
-        try!(delete_all_in_range_cf(db, cf, start_key, end_key));
+        delete_all_in_range_cf(db, cf, start_key, end_key)?;
     }
 
     Ok(())
 }
 
 pub fn delete_all_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-    let handle = try!(rocksdb_util::get_cf_handle(db, cf));
+    let handle = rocksdb_util::get_cf_handle(db, cf)?;
     let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
-    let mut it = try!(db.new_iterator_cf(cf, iter_opt));
+    let mut it = db.new_iterator_cf(cf, iter_opt)?;
     let mut wb = WriteBatch::new();
     it.seek(start_key.into());
     while it.valid() {
-        try!(wb.delete_cf(handle, it.key()));
+        wb.delete_cf(handle, it.key())?;
         if wb.count() == MAX_DELETE_KEYS_COUNT {
             // Can't use write_without_wal here.
             // Otherwise it may cause dirty data when applying snapshot.
-            try!(db.write(wb));
+            db.write(wb)?;
             wb = WriteBatch::new();
         }
 
@@ -125,7 +125,7 @@ pub fn delete_all_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8
     }
 
     if wb.count() > 0 {
-        try!(db.write(wb));
+        db.write(wb)?;
     }
 
     Ok(())
@@ -142,7 +142,7 @@ pub fn get_region_properties_cf(
     cfname: &str,
     region: &metapb::Region,
 ) -> Result<TablePropertiesCollection> {
-    let cf = try!(rocksdb_util::get_cf_handle(db, cfname));
+    let cf = rocksdb_util::get_cf_handle(db, cfname)?;
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
@@ -155,14 +155,14 @@ pub fn get_region_approximate_size_cf(
     cfname: &str,
     region: &metapb::Region,
 ) -> Result<u64> {
-    let cf = try!(rocksdb_util::get_cf_handle(db, cfname));
+    let cf = rocksdb_util::get_cf_handle(db, cfname)?;
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
-    let collection = try!(db.get_properties_of_tables_in_range(cf, &[range]));
+    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
-        let props = try!(SizeProperties::decode(v.user_collected_properties()));
+        let props = SizeProperties::decode(v.user_collected_properties())?;
         size += props.get_approximate_size_in_range(&start, &end);
     }
     Ok(size)
@@ -171,7 +171,7 @@ pub fn get_region_approximate_size_cf(
 pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
     let mut size = 0;
     for cfname in LARGE_CFS {
-        size += try!(get_region_approximate_size_cf(db, cfname, region))
+        size += get_region_approximate_size_cf(db, cfname, region)?
     }
     Ok(size)
 }
@@ -421,7 +421,7 @@ mod tests {
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
         let cf = "default";
-        let db = DB::open_cf(opts, path_str, vec![cf], vec![cf_opts]).unwrap();
+        let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
         let wb = WriteBatch::new();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),

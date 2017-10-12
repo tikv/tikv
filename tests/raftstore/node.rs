@@ -13,8 +13,7 @@
 
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::sync::mpsc::Sender;
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
@@ -31,6 +30,7 @@ use kvproto::eraftpb::MessageType;
 use tikv::config::TiKvConfig;
 use tikv::raftstore::{Error, Result};
 use tikv::util::HandyRwLock;
+use tikv::util::worker::FutureWorker;
 use tikv::util::transport::SendCh;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
@@ -40,7 +40,6 @@ use super::transport_simulate::*;
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
-    snapshot_status_senders: HashMap<u64, Mutex<Sender<SignificantMsg>>>,
 }
 
 #[derive(Clone)]
@@ -54,7 +53,6 @@ impl ChannelTransport {
             core: Arc::new(RwLock::new(ChannelTransportCore {
                 snap_paths: HashMap::new(),
                 routers: HashMap::new(),
-                snapshot_status_senders: HashMap::new(),
             })),
         }
     }
@@ -105,23 +103,17 @@ impl Channel<RaftMessage> for ChannelTransport {
                     .deregister(&key, &SnapEntry::Receiving);
             });
 
-            try!(copy_snapshot(from, to));
+            copy_snapshot(from, to)?;
         }
 
         match self.core.rl().routers.get(&to_store) {
             Some(h) => {
-                try!(h.send_raft_msg(msg));
+                h.send_raft_msg(msg)?;
                 if is_snapshot {
                     // should report snapshot finish.
                     let core = self.rl();
-                    core.snapshot_status_senders[&from_store]
-                        .lock()
-                        .unwrap()
-                        .send(SignificantMsg::SnapshotStatus {
-                            region_id: region_id,
-                            to_peer_id: to_peer_id,
-                            status: SnapshotStatus::Finish,
-                        })
+                    core.routers[&from_store]
+                        .report_snapshot_status(region_id, to_peer_id, SnapshotStatus::Finish)
                         .unwrap();
                 }
                 Ok(())
@@ -164,6 +156,7 @@ impl Simulator for NodeCluster {
 
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
+        let pd_worker = FutureWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(
@@ -191,6 +184,7 @@ impl Simulator for NodeCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             snap_status_receiver,
+            pd_worker,
         ).unwrap();
         assert!(
             engines
@@ -214,15 +208,11 @@ impl Simulator for NodeCluster {
         }
 
         let node_id = node.id();
-        let router = ServerRaftStoreRouter::new(node.get_sendch());
+        let router = ServerRaftStoreRouter::new(node.get_sendch(), snap_status_sender.clone());
         self.trans
             .wl()
             .routers
             .insert(node_id, SimulateTransport::new(router));
-        self.trans
-            .wl()
-            .snapshot_status_senders
-            .insert(node_id, Mutex::new(snap_status_sender));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 

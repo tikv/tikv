@@ -109,7 +109,9 @@ impl<T: Display> Scheduler<T> {
             return Err(Stopped(t));
         }
         self.counter.fetch_add(1, Ordering::SeqCst);
-        PENDING_TASKS.with_label_values(&[&self.name]).inc();
+        WORKER_PENDING_TASK_VEC
+            .with_label_values(&[&self.name])
+            .inc();
         Ok(())
     }
 
@@ -170,9 +172,13 @@ where
             }
         }
         counter.fetch_sub(buffer.len(), Ordering::SeqCst);
-        PENDING_TASKS
+        WORKER_PENDING_TASK_VEC
             .with_label_values(&[&name])
             .sub(buffer.len() as f64);
+        WORKER_HANDLED_TASK_VEC
+            .with_label_values(&[&name])
+            .inc_by(buffer.len() as f64)
+            .unwrap();
         runner.run_batch(&mut buffer);
         buffer.clear();
     }
@@ -208,11 +214,9 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
-        let h = try!(
-            Builder::new()
-                .name(thd_name!(self.scheduler.name.as_ref()))
-                .spawn(move || poll(runner, rx, counter, batch_size))
-        );
+        let h = Builder::new()
+            .name(thd_name!(self.scheduler.name.as_ref()))
+            .spawn(move || poll(runner, rx, counter, batch_size))?;
         self.handle = Some(h);
         Ok(())
     }

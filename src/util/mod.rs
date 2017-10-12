@@ -148,8 +148,8 @@ impl<T> HandyRwLock<T> for RwLock<T> {
 
 
 pub fn make_std_tcp_conn<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
-    let stream = try!(TcpStream::connect(addr));
-    try!(stream.set_nodelay(true));
+    let stream = TcpStream::connect(addr)?;
+    stream.set_nodelay(true)?;
     Ok(stream)
 }
 
@@ -157,7 +157,7 @@ pub fn make_std_tcp_conn<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
 // In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
 // but it is just ok for "ip:port", not "host:port".
 pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
-    let addrs = try!(addr.to_socket_addrs());
+    let addrs = addr.to_socket_addrs()?;
     Ok(addrs.collect::<Vec<SocketAddr>>()[0])
 }
 
@@ -269,7 +269,7 @@ impl<'a, T: 'a, V: 'a, E> TryInsertWith<'a, V, E> for Entry<'a, T, V> {
         match self {
             Entry::Occupied(e) => Ok(e.into_mut()),
             Entry::Vacant(e) => {
-                let v = try!(default());
+                let v = default()?;
                 Ok(e.insert(v))
             }
         }

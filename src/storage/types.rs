@@ -43,6 +43,11 @@ pub struct MvccInfo {
     pub values: Vec<(u64, bool, Value)>,
 }
 
+/// The caller should ensure the key is a timestamped key.
+pub fn truncate_ts(key: &[u8]) -> &[u8] {
+    &key[..key.len() - number::U64_SIZE]
+}
+
 /// Key type.
 ///
 /// Keys have 2 types of binary representation - raw and encoded. The raw
@@ -104,7 +109,7 @@ impl Key {
             Err(codec::Error::KeyLength)
         } else {
             let mut ts = &self.0[len - number::U64_SIZE..];
-            Ok(try!(ts.decode_u64_desc()))
+            Ok(ts.decode_u64_desc()?)
         }
     }
 
@@ -117,7 +122,7 @@ impl Key {
             // TODO: (the same as above)
             return Err(codec::Error::KeyLength);
         }
-        Ok(Key::from_encoded(self.0[..len - number::U64_SIZE].to_vec()))
+        Ok(Key::from_encoded(truncate_ts(&self.0).to_vec()))
     }
 }
 
@@ -156,7 +161,7 @@ pub fn split_encoded_key_on_ts(key: &[u8]) -> Result<(&[u8], u64), codec::Error>
         let pos = key.len() - number::U64_SIZE;
         let k = &key[..pos];
         let mut ts = &key[pos..];
-        Ok((k, try!(ts.decode_u64_desc())))
+        Ok((k, ts.decode_u64_desc()?))
     }
 }
 

@@ -14,27 +14,6 @@
 use prometheus::{exponential_buckets, CounterVec, Histogram, HistogramVec};
 
 lazy_static! {
-    pub static ref PD_REQ_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_raftstore_pd_request_sent_total",
-            "Total number of pd client request sent.",
-            &["type", "status"]
-        ).unwrap();
-
-    pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_raftstore_pd_heartbeat_sent_total",
-            "Total number of raftstore pd client heartbeat sent.",
-            &["type"]
-        ).unwrap();
-
-    pub static ref PD_VALIDATE_PEER_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_raftstore_pd_validate_peer_total",
-            "Total number of raftstore pd worker validate peer task.",
-            &["type"]
-        ).unwrap();
-
     pub static ref SNAP_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_raftstore_snapshot_total",
@@ -82,5 +61,12 @@ lazy_static! {
             "tikv_raftstore_apply_proposal",
             "Proposal count of all regions in a mio tick",
             exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref REGION_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_region_size",
+            "Bucketed histogram of approximate region size.",
+            exponential_buckets(4096.0, 2.0, 20).unwrap()
         ).unwrap();
 }
