@@ -408,7 +408,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=javaforfun/raft-non-voting#360108a48d78fdef5c0190136ddac513b82c4c85"
+source = "git+https://github.com/pingcap/kvproto.git?branch=javaforfun/raft-non-voting#9541fc9bea9496f019742c892afaaf4e17e8917a"
 dependencies = [
  "futures 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",

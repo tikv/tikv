@@ -28,8 +28,6 @@
 
 use std::cmp;
 
-use kvproto::eraftpb::SuffrageState;
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {
     Probe,
@@ -44,7 +42,7 @@ impl Default for ProgressState {
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Progress {
     pub matched: u64,
     pub next_idx: u64,
@@ -59,7 +57,6 @@ pub struct Progress {
     // before and stops sending any replication message.
     pub state: ProgressState,
 
-    pub suffrage: SuffrageState,
     // Paused is used in ProgressStateProbe.
     // When Paused is true, raft should pause sending replication message to this peer.
     pub paused: bool,
@@ -83,24 +80,13 @@ pub struct Progress {
     // When a leader receives a reply, the previous inflights should
     // be freed by calling inflights.freeTo.
     pub ins: Inflights,
+
+    pub is_learner: bool,
 }
 
 
 
 impl Progress {
-    pub fn default() -> Progress {
-        Progress {
-            matched: 0,
-            next_idx: 0,
-            state: ProgressState::default(),
-            suffrage: SuffrageState::Nonvoter,
-            paused: false,
-            pending_snapshot: 0,
-            recent_active: false,
-            ins: Inflights::new(0),
-        }
-    }
-
     fn reset_state(&mut self, state: ProgressState) {
         self.paused = false;
         self.pending_snapshot = 0;

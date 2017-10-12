@@ -23,7 +23,7 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType, SuffrageState};
+use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
@@ -1171,7 +1171,7 @@ impl Peer {
         let mut healthy = 0;
         let mut voter_count = 0;
         for pr in progress {
-            if pr.suffrage == SuffrageState::Voter {
+            if !pr.is_learner {
                 voter_count += 1;
                 if pr.matched >= self.get_store().truncated_index() {
                     healthy += 1;
@@ -1219,7 +1219,7 @@ impl Peer {
         match change_type {
             ConfChangeType::AddNode => {
                 let mut p = Progress::default();
-                p.suffrage = SuffrageState::Voter;
+                p.is_learner = false;
                 status.progress.insert(peer.get_id(), p);
             }
             ConfChangeType::RemoveNode => {
@@ -1228,15 +1228,15 @@ impl Peer {
                     return Ok(());
                 }
             }
-            ConfChangeType::AddNonvoter => if status.progress.contains_key(&peer.get_id()) {
+            ConfChangeType::AddLearner => if status.progress.contains_key(&peer.get_id()) {
                 warn!(
-                    "{} rejects add non-voter for exist node {:?}",
+                    "{} rejects add learner for exist node {:?}",
                     self.tag,
                     change_peer
                 );
-                return Err(box_err!("ignore add non-voter"));
+                return Err(box_err!("ignore add learner"));
             },
-            ConfChangeType::AddVoter | ConfChangeType::UpdateNode | ConfChangeType::DemoteVoter => {
+            ConfChangeType::UpdateNode => {
                 unimplemented!();
             }
         }
@@ -1570,7 +1570,7 @@ impl Peer {
         for peer in self.get_store().get_region().get_peers() {
             if peer.get_id() == peer_id {
                 let mut new_peer = peer.clone();
-                new_peer.clear_suffrage();
+                new_peer.clear_is_learner();
                 self.peer_cache
                     .borrow_mut()
                     .insert(peer_id, new_peer.clone());

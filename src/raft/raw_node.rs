@@ -284,9 +284,7 @@ impl<T: Storage> RawNode<T> {
             ConfChangeType::AddNode => self.raft.add_node(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
             ConfChangeType::UpdateNode => unimplemented!(),
-            ConfChangeType::AddNonvoter => self.raft.add_non_voter(nid),
-            ConfChangeType::AddVoter => unimplemented!(),
-            ConfChangeType::DemoteVoter => unimplemented!(),
+            ConfChangeType::AddLearner => self.raft.add_learner(nid),
         }
         let mut cs = ConfState::new();
         cs.set_nodes(self.raft.nodes());

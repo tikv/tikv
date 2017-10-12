@@ -22,7 +22,7 @@ use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
-use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, SuffrageState};
+use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftTruncatedState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           RaftCmdRequest, RaftCmdResponse, Request, Response};
@@ -743,12 +743,12 @@ impl ApplyDelegate {
                     .inc();
 
                 if !exists {
-                    peer.set_suffrage(SuffrageState::Voter);
+                    peer.set_is_learner(false);
                     region.mut_peers().push(peer.clone());
                 } else {
                     for exist_peer in region.mut_peers().iter_mut() {
                         if exist_peer.get_store_id() == store_id {
-                            if exist_peer.get_suffrage() == SuffrageState::Voter {
+                            if !exist_peer.get_is_learner() {
                                 error!(
                                     "{} can't add duplicated voter peer {:?} to region {:?}",
                                     self.tag,
@@ -762,7 +762,7 @@ impl ApplyDelegate {
                                 ));
                             }
                             // TODO: Do we allow adding peer in same node?
-                            exist_peer.set_suffrage(SuffrageState::Voter);
+                            exist_peer.set_is_learner(false);
                             break;
                         }
                     }
@@ -817,30 +817,30 @@ impl ApplyDelegate {
                     self.region
                 );
             }
-            ConfChangeType::AddNonvoter => {
+            ConfChangeType::AddLearner => {
                 PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["add_non_voter", "all"])
+                    .with_label_values(&["add_learner", "all"])
                     .inc();
 
                 if exists {
                     error!(
-                        "{} can't add duplicated non-voter peer {:?} to region {:?}",
+                        "{} can't add duplicated learner peer {:?} to region {:?}",
                         self.tag,
                         peer,
                         self.region
                     );
                     return Err(box_err!(
-                        "can't add duplicated non-voter peer {:?} to region {:?}",
+                        "can't add duplicated learner peer {:?} to region {:?}",
                         peer,
                         self.region
                     ));
                 }
 
-                peer.set_suffrage(SuffrageState::Nonvoter);
+                peer.set_is_learner(true);
                 region.mut_peers().push(peer.clone());
 
                 PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["add_non_voter", "success"])
+                    .with_label_values(&["add_learner", "success"])
                     .inc();
 
                 info!(
@@ -850,7 +850,7 @@ impl ApplyDelegate {
                     self.region
                 );
             }
-            ConfChangeType::AddVoter | ConfChangeType::UpdateNode | ConfChangeType::DemoteVoter => {
+            ConfChangeType::UpdateNode => {
                 unimplemented!();
             }
         }

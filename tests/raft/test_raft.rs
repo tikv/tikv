@@ -32,7 +32,7 @@ use std::cmp;
 
 use protobuf::{self, RepeatedField};
 use kvproto::eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState,
-                       Message, MessageType, Server, Snapshot, SuffrageState};
+                       Message, MessageType, Snapshot};
 use rand;
 
 use tikv::raft::*;
@@ -59,27 +59,21 @@ fn new_progress(
     pending_snapshot: u64,
     ins_size: usize,
 ) -> Progress {
-    let mut p = Progress::default();
-    p.state = state;
-    p.matched = matched;
-    p.next_idx = next_idx;
-    p.suffrage = SuffrageState::Voter;
-    p.pending_snapshot = pending_snapshot;
-    p.ins = Inflights::new(ins_size);
-    p
+    Progress {
+        state: state,
+        matched: matched,
+        next_idx: next_idx,
+        pending_snapshot: pending_snapshot,
+        ins: Inflights::new(ins_size),
+        is_learner: false,
+        ..Default::default()
+    }
 }
 
 pub fn new_test_config(id: u64, peers: Vec<u64>, election: usize, heartbeat: usize) -> Config {
-    let mut new_peers: Vec<Server> = vec![];
-    for i in peers {
-        let mut server = Server::new();
-        server.set_node(i);
-        server.set_suffrage(SuffrageState::Voter);
-        new_peers.push(server);
-    }
     Config {
         id: id,
-        peers: new_peers,
+        peers: peers,
         election_tick: election,
         heartbeat_tick: heartbeat,
         max_size_per_msg: NO_LIMIT,
@@ -198,18 +192,22 @@ impl Interface {
 
     fn initial(&mut self, id: u64, ids: &[u64]) {
         if self.raft.is_some() {
-            let mut suffrages: FlatMap<u64, SuffrageState> = FlatMap::new();
+            let mut learners: FlatMap<u64, bool> = FlatMap::new();
             for (id, pr) in &self.prs {
-                suffrages.insert(*id, pr.suffrage);
+                if pr.is_learner {
+                    learners.insert(*id, true);
+                }
             }
             self.id = id;
             self.prs = FlatMap::with_capacity(ids.len());
             for id in ids {
-                let mut pr = Progress::default();
-                if let Some(suffrage) = suffrages.get(id) {
-                    pr.suffrage = *suffrage;
-                }
-                self.prs.insert(*id, pr);
+                self.prs.insert(
+                    *id,
+                    Progress {
+                        is_learner: learners.contains_key(id),
+                        ..Default::default()
+                    },
+                );
             }
             let term = self.term;
             self.reset(term);
@@ -294,16 +292,6 @@ pub fn new_snapshot(index: u64, term: u64, nodes: Vec<u64>) -> Snapshot {
     s.mut_metadata().set_index(index);
     s.mut_metadata().set_term(term);
     s.mut_metadata().mut_conf_state().set_nodes(nodes);
-    s
-}
-
-pub fn new_snapshot_with_suffrage(index: u64, term: u64, servers: Vec<Server>) -> Snapshot {
-    let mut s = Snapshot::new();
-    s.mut_metadata().set_index(index);
-    s.mut_metadata().set_term(term);
-    s.mut_metadata()
-        .mut_conf_state()
-        .set_servers(RepeatedField::from_vec(servers));
     s
 }
 
@@ -491,9 +479,11 @@ fn test_progress_update() {
         (prev_m + 2, prev_m + 2, prev_n + 1, true),
     ];
     for (i, &(update, wm, wn, wok)) in tests.iter().enumerate() {
-        let mut p = Progress::default();
-        p.matched = prev_m;
-        p.next_idx = prev_n;
+        let mut p = Progress {
+            matched: prev_m,
+            next_idx: prev_n,
+            ..Default::default()
+        };
         let ok = p.maybe_update(update);
         if ok != wok {
             panic!("#{}: ok= {}, want {}", i, ok, wok);
@@ -557,10 +547,12 @@ fn test_progress_is_paused() {
         (ProgressState::Snapshot, true, true),
     ];
     for (i, &(state, paused, w)) in tests.iter().enumerate() {
-        let mut p = Progress::default();
-        p.state = state;
-        p.paused = paused;
-        p.ins = Inflights::new(256);
+        let p = Progress {
+            state: state,
+            paused: paused,
+            ins: Inflights::new(256),
+            ..Default::default()
+        };
         if p.is_paused() != w {
             panic!("#{}: shouldwait = {}, want {}", i, p.is_paused(), w)
         }
@@ -571,9 +563,11 @@ fn test_progress_is_paused() {
 // will reset progress.paused.
 #[test]
 fn test_progress_resume() {
-    let mut p = Progress::default();
-    p.next_idx = 2;
-    p.paused = true;
+    let mut p = Progress {
+        next_idx: 2,
+        paused: true,
+        ..Default::default()
+    };
     p.maybe_decr_to(1, 1);
     assert!(!p.paused, "paused= true, want false");
     p.paused = true;
@@ -824,44 +818,46 @@ fn test_leader_election_overwrite_newer_logs_with_config(pre_vote: bool) {
 }
 
 #[test]
-fn test_non_voter_election_timeout() {
-    let mut n1 = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
-    n1.prs.get_mut(&3).unwrap().suffrage = SuffrageState::Nonvoter;
+fn test_learner_election_timeout() {
+    let mut n1 = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
+    n1.prs.get_mut(&2).unwrap().is_learner = true;
 
-    let mut n2 = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
-    n2.prs.get_mut(&3).unwrap().suffrage = SuffrageState::Nonvoter;
-
-    let mut n3 = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
-    n3.suffrage = SuffrageState::Nonvoter;
-    n3.prs.get_mut(&3).unwrap().suffrage = SuffrageState::Nonvoter;
+    let mut n2 = new_test_raft(2, vec![1, 2], 10, 1, new_storage());
+    n2.is_learner = true;
+    n2.prs.get_mut(&2).unwrap().is_learner = true;
 
     n1.become_follower(1, INVALID_ID);
     n2.become_follower(1, INVALID_ID);
-    n3.become_follower(1, INVALID_ID);
 
-    let mut nt = Network::new(vec![Some(n1), Some(n2), Some(n3)]);
+    let mut nt = Network::new(vec![Some(n1), Some(n2)]);
 
     // Nonvoter can't start election
-    let election_timeout = nt.peers[&3].get_election_timeout();
+    let election_timeout = nt.peers[&2].get_election_timeout();
     nt.peers
-        .get_mut(&3)
+        .get_mut(&2)
         .unwrap()
         .set_randomized_election_timeout(election_timeout);
     for _ in 0..election_timeout {
-        nt.peers.get_mut(&3).unwrap().tick();
+        nt.peers.get_mut(&2).unwrap().tick();
     }
     assert_eq!(nt.peers[&1].state, StateRole::Follower);
     assert_eq!(nt.peers[&2].state, StateRole::Follower);
-    assert_eq!(nt.peers[&3].state, StateRole::Follower);
 
+    // n1 should become leader
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
     assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
 
-    nt.peers.get_mut(&1).unwrap().add_node(3);
-    nt.peers.get_mut(&2).unwrap().add_node(3);
-    nt.peers.get_mut(&3).unwrap().add_node(3);
-    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
-    assert_eq!(nt.peers[&3].state, StateRole::Leader);
+    nt.send(vec![new_message(1, 1, MessageType::MsgBeat, 0)]);
+
+    nt.peers.get_mut(&1).unwrap().add_node(2);
+    nt.peers.get_mut(&2).unwrap().add_node(2);
+    assert!(!nt.peers[&2].is_learner);
+
+    // n2 start election, should become leader
+    nt.send(vec![new_message(2, 2, MessageType::MsgHup, 0)]);
+    assert_eq!(nt.peers[&1].state, StateRole::Follower);
+    assert_eq!(nt.peers[&2].state, StateRole::Leader);
 }
 
 #[test]
@@ -1469,7 +1465,7 @@ fn test_commit() {
 
         let mut sm = new_test_raft(1, vec![1], 5, 1, store);
         for (j, &v) in matches.iter().enumerate() {
-            sm.set_progress(j as u64 + 1, v, v + 1, SuffrageState::Voter);
+            sm.set_progress(j as u64 + 1, v, v + 1, false);
         }
         sm.maybe_commit();
         if sm.raft_log.committed != w {
@@ -2931,34 +2927,28 @@ fn test_slow_node_restore() {
 }
 
 #[test]
-fn test_restore_with_non_voter() {
-    let mut server_1 = Server::new();
-    server_1.set_node(1);
-    server_1.set_suffrage(SuffrageState::Voter);
-
-    let mut server_2 = Server::new();
-    server_2.set_node(2);
-    server_2.set_suffrage(SuffrageState::Voter);
-
-    let mut server_3 = Server::new();
-    server_3.set_node(3);
-    server_3.set_suffrage(SuffrageState::Nonvoter);
-
+fn test_restore_with_learner() {
     // magic number
-    let s = new_snapshot_with_suffrage(11, 11, vec![server_1, server_2, server_3]);
+    let mut s = new_snapshot(11, 11, vec![1, 2]);
+    s.mut_metadata().mut_conf_state().set_learners(vec![3]);
 
-    let mut sm = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
+    let mut sm = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
     assert!(sm.restore(s.clone()));
     assert_eq!(sm.raft_log.last_index(), s.get_metadata().get_index());
     assert_eq!(
         sm.raft_log.term(s.get_metadata().get_index()).unwrap(),
         s.get_metadata().get_term()
     );
-    for s in s.get_metadata().get_conf_state().get_servers() {
-        assert_eq!(
-            sm.prs.get(&s.get_node()).unwrap().suffrage,
-            s.get_suffrage()
-        );
+    assert_eq!(
+        sm.nodes().len(),
+        s.get_metadata().get_conf_state().get_nodes().len() +
+            s.get_metadata().get_conf_state().get_learners().len()
+    );
+    for n in s.get_metadata().get_conf_state().get_nodes() {
+        assert!(!sm.prs.get(n).unwrap().is_learner);
+    }
+    for n in s.get_metadata().get_conf_state().get_learners() {
+        assert!(sm.prs.get(n).unwrap().is_learner);
     }
 
     assert!(!sm.restore(s));
@@ -3057,13 +3047,13 @@ fn test_add_node() {
 }
 
 #[test]
-fn test_add_non_voter() {
+fn test_add_learner() {
     let mut r = new_test_raft(1, vec![1], 10, 1, new_storage());
     r.pending_conf = true;
-    r.add_non_voter(2);
+    r.add_learner(2);
     assert!(!r.pending_conf);
     assert_eq!(r.nodes(), vec![1, 2]);
-    assert_eq!(r.prs.get(&2).unwrap().suffrage, SuffrageState::Nonvoter);
+    assert!(r.prs.get(&2).unwrap().is_learner);
 }
 
 // test_remove_node tests that removeNode could update pendingConf, nodes and
