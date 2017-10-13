@@ -27,12 +27,13 @@ use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 
 use util::time::{duration_to_sec, Instant};
-use util::worker::{BatchRunnable, Scheduler};
+use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
 use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
+use pd::PdTask;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
@@ -63,14 +64,14 @@ const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
 
-pub struct Host<R: CopSender + 'static> {
+pub struct Host {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<CopContext<R>>,
-    low_priority_pool: ThreadPool<CopContext<R>>,
-    high_priority_pool: ThreadPool<CopContext<R>>,
+    pool: ThreadPool<CopContext>,
+    low_priority_pool: ThreadPool<CopContext>,
+    high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
 }
 
@@ -80,15 +81,12 @@ pub trait CopSender: Send + Clone {
     fn send(&self, CopRequestStatistics) -> Result<()>;
 }
 
-struct CopContextFactory<R: CopSender + 'static> {
-    sender: R,
+struct CopContextFactory {
+    sender: FutureScheduler<PdTask>,
 }
 
-impl<R> ContextFactory<CopContext<R>> for CopContextFactory<R>
-where
-    R: CopSender + 'static,
-{
-    fn create(&self) -> CopContext<R> {
+impl ContextFactory<CopContext> for CopContextFactory {
+    fn create(&self) -> CopContext {
         CopContext {
             sender: self.sender.clone(),
             select_stats: Default::default(),
@@ -98,15 +96,14 @@ where
     }
 }
 
-#[derive(Default)]
-struct CopContext<R: CopSender + 'static> {
+struct CopContext {
     select_stats: StatisticsSummary,
     index_stats: StatisticsSummary,
     request_stats: CopRequestStatistics,
-    sender: R,
+    sender: FutureScheduler<PdTask>,
 }
 
-impl<R: CopSender + 'static> CopContext<R> {
+impl CopContext {
     fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
         self.get_statistics(type_str).add_statistics(stats);
     }
@@ -131,7 +128,7 @@ impl<R: CopSender + 'static> CopContext<R> {
     }
 }
 
-impl<R: CopSender + 'static> Context for CopContext<R> {
+impl Context for CopContext {
     fn on_tick(&mut self) {
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
             let this_statistics = self.get_statistics(type_str);
@@ -151,7 +148,9 @@ impl<R: CopSender + 'static> Context for CopContext<R> {
         if !self.request_stats.is_empty() {
             let mut to_send_stats = HashMap::default();
             mem::swap(&mut to_send_stats, &mut self.request_stats);
-            if let Err(e) = self.sender.send(to_send_stats) {
+            if let Err(e) = self.sender.schedule(PdTask::ReadStats {
+                read_stats: to_send_stats,
+            }) {
                 error!("send coprocessor statistics: {:?}", e);
             };
         }
@@ -159,8 +158,13 @@ impl<R: CopSender + 'static> Context for CopContext<R> {
     }
 }
 
-impl<R: CopSender + 'static> Host<R> {
-    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config, r: R) -> Host<R> {
+impl Host {
+    pub fn new(
+        engine: Box<Engine>,
+        scheduler: Scheduler<Task>,
+        cfg: &Config,
+        r: FutureScheduler<PdTask>,
+    ) -> Host {
         Host {
             engine: engine,
             sched: scheduler,
@@ -220,7 +224,7 @@ impl<R: CopSender + 'static> Host<R> {
                 CommandPri::High => &mut self.high_priority_pool,
                 CommandPri::Normal => &mut self.pool,
             };
-            pool.execute(move |ctx: &mut CopContext<R>| {
+            pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
                 let stats = end_point.handle_request(req);
                 ctx.add_statistics(type_str, &stats);
@@ -433,7 +437,7 @@ impl Display for RequestTask {
     }
 }
 
-impl<R: CopSender + 'static> BatchRunnable<Task> for Host<R> {
+impl BatchRunnable<Task> for Host {
     // TODO: limit pending reqs
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
@@ -743,21 +747,8 @@ mod tests {
 
     use kvproto::coprocessor::Request;
 
-    use util::worker::Worker;
+    use util::worker::{FutureWorker, Worker};
     use util::time::Instant;
-
-    #[derive(Clone)]
-    struct MockCopSender {}
-    impl MockCopSender {
-        fn new() -> MockCopSender {
-            MockCopSender {}
-        }
-    }
-    impl CopSender for MockCopSender {
-        fn send(&self, _stats: CopRequestStatistics) -> Result<()> {
-            Ok(())
-        }
-    }
 
     #[test]
     fn test_get_reg_scan_tag() {
@@ -778,7 +769,8 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let end_point = Host::new(engine, worker.scheduler(), &cfg, MockCopSender::new());
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
@@ -795,7 +787,8 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, MockCopSender::new());
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
