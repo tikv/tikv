@@ -22,8 +22,7 @@
 ///
 /// ```sh
 /// ./tikv-fail -a 127.0.0.1:9090 inject\
-//      -f tikv::raftstore::store::store::raft_between_save\
-///     -a "panic(fail_point_raft_between_write)"
+//      -a tikv::raftstore::store::store::raft_between_save=panic
 /// ```
 ///
 
@@ -58,19 +57,18 @@ fn main() {
             SubCommand::with_name("inject")
                 .about("Inject failures")
                 .arg(
-                    Arg::with_name("failpoint")
-                        .short("f")
-                        .takes_value(true)
-                        .help("Fail point name"),
-                )
-                .arg(
-                    Arg::with_name("actions")
+                    Arg::with_name("args")
                         .short("a")
+                        .multiple(true)
                         .takes_value(true)
-                        .help("Fail actions"),
+                        .help(
+                            "Inject fail point and actions pairs.\
+                             E.g. tikv-fail inject --args fail::a=off fail::b=panic",
+                        ),
                 )
                 .arg(
                     Arg::with_name("file")
+                        .short("f")
                         .takes_value(true)
                         .help("Read a file of fail points and actions to inject"),
                 ),
@@ -79,14 +77,17 @@ fn main() {
             SubCommand::with_name("recover")
                 .about("Recover failures")
                 .arg(
-                    Arg::with_name("failpoint")
-                        .short("f")
+                    Arg::with_name("args")
+                        .short("a")
                         .multiple(true)
                         .takes_value(true)
-                        .help("Fail point name"),
+                        .help(
+                            "Recover fail points. Eg. tikv-fail recover --args fail::a fail::b",
+                        ),
                 )
                 .arg(
                     Arg::with_name("file")
+                        .short("f")
                         .takes_value(true)
                         .help("Recover from a file of fail points"),
                 ),
@@ -102,13 +103,19 @@ fn main() {
 
     if let Some(matches) = matches.subcommand_matches("inject") {
         let mut list = matches.value_of("file").map_or_else(Vec::new, read_file);
-        if let (Some(name), Some(actions)) =
-            (matches.value_of("failpoint"), matches.value_of("actions"))
-        {
-            list.push((name.to_owned(), actions.to_owned()));
+        for pair in matches.values_of("args").unwrap() {
+            let mut parts = pair.split('=');
+            list.push((
+                parts.next().unwrap().to_owned(),
+                parts.next().unwrap_or("").to_owned(),
+            ))
         }
 
         for (name, actions) in list {
+            if actions.is_empty() {
+                println!("No action for fail point {}", name);
+                continue;
+            }
             let mut inject_req = debugpb::InjectFailPointRequest::new();
             inject_req.set_name(name);
             inject_req.set_actions(actions);
@@ -118,10 +125,11 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("recover") {
         let mut list = matches.value_of("file").map_or_else(Vec::new, read_file);
-        if let Some(names) = matches.values_of("failpoint") {
-            for name in names {
-                list.push((name.to_owned(), "".to_owned()));
-            }
+        for f in matches.values_of("args").unwrap() {
+            list.push((
+                f.to_owned(),
+                "".to_owned(),
+            ))
         }
 
         for (name, _) in list {

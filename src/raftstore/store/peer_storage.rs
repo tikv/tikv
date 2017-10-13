@@ -1102,7 +1102,7 @@ impl PeerStorage {
                 &mut ctx,
                 &ready.snapshot,
                 &ready_ctx.kv_wb,
-                &ready_ctx.raft_wb
+                &ready_ctx.raft_wb,
             )?;
             fail_point!("raft_after_apply_snap");
 
