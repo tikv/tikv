@@ -22,7 +22,7 @@
 ///
 /// ```sh
 /// ./tikv-fail -a 127.0.0.1:9090 inject\
-//      -a tikv::raftstore::store::store::raft_between_save=panic
+//      tikv::raftstore::store::store::raft_between_save=panic
 /// ```
 ///
 
@@ -58,12 +58,11 @@ fn main() {
                 .about("Inject failures")
                 .arg(
                     Arg::with_name("args")
-                        .short("a")
                         .multiple(true)
                         .takes_value(true)
                         .help(
                             "Inject fail point and actions pairs.\
-                             E.g. tikv-fail inject --args fail::a=off fail::b=panic",
+                             E.g. tikv-fail inject fail::a=off fail::b=panic",
                         ),
                 )
                 .arg(
@@ -78,11 +77,10 @@ fn main() {
                 .about("Recover failures")
                 .arg(
                     Arg::with_name("args")
-                        .short("a")
                         .multiple(true)
                         .takes_value(true)
                         .help(
-                            "Recover fail points. Eg. tikv-fail recover --args fail::a fail::b",
+                            "Recover fail points. Eg. tikv-fail recover fail::a fail::b",
                         ),
                 )
                 .arg(
