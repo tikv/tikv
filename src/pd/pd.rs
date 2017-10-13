@@ -71,6 +71,7 @@ pub enum Task {
         peer: metapb::Peer,
     },
     ReadStats { read_stats: HashMap<u64, FlowStatistics>, },
+    DestroyPeer { region_id: u64 },
 }
 
 pub struct StoreStat {
@@ -148,6 +149,7 @@ impl Display for Task {
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
+            Task::DestroyPeer { ref region_id } => write!(f, "destroy peer {}", region_id),
         }
     }
 }
@@ -449,6 +451,13 @@ impl<T: PdClient> Runner<T> {
             self.store_stat.engine_total_keys_read += stats.read_keys as u64;
         }
     }
+
+    fn handle_destory_peer(&mut self, region_id: u64) {
+        match self.region_peers.remove(&region_id) {
+            None => return,
+            Some(_) => info!("[region {}] remove peer statistic record in pd", region_id),
+        }
+    }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
@@ -520,6 +529,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
+            Task::DestroyPeer { region_id } => self.handle_destory_peer(region_id),
         };
     }
 }

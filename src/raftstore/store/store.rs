@@ -1220,7 +1220,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("[region {}] destroy peer {:?}", region_id, peer);
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
-
+        let task = PdTask::DestroyPeer {
+            region_id: region_id,
+        };
+        if let Err(e) = self.pd_worker.schedule(task) {
+            error!("{} failed to notify pd: {}", self.tag, e);
+        }
         let is_initialized = p.is_initialized();
         if let Err(e) = p.destroy() {
             // If not panic here, the peer will be recreated in the next restart,
