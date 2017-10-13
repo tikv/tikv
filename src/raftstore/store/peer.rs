@@ -193,12 +193,6 @@ enum RequestPolicy {
 pub struct PeerStat {
     pub written_bytes: u64,
     pub written_keys: u64,
-    pub last_written_bytes: u64,
-    pub last_written_keys: u64,
-    pub read_bytes: u64,
-    pub read_keys: u64,
-    pub last_read_bytes: u64,
-    pub last_read_keys: u64,
 }
 
 pub struct Peer {
@@ -219,6 +213,8 @@ pub struct Peer {
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
+    /// approximate region size.
+    pub approximate_size: Option<u64>,
 
     pub consistency_state: ConsistencyState,
 
@@ -351,6 +347,7 @@ impl Peer {
             coprocessor_host: store.coprocessor_host.clone(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
+            approximate_size: None,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
@@ -1564,20 +1561,15 @@ impl Peer {
         None
     }
 
-    pub fn approximate_size(&self) -> Result<u64> {
-        util::get_region_approximate_size(&self.kv_engine(), self.region())
-    }
-
     pub fn heartbeat_pd(&self, worker: &FutureWorker<PdTask>) {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.peer_stat.written_bytes - self.peer_stat.last_written_bytes,
-            written_keys: self.peer_stat.written_keys - self.peer_stat.last_written_keys,
-            read_bytes: self.peer_stat.read_bytes - self.peer_stat.last_read_bytes,
-            read_keys: self.peer_stat.read_keys - self.peer_stat.last_read_keys,
+            written_bytes: self.peer_stat.written_bytes,
+            written_keys: self.peer_stat.written_keys,
+            region_size: self.approximate_size,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
