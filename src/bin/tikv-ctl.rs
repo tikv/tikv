@@ -173,7 +173,7 @@ trait DebugExecutor {
             eprintln!(r#"please pass "to" or "limit""#);
             process::exit(-1);
         }
-        if to < from {
+        if !to.is_empty() && to < from {
             eprintln!("The region's from pos must greater than the to pos.");
             process::exit(-1);
         }
@@ -263,7 +263,7 @@ trait DebugExecutor {
                 }
             }
         }
-        println!("\n");
+        println!("");
     }
 }
 
@@ -411,25 +411,32 @@ fn main() {
         )
         .arg(
             Arg::with_name("db")
-                .short("d")
+                .long("db")
                 .takes_value(true)
                 .help("set rocksdb path"),
         )
         .arg(
             Arg::with_name("raftdb")
-                .short("r")
+                .long("raftdb")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
         .arg(
+            Arg::with_name("host")
+                .long("host")
+                .conflicts_with_all(&["db", "raftdb"])
+                .takes_value(true)
+                .help("set remote host"),
+        )
+        .arg(
             Arg::with_name("hex-to-escaped")
-                .short("h")
+                .long("from-hex")
                 .takes_value(true)
                 .help("convert hex key to escaped key"),
         )
         .arg(
             Arg::with_name("escaped-to-hex")
-                .short("e")
+                .long("to-hex")
                 .takes_value(true)
                 .help("convert escaped key to hex key"),
         )
@@ -469,7 +476,7 @@ fn main() {
                         )
                         .arg(
                             Arg::with_name("skip-tombstone")
-                                .short("s")
+                                .long("skip-tombstone")
                                 .takes_value(false)
                                 .help("skip tombstone region."),
                         ),
@@ -496,39 +503,44 @@ fn main() {
                 .about("print the range db range")
                 .arg(
                     Arg::with_name("from")
-                        .short("f")
+                        .long("from")
                         .takes_value(true)
                         .help("set the scan from raw key, in escaped format"),
                 )
                 .arg(
                     Arg::with_name("to")
-                        .short("t")
+                        .long("to")
                         .takes_value(true)
                         .help("set the scan end raw key, in escaped format"),
                 )
                 .arg(
                     Arg::with_name("limit")
-                        .short("l")
+                        .long("limit")
                         .takes_value(true)
                         .help("set the scan limit"),
                 )
                 .arg(
                     Arg::with_name("start_ts")
-                        .short("s")
+                        .long("start-ts")
                         .takes_value(true)
                         .help("set the scan start_ts as filter"),
                 )
                 .arg(
                     Arg::with_name("commit_ts")
+                        .long("commit-ts")
                         .takes_value(true)
                         .help("set the scan commit_ts as filter"),
                 )
                 .arg(
                     Arg::with_name("cf")
-                        .short("c")
+                        .long("cf")
                         .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
                         .default_value(CF_DEFAULT)
-                        .help("column family name"),
+                        .help("column family names, combined from default/lock/write"),
                 ),
         )
         .subcommand(
@@ -553,7 +565,7 @@ fn main() {
                 .about("print the mvcc value")
                 .arg(
                     Arg::with_name("key")
-                        .short("key")
+                        .short("k")
                         .takes_value(true)
                         .help("set the query raw key, in escaped form"),
                 )
@@ -570,12 +582,13 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("start_ts")
-                        .short("s")
+                        .long("start-ts")
                         .takes_value(true)
                         .help("set start_ts as filter"),
                 )
                 .arg(
                     Arg::with_name("commit_ts")
+                        .long("commit-ts")
                         .takes_value(true)
                         .help("set commit_ts as filter"),
                 ),
@@ -591,12 +604,15 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("to_db")
+                        .long("to-db")
                         .takes_value(true)
                         .help("to which db path"),
                 )
                 .arg(
                     Arg::with_name("to_host")
+                        .long("to-host")
                         .takes_value(true)
+                        .conflicts_with("to_db")
                         .help("to which remote host"),
                 ),
         )
@@ -619,13 +635,13 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("from")
-                        .short("f")
+                        .long("from")
                         .takes_value(true)
                         .help("set the start raw key, in escaped form"),
                 )
                 .arg(
                     Arg::with_name("to")
-                        .short("t")
+                        .long("to")
                         .takes_value(true)
                         .help("set the end raw key, in escaped form"),
                 ),
@@ -690,7 +706,7 @@ fn main() {
         let from = unescape(matches.value_of("from").unwrap());
         let to = matches.value_of("to").map(|to| unescape(to));
         let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
-        let cfs = vec![matches.value_of("cf").unwrap()];
+        let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
