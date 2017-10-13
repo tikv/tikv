@@ -17,6 +17,7 @@ use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
+use fail;
 
 use raftstore::store::Engines;
 use raftstore::store::debug::{Debugger, Error};
@@ -224,5 +225,71 @@ impl debugpb_grpc::Debug for Service {
                 .map(|_| CompactResponse::default())
         });
         self.handle_response(ctx, sink, f, "debug_compact");
+    }
+
+    fn inject_fail_point(
+        &self,
+        ctx: RpcContext,
+        mut req: InjectFailPointRequest,
+        sink: UnarySink<InjectFailPointResponse>,
+    ) {
+        const TAG: &'static str = "debug_inject_fail_point";
+
+        let f = self.pool.spawn_fn(move || {
+            let name = req.take_name();
+            if name.is_empty() {
+                return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
+            }
+            let actions = req.get_actions();
+            if let Err(e) = fail::cfg(name, actions) {
+                return Err(box_err!("{:?}", e));
+            }
+            Ok(InjectFailPointResponse::new())
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn recover_fail_point(
+        &self,
+        ctx: RpcContext,
+        mut req: RecoverFailPointRequest,
+        sink: UnarySink<RecoverFailPointResponse>,
+    ) {
+        const TAG: &'static str = "debug_recover_fail_point";
+
+        let f = self.pool.spawn_fn(move || {
+            let name = req.take_name();
+            if name.is_empty() {
+                return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
+            }
+            fail::remove(name);
+            Ok(RecoverFailPointResponse::new())
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn list_fail_points(
+        &self,
+        ctx: RpcContext,
+        _: ListFailPointsRequest,
+        sink: UnarySink<ListFailPointsResponse>,
+    ) {
+        const TAG: &'static str = "debug_list_fail_points";
+
+        let f = self.pool.spawn_fn(move || {
+            let list = fail::list().into_iter().map(|(name, actions)| {
+                let mut entry = ListFailPointsResponse_Entry::new();
+                entry.set_name(name);
+                entry.set_actions(actions);
+                entry
+            });
+            let mut resp = ListFailPointsResponse::new();
+            resp.set_entries(list.collect());
+            Ok(resp)
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 }
