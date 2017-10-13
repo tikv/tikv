@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ObserverContext, RegionObserver, Result};
+use super::{ObserverContext, RegionObserver, Result, SplitTableChecker};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
@@ -51,6 +51,10 @@ impl CoprocessorHost {
 
     pub fn new() -> CoprocessorHost {
         CoprocessorHost::default()
+    }
+
+    pub fn split_table_checker(&self) -> SplitTableChecker {
+        SplitTableChecker::default()
     }
 
     /// Call all prepose hook until bypass is set to true.

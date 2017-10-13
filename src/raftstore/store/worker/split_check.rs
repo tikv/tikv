@@ -21,7 +21,6 @@ use rocksdb::DB;
 use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
 
-use raftstore::coprocessor::cross_table;
 use raftstore::store::{keys, Msg};
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::util;
@@ -126,6 +125,11 @@ impl<'a> MergedIterator<'a> {
     }
 }
 
+/// An interface for writing split checker extensions.
+pub trait Checker: Send {
+    fn check(&self, prev_key: &[u8], current_key: &[u8]) -> Option<Vec<u8>>;
+}
+
 /// Split checking task.
 pub struct Task {
     region: Region,
@@ -150,7 +154,7 @@ pub struct Runner<C> {
     ch: RetryableSendCh<Msg, C>,
     region_max_size: u64,
     split_size: u64,
-    split_table: bool,
+    priority_checker: Option<Box<Checker>>,
 }
 
 impl<C: Sender<Msg>> Runner<C> {
@@ -159,14 +163,14 @@ impl<C: Sender<Msg>> Runner<C> {
         ch: RetryableSendCh<Msg, C>,
         region_max_size: u64,
         split_size: u64,
-        split_table: bool,
+        priority_checker: Option<Box<Checker>>,
     ) -> Runner<C> {
         Runner {
             engine: engine,
             ch: ch,
             region_max_size: region_max_size,
             split_size: split_size,
-            split_table: split_table,
+            priority_checker: priority_checker,
         }
     }
 
@@ -213,16 +217,22 @@ impl<C: Sender<Msg>> Runner<C> {
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
         let mut size = 0;
-        let mut split_key = vec![];
+        let mut split_key = None;
+        let mut priority_split_key = None;
         let mut prev_key: Option<Vec<u8>> = None;
+
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
             .map(|mut iter| while let Some(e) = iter.next() {
-                if self.split_table {
+                if let Some(ref checker) = self.priority_checker {
                     if let (Some(ref prev_key), &Some(ref current_key)) = (prev_key, &e.key) {
-                        if let Some(key) = cross_table(prev_key, current_key) {
-                            info!("[region {}] split table, split key {:?}", region_id, key);
-                            split_key = key;
+                        if let Some(key) = checker.check(prev_key, current_key) {
+                            info!(
+                                "[region {}] priority split checker require splitting at {:?}",
+                                region_id,
+                                key
+                            );
+                            priority_split_key = Some(key);
                             break;
                         }
                     }
@@ -230,36 +240,44 @@ impl<C: Sender<Msg>> Runner<C> {
                 }
 
                 size += e.len() as u64;
-                if split_key.is_empty() && size > self.split_size {
-                    split_key = e.key.unwrap();
+                if split_key.is_none() && size > self.split_size {
+                    split_key = e.key.clone();
                 }
                 if size >= self.region_max_size {
                     break;
                 }
             });
+        timer.observe_duration();
 
         if let Err(e) = res {
             error!("[region {}] failed to scan split key: {}", region_id, e);
             return;
         }
 
-        timer.observe_duration();
+        let key = match (priority_split_key, split_key) {
+            (Some(key), _) => key,
+            (None, Some(key)) => if size < self.region_max_size {
+                debug!(
+                    "[region {}] no need to send for {} < {}",
+                    region_id,
+                    size,
+                    self.region_max_size
+                );
 
-        if size < self.region_max_size && !self.split_table {
-            debug!(
-                "[region {}] no need to send for {} < {}",
-                region_id,
-                size,
-                self.region_max_size
-            );
-
-            CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
-            return;
-        }
+                CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
+                return;
+            } else {
+                key
+            },
+            _ => {
+                CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
+                return;
+            }
+        };
 
         let region_epoch = region.get_region_epoch().clone();
         let res = self.ch
-            .try_send(new_split_region(region_id, region_epoch, split_key));
+            .try_send(new_split_region(region_id, region_epoch, key));
         if let Err(e) = res {
             warn!("[region {}] failed to send check result: {}", region_id, e);
         }
@@ -309,10 +327,11 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions};
 
     use storage::ALL_CFS;
+    use storage::types::Key;
     use util::rocksdb::{new_engine, new_engine_opt, CFOptions};
     use util::properties::SizePropertiesCollectorFactory;
     use coprocessor::codec::table;
-    use storage::types::Key;
+    use raftstore::coprocessor::SplitTableChecker;
     use super::*;
 
     #[test]
@@ -339,7 +358,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
-        let mut runnable = Runner::new(engine.clone(), ch, 100, 60, false);
+        let mut runnable = Runner::new(engine.clone(), ch, 100, 60, None);
 
         // so split key will be z0006
         for i in 0..7 {
@@ -438,7 +457,13 @@ mod tests {
 
         let (table_tx, table_rx) = mpsc::sync_channel(100);
         let table_ch = RetryableSendCh::new(table_tx, "test-split-table");
-        let mut table_runnable = Runner::new(engine.clone(), table_ch, 100, 60, true);
+        let mut table_runnable = Runner::new(
+            engine.clone(),
+            table_ch,
+            100,
+            60,
+            Some(Box::new(SplitTableChecker::default())),
+        );
 
         let check = |msg: Msg, key: Vec<u8>| match msg {
             Msg::SplitRegion { split_key, .. } => {
