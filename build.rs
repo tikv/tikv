@@ -27,7 +27,7 @@ fn main() {
         .write_all(build_info().as_bytes())
         .unwrap();
 
-    #[cfg(target_arch = "powerpc64" && target_endian = "little")]
+    #[cfg(all(target_arch = "powerpc64", target_endian = "little"))]
     println!(r"cargo:rustc-link-lib=jemalloc");
 }
 
