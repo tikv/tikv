@@ -33,7 +33,7 @@ extern crate protobuf;
 extern crate kvproto;
 
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::str;
 use std::time::Duration;
 use std::sync::Arc;
@@ -79,9 +79,7 @@ fn main() {
                     Arg::with_name("args")
                         .multiple(true)
                         .takes_value(true)
-                        .help(
-                            "Recover fail points. Eg. tikv-fail recover fail::a fail::b",
-                        ),
+                        .help("Recover fail points. Eg. tikv-fail recover fail::a fail::b"),
                 )
                 .arg(
                     Arg::with_name("file")
@@ -101,12 +99,14 @@ fn main() {
 
     if let Some(matches) = matches.subcommand_matches("inject") {
         let mut list = matches.value_of("file").map_or_else(Vec::new, read_file);
-        for pair in matches.values_of("args").unwrap() {
-            let mut parts = pair.split('=');
-            list.push((
-                parts.next().unwrap().to_owned(),
-                parts.next().unwrap_or("").to_owned(),
-            ))
+        if let Some(ps) = matches.values_of("args") {
+            for pair in ps {
+                let mut parts = pair.split('=');
+                list.push((
+                    parts.next().unwrap().to_owned(),
+                    parts.next().unwrap_or("").to_owned(),
+                ))
+            }
         }
 
         for (name, actions) in list {
@@ -123,11 +123,10 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("recover") {
         let mut list = matches.value_of("file").map_or_else(Vec::new, read_file);
-        for f in matches.values_of("args").unwrap() {
-            list.push((
-                f.to_owned(),
-                "".to_owned(),
-            ))
+        if let Some(fps) = matches.values_of("args") {
+            for fp in fps {
+                list.push((fp.to_owned(), "".to_owned()))
+            }
         }
 
         for (name, _) in list {
@@ -146,13 +145,12 @@ fn main() {
 }
 
 fn read_file(path: &str) -> Vec<(String, String)> {
+    let f = fs::File::open(path).unwrap();
+    let f = BufReader::new(f);
+
     let mut list = vec![];
-    let mut buffer = String::new();
-    fs::File::open(path)
-        .unwrap()
-        .read_to_string(&mut buffer)
-        .unwrap();
-    for line in buffer.lines() {
+    for line in f.lines() {
+        let line = line.unwrap();
         let mut parts = line.split('=');
         list.push((
             parts.next().unwrap().to_owned(),
