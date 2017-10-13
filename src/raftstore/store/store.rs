@@ -511,17 +511,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
 
-        let split_check_runner = SplitCheckRunner::new(
+        let mut split_check_runner = SplitCheckRunner::new(
             self.kv_engine.clone(),
             self.sendch.clone(),
             self.cfg.region_max_size.0,
             self.cfg.region_split_size.0,
-            if self.cfg.region_split_table {
-                Some(Box::new(self.coprocessor_host.split_table_checker()))
-            } else {
-                None
-            },
         );
+        if self.cfg.coprocessor.split_region_on_table {
+            split_check_runner
+                .set_priority_checker(Box::new(self.coprocessor_host.split_table_checker()));
+        }
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(

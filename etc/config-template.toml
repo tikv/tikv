@@ -135,6 +135,11 @@
 # Interval (s) to check region whether the data are consistent.
 # consistency-check-interval = 0
 
+[raftstore.coprocessor]
+# When it is true, it will try to split a region with table prefix if
+# that region crosses tables.
+# split-region-on-table = false
+
 [rocksdb]
 # Maximum number of concurrent background jobs (compactions and flushes)
 # max-background-jobs = 8

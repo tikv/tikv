@@ -53,7 +53,6 @@ split-region-check-tick-interval = "12s"
 region-max-size = "12MB"
 region-split-size = "12MB"
 region-split-check-diff = "6MB"
-region-split-table = true
 region-compact-check-interval = "12s"
 region-compact-delete-keys-count = 1234
 pd-heartbeat-tick-interval = "12m"
@@ -72,6 +71,9 @@ report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
+
+[raftstore.coprocessor]
+split-region-on-table = true
 
 [rocksdb]
 wal-recovery-mode = 1

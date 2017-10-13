@@ -16,7 +16,9 @@ pub mod dispatcher;
 pub mod split_observer;
 mod error;
 mod split_table;
+mod config;
 
+pub use self::config::Config;
 pub use self::split_table::Checker as SplitTableChecker;
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};

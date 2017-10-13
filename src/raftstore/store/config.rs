@@ -15,6 +15,7 @@ use std::u64;
 
 use time::Duration as TimeDuration;
 
+use raftstore::coprocessor::Config as CopConfig;
 use raftstore::Result;
 use util::config::{ReadableDuration, ReadableSize};
 
@@ -58,9 +59,6 @@ pub struct Config {
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_diff: ReadableSize,
-    /// When it is true, it will try to split a region with table prefix if
-    // that region crosses tables.
-    pub region_split_table: bool,
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
     /// When delete keys of a region exceeds the size, a compaction will
@@ -99,6 +97,8 @@ pub struct Config {
     pub right_derive_when_split: bool,
 
     pub allow_remove_leader: bool,
+
+    pub coprocessor: CopConfig,
 }
 
 impl Default for Config {
@@ -123,7 +123,6 @@ impl Default for Config {
             region_max_size: split_size / 2 * 3,
             region_split_size: split_size,
             region_split_check_diff: split_size / 16,
-            region_split_table: false,
             // Disable manual compaction by default.
             region_compact_check_interval: ReadableDuration::secs(0),
             region_compact_delete_keys_count: 1_000_000,
@@ -145,6 +144,7 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             allow_remove_leader: false,
+            coprocessor: CopConfig::default(),
         }
     }
 }

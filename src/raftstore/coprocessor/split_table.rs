@@ -25,6 +25,9 @@ impl Default for Checker {
 }
 
 impl SplitChecker for Checker {
+    fn name(&self) -> &str {
+        "TableSplitChecker"
+    }
     fn check(&self, prev_key: &[u8], current_key: &[u8]) -> Option<Vec<u8>> {
         cross_table(prev_key, current_key)
     }

@@ -127,6 +127,7 @@ impl<'a> MergedIterator<'a> {
 
 /// An interface for writing split checker extensions.
 pub trait Checker: Send {
+    fn name(&self) -> &str;
     fn check(&self, prev_key: &[u8], current_key: &[u8]) -> Option<Vec<u8>>;
 }
 
@@ -163,18 +164,21 @@ impl<C: Sender<Msg>> Runner<C> {
         ch: RetryableSendCh<Msg, C>,
         region_max_size: u64,
         split_size: u64,
-        priority_checker: Option<Box<Checker>>,
     ) -> Runner<C> {
         Runner {
             engine: engine,
             ch: ch,
             region_max_size: region_max_size,
             split_size: split_size,
-            priority_checker: priority_checker,
+            priority_checker: None,
         }
     }
 
-    fn check_size(&mut self, region: &Region) -> Option<u64> {
+    pub fn set_priority_checker(&mut self, checker: Box<Checker>) {
+        self.priority_checker = Some(checker);
+    }
+
+    fn check_size(&self, region: &Region) -> Option<u64> {
         let region_id = region.get_id();
         let region_size = match util::get_region_approximate_size(&self.engine, region) {
             Ok(size) => size,
@@ -204,7 +208,27 @@ impl<C: Sender<Msg>> Runner<C> {
         Some(region_size)
     }
 
-    fn check_split(&mut self, region: &Region) {
+    fn filter_region(&self, region: &Region) -> bool {
+        if self.priority_checker.is_some() {
+            false
+        } else if let Some(region_size) = self.check_size(region) {
+            if region_size < self.region_max_size {
+                true
+            } else {
+                info!(
+                    "[region {}] approximate size {} >= {}, need to do split check",
+                    region.get_id(),
+                    region_size,
+                    self.region_max_size
+                );
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    fn check_split(&self, region: &Region) {
         let region_id = region.get_id();
         let start_key = keys::enc_start_key(region);
         let end_key = keys::enc_end_key(region);
@@ -217,7 +241,7 @@ impl<C: Sender<Msg>> Runner<C> {
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
         let mut size = 0;
-        let mut split_key = None;
+        let mut size_split_key = None;
         let mut priority_split_key = None;
         let mut prev_key: Option<Vec<u8>> = None;
 
@@ -228,8 +252,9 @@ impl<C: Sender<Msg>> Runner<C> {
                     if let (Some(ref prev_key), &Some(ref current_key)) = (prev_key, &e.key) {
                         if let Some(key) = checker.check(prev_key, current_key) {
                             info!(
-                                "[region {}] priority split checker require splitting at {:?}",
+                                "[region {}] priority split checker {} requires splitting at {:?}",
                                 region_id,
+                                checker.name(),
                                 key
                             );
                             priority_split_key = Some(key);
@@ -240,8 +265,8 @@ impl<C: Sender<Msg>> Runner<C> {
                 }
 
                 size += e.len() as u64;
-                if split_key.is_none() && size > self.split_size {
-                    split_key = e.key.clone();
+                if size_split_key.is_none() && size > self.split_size {
+                    size_split_key = e.key.clone();
                 }
                 if size >= self.region_max_size {
                     break;
@@ -254,7 +279,7 @@ impl<C: Sender<Msg>> Runner<C> {
             return;
         }
 
-        let key = match (priority_split_key, split_key) {
+        let split_key = match (priority_split_key, size_split_key) {
             (Some(key), _) => key,
             (None, Some(key)) => if size < self.region_max_size {
                 debug!(
@@ -277,7 +302,7 @@ impl<C: Sender<Msg>> Runner<C> {
 
         let region_epoch = region.get_region_epoch().clone();
         let res = self.ch
-            .try_send(new_split_region(region_id, region_epoch, key));
+            .try_send(new_split_region(region_id, region_epoch, split_key));
         if let Err(e) = res {
             warn!("[region {}] failed to send check result: {}", region_id, e);
         }
@@ -291,16 +316,8 @@ impl<C: Sender<Msg>> Runner<C> {
 impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
         let region = &task.region;
-        if let Some(region_size) = self.check_size(region) {
-            if region_size < self.region_max_size {
-                return;
-            }
-            info!(
-                "[region {}] approximate size {} >= {}, need to do split check",
-                region.get_id(),
-                region_size,
-                self.region_max_size
-            );
+        if self.filter_region(region) {
+            return;
         }
         self.check_split(region);
     }
@@ -358,7 +375,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
-        let mut runnable = Runner::new(engine.clone(), ch, 100, 60, None);
+        let mut runnable = Runner::new(engine.clone(), ch, 100, 60);
 
         // so split key will be z0006
         for i in 0..7 {
@@ -457,13 +474,8 @@ mod tests {
 
         let (table_tx, table_rx) = mpsc::sync_channel(100);
         let table_ch = RetryableSendCh::new(table_tx, "test-split-table");
-        let mut table_runnable = Runner::new(
-            engine.clone(),
-            table_ch,
-            100,
-            60,
-            Some(Box::new(SplitTableChecker::default())),
-        );
+        let mut table_runnable = Runner::new(engine.clone(), table_ch, 100, 60);
+        table_runnable.set_priority_checker(Box::new(SplitTableChecker::default()));
 
         let check = |msg: Msg, key: Vec<u8>| match msg {
             Msg::SplitRegion { split_key, .. } => {

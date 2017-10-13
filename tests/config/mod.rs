@@ -19,6 +19,7 @@ use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
 use tikv::server::Config as ServerConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
+use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
@@ -87,7 +88,6 @@ fn test_serde_custom_tikv_config() {
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
         region_split_check_diff: ReadableSize::mb(6),
-        region_split_table: true,
         region_compact_check_interval: ReadableDuration::secs(12),
         region_compact_delete_keys_count: 1_234,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
@@ -106,6 +106,9 @@ fn test_serde_custom_tikv_config() {
         raft_store_max_leader_lease: ReadableDuration::secs(12),
         right_derive_when_split: false,
         allow_remove_leader: true,
+        coprocessor: CopConfig {
+            split_region_on_table: true,
+        },
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],
