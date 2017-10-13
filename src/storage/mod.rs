@@ -434,7 +434,7 @@ impl Command {
         }
     }
 
-    pub fn kvs_count(&self) -> usize {
+    pub fn kv_count(&self) -> usize {
         match *self {
             Command::Pause { .. } => 0,
             Command::ScanLock { .. } |
