@@ -64,14 +64,6 @@ fn new_debug_executor(
     host: Option<&str>,
 ) -> Box<DebugExecutor> {
     match (host, db) {
-        (Some(_), Some(_)) => {
-            eprintln!(r#""host" and "db" can not be passed together!"#);
-            process::exit(1);
-        }
-        (None, None) => {
-            eprintln!(r#"please pass "host" or "db""#);
-            process::exit(1);
-        }
         (None, Some(kv_path)) => {
             let db = util::rocksdb::open(kv_path, ALL_CFS).unwrap();
             let raft_db = if let Some(raft_path) = raft_db {
@@ -89,32 +81,36 @@ fn new_debug_executor(
             let client = DebugClient::new(channel);
             Box::new(client) as Box<DebugExecutor>
         }
+        _ => unreachable!(),
     }
 }
 
 trait DebugExecutor {
-    fn dump_key_value(&self, cf: &str, key: Vec<u8>) {
+    fn dump_value(&self, cf: &str, key: Vec<u8>) {
         let value = self.get_value_by_key(cf, key);
         println!("value: {}", escape(&value));
     }
 
-    fn dump_region_size(&self, region: u64, cfs: Vec<&str>) {
+    fn dump_region_size(&self, region: u64, cfs: Vec<&str>) -> usize {
         let sizes = self.get_region_size(region, cfs);
-        if sizes.len() > 1 {
-            let total_size = sizes.iter().map(|t| t.1).sum::<usize>() as u64;
-            println!("total region number: {}", sizes.len());
-            println!("total region size: {}", convert_gbmb(total_size));
-        }
+        let mut total_size = 0;
+        println!("region id: {}", region);
         for (cf, size) in sizes {
-            println!("cf: {}", cf);
-            println!("region size: {}", convert_gbmb(size as u64));
+            println!("cf {} region size: {}", cf, convert_gbmb(size as u64));
+            total_size += size;
         }
+        total_size
     }
 
     fn dump_all_region_size(&self, cfs: Vec<&str>) {
-        for region in self.get_all_meta_regions() {
-            self.dump_region_size(region, cfs.clone());
+        let regions = self.get_all_meta_regions();
+        let regions_number = regions.len();
+        let mut total_size = 0;
+        for region in regions {
+            total_size += self.dump_region_size(region, cfs.clone());
         }
+        println!("total region number: {}", regions_number);
+        println!("total region size: {}", convert_gbmb(total_size as u64));
     }
 
     fn dump_region_info(&self, region: u64, skip_tombstone: bool) {
@@ -128,6 +124,7 @@ trait DebugExecutor {
         let region_state_key = keys::region_state_key(region);
         let raft_state_key = keys::raft_state_key(region);
         let apply_state_key = keys::apply_state_key(region);
+        println!("region id: {}", region);
         println!("region state key: {}", escape(&region_state_key));
         println!("region state: {:?}", r.region_local_state);
         println!("raft state key: {}", escape(&raft_state_key));
@@ -430,7 +427,7 @@ fn main() {
         )
         .arg(
             Arg::with_name("hex-to-escaped")
-                .long("from-hex")
+                .long("to-escaped")
                 .takes_value(true)
                 .help("convert hex key to escaped key"),
         )
@@ -503,12 +500,14 @@ fn main() {
                 .about("print the range db range")
                 .arg(
                     Arg::with_name("from")
+                        .short("f")
                         .long("from")
                         .takes_value(true)
                         .help("set the scan from raw key, in escaped format"),
                 )
                 .arg(
                     Arg::with_name("to")
+                        .short("t")
                         .long("to")
                         .takes_value(true)
                         .help("set the scan end raw key, in escaped format"),
@@ -635,12 +634,14 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("from")
+                        .short("f")
                         .long("from")
                         .takes_value(true)
                         .help("set the start raw key, in escaped form"),
                 )
                 .arg(
                     Arg::with_name("to")
+                        .short("t")
                         .long("to")
                         .takes_value(true)
                         .help("set the end raw key, in escaped form"),
@@ -672,7 +673,7 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
         let key = unescape(matches.value_of("key").unwrap());
-        debug_executor.dump_key_value(cf, key);
+        debug_executor.dump_value(cf, key);
     } else if let Some(matches) = matches.subcommand_matches("raft") {
         if let Some(matches) = matches.subcommand_matches("log") {
             let (id, index) = if let Some(key) = matches.value_of("key") {
