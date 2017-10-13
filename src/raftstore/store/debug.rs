@@ -85,9 +85,10 @@ impl Debugger {
         Debugger { engines }
     }
 
-    /// Get all region id in the specified CF, only used for KV rocksdb.
-    pub fn get_all_regions(&self, cf: &str) -> Result<Vec<u64>> {
+    /// Get all regions holding region meta data from raft CF in KV storage.
+    pub fn get_all_meta_regions(&self) -> Result<Vec<u64>> {
         let db = &self.engines.kv_engine;
+        let cf = CF_RAFT;
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
