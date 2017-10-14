@@ -95,10 +95,9 @@ impl Stream for SnapChunk {
                 self.remain_bytes -= buf.len();
                 let mut chunk = SnapshotChunk::new();
                 chunk.set_data(buf);
-                Ok(Async::Ready(Some((
-                    chunk,
-                    WriteFlags::default().buffer_hint(self.remain_bytes > 0),
-                ))))
+                Ok(Async::Ready(
+                    Some((chunk, WriteFlags::default().buffer_hint(true))),
+                ))
             }
             Err(e) => Err(box_err!("failed to read snapshot chunk: {}", e)),
         }
@@ -144,7 +143,7 @@ fn send_snap(
         let first: Once<(SnapshotChunk, _), Error> = stream::once({
             let mut chunk = SnapshotChunk::new();
             chunk.set_message(msg);
-            Ok((chunk, WriteFlags::default()))
+            Ok((chunk, WriteFlags::default().buffer_hint(true)))
         });
         first.chain(snap_chunk)
     };
