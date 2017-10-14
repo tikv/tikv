@@ -735,6 +735,7 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
+            fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             self.send(ctx.trans, msgs, &mut ctx.metrics.message)
                 .unwrap_or_else(|e| {
@@ -770,6 +771,7 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
 
         if !self.is_leader() {
+            fail_point!("raft_before_follower_send");
             self.send(trans, ready.messages.drain(..), &mut metrics.message)
                 .unwrap_or_else(|e| {
                     warn!("{} follower send messages err {:?}", self.tag, e);
