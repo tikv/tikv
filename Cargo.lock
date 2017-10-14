@@ -8,6 +8,7 @@ dependencies = [
  "clap 2.23.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "clippy 0.0.150 (registry+https://github.com/rust-lang/crates.io-index)",
  "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "fail 0.1.0 (git+https://github.com/pingcap/fail-rs.git)",
  "flat_map 0.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "fnv 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -15,7 +16,7 @@ dependencies = [
  "futures-cpupool 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemallocator 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=ov/fail-point)",
  "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.31 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -245,6 +246,16 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "fail"
+version = "0.1.0"
+source = "git+https://github.com/pingcap/fail-rs.git#6a92d26dc04dc82359bbb73320caba9c5e9c3024"
+dependencies = [
+ "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "flat_map"
 version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -404,7 +415,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git#b70d97d49f8aff4bda45ede251de76911e56e9ef"
+source = "git+https://github.com/pingcap/kvproto.git?branch=ov/fail-point#b2f74cc5984bf61addcd2fa42fd4c4756b8726c3"
 dependencies = [
  "futures 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1088,6 +1099,7 @@ dependencies = [
 "checksum dbghelp-sys 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "97590ba53bcb8ac28279161ca943a924d1fd4a8fb3fa63302591647c4fc5b850"
 "checksum dtoa 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "80c8b71fd71146990a9742fc06dcbbde19161a267e0ad4e572c35162f4578c90"
 "checksum either 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "18785c1ba806c258137c937e44ada9ee7e69a37e3c72077542cd2f069d78562a"
+"checksum fail 0.1.0 (git+https://github.com/pingcap/fail-rs.git)" = "<none>"
 "checksum flat_map 0.0.4 (registry+https://github.com/rust-lang/crates.io-index)" = "fc16c081affe2ded9d62cd239a9ef1b4801fa98037b59523014f661c7bee182c"
 "checksum fnv 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)" = "6cc484842f1e2884faf56f529f960cc12ad8c71ce96cc7abba0a067c98fee344"
 "checksum fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "237b7991317b8d94391c0a4813b1f74fd81c11352440cd598d2b763ed288bfc1"
@@ -1107,7 +1119,7 @@ dependencies = [
 "checksum jemalloc-sys 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)" = "<none>"
 "checksum jemallocator 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)" = "<none>"
 "checksum kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
-"checksum kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)" = "<none>"
+"checksum kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=ov/fail-point)" = "<none>"
 "checksum language-tags 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a91d884b6667cd606bb5a69aa0c99ba811a115fc68915e7056ec08a46e93199a"
 "checksum lazy_static 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)" = "cf186d1a8aa5f5bee5fd662bc9c1b949e0259e1bcc379d1f006847b0080c7417"
 "checksum lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)" = "3b37545ab726dd833ec6420aaba8231c5b320814b9029ad585555d2a03e94fbf"
