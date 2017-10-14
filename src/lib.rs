@@ -74,6 +74,8 @@ extern crate toml;
 extern crate sys_info;
 #[cfg(test)]
 extern crate utime;
+#[macro_use]
+extern crate fail;
 
 #[macro_use]
 pub mod util;
