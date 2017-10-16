@@ -1674,6 +1674,30 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     sel_resp
 }
 
+
+pub fn handle_request_with_stream(end_point: &Worker<EndPointTask>, req: Request) -> Vec<Response> {
+    let (tx, rx) = mpsc::channel();
+    let req = RequestTask::new(req, OnResponse::Stream(box move |r| tx.send(r).unwrap()));
+    end_point.schedule(EndPointTask::Request(req)).unwrap();
+    let mut resp = vec![];
+    while let Some(res) = rx.recv().unwrap() {
+        resp.push(res);
+    }
+    resp
+}
+
+fn handle_select_with_stream(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
+    let mut sel_resp = SelectResponse::new();
+    let mut chunks = vec![];
+    for resp in handle_request_with_stream(end_point, req) {
+        let mut sel = SelectResponse::new();
+        sel.merge_from_bytes(resp.get_data()).unwrap();
+        chunks.append(&mut sel.take_chunks().to_vec());
+    }
+    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+    sel_resp
+}
+
 #[test]
 fn test_index() {
     let data = vec![
@@ -2299,7 +2323,7 @@ fn test_where() {
 
 
 #[test]
-fn test_where_for_dag() {
+fn test_where_for_dag_with_stream() {
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
@@ -2333,7 +2357,7 @@ fn test_where_for_dag() {
     };
 
     let req = DAGSelect::from(&product.table).where_expr(cond).build();
-    let mut resp = handle_select(&end_point, req);
+    let mut resp = handle_select_with_stream(&end_point, req);
     let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     let row = spliter.next().unwrap();
     let (id, name, cnt) = data[2];

@@ -423,7 +423,7 @@ impl RequestTask {
         self.req.get_context().get_priority()
     }
 
-    fn finsh_with_err(self, e: Error) -> Statistics {
+    fn finish_with_err(self, e: Error) -> Statistics {
         let resp = err_resp(e);
         self.finish(Some(resp))
     }
@@ -460,7 +460,7 @@ impl BatchRunnable<Task> for Host {
             match task {
                 Task::Request(req) => {
                     if let Err(e) = req.check_outdated() {
-                        req.finsh_with_err(e);
+                        req.finish_with_err(e);
                         continue;
                     }
                     let key = {
@@ -625,7 +625,7 @@ impl TiDbEndPoint {
     fn handle_request(&self, mut t: RequestTask) -> Statistics {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
-            return t.finsh_with_err(e);
+            return t.finish_with_err(e);
         }
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t).map(Some),
@@ -635,7 +635,7 @@ impl TiDbEndPoint {
         };
         match resp {
             Ok(r) => t.finish(r),
-            Err(e) => t.finsh_with_err(e),
+            Err(e) => t.finish_with_err(e),
         }
     }
 

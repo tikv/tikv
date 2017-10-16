@@ -24,7 +24,6 @@ use grpc::{self, ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcS
            ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, Async, Future, Poll, Stream};
 use futures::sync::oneshot;
-//use futures::sync::mpsc::{channel,Sender,Receiver};
 use futures::Sink;
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
@@ -136,7 +135,6 @@ fn make_stream_callback<T: Debug + Send + 'static>()
     let stream = StreamChunk::new(rx);
     (box callback, stream)
 }
-
 
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     fn kv_get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
