@@ -165,7 +165,7 @@ impl<'a> JsonFuncArgsParser<'a> {
 
     fn get_path_expr(&self, e: &Expression) -> Result<Option<PathExpression>> {
         let s = try_opt!(e.eval_string_and_decode(self.ctx, self.row));
-        let expr = try!(parse_json_path_expr(&s));
+        let expr = parse_json_path_expr(&s)?;
         Ok(Some(expr))
     }
 
@@ -174,7 +174,8 @@ impl<'a> JsonFuncArgsParser<'a> {
     }
 
     fn get_json(&self, e: &Expression) -> Result<Option<Json>> {
-        let j = try!(e.eval_json(self.ctx, self.row)).map_or(Json::None, Cow::into_owned);
+        let j = e.eval_json(self.ctx, self.row)?
+            .map_or(Json::None, Cow::into_owned);
         Ok(Some(j))
     }
 

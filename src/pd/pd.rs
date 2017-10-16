@@ -32,9 +32,11 @@ use util::rocksdb::*;
 use pd::{PdClient, RegionStat};
 use raftstore::store::Msg;
 use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
-use raftstore::store::metrics::*;
 use raftstore::store::store::StoreInfo;
 use raftstore::store::Callback;
+use storage::FlowStatistics;
+use util::collections::HashMap;
+use prometheus::local::LocalHistogram;
 use super::metrics::*;
 
 // Use an asynchronous thread to tell pd something.
@@ -45,7 +47,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right region derive origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Option<Callback>,
     },
     Heartbeat {
         region: metapb::Region,
@@ -54,8 +56,7 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
-        read_bytes: u64,
-        read_keys: u64,
+        region_size: Option<u64>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -69,6 +70,46 @@ pub enum Task {
         region: metapb::Region,
         peer: metapb::Peer,
     },
+    ReadStats { read_stats: HashMap<u64, FlowStatistics>, },
+    DestroyPeer { region_id: u64 },
+}
+
+pub struct StoreStat {
+    pub engine_total_bytes_read: u64,
+    pub engine_total_keys_read: u64,
+    pub engine_last_total_bytes_read: u64,
+    pub engine_last_total_keys_read: u64,
+
+    pub region_bytes_read: LocalHistogram,
+    pub region_keys_read: LocalHistogram,
+    pub region_bytes_written: LocalHistogram,
+    pub region_keys_written: LocalHistogram,
+}
+
+impl Default for StoreStat {
+    fn default() -> StoreStat {
+        StoreStat {
+            region_bytes_read: REGION_READ_BYTES_HISTOGRAM.local(),
+            region_keys_read: REGION_READ_KEYS_HISTOGRAM.local(),
+            region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
+            region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
+
+            engine_total_bytes_read: 0,
+            engine_total_keys_read: 0,
+            engine_last_total_bytes_read: 0,
+            engine_last_total_keys_read: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct PeerStat {
+    pub read_bytes: u64,
+    pub read_keys: u64,
+    pub last_read_bytes: u64,
+    pub last_read_keys: u64,
+    pub last_written_bytes: u64,
+    pub last_written_keys: u64,
 }
 
 impl Display for Task {
@@ -105,6 +146,10 @@ impl Display for Task {
                 ref region,
                 ref peer,
             } => write!(f, "validate peer {:?} with region {:?}", peer, region),
+            Task::ReadStats { ref read_stats } => {
+                write!(f, "get the read statistics {:?}", read_stats)
+            }
+            Task::DestroyPeer { ref region_id } => write!(f, "destroy peer {}", region_id),
         }
     }
 }
@@ -114,6 +159,8 @@ pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
     db: Arc<DB>,
+    region_peers: HashMap<u64, PeerStat>,
+    store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
 }
 
@@ -125,6 +172,8 @@ impl<T: PdClient> Runner<T> {
             ch: ch,
             db: db,
             is_hb_receiver_scheduled: false,
+            region_peers: HashMap::default(),
+            store_stat: StoreStat::default(),
         }
     }
 
@@ -135,12 +184,8 @@ impl<T: PdClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Option<Callback>,
     ) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["ask split", "all"])
-            .inc();
-
         let ch = self.ch.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
             match resp {
@@ -151,9 +196,6 @@ impl<T: PdClient> Runner<T> {
                         resp.get_new_region_id(),
                         region
                     );
-                    PD_REQ_COUNTER_VEC
-                        .with_label_values(&["ask split", "success"])
-                        .inc();
 
                     let req = new_split_region_request(
                         split_key,
@@ -163,7 +205,7 @@ impl<T: PdClient> Runner<T> {
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(&ch, region_id, epoch, peer, req, Some(callback))
+                    send_admin_request(&ch, region_id, epoch, peer, req, callback)
                 }
                 Err(e) => {
                     debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
@@ -181,9 +223,18 @@ impl<T: PdClient> Runner<T> {
         peer: metapb::Peer,
         region_stat: RegionStat,
     ) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["heartbeat", "all"])
-            .inc();
+        self.store_stat
+            .region_bytes_written
+            .observe(region_stat.written_bytes as f64);
+        self.store_stat
+            .region_keys_written
+            .observe(region_stat.written_keys as f64);
+        self.store_stat
+            .region_bytes_read
+            .observe(region_stat.read_bytes as f64);
+        self.store_stat
+            .region_keys_read
+            .observe(region_stat.read_keys as f64);
 
         // Now we use put region protocol for heartbeat.
         let f = self.pd_client
@@ -199,7 +250,7 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_store_heartbeat(
-        &self,
+        &mut self,
         handle: &Handle,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo,
@@ -242,6 +293,19 @@ impl<T: PdClient> Runner<T> {
         }
 
         stats.set_available(available);
+        stats.set_bytes_read(
+            self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
+        );
+        stats.set_keys_read(
+            self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
+        );
+        self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
+        self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
+
+        self.store_stat.region_bytes_written.flush();
+        self.store_stat.region_keys_written.flush();
+        self.store_stat.region_bytes_read.flush();
+        self.store_stat.region_keys_read.flush();
 
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
@@ -257,22 +321,8 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_report_split(&self, handle: &Handle, left: metapb::Region, right: metapb::Region) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["report split", "all"])
-            .inc();
-
-        let f = self.pd_client.report_split(left, right).then(move |resp| {
-            match resp {
-                Ok(_) => {
-                    PD_REQ_COUNTER_VEC
-                        .with_label_values(&["report split", "success"])
-                        .inc();
-                }
-                Err(e) => {
-                    error!("report split failed {:?}", e);
-                }
-            }
-            Ok(())
+        let f = self.pd_client.report_split(left, right).map_err(|e| {
+            debug!("report split failed {:?}", e);
         });
         handle.spawn(f);
     }
@@ -283,15 +333,10 @@ impl<T: PdClient> Runner<T> {
         local_region: metapb::Region,
         peer: metapb::Peer,
     ) {
-        PD_REQ_COUNTER_VEC
-            .with_label_values(&["get region", "all"])
-            .inc();
-
         let ch = self.ch.clone();
         let f = self.pd_client.get_region_by_id(local_region.get_id()).then(move |resp| {
             match resp {
                 Ok(Some(pd_region)) => {
-                    PD_REQ_COUNTER_VEC.with_label_values(&["get region", "success"]).inc();
                     if is_epoch_stale(pd_region.get_region_epoch(),
                                       local_region.get_region_epoch()) {
                         // The local region epoch is fresher than region epoch in PD
@@ -345,9 +390,6 @@ impl<T: PdClient> Runner<T> {
         let store_id = self.store_id;
         let f = self.pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
-                PD_REQ_COUNTER_VEC
-                    .with_label_values(&["heartbeat", "success"])
-                    .inc();
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
@@ -383,6 +425,8 @@ impl<T: PdClient> Runner<T> {
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     send_admin_request(&ch, region_id, epoch, peer, req, None)
+                } else {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
             })
             .map_err(|e| panic!("unexpected error: {:?}", e))
@@ -394,6 +438,25 @@ impl<T: PdClient> Runner<T> {
             });
         handle.spawn(f);
         self.is_hb_receiver_scheduled = true;
+    }
+
+    fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
+        for (region_id, stats) in read_stats {
+            let peer_stat = self.region_peers
+                .entry(region_id)
+                .or_insert_with(PeerStat::default);
+            peer_stat.read_bytes += stats.read_bytes as u64;
+            peer_stat.read_keys += stats.read_keys as u64;
+            self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
+            self.store_stat.engine_total_keys_read += stats.read_keys as u64;
+        }
+    }
+
+    fn handle_destory_peer(&mut self, region_id: u64) {
+        match self.region_peers.remove(&region_id) {
+            None => return,
+            Some(_) => info!("[region {}] remove peer statistic record in pd", region_id),
+        }
     }
 }
 
@@ -420,10 +483,31 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
-                read_bytes,
-                read_keys,
+                region_size,
             } => {
-                let approximate_size = get_region_approximate_size(&self.db, &region).unwrap_or(0);
+                let approximate_size = match region_size {
+                    Some(size) => size,
+                    None => get_region_approximate_size(&self.db, &region).unwrap_or(0),
+                };
+                let (read_bytes_delta, read_keys_delta, written_bytes_delta, written_keys_delta) = {
+                    let peer_stat = self.region_peers
+                        .entry(region.get_id())
+                        .or_insert_with(PeerStat::default);
+                    let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
+                    let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
+                    let written_bytes_delta = written_bytes - peer_stat.last_written_bytes;
+                    let written_keys_delta = written_keys - peer_stat.last_written_keys;
+                    peer_stat.last_written_bytes = written_bytes;
+                    peer_stat.last_written_keys = written_keys;
+                    peer_stat.last_read_bytes = peer_stat.read_bytes;
+                    peer_stat.last_read_keys = peer_stat.read_keys;
+                    (
+                        read_bytes_delta,
+                        read_keys_delta,
+                        written_bytes_delta,
+                        written_keys_delta,
+                    )
+                };
                 self.handle_heartbeat(
                     handle,
                     region,
@@ -431,10 +515,10 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     RegionStat::new(
                         down_peers,
                         pending_peers,
-                        written_bytes,
-                        written_keys,
-                        read_bytes,
-                        read_keys,
+                        written_bytes_delta,
+                        written_keys_delta,
+                        read_bytes_delta,
+                        read_keys_delta,
                         approximate_size,
                     ),
                 )
@@ -444,6 +528,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             }
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
+            Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
+            Task::DestroyPeer { region_id } => self.handle_destory_peer(region_id),
         };
     }
 }

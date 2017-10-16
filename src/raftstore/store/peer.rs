@@ -33,7 +33,7 @@ use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateR
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::Config;
-use raftstore::store::worker::{apply, PdTask, Proposal, RegionProposal};
+use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{FutureWorker, Scheduler};
@@ -42,7 +42,7 @@ use util::Either;
 use util::time::monotonic_raw_now;
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
-use pd::INVALID_ID;
+use pd::{PdTask, INVALID_ID};
 
 use super::store::{Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
@@ -193,12 +193,6 @@ enum RequestPolicy {
 pub struct PeerStat {
     pub written_bytes: u64,
     pub written_keys: u64,
-    pub last_written_bytes: u64,
-    pub last_written_keys: u64,
-    pub read_bytes: u64,
-    pub read_keys: u64,
-    pub last_read_bytes: u64,
-    pub last_read_keys: u64,
 }
 
 pub struct Peer {
@@ -219,6 +213,8 @@ pub struct Peer {
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
+    /// approximate region size.
+    pub approximate_size: Option<u64>,
 
     pub consistency_state: ConsistencyState,
 
@@ -310,14 +306,14 @@ impl Peer {
         let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
-        let ps = try!(PeerStorage::new(
+        let ps = PeerStorage::new(
             store.kv_engine(),
             store.raft_engine(),
             region,
             sched,
             tag.clone(),
-            store.entry_cache_metries.clone()
-        ));
+            store.entry_cache_metries.clone(),
+        )?;
 
         let applied_index = ps.applied_index();
 
@@ -335,7 +331,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = try!(RawNode::new(&raft_cfg, ps, &[]));
+        let raft_group = RawNode::new(&raft_cfg, ps, &[])?;
 
         let mut peer = Peer {
             kv_engine: store.kv_engine(),
@@ -351,6 +347,7 @@ impl Peer {
             coprocessor_host: store.coprocessor_host.clone(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
+            approximate_size: None,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
@@ -372,7 +369,7 @@ impl Peer {
 
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
-            try!(peer.raft_group.campaign());
+            peer.raft_group.campaign()?;
         }
 
         Ok(peer)
@@ -399,18 +396,13 @@ impl Peer {
         // Set Tombstone state explicitly
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        try!(self.mut_store().clear_meta(&kv_wb, &raft_wb));
-        try!(write_peer_state(
-            &self.kv_engine,
-            &kv_wb,
-            &region,
-            PeerState::Tombstone
-        ));
+        self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
+        write_peer_state(&self.kv_engine, &kv_wb, &region, PeerState::Tombstone)?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(self.cfg.sync_log);
-        try!(self.kv_engine.write_opt(kv_wb, &write_opts));
-        try!(self.raft_engine.write_opt(raft_wb, &write_opts));
+        self.kv_engine.write_opt(kv_wb, &write_opts)?;
+        self.raft_engine.write_opt(raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -509,7 +501,7 @@ impl Peer {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
 
-            try!(self.send_raft_message(msg, trans));
+            self.send_raft_message(msg, trans)?;
 
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
@@ -543,7 +535,7 @@ impl Peer {
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
         }
-        try!(self.raft_group.step(m));
+        self.raft_group.step(m)?;
         Ok(())
     }
 
@@ -743,6 +735,7 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
+            fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             self.send(ctx.trans, msgs, &mut ctx.metrics.message)
                 .unwrap_or_else(|e| {
@@ -778,6 +771,7 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
 
         if !self.is_leader() {
+            fail_point!("raft_before_follower_send");
             self.send(trans, ready.messages.drain(..), &mut metrics.message)
                 .unwrap_or_else(|e| {
                     warn!("{} follower send messages err {:?}", self.tag, e);
@@ -1362,8 +1356,8 @@ impl Peer {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        try!(self.coprocessor_host.pre_propose(self.region(), &mut req));
-        let data = try!(req.write_to_bytes());
+        self.coprocessor_host.pre_propose(self.region(), &mut req)?;
+        let data = req.write_to_bytes()?;
 
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
@@ -1375,7 +1369,7 @@ impl Peer {
 
         let sync_log = get_sync_log_from_request(&req);
         let propose_index = self.next_proposal_index();
-        try!(self.raft_group.propose(data, sync_log));
+        self.raft_group.propose(data, sync_log)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -1429,11 +1423,11 @@ impl Peer {
             ));
         }
 
-        try!(self.check_conf_change(&req));
+        self.check_conf_change(&req)?;
 
         metrics.conf_change += 1;
 
-        let data = try!(req.write_to_bytes());
+        let data = req.write_to_bytes()?;
 
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
@@ -1453,7 +1447,7 @@ impl Peer {
         );
 
         let propose_index = self.next_proposal_index();
-        try!(self.raft_group.propose_conf_change(cc));
+        self.raft_group.propose_conf_change(cc)?;
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -1569,20 +1563,15 @@ impl Peer {
         None
     }
 
-    pub fn approximate_size(&self) -> Result<u64> {
-        util::get_region_approximate_size(&self.kv_engine(), self.region())
-    }
-
     pub fn heartbeat_pd(&self, worker: &FutureWorker<PdTask>) {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.peer_stat.written_bytes - self.peer_stat.last_written_bytes,
-            written_keys: self.peer_stat.written_keys - self.peer_stat.last_written_keys,
-            read_bytes: self.peer_stat.read_bytes - self.peer_stat.last_read_bytes,
-            read_keys: self.peer_stat.read_keys - self.peer_stat.last_read_keys,
+            written_bytes: self.peer_stat.written_bytes,
+            written_keys: self.peer_stat.written_keys,
+            region_size: self.approximate_size,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -1664,7 +1653,7 @@ impl Peer {
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
-        try!(check_epoch(self.region(), req));
+        check_epoch(self.region(), req)?;
         let mut snap = None;
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
@@ -1676,14 +1665,9 @@ impl Peer {
                     if snap.is_none() {
                         snap = Some(Snapshot::new(self.kv_engine.clone()));
                     }
-                    try!(apply::do_get(
-                        &self.tag,
-                        self.region(),
-                        snap.as_ref().unwrap(),
-                        req
-                    ))
+                    apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req)?
                 }
-                CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
+                CmdType::Snap => apply::do_snap(self.region().to_owned())?,
                 CmdType::Prewrite |
                 CmdType::Put |
                 CmdType::Delete |

@@ -18,6 +18,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
 use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
+use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
 use protobuf::Message as PbMsg;
@@ -26,24 +27,27 @@ use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 
 use util::time::{duration_to_sec, Instant};
-use util::worker::{BatchRunnable, Scheduler};
+use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
 use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
+use pd::PdTask;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::select::select::SelectContext;
 use super::select::xeval::EvalContext;
 use super::dag::DAGContext;
+use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
 use super::{Error, Result};
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
 pub const REQ_TYPE_DAG: i64 = 103;
+pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const BATCH_ROW_COUNT: usize = 64;
 
 // If a request has been handled for more than 60 seconds, the client should
@@ -60,14 +64,14 @@ const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
 
-pub struct Host<R: CopSender + 'static> {
+pub struct Host {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<CopContext<R>>,
-    low_priority_pool: ThreadPool<CopContext<R>>,
-    high_priority_pool: ThreadPool<CopContext<R>>,
+    pool: ThreadPool<CopContext>,
+    low_priority_pool: ThreadPool<CopContext>,
+    high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
 }
 
@@ -77,15 +81,12 @@ pub trait CopSender: Send + Clone {
     fn send(&self, CopRequestStatistics) -> Result<()>;
 }
 
-struct CopContextFactory<R: CopSender + 'static> {
-    sender: R,
+struct CopContextFactory {
+    sender: FutureScheduler<PdTask>,
 }
 
-impl<R> ContextFactory<CopContext<R>> for CopContextFactory<R>
-where
-    R: CopSender + 'static,
-{
-    fn create(&self) -> CopContext<R> {
+impl ContextFactory<CopContext> for CopContextFactory {
+    fn create(&self) -> CopContext {
         CopContext {
             sender: self.sender.clone(),
             select_stats: Default::default(),
@@ -95,15 +96,14 @@ where
     }
 }
 
-#[derive(Default)]
-struct CopContext<R: CopSender + 'static> {
+struct CopContext {
     select_stats: StatisticsSummary,
     index_stats: StatisticsSummary,
     request_stats: CopRequestStatistics,
-    sender: R,
+    sender: FutureScheduler<PdTask>,
 }
 
-impl<R: CopSender + 'static> CopContext<R> {
+impl CopContext {
     fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
         self.get_statistics(type_str).add_statistics(stats);
     }
@@ -128,7 +128,7 @@ impl<R: CopSender + 'static> CopContext<R> {
     }
 }
 
-impl<R: CopSender + 'static> Context for CopContext<R> {
+impl Context for CopContext {
     fn on_tick(&mut self) {
         for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
             let this_statistics = self.get_statistics(type_str);
@@ -148,7 +148,9 @@ impl<R: CopSender + 'static> Context for CopContext<R> {
         if !self.request_stats.is_empty() {
             let mut to_send_stats = HashMap::default();
             mem::swap(&mut to_send_stats, &mut self.request_stats);
-            if let Err(e) = self.sender.send(to_send_stats) {
+            if let Err(e) = self.sender.schedule(PdTask::ReadStats {
+                read_stats: to_send_stats,
+            }) {
                 error!("send coprocessor statistics: {:?}", e);
             };
         }
@@ -156,8 +158,13 @@ impl<R: CopSender + 'static> Context for CopContext<R> {
     }
 }
 
-impl<R: CopSender + 'static> Host<R> {
-    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, cfg: &Config, r: R) -> Host<R> {
+impl Host {
+    pub fn new(
+        engine: Box<Engine>,
+        scheduler: Scheduler<Task>,
+        cfg: &Config,
+        r: FutureScheduler<PdTask>,
+    ) -> Host {
         Host {
             engine: engine,
             sched: scheduler,
@@ -217,7 +224,7 @@ impl<R: CopSender + 'static> Host<R> {
                 CommandPri::High => &mut self.high_priority_pool,
                 CommandPri::Normal => &mut self.pool,
             };
-            pool.execute(move |ctx: &mut CopContext<R>| {
+            pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
                 let stats = end_point.handle_request(req);
                 ctx.add_statistics(type_str, &stats);
@@ -251,6 +258,7 @@ impl Display for Task {
 enum CopRequest {
     Select(SelectRequest),
     DAG(DAGRequest),
+    Analyze(AnalyzeReq),
 }
 
 pub struct ReqContext {
@@ -326,6 +334,19 @@ impl RequestTask {
                     Ok(CopRequest::DAG(dag))
                 }
             }
+            REQ_TYPE_ANALYZE => {
+                let mut analyze = AnalyzeReq::new();
+                if let Err(e) = analyze.merge_from_bytes(req.get_data()) {
+                    Err(box_err!(e))
+                } else {
+                    start_ts = Some(analyze.get_start_ts());
+                    if analyze.get_tp() == AnalyzeType::TypeColumn {
+                        table_scan = true;
+                    }
+                    Ok(CopRequest::Analyze(analyze))
+                }
+            }
+
             _ => Err(box_err!("unsupported tp {}", tp)),
         };
         let req_ctx = ReqContext {
@@ -416,7 +437,7 @@ impl Display for RequestTask {
     }
 }
 
-impl<R: CopSender + 'static> BatchRunnable<Task> for Host<R> {
+impl BatchRunnable<Task> for Host {
     // TODO: limit pending reqs
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
@@ -606,6 +627,7 @@ impl TiDbEndPoint {
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t),
+            Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
         };
         match resp {
@@ -615,12 +637,7 @@ impl TiDbEndPoint {
     }
 
     fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let ctx = try!(SelectContext::new(
-            sel,
-            self.snap.as_ref(),
-            &mut t.statistics,
-            &t.ctx
-        ));
+        let ctx = SelectContext::new(sel, self.snap.as_ref(), &mut t.statistics, &t.ctx)?;
         let range = t.req.get_ranges().to_vec();
         ctx.handle_request(range)
     }
@@ -633,6 +650,18 @@ impl TiDbEndPoint {
         )));
         let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
         ctx.handle_request(&mut t.statistics)
+    }
+
+    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
+        let ranges = t.req.get_ranges().to_vec();
+        let ctx = AnalyzeContext::new(
+            analyze,
+            ranges,
+            self.snap.as_ref(),
+            &mut t.statistics,
+            &t.ctx,
+        );
+        ctx.handle_request()
     }
 }
 
@@ -718,21 +747,8 @@ mod tests {
 
     use kvproto::coprocessor::Request;
 
-    use util::worker::Worker;
+    use util::worker::{FutureWorker, Worker};
     use util::time::Instant;
-
-    #[derive(Clone)]
-    struct MockCopSender {}
-    impl MockCopSender {
-        fn new() -> MockCopSender {
-            MockCopSender {}
-        }
-    }
-    impl CopSender for MockCopSender {
-        fn send(&self, _stats: CopRequestStatistics) -> Result<()> {
-            Ok(())
-        }
-    }
 
     #[test]
     fn test_get_reg_scan_tag() {
@@ -753,7 +769,8 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let end_point = Host::new(engine, worker.scheduler(), &cfg, MockCopSender::new());
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
@@ -770,7 +787,8 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
-        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, MockCopSender::new());
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();

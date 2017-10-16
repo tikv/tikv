@@ -95,10 +95,9 @@ impl Stream for SnapChunk {
                 self.remain_bytes -= buf.len();
                 let mut chunk = SnapshotChunk::new();
                 chunk.set_data(buf);
-                Ok(Async::Ready(Some((
-                    chunk,
-                    WriteFlags::default().buffer_hint(self.remain_bytes > 0),
-                ))))
+                Ok(Async::Ready(
+                    Some((chunk, WriteFlags::default().buffer_hint(true))),
+                ))
             }
             Err(e) => Err(box_err!("failed to read snapshot chunk: {}", e)),
         }
@@ -121,7 +120,7 @@ fn send_snap(
 
     let key = {
         let snap = msg.get_message().get_snapshot();
-        try!(SnapKey::from_snap(snap))
+        SnapKey::from_snap(snap)?
     };
     mgr.register(key.clone(), SnapEntry::Sending);
     defer!({
@@ -131,7 +130,7 @@ fn send_snap(
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
-    let total_size = try!(s.total_size());
+    let total_size = s.total_size()?;
 
     // snapshot file has been validated when created, so no need to validate again.
     let s = Arc::new(RwLock::new(s));
@@ -144,7 +143,7 @@ fn send_snap(
         let first: Once<(SnapshotChunk, _), Error> = stream::once({
             let mut chunk = SnapshotChunk::new();
             chunk.set_message(msg);
-            Ok((chunk, WriteFlags::default()))
+            Ok((chunk, WriteFlags::default().buffer_hint(true)))
         });
         first.chain(snap_chunk)
     };

@@ -106,14 +106,14 @@ pub trait Peekable {
     where
         M: protobuf::Message + protobuf::MessageStatic,
     {
-        let value = try!(self.get_value(key));
+        let value = self.get_value(key)?;
 
         if value.is_none() {
             return Ok(None);
         }
 
         let mut m = M::new();
-        try!(m.merge_from_bytes(&value.unwrap()));
+        m.merge_from_bytes(&value.unwrap())?;
         Ok(Some(m))
     }
 
@@ -121,19 +121,19 @@ pub trait Peekable {
     where
         M: protobuf::Message + protobuf::MessageStatic,
     {
-        let value = try!(self.get_value_cf(cf, key));
+        let value = self.get_value_cf(cf, key)?;
 
         if value.is_none() {
             return Ok(None);
         }
 
         let mut m = M::new();
-        try!(m.merge_from_bytes(&value.unwrap()));
+        m.merge_from_bytes(&value.unwrap())?;
         Ok(Some(m))
     }
 
     fn get_u64(&self, key: &[u8]) -> Result<Option<u64>> {
-        let value = try!(self.get_value(key));
+        let value = self.get_value(key)?;
 
         if value.is_none() {
             return Ok(None);
@@ -149,7 +149,7 @@ pub trait Peekable {
     }
 
     fn get_i64(&self, key: &[u8]) -> Result<Option<i64>> {
-        let r = try!(self.get_u64(key));
+        let r = self.get_u64(key)?;
         match r {
             None => Ok(None),
             Some(n) => Ok(Some(n as i64)),
@@ -236,8 +236,8 @@ impl Default for IterOption {
 
 // TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator;
-    fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator>;
+    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB>;
+    fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
@@ -262,7 +262,7 @@ pub trait Iterable {
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
         let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
-        scan_impl(try!(self.new_iterator_cf(cf, iter_opt)), start_key, f)
+        scan_impl(self.new_iterator_cf(cf, iter_opt)?, start_key, f)
     }
 
     // Seek the first key >= given key, if no found, return None.
@@ -274,19 +274,19 @@ pub trait Iterable {
 
     // Seek the first key >= given key, if no found, return None.
     fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = try!(self.new_iterator_cf(cf, IterOption::default()));
+        let mut iter = self.new_iterator_cf(cf, IterOption::default())?;
         iter.seek(key.into());
         Ok(iter.kv())
     }
 }
 
-fn scan_impl<F>(mut it: DBIterator, start_key: &[u8], f: &mut F) -> Result<()>
+fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], f: &mut F) -> Result<()>
 where
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
     it.seek(start_key.into());
     while it.valid() {
-        let r = try!(f(it.key(), it.value()));
+        let r = f(it.key(), it.value())?;
 
         if !r || !it.next() {
             break;
@@ -298,24 +298,24 @@ where
 
 impl Peekable for DB {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        let v = try!(self.get(key));
+        let v = self.get(key)?;
         Ok(v)
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = try!(rocksdb::get_cf_handle(self, cf));
-        let v = try!(self.get_cf(handle, key));
+        let handle = rocksdb::get_cf_handle(self, cf)?;
+        let v = self.get_cf(handle, key)?;
         Ok(v)
     }
 }
 
 impl Iterable for DB {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
+    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB> {
         self.iter_opt(iter_opt.build_read_opts())
     }
 
-    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
-        let handle = try!(rocksdb::get_cf_handle(self, cf));
+    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
+        let handle = rocksdb::get_cf_handle(self, cf)?;
         let readopts = iter_opt.build_read_opts();
         Ok(DBIterator::new_cf(self, handle, readopts))
     }
@@ -327,23 +327,23 @@ impl Peekable for Snapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        let v = try!(self.db.get_opt(key, &opt));
+        let v = self.db.get_opt(key, &opt)?;
         Ok(v)
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
+        let handle = rocksdb::get_cf_handle(&self.db, cf)?;
         let mut opt = ReadOptions::new();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        let v = try!(self.db.get_cf_opt(handle, key, &opt));
+        let v = self.db.get_cf_opt(handle, key, &opt)?;
         Ok(v)
     }
 }
 
 impl Iterable for Snapshot {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
+    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB> {
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -351,8 +351,8 @@ impl Iterable for Snapshot {
         DBIterator::new(&self.db, opt)
     }
 
-    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
-        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
+    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
+        let handle = rocksdb::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -363,21 +363,21 @@ impl Iterable for Snapshot {
 
 pub trait Mutable: Writable {
     fn put_msg<M: protobuf::Message>(&self, key: &[u8], m: &M) -> Result<()> {
-        let value = try!(m.write_to_bytes());
-        try!(self.put(key, &value));
+        let value = m.write_to_bytes()?;
+        self.put(key, &value)?;
         Ok(())
     }
 
     fn put_msg_cf<M: protobuf::Message>(&self, cf: &CFHandle, key: &[u8], m: &M) -> Result<()> {
-        let value = try!(m.write_to_bytes());
-        try!(self.put_cf(cf, key, &value));
+        let value = m.write_to_bytes()?;
+        self.put_cf(cf, key, &value)?;
         Ok(())
     }
 
     fn put_u64(&self, key: &[u8], n: u64) -> Result<()> {
         let mut value = vec![0; 8];
         BigEndian::write_u64(&mut value, n);
-        try!(self.put(key, &value));
+        self.put(key, &value)?;
         Ok(())
     }
 
@@ -386,7 +386,7 @@ pub trait Mutable: Writable {
     }
 
     fn del(&self, key: &[u8]) -> Result<()> {
-        try!(self.delete(key));
+        self.delete(key)?;
         Ok(())
     }
 }

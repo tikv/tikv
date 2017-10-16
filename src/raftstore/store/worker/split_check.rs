@@ -78,7 +78,7 @@ impl Ord for KeyEntry {
 }
 
 struct MergedIterator<'a> {
-    iters: Vec<DBIterator<'a>>,
+    iters: Vec<DBIterator<&'a DB>>,
     heap: BinaryHeap<KeyEntry>,
 }
 
@@ -94,7 +94,7 @@ impl<'a> MergedIterator<'a> {
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.into_iter().enumerate() {
             let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
-            let mut iter = try!(db.new_iterator_cf(cf, iter_opt));
+            let mut iter = db.new_iterator_cf(cf, iter_opt)?;
             if iter.seek(start_key.into()) {
                 heap.push(KeyEntry::new(iter.key().to_vec(), pos, iter.value().len()));
             }
@@ -151,7 +151,7 @@ pub struct Runner<C> {
     split_size: u64,
 }
 
-impl<C> Runner<C> {
+impl<C: Sender<Msg>> Runner<C> {
     pub fn new(
         engine: Arc<DB>,
         ch: RetryableSendCh<Msg, C>,
@@ -165,34 +165,39 @@ impl<C> Runner<C> {
             split_size: split_size,
         }
     }
-}
 
-impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
-    fn run(&mut self, task: Task) {
-        let region = &task.region;
+    fn check_size(&mut self, region: &Region) -> Option<u64> {
         let region_id = region.get_id();
-
-        // Check approximate size before scanning region.
-        match util::get_region_approximate_size(&self.engine, region) {
-            Ok(size) => {
-                if size < self.region_max_size {
-                    CHECK_SPILT_COUNTER_VEC.with_label_values(&["skip"]).inc();
-                    return;
-                }
-                info!(
-                    "[region {}] approximate size {} >= {}, need to scan region",
+        let region_size = match util::get_region_approximate_size(&self.engine, region) {
+            Ok(size) => size,
+            Err(e) => {
+                error!(
+                    "[region {}] failed to get approximate size: {}",
                     region_id,
-                    size,
-                    self.region_max_size
+                    e
                 );
+                return None;
             }
-            Err(e) => error!(
-                "[region {}] failed to get approximate size: {}",
+        };
+
+        let res = Msg::ApproximateRegionSize {
+            region_id: region_id,
+            region_size: region_size,
+        };
+        if let Err(e) = self.ch.try_send(res) {
+            error!(
+                "[region {}] failed to send approximate region size: {}",
                 region_id,
                 e
-            ),
+            );
         }
 
+        REGION_SIZE_HISTOGRAM.observe(region_size as f64);
+        Some(region_size)
+    }
+
+    fn check_split(&mut self, region: &Region) {
+        let region_id = region.get_id();
         let start_key = keys::enc_start_key(region);
         let end_key = keys::enc_end_key(region);
         debug!(
@@ -238,7 +243,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
 
         let region_epoch = region.get_region_epoch().clone();
         let res = self.ch
-            .try_send(new_split_check_result(region_id, region_epoch, split_key));
+            .try_send(new_split_region(region_id, region_epoch, split_key));
         if let Err(e) = res {
             warn!("[region {}] failed to send check result: {}", region_id, e);
         }
@@ -249,33 +254,62 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     }
 }
 
-fn new_split_check_result(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> Msg {
-    Msg::SplitCheckResult {
+impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
+    fn run(&mut self, task: Task) {
+        let region = &task.region;
+        if let Some(region_size) = self.check_size(region) {
+            if region_size < self.region_max_size {
+                return;
+            }
+            info!(
+                "[region {}] approximate size {} >= {}, need to do split check",
+                region.get_id(),
+                region_size,
+                self.region_max_size
+            );
+        }
+        self.check_split(region);
+    }
+}
+
+fn new_split_region(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> Msg {
+    let key = keys::origin_key(split_key.as_slice()).to_vec();
+    Msg::SplitRegion {
         region_id: region_id,
-        epoch: epoch,
-        split_key: split_key,
+        region_epoch: epoch,
+        split_key: key,
+        callback: None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{self, TryRecvError};
+    use std::sync::mpsc;
     use std::sync::Arc;
 
     use tempdir::TempDir;
     use rocksdb::Writable;
     use kvproto::metapb::Peer;
+    use rocksdb::{ColumnFamilyOptions, DBOptions};
 
     use storage::ALL_CFS;
-    use util::rocksdb;
+    use util::rocksdb::{new_engine_opt, CFOptions};
+    use util::properties::SizePropertiesCollectorFactory;
     use super::*;
 
     #[test]
     fn test_split_check() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
-        );
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        let f = Box::new(SizePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut region = Region::new();
         region.set_id(1);
@@ -298,7 +332,9 @@ mod tests {
         runnable.run(Task::new(&region));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
-            Err(TryRecvError::Empty) => {}
+            Ok(Msg::ApproximateRegionSize { region_id, .. }) => {
+                assert_eq!(region_id, region.get_id());
+            }
             others => panic!("expect recv empty, but got {:?}", others),
         }
 
@@ -313,14 +349,21 @@ mod tests {
 
         runnable.run(Task::new(&region));
         match rx.try_recv() {
-            Ok(Msg::SplitCheckResult {
+            Ok(Msg::ApproximateRegionSize { region_id, .. }) => {
+                assert_eq!(region_id, region.get_id());
+            }
+            others => panic!("expect approximate region size, but got {:?}", others),
+        }
+        match rx.try_recv() {
+            Ok(Msg::SplitRegion {
                 region_id,
-                epoch,
+                region_epoch,
                 split_key,
+                ..
             }) => {
                 assert_eq!(region_id, region.get_id());
-                assert_eq!(&epoch, region.get_region_epoch());
-                assert_eq!(split_key, keys::data_key(b"0006"));
+                assert_eq!(&region_epoch, region.get_region_epoch());
+                assert_eq!(split_key, b"0006");
             }
             others => panic!("expect split check result, but got {:?}", others),
         }
@@ -340,14 +383,21 @@ mod tests {
 
         runnable.run(Task::new(&region));
         match rx.try_recv() {
-            Ok(Msg::SplitCheckResult {
+            Ok(Msg::ApproximateRegionSize { region_id, .. }) => {
+                assert_eq!(region_id, region.get_id());
+            }
+            others => panic!("expect approximate region size, but got {:?}", others),
+        }
+        match rx.try_recv() {
+            Ok(Msg::SplitRegion {
                 region_id,
-                epoch,
+                region_epoch,
                 split_key,
+                ..
             }) => {
                 assert_eq!(region_id, region.get_id());
-                assert_eq!(&epoch, region.get_region_epoch());
-                assert_eq!(split_key, keys::data_key(b"0003"));
+                assert_eq!(&region_epoch, region.get_region_epoch());
+                assert_eq!(split_key, b"0003");
             }
             others => panic!("expect split check result, but got {:?}", others),
         }

@@ -167,9 +167,10 @@ impl FnCall {
         let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let escape = {
             let c = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
-            try!(char::from_u32(c).ok_or::<Error>(box_err!("invalid escape char: {}", c)))
+            char::from_u32(c)
+                .ok_or::<Error>(box_err!("invalid escape char: {}", c))?
         };
-        Ok(Some(try!(like(&target, &pattern, escape, 0)) as i64))
+        Ok(Some(like(&target, &pattern, escape, 0)? as i64))
     }
 }
 
@@ -178,15 +179,15 @@ where
     E: Fn(usize) -> Result<Option<T>>,
     F: Fn(T, T) -> Result<Ordering>,
 {
-    let lhs = try!(e(0));
+    let lhs = e(0)?;
     if lhs.is_none() && op != CmpOp::NullEQ {
         return Ok(None);
     }
-    let rhs = try!(e(1));
+    let rhs = e(1)?;
     match (lhs, rhs) {
         (None, None) => Ok(Some(1)),
         (Some(lhs), Some(rhs)) => {
-            let ordering = try!(get_order(lhs, rhs));
+            let ordering = get_order(lhs, rhs)?;
             let r = match op {
                 CmpOp::LT => ordering == Ordering::Less,
                 CmpOp::LE => ordering != Ordering::Greater,
@@ -236,7 +237,7 @@ where
     F: Fn(&'a Expression) -> Result<Option<T>>,
 {
     for exp in &expr.children {
-        let v = try!(f(exp));
+        let v = f(exp)?;
         if v.is_some() {
             return Ok(v);
         }
@@ -306,7 +307,7 @@ fn like(target: &str, pattern: &str, escape: char, recurse_level: usize) -> Resu
                 None => return Ok(false),
                 Some(s) => s,
             };
-            if s == next_char && try!(like(tcs.as_str(), pcs.as_str(), escape, recurse_level + 1)) {
+            if s == next_char && like(tcs.as_str(), pcs.as_str(), escape, recurse_level + 1)? {
                 return Ok(true);
             }
         }

@@ -19,14 +19,10 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
-use util::collections::HashMap;
-use storage::FlowStatistics;
-
 use util::escape;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 pub type BatchCallback = Box<FnBox(Vec<Option<RaftCmdResponse>>) + Send>;
-pub type CopFlowStatistics = HashMap<u64, FlowStatistics>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Tick {
@@ -41,10 +37,14 @@ pub enum Tick {
     ConsistencyCheck,
 }
 
-pub struct SnapshotStatusMsg {
-    pub region_id: u64,
-    pub to_peer_id: u64,
-    pub status: SnapshotStatus,
+#[derive(Debug, PartialEq)]
+pub enum SignificantMsg {
+    SnapshotStatus {
+        region_id: u64,
+        to_peer_id: u64,
+        status: SnapshotStatus,
+    },
+    Unreachable { region_id: u64, to_peer_id: u64 },
 }
 
 pub enum Msg {
@@ -65,28 +65,17 @@ pub enum Msg {
         on_finished: BatchCallback,
     },
 
-    // For split check
-    SplitCheckResult {
-        region_id: u64,
-        epoch: RegionEpoch,
-        // It's a data key, starts with `DATA_PREFIX_KEY`.
-        split_key: Vec<u8>,
-    },
-
     SplitRegion {
         region_id: u64,
         region_epoch: RegionEpoch,
         // It's an encoded key.
+        // TODO: support meta key.
         split_key: Vec<u8>,
-        callback: Callback,
+        callback: Option<Callback>,
     },
-
-    ReportUnreachable { region_id: u64, to_peer_id: u64 },
 
     // For snapshot stats.
     SnapshotStats,
-
-    CoprocessorStats { request_stats: CopFlowStatistics },
 
     // For consistency check
     ComputeHashResult {
@@ -94,6 +83,9 @@ pub enum Msg {
         index: u64,
         hash: Vec<u8>,
     },
+
+    // For region size
+    ApproximateRegionSize { region_id: u64, region_size: u64 },
 }
 
 impl fmt::Debug for Msg {
@@ -103,18 +95,7 @@ impl fmt::Debug for Msg {
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
-            Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
-            Msg::ReportUnreachable {
-                ref region_id,
-                ref to_peer_id,
-            } => write!(
-                fmt,
-                "peer {} for region {} is unreachable",
-                to_peer_id,
-                region_id
-            ),
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
-            Msg::CoprocessorStats { .. } => write!(fmt, "Coperocessor stats"),
             Msg::ComputeHashResult {
                 region_id,
                 index,
@@ -131,6 +112,15 @@ impl fmt::Debug for Msg {
                 ref split_key,
                 ..
             } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
+            Msg::ApproximateRegionSize {
+                region_id,
+                region_size,
+            } => write!(
+                fmt,
+                "Approximate region size [region_id: {}, region_size: {}]",
+                region_id,
+                region_size
+            ),
         }
     }
 }

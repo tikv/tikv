@@ -11,11 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use grpc::{Error as GrpcError, WriteFlags};
 use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use futures::{future, Future};
+use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::debugpb_grpc;
 use kvproto::debugpb::*;
+use fail;
 
 use raftstore::store::Engines;
 use raftstore::store::debug::{Debugger, Error};
@@ -41,25 +43,34 @@ impl Service {
         P: Send + 'static,
         F: Future<Item = P, Error = Error> + Send + 'static,
     {
-        let on_error = move |e| {
-            error!("{} failed: {:?}", tag, e);
-        };
         let f = resp.then(|v| match v {
-            Ok(resp) => sink.success(resp).map_err(on_error),
-            Err(Error::NotFound(msg)) => {
-                let status = RpcStatus::new(RpcStatusCode::NotFound, Some(msg));
-                sink.fail(status).map_err(on_error)
-            }
-            Err(Error::InvalidArgument(msg)) => {
-                let status = RpcStatus::new(RpcStatusCode::InvalidArgument, Some(msg));
-                sink.fail(status).map_err(on_error)
-            }
-            Err(Error::Other(e)) => {
-                let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
-                sink.fail(status).map_err(on_error)
+            Ok(resp) => sink.success(resp),
+            Err(e) => {
+                let status = Service::error_to_status(e);
+                sink.fail(status)
             }
         });
-        ctx.spawn(f);
+        ctx.spawn(f.map_err(move |e| Service::on_grpc_error(tag, &e)));
+    }
+
+    fn error_to_status(e: Error) -> RpcStatus {
+        let (code, msg) = match e {
+            Error::NotFound(msg) => (RpcStatusCode::NotFound, Some(msg)),
+            Error::InvalidArgument(msg) => (RpcStatusCode::InvalidArgument, Some(msg)),
+            Error::Other(e) => (RpcStatusCode::Unknown, Some(format!("{:?}", e))),
+        };
+        RpcStatus::new(code, msg)
+    }
+
+    fn on_grpc_error(tag: &'static str, e: &GrpcError) {
+        error!("{} failed: {:?}", tag, e);
+    }
+
+    fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
+        let status = Service::error_to_status(e);
+        let e = GrpcError::RpcFailure(status);
+        Service::on_grpc_error(tag, &e);
+        e
     }
 }
 
@@ -175,9 +186,110 @@ impl debugpb_grpc::Debug for Service {
     fn scan_mvcc(
         &self,
         _: RpcContext,
-        _: ScanMvccRequest,
-        _: ServerStreamingSink<ScanMvccResponse>,
+        mut req: ScanMvccRequest,
+        sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
-        unimplemented!()
+        let debugger = self.debugger.clone();
+        let from = req.take_from_key();
+        let to = req.take_to_key();
+        let limit = req.get_limit();
+        let future = future::result(debugger.scan_mvcc(&from, &to, limit))
+            .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
+            .and_then(|iter| {
+                #[allow(deprecated)]
+                stream::iter(iter)
+                    .map_err(|e| Service::error_to_grpc_error("scan_mvcc", e))
+                    .map(|(key, mvcc_info)| {
+                        let mut resp = ScanMvccResponse::new();
+                        resp.set_key(key);
+                        resp.set_info(mvcc_info);
+                        (resp, WriteFlags::default())
+                    })
+                    .forward(sink)
+                    .map(|_| ())
+            })
+            .map_err(|e| Service::on_grpc_error("scan_mvcc", &e));
+        self.pool.spawn(future).forget();
+    }
+
+    fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+        let debugger = self.debugger.clone();
+        let f = self.pool.spawn_fn(move || {
+            debugger
+                .compact(
+                    req.get_db(),
+                    req.get_cf(),
+                    req.get_from_key(),
+                    req.get_to_key(),
+                )
+                .map(|_| CompactResponse::default())
+        });
+        self.handle_response(ctx, sink, f, "debug_compact");
+    }
+
+    fn inject_fail_point(
+        &self,
+        ctx: RpcContext,
+        mut req: InjectFailPointRequest,
+        sink: UnarySink<InjectFailPointResponse>,
+    ) {
+        const TAG: &'static str = "debug_inject_fail_point";
+
+        let f = self.pool.spawn_fn(move || {
+            let name = req.take_name();
+            if name.is_empty() {
+                return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
+            }
+            let actions = req.get_actions();
+            if let Err(e) = fail::cfg(name, actions) {
+                return Err(box_err!("{:?}", e));
+            }
+            Ok(InjectFailPointResponse::new())
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn recover_fail_point(
+        &self,
+        ctx: RpcContext,
+        mut req: RecoverFailPointRequest,
+        sink: UnarySink<RecoverFailPointResponse>,
+    ) {
+        const TAG: &'static str = "debug_recover_fail_point";
+
+        let f = self.pool.spawn_fn(move || {
+            let name = req.take_name();
+            if name.is_empty() {
+                return Err(Error::InvalidArgument("Failure Type INVALID".to_owned()));
+            }
+            fail::remove(name);
+            Ok(RecoverFailPointResponse::new())
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn list_fail_points(
+        &self,
+        ctx: RpcContext,
+        _: ListFailPointsRequest,
+        sink: UnarySink<ListFailPointsResponse>,
+    ) {
+        const TAG: &'static str = "debug_list_fail_points";
+
+        let f = self.pool.spawn_fn(move || {
+            let list = fail::list().into_iter().map(|(name, actions)| {
+                let mut entry = ListFailPointsResponse_Entry::new();
+                entry.set_name(name);
+                entry.set_actions(actions);
+                entry
+            });
+            let mut resp = ListFailPointsResponse::new();
+            resp.set_entries(list.collect());
+            Ok(resp)
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
     }
 }

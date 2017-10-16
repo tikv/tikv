@@ -115,8 +115,8 @@ impl Config {
         }
 
         for (k, v) in &self.labels {
-            try!(validate_label(k, "key"));
-            try!(validate_label(v, "value"));
+            validate_label(k, "key")?;
+            validate_label(v, "value")?;
         }
 
         Ok(())
@@ -126,7 +126,7 @@ impl Config {
 fn validate_label(s: &str, tp: &str) -> Result<()> {
     let report_err = || {
         box_err!(
-            "store label {}: {:?} not match ^[a-z0-9]([a-z0-9-._]*[a-z0-9])?",
+            "store label {}: {:?} not match ^[a-zA-Z0-9]([a-zA-Z0-9-._]*[a-zA-Z0-9])?",
             tp,
             s
         )
@@ -136,18 +136,18 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
     }
     let mut chrs = s.chars();
     let first_char = chrs.next().unwrap();
-    if !first_char.is_ascii_lowercase() && !first_char.is_ascii_digit() {
+    if !first_char.is_ascii_alphanumeric() {
         return Err(report_err());
     }
     let last_char = match chrs.next_back() {
         None => return Ok(()),
         Some(c) => c,
     };
-    if !last_char.is_ascii_lowercase() && !last_char.is_ascii_digit() {
+    if !last_char.is_ascii_alphanumeric() {
         return Err(report_err());
     }
     for c in chrs {
-        if !c.is_ascii_lowercase() && !c.is_ascii_digit() && !"-._".contains(c) {
+        if !c.is_ascii_alphanumeric() && !"-._".contains(c) {
             return Err(report_err());
         }
     }
@@ -187,13 +187,22 @@ mod tests {
 
     #[test]
     fn test_store_labels() {
-        let invalid_cases = vec!["", "123*", ".123", "Cab", "abC", "💖"];
+        let invalid_cases = vec!["", "123*", ".123", "💖"];
 
         for case in invalid_cases {
             assert!(validate_label(case, "dummy").is_err());
         }
 
-        let valid_cases = vec!["a", "0", "a.1-2", "b_1.2", "cab-012", "3ac.8b2"];
+        let valid_cases = vec![
+            "a",
+            "0",
+            "a.1-2",
+            "Cab",
+            "abC",
+            "b_1.2",
+            "cab-012",
+            "3ac.8b2",
+        ];
 
         for case in valid_cases {
             validate_label(case, "dummy").unwrap();

@@ -55,9 +55,9 @@
 # also should less than total cpu cores.
 # scheduler-worker-pool-size = 4
 
-# A write flow control mechanism. When concurrent running write count over
-# this threshold, will return too busy error.
-# scheduler-too-busy-threshold = 4000
+# When the number of concurrent running writes exceeds this threshold,
+# the "too busy" error is displayed.
+# scheduler-too-busy-threshold = 10000
 
 [pd]
 # pd endpoints
@@ -99,10 +99,7 @@
 # region-split-size = "96MB"
 # When region size changes exceeds region-split-check-diff, we should check
 # whether the region should be split or not.
-# region-split-check-diff = "12MB"
-# Set it to true will check regions if they need to spilt right after
-# initialization. It is useful when we adjust the region size.
-# region-split-check-after-initialization = false
+# region-split-check-diff = "6MB"
 
 # Interval to check region whether need to be split or not.
 # split-region-check-tick-interval = "10s"

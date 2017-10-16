@@ -66,12 +66,31 @@ impl<'a> IndexScanExecutor<'a> {
         }
     }
 
+    pub fn new_with_cols_len(
+        cols: i64,
+        key_ranges: Vec<KeyRange>,
+        store: SnapshotStore<'a>,
+        statistics: &'a mut Statistics,
+    ) -> IndexScanExecutor<'a> {
+        let col_ids: Vec<i64> = (0..cols).collect();
+        COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
+        let scanner = Scanner::new(store, false, false, statistics);
+        IndexScanExecutor {
+            desc: false,
+            col_ids: col_ids,
+            scanner: scanner,
+            key_ranges: key_ranges,
+            cursor: Default::default(),
+            pk_col: None,
+        }
+    }
+
     pub fn get_row_from_range(&mut self) -> Result<Option<Row>> {
         let range = &self.key_ranges[self.cursor];
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
-        let kv = try!(self.scanner.next_row(range));
+        let kv = self.scanner.next_row(range)?;
         let (key, value) = match kv {
             Some((key, value)) => (key, value),
             None => return Ok(None),
@@ -109,7 +128,7 @@ impl<'a> IndexScanExecutor<'a> {
 impl<'a> Executor for IndexScanExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         while self.cursor < self.key_ranges.len() {
-            let data = try!(self.get_row_from_range());
+            let data = self.get_row_from_range()?;
             if data.is_none() {
                 CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 self.scanner.set_seek_key(None);

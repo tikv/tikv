@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME: remove following later
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
@@ -22,6 +19,7 @@ use tipb::analyze;
 /// `FMSketch` is used to count the approximate number of distinct
 /// elements in multiset.
 /// Refer:[Flajolet-Martin](https://en.wikipedia.org/wiki/Flajolet%E2%80%93Martin_algorithm)
+#[derive(Clone)]
 pub struct FMSketch {
     mask: u64,
     max_size: usize,
@@ -35,11 +33,6 @@ impl FMSketch {
             max_size: max_size,
             hash_set: HashSet::with_capacity(max_size + 1),
         }
-    }
-
-    // ndv returns the approximate number of distinct elements
-    pub fn ndv(&self) -> u64 {
-        (self.mask + 1) * (self.hash_set.len() as u64)
     }
 
     pub fn insert(&mut self, mut bytes: &[u8]) {
@@ -123,10 +116,17 @@ mod test {
     pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FMSketch> {
         let mut s = FMSketch::new(max_size);
         for value in values {
-            let bytes = try!(datum::encode_value(as_slice(value)));
+            let bytes = datum::encode_value(as_slice(value))?;
             s.insert(&bytes);
         }
         Ok(s)
+    }
+
+    impl FMSketch {
+        // ndv returns the approximate number of distinct elements
+        pub fn ndv(&self) -> u64 {
+            (self.mask + 1) * (self.hash_set.len() as u64)
+        }
     }
 
     // This test was ported from tidb.

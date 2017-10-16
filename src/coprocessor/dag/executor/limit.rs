@@ -43,7 +43,7 @@ impl<'a> Executor for LimitExecutor<'a> {
         if self.cursor >= self.limit {
             return Ok(None);
         }
-        if let Some(row) = try!(self.src.next()) {
+        if let Some(row) = self.src.next()? {
             self.cursor += 1;
             Ok(Some(row))
         } else {
@@ -98,7 +98,7 @@ mod test {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, &mut statistics);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
 
         // init Limit meta
         let mut limit_meta = Limit::default();

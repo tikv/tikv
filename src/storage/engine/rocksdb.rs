@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Deref;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
@@ -95,7 +96,7 @@ impl EngineRocksdb {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = try!(rocksdb::new_engine(&path, cfs));
+        let db = rocksdb::new_engine(&path, cfs)?;
         box_try!(worker.start(Runner(Arc::new(db))));
         Ok(EngineRocksdb {
             sched: worker.scheduler(),
@@ -133,7 +134,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                 wb.delete(k.encoded())
             } else {
                 trace!("EngineRocksdb: delete_cf {} {}", cf, k);
-                let handle = try!(rocksdb::get_cf_handle(db, cf));
+                let handle = rocksdb::get_cf_handle(db, cf)?;
                 wb.delete_cf(handle, k.encoded())
             },
             Modify::Put(cf, k, v) => if cf == CF_DEFAULT {
@@ -141,7 +142,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                 wb.put(k.encoded(), &v)
             } else {
                 trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
-                let handle = try!(rocksdb::get_cf_handle(db, cf));
+                let handle = rocksdb::get_cf_handle(db, cf)?;
                 wb.put_cf(handle, k.encoded(), &v)
             },
             Modify::DeleteRange(cf, start_key, end_key) => {
@@ -151,7 +152,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     escape(start_key.encoded()),
                     escape(end_key.encoded())
                 );
-                let handle = try!(rocksdb::get_cf_handle(db, cf));
+                let handle = rocksdb::get_cf_handle(db, cf)?;
                 wb.delete_range_cf(handle, start_key.encoded(), end_key.encoded())
             }
         };
@@ -223,7 +224,7 @@ impl Snapshot for RocksSnapshot {
         mode: ScanMode,
     ) -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create cf iterator");
-        Ok(Cursor::new(try!(self.new_iterator_cf(cf, iter_opt)), mode))
+        Ok(Cursor::new(self.new_iterator_cf(cf, iter_opt)?, mode))
     }
 
     fn clone(&self) -> Box<Snapshot> {
@@ -231,7 +232,7 @@ impl Snapshot for RocksSnapshot {
     }
 }
 
-impl<'a> EngineIterator for DBIterator<'a> {
+impl<D: Deref<Target = DB>> EngineIterator for DBIterator<D> {
     fn next(&mut self) -> bool {
         DBIterator::next(self)
     }

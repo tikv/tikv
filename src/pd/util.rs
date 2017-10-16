@@ -28,11 +28,9 @@ use tokio_timer::Timer;
 use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
                     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader};
 use kvproto::pdpb_grpc::PdClient;
-use prometheus::HistogramTimer;
 
 use util::{Either, HandyRwLock};
 use super::{Error, PdFuture, Result, REQUEST_TIMEOUT};
-use super::metrics::PD_SEND_MSG_HISTOGRAM;
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -142,7 +140,6 @@ impl LeaderClient {
             req: req,
             resp: None,
             func: f,
-            timer: None,
         }
     }
 
@@ -161,7 +158,7 @@ impl LeaderClient {
 
             let start = Instant::now();
             (
-                try!(try_connect_leader(inner.env.clone(), &inner.members)),
+                try_connect_leader(inner.env.clone(), &inner.members)?,
                 start,
             )
         };
@@ -195,8 +192,6 @@ pub struct Request<Req, Resp, F> {
     req: Req,
     resp: Option<Result<Resp>>,
     func: F,
-
-    timer: Option<HistogramTimer>,
 }
 
 const MAX_REQUEST_COUNT: usize = 3;
@@ -239,20 +234,15 @@ where
         let r = self.req.clone();
 
         Box::new(ok(self).and_then(|mut ctx| {
-            ctx.timer = Some(PD_SEND_MSG_HISTOGRAM.start_coarse_timer());
             let req = (ctx.func)(&ctx.client.inner, r);
-            req.then(|resp| {
-                // Observe on dropping, schedule time will be recorded too.
-                ctx.timer.take();
-                match resp {
-                    Ok(resp) => {
-                        ctx.resp = Some(Ok(resp));
-                        Ok(ctx)
-                    }
-                    Err(err) => {
-                        error!("request failed: {:?}", err);
-                        Err(ctx)
-                    }
+            req.then(|resp| match resp {
+                Ok(resp) => {
+                    ctx.resp = Some(Ok(resp));
+                    Ok(ctx)
+                }
+                Err(err) => {
+                    error!("request failed: {:?}", err);
+                    Err(ctx)
                 }
             })
         }))
@@ -295,12 +285,7 @@ where
     F: Fn(&PdClient) -> GrpcResult<R>,
 {
     for _ in 0..retry {
-        let r = {
-            let _timer = PD_SEND_MSG_HISTOGRAM.start_coarse_timer(); // observe on dropping.
-            func(&client.inner.rl().client).map_err(Error::Grpc)
-        };
-
-        match r {
+        match func(&client.inner.rl().client).map_err(Error::Grpc) {
             Ok(r) => {
                 return Ok(r);
             }
@@ -365,7 +350,7 @@ pub fn validate_endpoints(
 
     match members {
         Some(members) => {
-            let (client, members) = try!(try_connect_leader(env.clone(), &members));
+            let (client, members) = try_connect_leader(env.clone(), &members)?;
             info!("All PD endpoints are consistent: {:?}", endpoints);
             Ok((client, members))
         }

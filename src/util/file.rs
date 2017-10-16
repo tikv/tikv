@@ -16,7 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn get_file_size(path: &PathBuf) -> io::Result<u64> {
-    let meta = try!(fs::metadata(path));
+    let meta = fs::metadata(path)?;
     Ok(meta.len())
 }
 

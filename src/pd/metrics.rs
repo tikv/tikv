@@ -11,13 +11,62 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, Histogram};
+use prometheus::*;
 
 lazy_static! {
-    pub static ref PD_SEND_MSG_HISTOGRAM: Histogram =
+    pub static ref PD_REQUEST_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_pd_request_duration_seconds",
+            "Bucketed histogram of PD requests duration",
+            &["type"]
+        ).unwrap();
+
+    pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_pd_heartbeat_message_total",
+            "Total number of PD heartbeat messages.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref PD_VALIDATE_PEER_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_pd_validate_peer_total",
+            "Total number of pd worker validate peer task.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_SIZE_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_store_size_bytes",
+            "Size of storage.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref REGION_READ_KEYS_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_pd_msg_send_duration_seconds",
-            "Bucketed histogram of PD message send duration",
-             exponential_buckets(0.0005, 10.0, 7).unwrap()
+           "tikv_region_read_keys",
+           "Histogram of keys written for regions",
+           exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref REGION_READ_BYTES_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_region_read_bytes",
+            "Histogram of bytes written for regions",
+            exponential_buckets(256.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref REGION_WRITTEN_BYTES_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_region_written_bytes",
+            "Histogram of bytes written for regions",
+             exponential_buckets(256.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref REGION_WRITTEN_KEYS_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_region_written_keys",
+            "Histogram of keys written for regions",
+             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 }

@@ -185,8 +185,8 @@ pub trait Snapshot: Read + Write + Send {
 // Only used in tests.
 pub fn copy_snapshot(mut from: Box<Snapshot>, mut to: Box<Snapshot>) -> io::Result<()> {
     if !to.exists() {
-        try!(io::copy(&mut from, &mut to));
-        try!(to.save());
+        io::copy(&mut from, &mut to)?;
+        to.save()?;
     }
     Ok(())
 }
@@ -234,7 +234,7 @@ const DIGEST_BUFFER_SIZE: usize = 10240;
 
 fn calc_crc32(p: &PathBuf) -> io::Result<u32> {
     let mut digest = Digest::new(crc32::IEEE);
-    let mut f = try!(OpenOptions::new().read(true).open(&p));
+    let mut f = OpenOptions::new().read(true).open(&p)?;
     let mut buf = vec![0; DIGEST_BUFFER_SIZE];
     loop {
         match f.read(&mut buf[..]) {
@@ -272,7 +272,7 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
 }
 
 fn check_file_size(path: &PathBuf, expected_size: u64) -> RaftStoreResult<()> {
-    let size = try!(get_file_size(path));
+    let size = get_file_size(path)?;
     if size != expected_size {
         return Err(box_err!(
             "invalid size {} for snapshot cf file {}, expected {}",
@@ -285,7 +285,7 @@ fn check_file_size(path: &PathBuf, expected_size: u64) -> RaftStoreResult<()> {
 }
 
 fn check_file_checksum(path: &PathBuf, expected_checksum: u32) -> RaftStoreResult<()> {
-    let checksum = try!(calc_crc32(path));
+    let checksum = calc_crc32(path)?;
     if checksum != expected_checksum {
         return Err(box_err!(
             "invalid checksum {} for snapshot cf file {}, expected {}",
@@ -349,7 +349,7 @@ impl Snap {
     ) -> RaftStoreResult<Snap> {
         let dir_path = dir.into();
         if !dir_path.exists() {
-            try!(fs::create_dir_all(dir_path.as_path()));
+            fs::create_dir_all(dir_path.as_path())?;
         }
         let snap_prefix = if is_sending {
             SNAP_GEN_PREFIX
@@ -421,8 +421,8 @@ impl Snap {
         size_track: Arc<RwLock<u64>>,
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
-        let mut s = try!(Snap::new(dir, key, size_track, true, true, deleter));
-        try!(s.init_for_building(snap));
+        let mut s = Snap::new(dir, key, size_track, true, true, deleter)?;
+        s.init_for_building(snap)?;
         Ok(s)
     }
 
@@ -432,7 +432,7 @@ impl Snap {
         size_track: Arc<RwLock<u64>>,
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
-        let mut s = try!(Snap::new(dir, key, size_track, true, false, deleter));
+        let mut s = Snap::new(dir, key, size_track, true, false, deleter)?;
 
         if !s.exists() {
             // Skip the initialization below if it doesn't exists.
@@ -441,7 +441,7 @@ impl Snap {
         for cf_file in &mut s.cf_files {
             // initialize cf file size and reader
             if cf_file.size > 0 {
-                let file = try!(File::open(&cf_file.path));
+                let file = File::open(&cf_file.path)?;
                 cf_file.file = Some(file);
             }
         }
@@ -455,8 +455,8 @@ impl Snap {
         size_track: Arc<RwLock<u64>>,
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
-        let mut s = try!(Snap::new(dir, key, size_track, false, false, deleter));
-        try!(s.set_snapshot_meta(snapshot_meta));
+        let mut s = Snap::new(dir, key, size_track, false, false, deleter)?;
+        s.set_snapshot_meta(snapshot_meta)?;
 
         if s.exists() {
             return Ok(s);
@@ -465,21 +465,17 @@ impl Snap {
             if cf_file.size == 0 {
                 continue;
             }
-            let f = try!(
-                OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&cf_file.tmp_path)
-            );
+            let f = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&cf_file.tmp_path)?;
             cf_file.file = Some(f);
             cf_file.write_digest = Some(Digest::new(crc32::IEEE));
         }
-        let f = try!(
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&s.meta_file.tmp_path)
-        );
+        let f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&s.meta_file.tmp_path)?;
         s.meta_file.file = Some(f);
         Ok(s)
     }
@@ -490,7 +486,7 @@ impl Snap {
         size_track: Arc<RwLock<u64>>,
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
-        let s = try!(Snap::new(dir, key, size_track, false, false, deleter));
+        let s = Snap::new(dir, key, size_track, false, false, deleter)?;
         Ok(s)
     }
 
@@ -500,16 +496,14 @@ impl Snap {
         }
         for cf_file in &mut self.cf_files {
             if plain_file_used(cf_file.cf) {
-                let f = try!(
-                    OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .truncate(true)
-                        .open(&cf_file.tmp_path)
-                );
+                let f = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(&cf_file.tmp_path)?;
                 cf_file.file = Some(f);
             } else {
-                let handle = try!(snap.cf_handle(cf_file.cf));
+                let handle = snap.cf_handle(cf_file.cf)?;
                 let mut io_options = snap.get_db().get_options_cf(handle).clone();
                 io_options.compression(get_fastest_supported_compression_type());
                 // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
@@ -522,23 +516,21 @@ impl Snap {
                 cf_file.sst_writer = Some(writer);
             }
         }
-        let file = try!(
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&self.meta_file.tmp_path)
-        );
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.meta_file.tmp_path)?;
         self.meta_file.file = Some(file);
         Ok(())
     }
 
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
-        let size = try!(get_file_size(&self.meta_file.path));
-        let mut file = try!(File::open(&self.meta_file.path));
+        let size = get_file_size(&self.meta_file.path)?;
+        let mut file = File::open(&self.meta_file.path)?;
         let mut buf = Vec::with_capacity(size as usize);
-        try!(file.read_to_end(&mut buf));
+        file.read_to_end(&mut buf)?;
         let mut snapshot_meta = SnapshotMeta::new();
-        try!(snapshot_meta.merge_from_bytes(&buf));
+        snapshot_meta.merge_from_bytes(&buf)?;
         Ok(snapshot_meta)
     }
 
@@ -562,7 +554,7 @@ impl Snap {
             }
             if file_exists(&cf_file.path) {
                 // Check only the file size for `exists()` to work correctly.
-                try!(check_file_size(&cf_file.path, meta.get_size()));
+                check_file_size(&cf_file.path, meta.get_size())?;
             }
             cf_file.size = meta.get_size();
             cf_file.checksum = meta.get_checksum();
@@ -572,8 +564,8 @@ impl Snap {
     }
 
     fn load_snapshot_meta(&mut self) -> RaftStoreResult<()> {
-        let snapshot_meta = try!(self.read_snapshot_meta());
-        try!(self.set_snapshot_meta(snapshot_meta));
+        let snapshot_meta = self.read_snapshot_meta()?;
+        self.set_snapshot_meta(snapshot_meta)?;
         // check if there is a data corruption when the meta file exists
         // but cf files are deleted.
         if !self.exists() {
@@ -603,11 +595,7 @@ impl Snap {
                 // this is checked when loading the snapshot meta.
                 continue;
             }
-            try!(check_file_size_and_checksum(
-                &cf_file.path,
-                cf_file.size,
-                cf_file.checksum
-            ));
+            check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
         }
         Ok(())
     }
@@ -628,7 +616,7 @@ impl Snap {
     fn add_kv(&mut self, k: &[u8], v: &[u8]) -> io::Result<()> {
         let cf_file = &mut self.cf_files[self.cf_index];
         let writer = cf_file.sst_writer.as_mut().unwrap();
-        if let Err(e) = writer.add(k, v) {
+        if let Err(e) = writer.put(k, v) {
             return Err(io::Error::new(ErrorKind::Other, e));
         }
         cf_file.kv_count += 1;
@@ -647,15 +635,15 @@ impl Snap {
                     return Err(io::Error::new(ErrorKind::Other, e));
                 }
             }
-            let size = try!(get_file_size(&cf_file.tmp_path));
+            let size = get_file_size(&cf_file.tmp_path)?;
             if size > 0 {
-                try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
+                fs::rename(&cf_file.tmp_path, &cf_file.path)?;
                 cf_file.size = size;
                 // add size
                 let mut size_track = self.size_track.wl();
                 *size_track = size_track.saturating_add(size);
 
-                cf_file.checksum = try!(calc_crc32(&cf_file.path));
+                cf_file.checksum = calc_crc32(&cf_file.path)?;
             } else {
                 // Clean up the `tmp_path` if this cf file is empty.
                 delete_file_if_exist(&cf_file.tmp_path);
@@ -669,10 +657,10 @@ impl Snap {
         box_try!(self.meta_file.meta.write_to_vec(&mut v));
         {
             let mut f = self.meta_file.file.take().unwrap();
-            try!(f.write_all(&v[..]));
-            try!(f.flush());
+            f.write_all(&v[..])?;
+            f.flush()?;
         }
-        try!(fs::rename(&self.meta_file.tmp_path, &self.meta_file.path));
+        fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
         Ok(())
     }
 
@@ -701,7 +689,7 @@ impl Snap {
                         );
                         return Err(e);
                     }
-                    try!(self.init_for_building(snap));
+                    self.init_for_building(snap)?;
                 }
             }
         }
@@ -709,14 +697,14 @@ impl Snap {
         let mut snap_key_count = 0;
         let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
         for cf in SNAPSHOT_CFS {
-            try!(self.switch_to_cf_file(cf));
+            self.switch_to_cf_file(cf)?;
             let (cf_key_count, cf_size) = if plain_file_used(cf) {
                 let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
-                try!(build_plain_cf_file(file, snap, cf, &begin_key, &end_key))
+                build_plain_cf_file(file, snap, cf, &begin_key, &end_key)?
             } else {
                 let mut key_count = 0;
                 let mut size = 0;
-                try!(snap.scan_cf(
+                snap.scan_cf(
                     cf,
                     &begin_key,
                     &end_key,
@@ -724,10 +712,10 @@ impl Snap {
                     &mut |key, value| {
                         key_count += 1;
                         size += key.len() + value.len();
-                        try!(self.add_kv(key, value));
+                        self.add_kv(key, value)?;
                         Ok(true)
-                    }
-                ));
+                    },
+                )?;
                 (key_count, size)
             };
             snap_key_count += cf_key_count;
@@ -747,12 +735,12 @@ impl Snap {
             );
         }
 
-        try!(self.save_cf_files());
+        self.save_cf_files()?;
         stat.kv_count = snap_key_count;
         // save snapshot meta to meta file
-        let snapshot_meta = try!(gen_snapshot_meta(&self.cf_files[..]));
+        let snapshot_meta = gen_snapshot_meta(&self.cf_files[..])?;
         self.meta_file.meta = snapshot_meta;
-        try!(self.save_meta_file());
+        self.save_meta_file()?;
 
         Ok(())
     }
@@ -767,7 +755,7 @@ pub fn build_plain_cf_file<E: BytesEncoder>(
 ) -> RaftStoreResult<(usize, usize)> {
     let mut cf_key_count = 0;
     let mut cf_size = 0;
-    try!(snap.scan_cf(
+    snap.scan_cf(
         cf,
         start_key,
         end_key,
@@ -775,11 +763,11 @@ pub fn build_plain_cf_file<E: BytesEncoder>(
         &mut |key, value| {
             cf_key_count += 1;
             cf_size += key.len() + value.len();
-            try!(encoder.encode_compact_bytes(key));
-            try!(encoder.encode_compact_bytes(value));
+            encoder.encode_compact_bytes(key)?;
+            encoder.encode_compact_bytes(value)?;
             Ok(true)
-        }
-    ));
+        },
+    )?;
     // use an empty byte array to indicate that cf reaches an end.
     box_try!(encoder.encode_compact_bytes(b""));
     Ok((cf_key_count, cf_size))
@@ -793,7 +781,7 @@ fn apply_plain_cf_file<D: CompactBytesDecoder>(
     let mut wb = WriteBatch::new();
     let mut batch_size = 0;
     loop {
-        try!(check_abort(&options.abort));
+        check_abort(&options.abort)?;
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if batch_size > 0 {
@@ -825,9 +813,9 @@ impl Snapshot for Snap {
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        try!(self.do_build(snap, region, stat, deleter));
+        self.do_build(snap, region, stat, deleter)?;
 
-        let total_size = try!(self.total_size());
+        let total_size = self.total_size()?;
         stat.size = total_size;
         // set snapshot meta data
         snap_data.set_file_size(total_size);
@@ -891,7 +879,7 @@ impl Snapshot for Snap {
             // Check each cf file has been fully written, and the checksum matches.
             {
                 let mut file = cf_file.file.take().unwrap();
-                try!(file.flush());
+                file.flush()?;
             }
             if cf_file.written_size != cf_file.size {
                 return Err(io::Error::new(
@@ -922,15 +910,15 @@ impl Snapshot for Snap {
                 ));
             }
 
-            try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
+            fs::rename(&cf_file.tmp_path, &cf_file.path)?;
             let mut size_track = self.size_track.wl();
             *size_track = size_track.saturating_add(cf_file.size);
         }
         // write meta file
         let mut v = vec![];
-        try!(self.meta_file.meta.write_to_vec(&mut v));
-        try!(self.meta_file.file.take().unwrap().write_all(&v[..]));
-        try!(fs::rename(&self.meta_file.tmp_path, &self.meta_file.path));
+        self.meta_file.meta.write_to_vec(&mut v)?;
+        self.meta_file.file.take().unwrap().write_all(&v[..])?;
+        fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
         Ok(())
     }
 
@@ -943,11 +931,11 @@ impl Snapshot for Snap {
                 continue;
             }
 
-            try!(check_abort(&options.abort));
+            check_abort(&options.abort)?;
             let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
             if plain_file_used(cf_file.cf) {
                 let mut file = box_try!(File::open(&cf_file.path));
-                try!(apply_plain_cf_file(&mut file, &options, cf_handle));
+                apply_plain_cf_file(&mut file, &options, cf_handle)?;
             } else {
                 let ingest_opt = IngestExternalFileOptions::new();
                 // TODO: move SST file instead of copy
@@ -1014,13 +1002,13 @@ impl Write for Snap {
             let file = cf_file.file.as_mut().unwrap();
             let digest = cf_file.write_digest.as_mut().unwrap();
             if next_buf.len() > left {
-                try!(file.write_all(&next_buf[0..left]));
+                file.write_all(&next_buf[0..left])?;
                 digest.write(&next_buf[0..left]);
                 cf_file.written_size += left as u64;
                 self.cf_index += 1;
                 next_buf = &next_buf[left..];
             } else {
-                try!(file.write_all(next_buf));
+                file.write_all(next_buf)?;
                 digest.write(next_buf);
                 cf_file.written_size += next_buf.len() as u64;
                 return Ok(buf.len());
@@ -1034,7 +1022,7 @@ impl Write for Snap {
     fn flush(&mut self) -> io::Result<()> {
         if let Some(cf_file) = self.cf_files.get_mut(self.cf_index) {
             let file = cf_file.file.as_mut().unwrap();
-            try!(file.flush());
+            file.flush()?;
         }
         Ok(())
     }
@@ -1113,7 +1101,7 @@ impl SnapManager {
         let core = self.core.wl();
         let path = Path::new(&core.base);
         if !path.exists() {
-            try!(fs::create_dir_all(path));
+            fs::create_dir_all(path)?;
             return Ok(());
         }
         if !path.is_dir() {
@@ -1123,14 +1111,14 @@ impl SnapManager {
             ));
         }
         let mut size = core.snap_size.wl();
-        for f in try!(fs::read_dir(path)) {
-            let p = try!(f);
-            if try!(p.file_type()).is_file() {
+        for f in fs::read_dir(path)? {
+            let p = f?;
+            if p.file_type()?.is_file() {
                 if let Some(s) = p.file_name().to_str() {
                     if s.ends_with(TMP_FILE_SUFFIX) {
-                        try!(fs::remove_file(p.path()));
+                        fs::remove_file(p.path())?;
                     } else if s.ends_with(SST_FILE_SUFFIX) {
-                        let len = try!(p.metadata()).len();
+                        let len = p.metadata()?.len();
                         *size += len;
                     }
                 }
@@ -1143,7 +1131,7 @@ impl SnapManager {
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         let core = self.core.rl();
         let path = Path::new(&core.base);
-        let read_dir = try!(fs::read_dir(path));
+        let read_dir = fs::read_dir(path)?;
         // Remove the duplicate snap keys.
         let mut v: Vec<_> = read_dir
             .filter_map(|p| {
@@ -1204,24 +1192,18 @@ impl SnapManager {
             let core = self.core.rl();
             (core.base.clone(), core.snap_size.clone())
         };
-        let f = try!(Snap::new_for_building(
-            dir,
-            key,
-            snap,
-            snap_size,
-            Box::new(self.clone())
-        ));
+        let f = Snap::new_for_building(dir, key, snap, snap_size, Box::new(self.clone()))?;
         Ok(Box::new(f))
     }
 
     pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
-        let s = try!(Snap::new_for_sending(
+        let s = Snap::new_for_sending(
             &core.base,
             key,
             core.snap_size.clone(),
-            Box::new(self.clone())
-        ));
+            Box::new(self.clone()),
+        )?;
         Ok(Box::new(s))
     }
 
@@ -1232,25 +1214,25 @@ impl SnapManager {
     ) -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
         let mut snapshot_data = RaftSnapshotData::new();
-        try!(snapshot_data.merge_from_bytes(data));
-        let f = try!(Snap::new_for_receiving(
+        snapshot_data.merge_from_bytes(data)?;
+        let f = Snap::new_for_receiving(
             &core.base,
             key,
             snapshot_data.take_meta(),
             core.snap_size.clone(),
-            Box::new(self.clone())
-        ));
+            Box::new(self.clone()),
+        )?;
         Ok(Box::new(f))
     }
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
-        let s = try!(Snap::new_for_applying(
+        let s = Snap::new_for_applying(
             &core.base,
             key,
             core.snap_size.clone(),
-            Box::new(self.clone())
-        ));
+            Box::new(self.clone()),
+        )?;
         if !s.exists() {
             return Err(RaftStoreError::Other(From::from(
                 format!("snapshot of {:?} not exists.", key).to_string(),
@@ -1402,21 +1384,21 @@ mod test {
 
     pub fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
-        let db = try!(rocksdb::new_engine(p, ALL_CFS));
+        let db = rocksdb::new_engine(p, ALL_CFS)?;
         Ok(Arc::new(db))
     }
 
     pub fn get_test_db(path: &TempDir) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
-        let db = try!(rocksdb::new_engine(p, ALL_CFS));
+        let db = rocksdb::new_engine(p, ALL_CFS)?;
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in ALL_CFS.iter().enumerate() {
-            let handle = try!(rocksdb::get_cf_handle(&db, cf));
+            let handle = rocksdb::get_cf_handle(&db, cf)?;
             let mut p = Peer::new();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
-            try!(db.put_msg_cf(handle, &key[..], &p));
+            db.put_msg_cf(handle, &key[..], &p)?;
         }
         Ok(Arc::new(db))
     }

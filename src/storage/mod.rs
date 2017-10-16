@@ -433,6 +433,27 @@ impl Command {
             Command::MvccByStartTs { ref mut ctx, .. } => ctx,
         }
     }
+
+    pub fn kv_count(&self) -> usize {
+        match *self {
+            Command::Pause { .. } => 0,
+            Command::ScanLock { .. } |
+            Command::MvccByKey { .. } |
+            Command::MvccByStartTs { .. } |
+            Command::Get { .. } |
+            Command::RawGet { .. } |
+            Command::RawScan { .. } |
+            Command::Cleanup { .. } |
+            Command::DeleteRange { .. } => 1,
+            Command::Scan { limit, .. } => limit,
+            Command::Gc { ref keys, .. } |
+            Command::BatchGet { ref keys, .. } |
+            Command::Commit { ref keys, .. } |
+            Command::Rollback { ref keys, .. } |
+            Command::ResolveLock { ref keys, .. } => keys.len(),
+            Command::Prewrite { ref mutations, .. } => mutations.len(),
+        }
+    }
 }
 
 use util::transport::SyncSendCh;
@@ -486,7 +507,7 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let engine = try!(engine::new_local_engine(&config.data_dir, ALL_CFS));
+        let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
         Storage::from_engine(engine, config)
     }
 
@@ -503,7 +524,7 @@ impl Storage {
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
         let sched_too_busy_threshold = config.scheduler_too_busy_threshold;
         let ch = self.sendch.clone();
-        let h = try!(builder.spawn(move || {
+        let h = builder.spawn(move || {
             let mut sched = Scheduler::new(
                 engine,
                 ch,
@@ -515,7 +536,7 @@ impl Storage {
                 panic!("scheduler run err:{:?}", e);
             }
             info!("scheduler stopped");
-        }));
+        })?;
         handle.handle = Some(h);
 
         Ok(())
@@ -563,7 +584,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::SingleValue(callback)));
+        self.send(cmd, StorageCb::SingleValue(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -581,7 +602,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        self.send(cmd, StorageCb::KvPairs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -603,7 +624,7 @@ impl Storage {
             options: options,
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        self.send(cmd, StorageCb::KvPairs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -613,7 +634,7 @@ impl Storage {
             ctx: ctx,
             duration: duration,
         };
-        try!(self.send(cmd, StorageCb::Boolean(callback)));
+        self.send(cmd, StorageCb::Boolean(callback))?;
         Ok(())
     }
 
@@ -634,7 +655,7 @@ impl Storage {
             options: options,
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::Booleans(callback)));
+        self.send(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -654,7 +675,7 @@ impl Storage {
             commit_ts: commit_ts,
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::Boolean(callback)));
+        self.send(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -681,11 +702,11 @@ impl Storage {
             modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
         }
 
-        try!(self.engine.async_write(
+        self.engine.async_write(
             &ctx,
             modifies,
-            box |(_, res): (_, engine::Result<_>)| { callback(res.map_err(Error::from)) }
-        ));
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
             .inc();
@@ -705,7 +726,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::Boolean(callback)));
+        self.send(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -723,7 +744,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::Boolean(callback)));
+        self.send(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -739,7 +760,7 @@ impl Storage {
             max_ts: max_ts,
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::Locks(callback)));
+        self.send(cmd, StorageCb::Locks(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -759,7 +780,7 @@ impl Storage {
             keys: vec![],
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::Boolean(callback)));
+        self.send(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -773,7 +794,7 @@ impl Storage {
             keys: vec![],
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::Boolean(callback)));
+        self.send(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -788,7 +809,7 @@ impl Storage {
             ctx: ctx,
             key: Key::from_encoded(key),
         };
-        try!(self.send(cmd, StorageCb::SingleValue(callback)));
+        self.send(cmd, StorageCb::SingleValue(callback))?;
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
         Ok(())
     }
@@ -816,11 +837,11 @@ impl Storage {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        try!(self.engine.async_write(
+        self.engine.async_write(
             &ctx,
             vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
-            box |(_, res): (_, engine::Result<_>)| { callback(res.map_err(Error::from)) }
-        ));
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
         RAWKV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete"])
             .inc();
@@ -839,7 +860,7 @@ impl Storage {
             start_key: Key::from_encoded(key),
             limit: limit,
         };
-        try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        self.send(cmd, StorageCb::KvPairs(callback))?;
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
         Ok(())
     }
@@ -852,7 +873,7 @@ impl Storage {
     ) -> Result<()> {
         let cmd = Command::MvccByKey { ctx: ctx, key: key };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::MvccInfoByKey(callback)));
+        self.send(cmd, StorageCb::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -868,7 +889,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::MvccInfoByStartTs(callback)));
+        self.send(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }

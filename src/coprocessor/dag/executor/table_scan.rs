@@ -35,7 +35,7 @@ pub struct TableScanExecutor<'a> {
 
 impl<'a> TableScanExecutor<'a> {
     pub fn new(
-        meta: TableScan,
+        meta: &TableScan,
         mut key_ranges: Vec<KeyRange>,
         store: SnapshotStore<'a>,
         statistics: &'a mut Statistics,
@@ -62,7 +62,7 @@ impl<'a> TableScanExecutor<'a> {
 
     fn get_row_from_range(&mut self) -> Result<Option<Row>> {
         let range = &self.key_ranges[self.cursor];
-        let kv = try!(self.scanner.next_row(range));
+        let kv = self.scanner.next_row(range)?;
         let (key, value) = match kv {
             Some((key, value)) => (key, value),
             None => return Ok(None),
@@ -80,7 +80,7 @@ impl<'a> TableScanExecutor<'a> {
 
     fn get_row_from_point(&mut self) -> Result<Option<Row>> {
         let key = self.key_ranges[self.cursor].get_start();
-        let value = try!(self.scanner.get_row(key));
+        let value = self.scanner.get_row(key)?;
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(key));
@@ -95,7 +95,7 @@ impl<'a> Executor for TableScanExecutor<'a> {
         while self.cursor < self.key_ranges.len() {
             if is_point(&self.key_ranges[self.cursor]) {
                 CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
-                let data = try!(self.get_row_from_point());
+                let data = self.get_row_from_point()?;
                 self.scanner.set_seek_key(None);
                 self.cursor += 1;
                 if data.is_some() {
@@ -104,7 +104,7 @@ impl<'a> Executor for TableScanExecutor<'a> {
                 continue;
             }
 
-            let data = try!(self.get_row_from_range());
+            let data = self.get_row_from_range()?;
             if data.is_none() {
                 CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 self.scanner.set_seek_key(None);
@@ -184,7 +184,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, &mut statistics);
+            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store, &mut statistics);
 
         let row = table_scanner.next().unwrap().unwrap();
         assert_eq!(row.handle, handle as i64);
@@ -217,7 +217,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, &mut statistics);
+            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store, &mut statistics);
 
         for handle in 0..KEY_NUMBER {
             let row = table_scanner.next().unwrap().unwrap();
@@ -253,7 +253,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, &mut statistics);
+            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store, &mut statistics);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;

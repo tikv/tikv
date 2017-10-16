@@ -39,14 +39,14 @@ pub const TABLE_PREFIX_LEN: usize = 1;
 
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
-        try!(self.write_all(TABLE_PREFIX));
-        try!(self.encode_i64(table_id));
+        self.write_all(TABLE_PREFIX)?;
+        self.encode_i64(table_id)?;
         self.write_all(RECORD_PREFIX_SEP).map_err(From::from)
     }
 
     fn append_table_index_prefix(&mut self, table_id: i64) -> Result<()> {
-        try!(self.write_all(TABLE_PREFIX));
-        try!(self.encode_i64(table_id));
+        self.write_all(TABLE_PREFIX)?;
+        self.encode_i64(table_id)?;
         self.write_all(INDEX_PREFIX_SEP).map_err(From::from)
     }
 }
@@ -74,7 +74,7 @@ pub fn encode_row(row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
     let mut values = Vec::with_capacity(cmp::max(row.len() * 2, 1));
     for (&id, col) in col_ids.into_iter().zip(row) {
         values.push(Datum::I64(id));
-        let fc = try!(flatten(col));
+        let fc = flatten(col)?;
         values.push(fc);
     }
     if values.is_empty() {
@@ -111,7 +111,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &encoded[TABLE_PREFIX.len()..];
-    try!(remaining.decode_i64());
+    remaining.decode_i64()?;
 
     if !remaining.starts_with(RECORD_PREFIX_SEP) {
         return Err(invalid_type!(
@@ -126,7 +126,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
 pub fn truncate_as_row_key(key: &[u8]) -> Result<&[u8]> {
-    try!(decode_handle(key));
+    decode_handle(key)?;
     Ok(&key[..RECORD_ROW_KEY_LEN])
 }
 
@@ -152,8 +152,8 @@ pub fn decode_index_key(
         if encoded.is_empty() {
             return Err(box_err!("{} is too short.", escape(encoded)));
         }
-        let mut v = try!(encoded.decode_datum());
-        v = try!(unflatten(ctx, v, info));
+        let mut v = encoded.decode_datum()?;
+        v = unflatten(ctx, v, info)?;
         res.push(v);
     }
 
@@ -186,12 +186,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
         types::NEW_DECIMAL => Ok(datum),
         types::DATE | types::DATETIME | types::TIMESTAMP => {
             let fsp = col.get_decimal() as i8;
-            let t = try!(Time::from_packed_u64(
-                datum.u64(),
-                col.get_tp() as u8,
-                fsp,
-                &ctx.tz
-            ));
+            let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, &ctx.tz)?;
             Ok(Datum::Time(t))
         }
         types::DURATION => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
@@ -208,7 +203,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
 pub trait TableDecoder: DatumDecoder {
     // `decode_col_value` decodes data to a Datum according to the column info.
     fn decode_col_value(&mut self, ctx: &EvalContext, col: &ColumnInfo) -> Result<Datum> {
-        let d = try!(self.decode_datum());
+        let d = self.decode_datum()?;
         unflatten(ctx, d, col)
     }
 
@@ -220,7 +215,7 @@ pub trait TableDecoder: DatumDecoder {
         ctx: &EvalContext,
         cols: &HashMap<i64, ColumnInfo>,
     ) -> Result<HashMap<i64, Datum>> {
-        let mut values = try!(self.decode());
+        let mut values = self.decode()?;
         if values.get(0).map_or(true, |d| *d == Datum::Null) {
             return Ok(HashMap::default());
         }
@@ -236,7 +231,7 @@ pub trait TableDecoder: DatumDecoder {
             };
             let v = drain.next().unwrap();
             if let Some(ci) = cols.get(&id) {
-                let v = try!(unflatten(ctx, v, ci));
+                let v = unflatten(ctx, v, ci)?;
                 row.insert(id, v);
             }
         }
@@ -298,6 +293,19 @@ impl RowColsDict {
         self.value.append(value);
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
+
+    // get binary of cols, keep the origin order and return one slice.
+    pub fn get_column_values(&self) -> &[u8] {
+        let mut start = self.value.len();
+        let mut length = 0;
+        for meta in self.cols.values() {
+            if meta.offset < start {
+                start = meta.offset;
+            }
+            length += meta.length;
+        }
+        &self.value[start..start + length]
+    }
 }
 
 // `cut_row` cut encoded row into (col_id,offset,length)
@@ -312,9 +320,9 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && meta_map.len() < cols.len() {
-            let id = try!(tmp_data.decode_datum()).i64();
+            let id = tmp_data.decode_datum()?.i64();
             let offset = length - tmp_data.len();
-            let (val, rem) = try!(datum::split_datum(tmp_data, false));
+            let (val, rem) = datum::split_datum(tmp_data, false)?;
             if cols.contains(&id) {
                 meta_map.insert(id, RowColMeta::new(offset, val.len()));
             }
@@ -335,7 +343,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         // parse cols from data
         for &id in col_ids {
             let offset = length - tmp_data.len();
-            let (val, rem) = try!(datum::split_datum(tmp_data, false));
+            let (val, rem) = datum::split_datum(tmp_data, false)?;
             meta_map.insert(id, RowColMeta::new(offset, val.len()));
             tmp_data = rem;
         }

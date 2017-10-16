@@ -97,18 +97,18 @@ impl RegionSnapshot {
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
         let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
-        self.scan_impl(try!(self.iter_cf(cf, iter_opt)), start_key, f)
+        self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
     fn scan_impl<F>(&self, mut it: RegionIterator, start_key: &[u8], f: &mut F) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        if !try!(it.seek(start_key)) {
+        if !it.seek(start_key)? {
             return Ok(());
         }
         while it.valid() {
-            let r = try!(f(it.key(), it.value()));
+            let r = f(it.key(), it.value())?;
 
             if !r || !it.next() {
                 break;
@@ -133,13 +133,13 @@ impl RegionSnapshot {
 
 impl Peekable for RegionSnapshot {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        try!(util::check_key_in_region(key, &self.region));
+        util::check_key_in_region(key, &self.region)?;
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        try!(util::check_key_in_region(key, &self.region));
+        util::check_key_in_region(key, &self.region)?;
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key)
     }
@@ -149,7 +149,7 @@ impl Peekable for RegionSnapshot {
 /// iterate in the region. It behaves as if underlying
 /// db only contains one region.
 pub struct RegionIterator<'a> {
-    iter: DBIterator<'a>,
+    iter: DBIterator<&'a DB>,
     valid: bool,
     region: Arc<Region>,
     start_key: Vec<u8>,
@@ -231,7 +231,7 @@ impl<'a> RegionIterator<'a> {
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
-        try!(self.should_seekable(key));
+        self.should_seekable(key)?;
         let key = keys::data_key(key);
         if key == self.end_key {
             self.valid = false;
@@ -243,7 +243,7 @@ impl<'a> RegionIterator<'a> {
     }
 
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
-        try!(self.should_seekable(key));
+        self.should_seekable(key)?;
         let key = keys::data_key(key);
         self.valid = self.iter.seek_for_prev(key.as_slice().into());
         if self.valid && self.iter.key() == self.end_key.as_slice() {
