@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use tipb::executor::{ExecType, Executor};
 use tipb::schema::ColumnInfo;
-use tipb::select::{DAGRequest, SelectResponse};
+use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
 
@@ -23,8 +23,9 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqContext};
+use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext, BATCH_ROW_COUNT};
 use storage::{Snapshot, SnapshotStore, Statistics};
+use server::OnResponse;
 
 use super::executor::{AggregationExecutor, Executor as DAGExecutor, IndexScanExecutor,
                       LimitExecutor, Row, SelectionExecutor, TableScanExecutor, TopNExecutor};
@@ -58,15 +59,37 @@ impl<'s> DAGContext<'s> {
         }
     }
 
-    pub fn handle_request(mut self, statistics: &'s mut Statistics) -> Result<Response> {
+    pub fn handle_request(
+        mut self,
+        statistics: &'s mut Statistics,
+        on_resp: &'s mut OnResponse,
+    ) -> Result<Option<Response>> {
         self.validate_dag()?;
         let mut exec = self.build_dag(statistics)?;
         let mut chunks = vec![];
+        let mut cur_chunk_count = 0;
+        let is_stream = on_resp.is_stream();
         loop {
+            if is_stream && cur_chunk_count >= BATCH_ROW_COUNT {
+                let mut resp = Response::new();
+                let mut sel_resp = SelectResponse::new();
+                sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                let data = box_try!(sel_resp.write_to_bytes());
+                resp.set_data(data);
+                on_resp.resp(resp);
+                chunks = vec![];
+            }
+
             match exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    let chunk = get_chunk(&mut chunks);
+                    if chunks.is_empty() || cur_chunk_count >= BATCH_ROW_COUNT {
+                        let chunk = Chunk::new();
+                        chunks.push(chunk);
+                        cur_chunk_count = 0;
+                    }
+                    let mut chunk = chunks.last_mut().unwrap();
+
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
@@ -74,14 +97,18 @@ impl<'s> DAGContext<'s> {
                             inflate_cols(&row, &self.columns, self.req.get_output_offsets())?;
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
+                    cur_chunk_count += 1;
                 }
                 Ok(None) => {
+                    if is_stream && chunks.is_empty(){
+                        return Ok(None);
+                    }
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
-                    return Ok(resp);
+                    return Ok(Some(resp));
                 }
                 Err(e) => if let Error::Other(_) = e {
                     let mut resp = Response::new();
@@ -89,7 +116,7 @@ impl<'s> DAGContext<'s> {
                     sel_resp.set_error(to_pb_error(&e));
                     resp.set_data(box_try!(sel_resp.write_to_bytes()));
                     resp.set_other_error(format!("{}", e));
-                    return Ok(resp);
+                    return Ok(Some(resp));
                 } else {
                     return Err(e);
                 },

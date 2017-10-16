@@ -418,6 +418,20 @@ impl RequestTask {
     pub fn priority(&self) -> CommandPri {
         self.req.get_context().get_priority()
     }
+
+    fn finsh_with_err(self, e: Error) -> Statistics {
+        let resp = err_resp(e);
+        self.finish(Some(resp))
+    }
+
+    fn finish(mut self, resp: Option<Response>) -> Statistics {
+        self.stop_record_handling();
+        match resp {
+            Some(body)=>self.on_resp.on_finish(body),
+            None=>self.on_resp.finish_stream(None),
+        }
+        self.statistics
+    }
 }
 
 impl Display for RequestTask {
@@ -442,7 +456,7 @@ impl<R: CopSender + 'static> BatchRunnable<Task> for Host<R> {
             match task {
                 Task::Request(req) => {
                     if let Err(e) = req.check_outdated() {
-                        on_error(e, req);
+                        req.finsh_with_err(e);
                         continue;
                     }
                     let key = {
@@ -585,23 +599,12 @@ fn err_resp(e: Error) -> Response {
     resp
 }
 
-fn on_error(e: Error, req: RequestTask) -> Statistics {
-    let resp = err_resp(e);
-    respond(resp, req)
-}
-
 fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     debug!("failed to handle batch request: {:?}", e);
     let resp = err_resp(e.into());
     for t in reqs {
-        respond(resp.clone(), t);
+        t.finish(Some(resp.clone()));
     }
-}
-
-fn respond(resp: Response, mut t: RequestTask) -> Statistics {
-    t.stop_record_handling();
-    (t.on_resp)(resp);
-    t.statistics
 }
 
 pub struct TiDbEndPoint {
@@ -618,7 +621,7 @@ impl TiDbEndPoint {
     fn handle_request(&self, mut t: RequestTask) -> Statistics {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
-            return on_error(e, t);
+            return t.finsh_with_err(e);
         }
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
@@ -627,28 +630,31 @@ impl TiDbEndPoint {
             Err(err) => Err(err),
         };
         match resp {
-            Ok(r) => respond(r, t),
-            Err(e) => on_error(e, t),
+            Ok(r) => t.finish(r),
+            Err(e) => t.finsh_with_err(e),
         }
     }
 
-    fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
+    fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Option<Response>> {
         let ctx = SelectContext::new(sel, self.snap.as_ref(), &mut t.statistics, &t.ctx)?;
         let range = t.req.get_ranges().to_vec();
-        ctx.handle_request(range)
+        match ctx.handle_request(range) {
+            Ok(rep)=> Ok(Some(rep)),
+            Err(e)=> Err(e)
+        }
     }
 
-    pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
+    pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Option<Response>> {
         let ranges = t.req.get_ranges().to_vec();
         let eval_ctx = Rc::new(box_try!(EvalContext::new(
             dag.get_time_zone_offset(),
             dag.get_flags()
         )));
         let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
-        ctx.handle_request(&mut t.statistics)
+        ctx.handle_request(&mut t.statistics, &mut t.on_resp)
     }
 
-    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
+    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Option<Response>> {
         let ranges = t.req.get_ranges().to_vec();
         let ctx = AnalyzeContext::new(
             analyze,
@@ -657,7 +663,10 @@ impl TiDbEndPoint {
             &mut t.statistics,
             &t.ctx,
         );
-        ctx.handle_request()
+        match ctx.handle_request(){
+            Ok(rep)=> Ok(Some(rep)),
+            Err(e)=> Err(e)
+        }
     }
 }
 
@@ -745,6 +754,7 @@ mod tests {
 
     use util::worker::Worker;
     use util::time::Instant;
+    use server::OnResponse;
 
     #[derive(Clone)]
     struct MockCopSender {}
@@ -781,7 +791,7 @@ mod tests {
         let end_point = Host::new(engine, worker.scheduler(), &cfg, MockCopSender::new());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
+        let mut task = RequestTask::new(Request::new(), OnResponse::Unary(box move |msg| { tx.send(msg).unwrap(); }));
         task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -809,10 +819,10 @@ mod tests {
             } else {
                 req.mut_context().set_priority(CommandPri::High);
             }
-            let task = RequestTask::new(req, box move |msg| {
+            let task = RequestTask::new(req, OnResponse::Unary( box move |msg| {
                 thread::sleep(Duration::from_millis(100));
                 let _ = tx.send(msg);
-            });
+            }));
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {

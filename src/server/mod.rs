@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::boxed::FnBox;
+use std::ops::FnMut;
 use kvproto::coprocessor::Response;
 mod metrics;
 mod service;
@@ -33,4 +34,48 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
-pub type OnResponse = Box<FnBox(Response) + Send>;
+// pub type OnResponse = Box<FnBox(Response) + Send>;
+// pub type OnStreamResponse = Box<FnBox(Option<Response>) + Send>;
+pub enum OnResponse {
+    Unary(Box<FnBox(Response) + Send>),
+    Stream(Box<FnMut(Option<Response>) + Send>),
+}
+
+impl OnResponse {
+    pub fn on_finish(mut self, res: Response) {
+        if self.is_stream() {
+            self.finish_stream(Some(res))
+        } else {
+            self.finish_unary(res)
+        }
+    }
+
+    pub fn resp(&mut self, res: Response) {
+        match *self {
+            OnResponse::Unary(_) => {}
+            OnResponse::Stream(ref mut cb) => cb(Some(res)),
+        }
+    }
+
+    pub fn finish_unary(self, res:Response) {
+        if let OnResponse::Unary(cb) = self {
+             cb(res)
+        }
+    }
+
+    pub fn finish_stream(&mut self, res:Option<Response>) {
+        if let OnResponse::Stream(ref mut cb) = *self {
+                if res.is_some() {
+                    cb(res);
+                }
+                cb(None)
+        }
+    }
+
+    pub fn is_stream(&self) -> bool {
+        match *self {
+            OnResponse::Unary(_) => false,
+            OnResponse::Stream(_) => true,
+        }
+    }
+}
