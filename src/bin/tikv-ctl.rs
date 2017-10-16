@@ -36,8 +36,8 @@ use rustc_serialize::hex::{FromHex, ToHex};
 
 use clap::{App, Arg, SubCommand};
 use protobuf::Message;
-use futures::{future, Future, Stream};
-use grpcio::{ChannelBuilder, Environment, Error as GrpcError};
+use futures::{future, stream, Future, Stream};
+use grpcio::{ChannelBuilder, Environment};
 use protobuf::RepeatedField;
 use protobuf::text_format::print_to_string;
 
@@ -174,7 +174,47 @@ trait DebugExecutor {
             eprintln!("The region's from pos must greater than the to pos.");
             process::exit(-1);
         }
-        self.iter_mvcc(from, to, limit, cfs, start_ts, commit_ts);
+        let scan_future = self.get_mvcc_infos(from, to, limit).for_each(
+            move |(key, mut mvcc)| {
+                println!("key: {}", escape(&key));
+                if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
+                    let mut lock_info = mvcc.take_lock();
+                    if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
+                        // FIXME: "lock type" is lost in kvproto.
+                        let pk = escape(lock_info.get_primary_lock()).into_bytes();
+                        let k = escape(lock_info.get_key()).into_bytes();
+                        lock_info.set_primary_lock(pk);
+                        lock_info.set_key(k);
+                        println!("\tlock cf value: {}", print_to_string(&lock_info));
+                    }
+                }
+                if cfs.contains(&CF_DEFAULT) {
+                    for mut value_info in mvcc.take_values().into_iter() {
+                        if commit_ts.map_or(true, |ts| value_info.get_ts() == ts) {
+                            let value = escape(value_info.get_value()).into_bytes();
+                            value_info.set_value(value);
+                            println!("\tdefault cf value: {}", print_to_string(&value_info));
+                        }
+                    }
+                }
+                if cfs.contains(&CF_WRITE) {
+                    for write_info in mvcc.take_writes().into_iter() {
+                        if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts) &&
+                            commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
+                        {
+                            // FIXME: short_value is lost in kvproto.
+                            println!("\t write cf value: {}", print_to_string(&write_info));
+                        }
+                    }
+                }
+                println!("");
+                future::ok::<(), String>(())
+            },
+        );
+        if let Err(e) = scan_future.wait() {
+            eprintln!("{}", e);
+            process::exit(-1);
+        }
     }
 
     fn diff_region(
@@ -184,13 +224,58 @@ trait DebugExecutor {
         raft_db: Option<&str>,
         host: Option<&str>,
     ) {
+        let rhs_debug_executor = new_debug_executor(db, raft_db, host);
+
         let r1 = self.get_region_info(region);
-        let r2 = new_debug_executor(db, raft_db, host).get_region_info(region);
+        let r2 = rhs_debug_executor.get_region_info(region);
         println!("region id: {}", region);
         println!("db1 region state: {:?}", r1.region_local_state);
         println!("db2 region state: {:?}", r2.region_local_state);
         println!("db1 apply state: {:?}", r1.raft_apply_state);
         println!("db2 apply state: {:?}", r2.raft_apply_state);
+
+        match (r1.region_local_state, r2.region_local_state) {
+            (None, None) => return,
+            (Some(_), None) | (None, Some(_)) => {
+                println!("db1 and db2 don't have same region local_state");
+                return;
+            }
+            (Some(region_local_1), Some(region_local_2)) => {
+                let start_key = keys::data_key(region_local_1.get_region().get_start_key());
+                let end_key = keys::data_key(region_local_1.get_region().get_end_key());
+                if start_key != keys::data_key(region_local_2.get_region().get_start_key()) ||
+                    end_key != keys::data_key(region_local_2.get_region().get_end_key())
+                {
+                    println!("db1' range doesn't equal to db2' range.");
+                    return;
+                }
+                let mvcc_infos_1 = self.get_mvcc_infos(start_key.clone(), end_key.clone(), 0);
+                let mvcc_infos_2 = rhs_debug_executor.get_mvcc_infos(start_key, end_key, 0);
+                let cmp_future = mvcc_infos_1.zip(mvcc_infos_2).for_each(|(item_1, item_2)| {
+                    let (key1, mvcc1) = (escape(&item_1.0), item_1.1);
+                    let (key2, mvcc2) = (escape(&item_2.0), item_2.1);
+                    if key1 != key2 {
+                        let err_msg = format!("db1 cur key: {}, db2 cur key: {}", key1, key2);
+                        return future::err::<(), String>(err_msg);
+                    }
+                    if mvcc1 != mvcc2 {
+                        let err_msg = format!(
+                            "db1 key: {}, mvcc: {}\ndb2 key: {}, mvcc: {}",
+                            key1,
+                            print_to_string(&mvcc1),
+                            key2,
+                            print_to_string(&mvcc1),
+                        );
+                        return future::err::<(), String>(err_msg);
+                    }
+                    future::ok::<(), String>(())
+                });
+                match cmp_future.wait() {
+                    Err(msg) => println!("{}", msg),
+                    Ok(_) => println!("The region of db1 and db2 are equal."),
+                }
+            }
+        }
     }
 
     fn compact(&self, db: DBType, cf: &str, from: Option<Vec<u8>>, to: Option<Vec<u8>>) {
@@ -209,59 +294,14 @@ trait DebugExecutor {
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry;
 
-    fn iter_mvcc(
+    fn get_mvcc_infos(
         &self,
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-        cfs: Vec<&str>,
-        start_ts: Option<u64>,
-        commit_ts: Option<u64>,
-    );
+    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
-
-    fn filter_and_print_mvcc(
-        &self,
-        key: Vec<u8>,
-        mut mvcc: MvccInfo,
-        cfs: &[&str],
-        start_ts: Option<u64>,
-        commit_ts: Option<u64>,
-    ) {
-        println!("key: {}", escape(&key));
-        if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
-            let mut lock_info = mvcc.take_lock();
-            if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
-                // FIXME: "lock type" is lost in kvproto.
-                let pk = escape(lock_info.get_primary_lock()).into_bytes();
-                let k = escape(lock_info.get_key()).into_bytes();
-                lock_info.set_primary_lock(pk);
-                lock_info.set_key(k);
-                println!("\tlock cf value: {}", print_to_string(&lock_info));
-            }
-        }
-        if cfs.contains(&CF_DEFAULT) {
-            for mut value_info in mvcc.take_values().into_iter() {
-                if commit_ts.map_or(true, |ts| value_info.get_ts() == ts) {
-                    let value = escape(value_info.get_value()).into_bytes();
-                    value_info.set_value(value);
-                    println!("\tdefault cf value: {}", print_to_string(&value_info));
-                }
-            }
-        }
-        if cfs.contains(&CF_WRITE) {
-            for write_info in mvcc.take_writes().into_iter() {
-                if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts) &&
-                    commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
-                {
-                    // FIXME: short_value is lost in kvproto.
-                    println!("\t write cf value: {}", print_to_string(&write_info));
-                }
-            }
-        }
-        println!("");
-    }
 }
 
 
@@ -317,26 +357,21 @@ impl DebugExecutor for DebugClient {
         resp.take_entry()
     }
 
-    fn iter_mvcc(
+    fn get_mvcc_infos(
         &self,
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-        cfs: Vec<&str>,
-        start_ts: Option<u64>,
-        commit_ts: Option<u64>,
-    ) {
+    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
         let mut req = ScanMvccRequest::new();
         req.set_from_key(from);
         req.set_to_key(to);
         req.set_limit(limit);
-        let future = self.scan_mvcc(req).for_each(|mut resp: ScanMvccResponse| {
-            let key = resp.take_key();
-            let mvcc = resp.take_info();
-            self.filter_and_print_mvcc(key, mvcc, &cfs, start_ts, commit_ts);
-            future::ok::<_, GrpcError>(())
-        });
-        future.wait().unwrap_or_else(perror_and_exit);
+        Box::new(
+            self.scan_mvcc(req)
+                .map_err(|e| e.to_string())
+                .map(|mut resp| (resp.take_key(), resp.take_info())),
+        ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
@@ -376,21 +411,17 @@ impl DebugExecutor for Debugger {
         self.raft_log(region, index).unwrap_or_else(perror_and_exit)
     }
 
-    fn iter_mvcc(
+    fn get_mvcc_infos(
         &self,
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-        cfs: Vec<&str>,
-        start_ts: Option<u64>,
-        commit_ts: Option<u64>,
-    ) {
-        for r in self.scan_mvcc(&from, &to, limit)
-            .unwrap_or_else(perror_and_exit)
-        {
-            let (key, mvcc) = r.unwrap_or_else(perror_and_exit);
-            self.filter_and_print_mvcc(key, mvcc, &cfs, start_ts, commit_ts);
-        }
+    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+        let iter = self.scan_mvcc(&from, &to, limit)
+            .unwrap_or_else(perror_and_exit);
+        #[allow(deprecated)]
+        let stream = stream::iter(iter).map_err(|e| e.to_string());
+        Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
