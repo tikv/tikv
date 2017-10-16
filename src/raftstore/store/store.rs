@@ -57,12 +57,11 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::{BatchCallback, Callback, CopFlowStatistics};
+use super::msg::{BatchCallback, Callback};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::local_metrics::RaftMetrics;
-use prometheus::local::LocalHistogram;
 
 type Key = Vec<u8>;
 
@@ -91,40 +90,24 @@ pub struct StoreChannel {
 }
 
 pub struct StoreStat {
-    pub region_bytes_written: LocalHistogram,
-    pub region_keys_written: LocalHistogram,
-    pub region_bytes_read: LocalHistogram,
-    pub region_keys_read: LocalHistogram,
     pub lock_cf_bytes_written: u64,
 
     pub engine_total_bytes_written: u64,
     pub engine_total_keys_written: u64,
-    pub engine_total_bytes_read: u64,
-    pub engine_total_keys_read: u64,
 
     pub engine_last_total_bytes_written: u64,
     pub engine_last_total_keys_written: u64,
-    pub engine_last_total_bytes_read: u64,
-    pub engine_last_total_keys_read: u64,
 }
 
 impl Default for StoreStat {
     fn default() -> StoreStat {
         StoreStat {
-            region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
-            region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
-            region_bytes_read: REGION_READ_BYTES_HISTOGRAM.local(),
-            region_keys_read: REGION_READ_KEYS_HISTOGRAM.local(),
             lock_cf_bytes_written: 0,
             engine_total_bytes_written: 0,
             engine_total_keys_written: 0,
-            engine_total_bytes_read: 0,
-            engine_total_keys_read: 0,
 
             engine_last_total_bytes_written: 0,
             engine_last_total_keys_written: 0,
-            engine_last_total_bytes_read: 0,
-            engine_last_total_keys_read: 0,
         }
     }
 }
@@ -307,11 +290,7 @@ impl<T, C> Store<T, C> {
                     return Ok(true);
                 }
 
-                let mut peer = Peer::create(self, region)?;
-                if self.cfg.region_split_check_after_initialization {
-                    // Check if it needs to split ASAP.
-                    peer.size_diff_hint = self.cfg.region_split_check_diff.0;
-                }
+                let peer = Peer::create(self, region)?;
                 self.region_ranges.insert(enc_end_key(region), region_id);
                 // No need to check duplicated here, because we use region id as the key
                 // in DB.
@@ -1129,6 +1108,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
         // otherwise, if program restart between two write, raft log will be removed,
         // but region state may not changed in disk.
+        fail_point!("raft_before_save");
         if !kv_wb.is_empty() {
             // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
@@ -1139,6 +1119,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
         }
+        fail_point!("raft_between_save");
 
         if !raft_wb.is_empty() {
             // RaftLocalState, Raft Log Entry
@@ -1150,6 +1131,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
         }
+        fail_point!("raft_after_save");
 
         let mut ready_results = Vec::with_capacity(append_res.len());
         for (mut ready, invoke_ctx) in append_res {
@@ -1241,7 +1223,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("[region {}] destroy peer {:?}", region_id, peer);
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
-
+        let task = PdTask::DestroyPeer {
+            region_id: region_id,
+        };
+        if let Err(e) = self.pd_worker.schedule(task) {
+            error!("{} failed to notify pd: {}", self.tag, e);
+        }
         let is_initialized = p.is_initialized();
         if let Err(e) = p.destroy() {
             // If not panic here, the peer will be recreated in the next restart,
@@ -1689,40 +1676,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn on_update_region_flow(&mut self) {
-        for peer in self.region_peers.values_mut() {
-            peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
-            peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
-            peer.peer_stat.last_read_bytes = peer.peer_stat.read_bytes;
-            peer.peer_stat.last_read_keys = peer.peer_stat.read_keys;
-
-            self.store_stat
-                .region_bytes_written
-                .observe(peer.peer_stat.written_bytes as f64);
-            self.store_stat
-                .region_keys_written
-                .observe(peer.peer_stat.written_keys as f64);
-            self.store_stat
-                .region_bytes_read
-                .observe(peer.peer_stat.read_bytes as f64);
-            self.store_stat
-                .region_keys_read
-                .observe(peer.peer_stat.read_keys as f64);
-        }
-        self.store_stat.region_bytes_written.flush();
-        self.store_stat.region_keys_written.flush();
-        self.store_stat.region_bytes_read.flush();
-        self.store_stat.region_keys_read.flush();
-    }
-
-    fn on_update_store_flow(&mut self) {
-        self.store_stat.engine_last_total_bytes_written =
-            self.store_stat.engine_total_bytes_written;
-        self.store_stat.engine_last_total_keys_written = self.store_stat.engine_total_keys_written;
-        self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
-        self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
-    }
-
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let mut total_gc_logs = 0;
@@ -1829,16 +1782,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if !peer.is_leader() {
                 continue;
             }
-
-            if peer.size_diff_hint < self.cfg.region_split_check_diff.0 {
+            // When restart, the approximate size will be None. The
+            // split check will first check the region size, and then
+            // check whether the region should split.  This should
+            // work even if we change the region max size.
+            if peer.approximate_size.is_some() &&
+                peer.size_diff_hint < self.cfg.region_split_check_diff.0
+            {
                 continue;
             }
-            info!(
-                "{} region's size diff {} >= {}, need to check whether should split",
-                peer.tag,
-                peer.size_diff_hint,
-                self.cfg.region_split_check_diff.0
-            );
             let task = SplitCheckTask::new(peer.region());
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
@@ -1967,6 +1919,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
+    fn on_approximate_region_size(&mut self, region_id: u64, region_size: u64) {
+        let peer = match self.region_peers.get_mut(&region_id) {
+            Some(peer) => peer,
+            None => {
+                warn!(
+                    "[region {}] receive stale approximate size {}",
+                    region_id,
+                    region_size,
+                );
+                return;
+            }
+        };
+        peer.approximate_size = Some(region_size);
+    }
+
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
             peer.check_peers();
@@ -1978,7 +1945,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer.heartbeat_pd(&self.pd_worker);
             }
         }
-        self.on_update_region_flow();
         STORE_PD_HEARTBEAT_GAUGE_VEC
             .with_label_values(&["leader"])
             .set(leader_count as f64);
@@ -2041,13 +2007,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.store_stat.engine_total_keys_written -
                 self.store_stat.engine_last_total_keys_written,
         );
-        stats.set_bytes_read(
-            self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
-        );
-        stats.set_keys_read(
-            self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
-        );
-        self.on_update_store_flow();
+        self.store_stat.engine_last_total_bytes_written =
+            self.store_stat.engine_total_bytes_written;
+        self.store_stat.engine_last_total_keys_written = self.store_stat.engine_total_keys_written;
 
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
@@ -2189,20 +2151,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.cfg.lock_cf_compact_interval.as_millis(),
         ) {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
-        }
-    }
-
-    fn handle_coprocessor_msg(&mut self, request_stats: CopFlowStatistics) {
-        for (region_id, stats) in &request_stats {
-            if let Some(peer) = self.region_peers.get_mut(region_id) {
-                if !peer.is_leader() {
-                    continue;
-                }
-                peer.peer_stat.read_bytes += stats.read_bytes as u64;
-                peer.peer_stat.read_keys += stats.read_keys as u64;
-                self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
-                self.store_stat.engine_total_keys_read += stats.read_keys as u64;
-            }
         }
     }
 }
@@ -2501,7 +2449,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 event_loop.shutdown();
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
-            Msg::CoprocessorStats { request_stats } => self.handle_coprocessor_msg(request_stats),
             Msg::ComputeHashResult {
                 region_id,
                 index,
@@ -2522,6 +2469,10 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_key, callback);
             }
+            Msg::ApproximateRegionSize {
+                region_id,
+                region_size,
+            } => self.on_approximate_region_size(region_id, region_size),
         }
     }
 

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use tikv::util::HandyRwLock;
 use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use tikv::storage::mvcc::{Lock, LockType};
 use tikv::raftstore::store::{keys, Mutable, Peekable};
 
 use kvproto::kvrpcpb::*;
@@ -24,7 +25,7 @@ use kvproto::{debugpb, eraftpb, metapb, raft_serverpb};
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::debugpb_grpc::DebugClient;
 use rocksdb::Writable;
-use futures::{Future, Sink};
+use futures::{future, Future, Sink, Stream};
 use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use super::server::*;
@@ -697,4 +698,69 @@ fn test_debug_region_size() {
         }
         _ => panic!("expect NotFound"),
     }
+}
+
+#[test]
+#[cfg(not(feature = "no-fail"))]
+fn test_debug_fail_point() {
+    let (_cluster, debug_client, _) = must_new_cluster_and_debug_client();
+
+    let (fp, act) = ("tikv::raftstore::store::store::raft_between_save", "off");
+
+    let mut inject_req = debugpb::InjectFailPointRequest::new();
+    inject_req.set_name(fp.to_owned());
+    inject_req.set_actions(act.to_owned());
+    debug_client.inject_fail_point(inject_req).unwrap();
+
+    let resp = debug_client
+        .list_fail_points(debugpb::ListFailPointsRequest::new())
+        .unwrap();
+    let entries = resp.get_entries();
+    assert_eq!(entries.len(), 1);
+    for e in entries {
+        assert_eq!(e.get_name(), fp);
+        assert_eq!(e.get_actions(), act);
+    }
+
+    let mut recover_req = debugpb::RecoverFailPointRequest::new();
+    recover_req.set_name(fp.to_owned());
+    debug_client.recover_fail_point(recover_req).unwrap();
+
+    let resp = debug_client
+        .list_fail_points(debugpb::ListFailPointsRequest::new())
+        .unwrap();
+    let entries = resp.get_entries();
+    assert_eq!(entries.len(), 0);
+}
+
+#[test]
+fn test_debug_scan_mvcc() {
+    let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
+    let engine = cluster.get_engine(store_id);
+
+    // Put some data.
+    let keys = [
+        keys::data_key(b"meta_lock_1"),
+        keys::data_key(b"meta_lock_2"),
+    ];
+    for k in &keys {
+        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None).to_bytes();
+        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
+        engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+    }
+
+    let mut req = debugpb::ScanMvccRequest::new();
+    req.set_from_key(keys::data_key(b"m"));
+    req.set_to_key(keys::data_key(b"n"));
+    req.set_limit(1);
+
+    let receiver = debug_client.scan_mvcc(req);
+    let future = receiver.fold(Vec::new(), |mut keys, mut resp| {
+        let key = resp.take_key();
+        keys.push(key);
+        future::ok::<_, Error>(keys)
+    });
+    let keys = future.wait().unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
 }
