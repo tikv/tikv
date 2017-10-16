@@ -431,8 +431,8 @@ impl RequestTask {
     fn finish(mut self, resp: Option<Response>) -> Statistics {
         self.stop_record_handling();
         match resp {
-            Some(body)=>self.on_resp.on_finish(body),
-            None=>self.on_resp.finish_stream(None),
+            Some(body) => self.on_resp.on_finish(body),
+            None => self.on_resp.finish_stream(None),
         }
         self.statistics
     }
@@ -628,9 +628,9 @@ impl TiDbEndPoint {
             return t.finsh_with_err(e);
         }
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
+            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t).map(Some),
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t),
-            Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
+            Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t).map(Some),
             Err(err) => Err(err),
         };
         match resp {
@@ -639,13 +639,10 @@ impl TiDbEndPoint {
         }
     }
 
-    fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Option<Response>> {
+    fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
         let ctx = SelectContext::new(sel, self.snap.as_ref(), &mut t.statistics, &t.ctx)?;
         let range = t.req.get_ranges().to_vec();
-        match ctx.handle_request(range) {
-            Ok(rep)=> Ok(Some(rep)),
-            Err(e)=> Err(e)
-        }
+        ctx.handle_request(range)
     }
 
     pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Option<Response>> {
@@ -658,7 +655,7 @@ impl TiDbEndPoint {
         ctx.handle_request(&mut t.statistics, &mut t.on_resp)
     }
 
-    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Option<Response>> {
+    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
         let ranges = t.req.get_ranges().to_vec();
         let ctx = AnalyzeContext::new(
             analyze,
@@ -667,10 +664,7 @@ impl TiDbEndPoint {
             &mut t.statistics,
             &t.ctx,
         );
-        match ctx.handle_request(){
-            Ok(rep)=> Ok(Some(rep)),
-            Err(e)=> Err(e)
-        }
+        ctx.handle_request()
     }
 }
 
@@ -783,7 +777,10 @@ mod tests {
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut task = RequestTask::new(Request::new(), OnResponse::Unary(box move |msg| { tx.send(msg).unwrap(); }));
+        let mut task = RequestTask::new(
+            Request::new(),
+            OnResponse::Unary(box move |msg| { tx.send(msg).unwrap(); }),
+        );
         task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -812,10 +809,13 @@ mod tests {
             } else {
                 req.mut_context().set_priority(CommandPri::High);
             }
-            let task = RequestTask::new(req, OnResponse::Unary( box move |msg| {
-                thread::sleep(Duration::from_millis(100));
-                let _ = tx.send(msg);
-            }));
+            let task = RequestTask::new(
+                req,
+                OnResponse::Unary(box move |msg| {
+                    thread::sleep(Duration::from_millis(100));
+                    let _ = tx.send(msg);
+                }),
+            );
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {

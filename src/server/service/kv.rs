@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 
 use mio::Token;
-use grpc::{self,ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
+use grpc::{self, ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
            ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, Async, Future, Poll, Stream};
 use futures::sync::oneshot;
@@ -61,23 +61,24 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     token: Arc<AtomicUsize>, // TODO: remove it.
 }
 
-struct StreamChunk {
-    rc: Receiver<Option<Response>>,
+struct StreamChunk<T: Debug + Send + 'static> {
+    rc: Receiver<Option<T>>,
 }
 
-impl StreamChunk {
-    fn new(rc: Receiver<Option<Response>>) -> StreamChunk {
+impl<T: Debug + Send + 'static> StreamChunk<T> {
+    fn new(rc: Receiver<Option<T>>) -> StreamChunk<T> {
         StreamChunk { rc: rc }
     }
 }
-impl Stream for StreamChunk {
-    type Item = (Response, WriteFlags);
+
+impl<T: Debug + Send + 'static> Stream for StreamChunk<T> {
+    type Item = (T, WriteFlags);
     type Error = grpc::Error;
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.rc.recv() {
-            Ok(Some(resp)) => Ok(Async::Ready(Some((resp, WriteFlags::default())))),
-            Ok(None) => Ok(Async::Ready(None)),
-            _ => panic!(),//Err(box_err!("{:?}", e)),//TODO
+        match self.rc.recv().unwrap() {
+            Some(resp) => Ok(Async::Ready(Some((resp, WriteFlags::default())))),
+            None => Ok(Async::Ready(None)),
+            //TODO: process error
         }
     }
 }
@@ -127,7 +128,9 @@ fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
     (box callback, rx)
 }
 
-fn make_stream_callback() -> (Box<FnMut(Option<Response>) + Send>, StreamChunk) {
+fn make_stream_callback<T: Debug + Send + 'static>()
+    -> (Box<FnMut(Option<T>) + Send>, StreamChunk<T>)
+{
     let (tx, rx) = channel();
     let callback = move |resp| { tx.send(resp).unwrap(); };
     let stream = StreamChunk::new(rx);
@@ -830,7 +833,12 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             RequestTask::new(req, OnResponse::Stream(cb)),
         ));
         if let Err(e) = res {
-            self.send_fail_status_to_stream(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status_to_stream(
+                ctx,
+                sink,
+                Error::from(e),
+                RpcStatusCode::ResourceExhausted,
+            );
             return;
         }
 

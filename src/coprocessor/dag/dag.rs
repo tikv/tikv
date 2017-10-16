@@ -100,7 +100,7 @@ impl<'s> DAGContext<'s> {
                     cur_chunk_count += 1;
                 }
                 Ok(None) => {
-                    if is_stream && chunks.is_empty(){
+                    if is_stream && chunks.is_empty() {
                         return Ok(None);
                     }
                     let mut resp = Response::new();

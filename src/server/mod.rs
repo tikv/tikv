@@ -34,8 +34,6 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
-// pub type OnResponse = Box<FnBox(Response) + Send>;
-// pub type OnStreamResponse = Box<FnBox(Option<Response>) + Send>;
 pub enum OnResponse {
     Unary(Box<FnBox(Response) + Send>),
     Stream(Box<FnMut(Option<Response>) + Send>),
@@ -57,18 +55,18 @@ impl OnResponse {
         }
     }
 
-    pub fn finish_unary(self, res:Response) {
+    pub fn finish_unary(self, res: Response) {
         if let OnResponse::Unary(cb) = self {
-             cb(res)
+            cb(res)
         }
     }
 
-    pub fn finish_stream(&mut self, res:Option<Response>) {
+    pub fn finish_stream(&mut self, res: Option<Response>) {
         if let OnResponse::Stream(ref mut cb) = *self {
-                if res.is_some() {
-                    cb(res);
-                }
-                cb(None)
+            if res.is_some() {
+                cb(res);
+            }
+            cb(None)
         }
     }
 
