@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "0.9.0"
+version = "1.0.0"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -80,7 +80,6 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch = "ov/fail-point"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
