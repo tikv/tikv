@@ -427,12 +427,14 @@ fn main() {
         )
         .arg(
             Arg::with_name("hex-to-escaped")
+                .conflicts_with("escaped-to-hex")
                 .long("to-escaped")
                 .takes_value(true)
                 .help("convert hex key to escaped key"),
         )
         .arg(
             Arg::with_name("escaped-to-hex")
+                .conflicts_with("hex-to-escaped")
                 .long("to-hex")
                 .takes_value(true)
                 .help("convert escaped key to hex key"),
@@ -664,7 +666,6 @@ fn main() {
     let hex_key = matches.value_of("hex-to-escaped");
     let escaped_key = matches.value_of("escaped-to-hex");
     match (hex_key, escaped_key) {
-        (Some(_), Some(_)) => panic!("hex and escaped can not be passed together!"),
         (Some(hex), None) => {
             println!("{}", escape(&from_hex(hex)));
             return;
@@ -673,7 +674,7 @@ fn main() {
             println!("{}", &unescape(escaped).to_hex().to_uppercase());
             return;
         }
-        (None, None) => {}
+        _ => {}
     };
 
     let db = matches.value_of("db");
