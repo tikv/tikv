@@ -445,18 +445,24 @@ fn main() {
                         .about("print the raft log entry info")
                         .arg(
                             Arg::with_name("region")
+                                .required_unless("key")
+                                .conflicts_with("key")
                                 .short("r")
                                 .takes_value(true)
                                 .help("set the region id"),
                         )
                         .arg(
                             Arg::with_name("index")
+                                .required_unless("key")
+                                .conflicts_with("key")
                                 .short("i")
                                 .takes_value(true)
                                 .help("set the raft log index"),
                         )
                         .arg(
                             Arg::with_name("key")
+                                .required_unless_one(&["region", "index"])
+                                .conflicts_with_all(&["region", "index"])
                                 .short("k")
                                 .takes_value(true)
                                 .help("set the raw key, in escaped form"),
@@ -492,6 +498,11 @@ fn main() {
                     Arg::with_name("cf")
                         .short("c")
                         .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .default_value("default,write,lock")
                         .help("set the cf name, if not specified, print all cf."),
                 ),
         )
@@ -554,6 +565,7 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("key")
+                        .required(true)
                         .short("k")
                         .takes_value(true)
                         .help("set the query raw key, in escaped form"),
@@ -695,9 +707,7 @@ fn main() {
             let _ = app.print_help();
         }
     } else if let Some(matches) = matches.subcommand_matches("size") {
-        let cfs = matches
-            .value_of("cf")
-            .map_or_else(|| ALL_CFS.to_vec(), |cf| vec![cf]);
+        let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
         if let Some(id) = matches.value_of("region") {
             debug_executor.dump_region_size(id.parse().unwrap(), cfs);
         } else {
