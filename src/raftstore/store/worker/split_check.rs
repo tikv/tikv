@@ -16,7 +16,7 @@ use std::fmt::{self, Display, Formatter};
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;
 
-use rocksdb::DB;
+use rocksdb::{SeekKey, DB};
 
 use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
@@ -51,10 +51,6 @@ impl KeyEntry {
 
     fn take(&mut self) -> KeyEntry {
         KeyEntry::new(self.key.take().unwrap(), self.pos, self.value_size)
-    }
-
-    fn len(&self) -> usize {
-        self.key.as_ref().unwrap().len() + self.value_size
     }
 }
 
@@ -125,59 +121,90 @@ impl<'a> MergedIterator<'a> {
     }
 }
 
+#[allow(collapsible_if)]
+fn bound_keys(
+    db: &DB,
+    cfs: &[CfName],
+    start_key: &[u8],
+    end_key: &[u8],
+) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    let mut first_key = None;
+    let mut last_key = None;
+
+    for cf in cfs {
+        let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
+        let mut iter = db.new_iterator_cf(cf, iter_opt)?;
+
+        // the first key
+        let key = if iter.seek(start_key.into()) {
+            Some(iter.key().to_vec())
+        } else {
+            if iter.next() {
+                Some(iter.key().to_vec())
+            } else {
+                // No data in this CF.
+                None
+            }
+        };
+        if first_key.is_some() {
+            if key.is_some() {
+                if key.as_ref().unwrap() < first_key.as_ref().unwrap() {
+                    first_key = key;
+                }
+            }
+        } else {
+            first_key = key;
+        }
+
+        // the last key
+        let key = if iter.seek(SeekKey::End) {
+            Some(iter.key().to_vec())
+        } else {
+            // No dat in this CF.
+            None
+        };
+        if last_key.is_some() {
+            if key.is_some() {
+                if key.as_ref().unwrap() > last_key.as_ref().unwrap() {
+                    last_key = key;
+                }
+            }
+        } else {
+            last_key = key;
+        }
+    }
+
+    match (first_key, last_key) {
+        (Some(fk), Some(lk)) => Ok(Some((fk, lk))),
+        (None, None) => Ok(None),
+        (first_key, last_key) => Err(box_err!(
+            "invalid bound, first key: {:?}, last key: {:?}",
+            first_key,
+            last_key
+        )),
+    }
+}
+
 /// An interface for writing split checker extensions.
 pub trait Checker: Send {
     fn name(&self) -> &str;
-    fn check(&self, prev_key: &[u8], current_key: &[u8]) -> Option<Vec<u8>>;
+    /// Do some quick checks, true for skipping `iter_keys`.
+    fn skip_check(&self, region: &Region, actual_keys: &Option<(Vec<u8>, Vec<u8>)>) -> bool;
+    fn find_gap(&mut self, key: &[u8], value_size: u64) -> Option<Vec<u8>>;
+    fn finish(&mut self);
 }
 
-/// Split checking task.
-pub struct Task {
-    region: Region,
-}
-
-impl Task {
-    pub fn new(region: &Region) -> Task {
-        Task {
-            region: region.clone(),
-        }
-    }
-}
-
-impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Split Check Task for {}", self.region.get_id())
-    }
-}
-
-pub struct Runner<C> {
+struct SizeChecker<C> {
     engine: Arc<DB>,
     ch: RetryableSendCh<Msg, C>,
     region_max_size: u64,
     split_size: u64,
-    priority_checker: Option<Box<Checker>>,
+
+    split_key: Option<Vec<u8>>,
+    current_size: u64,
 }
 
-impl<C: Sender<Msg>> Runner<C> {
-    pub fn new(
-        engine: Arc<DB>,
-        ch: RetryableSendCh<Msg, C>,
-        region_max_size: u64,
-        split_size: u64,
-    ) -> Runner<C> {
-        Runner {
-            engine: engine,
-            ch: ch,
-            region_max_size: region_max_size,
-            split_size: split_size,
-            priority_checker: None,
-        }
-    }
-
-    pub fn set_priority_checker(&mut self, checker: Box<Checker>) {
-        self.priority_checker = Some(checker);
-    }
-
+impl<C: Sender<Msg> + Send> SizeChecker<C> {
     fn check_size(&self, region: &Region) -> Option<u64> {
         let region_id = region.get_id();
         let region_size = match util::get_region_approximate_size(&self.engine, region) {
@@ -207,11 +234,15 @@ impl<C: Sender<Msg>> Runner<C> {
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
         Some(region_size)
     }
+}
 
-    fn filter_region(&self, region: &Region) -> bool {
-        if self.priority_checker.is_some() {
-            false
-        } else if let Some(region_size) = self.check_size(region) {
+impl<C: Sender<Msg> + Send> Checker for SizeChecker<C> {
+    fn name(&self) -> &str {
+        "SizeChecker"
+    }
+
+    fn skip_check(&self, region: &Region, _: &Option<(Vec<u8>, Vec<u8>)>) -> bool {
+        if let Some(region_size) = self.check_size(region) {
             if region_size < self.region_max_size {
                 true
             } else {
@@ -228,10 +259,94 @@ impl<C: Sender<Msg>> Runner<C> {
         }
     }
 
-    fn check_split(&self, region: &Region) {
+    fn find_gap(&mut self, key: &[u8], value_size: u64) -> Option<Vec<u8>> {
+        self.current_size += key.len() as u64 + value_size;
+        if self.split_key.is_none() && self.current_size > self.split_size {
+            self.split_key = Some(key.to_vec());
+        }
+        if self.split_key.is_some() && self.current_size >= self.region_max_size {
+            return self.split_key.take();
+        }
+        None
+    }
+
+    fn finish(&mut self) {
+        self.split_key = None;
+        self.current_size = 0;
+    }
+}
+
+/// Split checking task.
+pub struct Task {
+    region: Region,
+}
+
+impl Task {
+    pub fn new(region: &Region) -> Task {
+        Task {
+            region: region.clone(),
+        }
+    }
+}
+
+impl Display for Task {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "Split Check Task for {}", self.region.get_id())
+    }
+}
+
+pub struct Runner<C> {
+    ch: RetryableSendCh<Msg, C>,
+    engine: Arc<DB>,
+    size_checker: SizeChecker<C>,
+    priority_checker: Option<Box<Checker + 'static>>,
+}
+
+impl<C: Sender<Msg> + Send> Runner<C> {
+    pub fn new(
+        engine: Arc<DB>,
+        ch: RetryableSendCh<Msg, C>,
+        region_max_size: u64,
+        split_size: u64,
+    ) -> Runner<C> {
+        Runner {
+            engine: engine.clone(),
+            ch: ch.clone(),
+            size_checker: SizeChecker {
+                engine: engine,
+                ch: ch,
+                region_max_size: region_max_size,
+                split_size: split_size,
+                split_key: None,
+                current_size: 0,
+            },
+            priority_checker: None,
+        }
+    }
+
+    pub fn set_priority_checker(&mut self, checker: Box<Checker>) {
+        self.priority_checker = Some(checker);
+    }
+
+    fn check_split(&mut self, region: &Region) {
         let region_id = region.get_id();
         let start_key = keys::enc_start_key(region);
         let end_key = keys::enc_end_key(region);
+        let bks = match bound_keys(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key) {
+            Ok(bks) => bks,
+            Err(e) => {
+                error!("[region {}] failed to get region bound: {}", region_id, e);
+                return;
+            }
+        };
+        let skip_size_checker = self.size_checker.skip_check(region, &bks);
+        let skip_priority_checker = self.priority_checker
+            .as_ref()
+            .map_or(true, |checker| checker.skip_check(region, &bks));
+        if skip_priority_checker && skip_size_checker {
+            return;
+        }
+
         debug!(
             "[region {}] executing task {} {}",
             region_id,
@@ -240,38 +355,45 @@ impl<C: Sender<Msg>> Runner<C> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let mut size = 0;
         let mut size_split_key = None;
+        let mut size_checker = &mut self.size_checker;
         let mut priority_split_key = None;
-        let mut prev_key: Option<Vec<u8>> = None;
+        let mut priority_checker = &mut self.priority_checker;
 
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
             .map(|mut iter| while let Some(e) = iter.next() {
-                if let Some(ref checker) = self.priority_checker {
-                    if let (Some(ref prev_key), &Some(ref current_key)) = (prev_key, &e.key) {
-                        if let Some(key) = checker.check(prev_key, current_key) {
-                            info!(
-                                "[region {}] priority split checker {} requires splitting at {:?}",
-                                region_id,
-                                checker.name(),
-                                key
-                            );
-                            priority_split_key = Some(key);
-                            break;
-                        }
+                if !skip_priority_checker {
+                    if let Some(key) = priority_checker.as_mut().map_or(None, |checker| {
+                        checker.find_gap(e.key.as_ref().unwrap(), e.value_size as u64)
+                    }) {
+                        info!(
+                            "[region {}] priority split checker {} requires splitting at {:?}",
+                            region_id,
+                            priority_checker.as_ref().unwrap().name(),
+                            key
+                        );
+                        priority_split_key = Some(key);
+                        break;
                     }
-                    prev_key = e.key.clone();
                 }
-
-                size += e.len() as u64;
-                if size_split_key.is_none() && size > self.split_size {
-                    size_split_key = e.key.clone();
-                }
-                if size >= self.region_max_size {
-                    break;
+                if !skip_size_checker {
+                    if let Some(key) =
+                        size_checker.find_gap(e.key.as_ref().unwrap(), e.value_size as u64)
+                    {
+                        info!(
+                            "[region {}] priority split checker {} requires splitting at {:?}",
+                            region_id,
+                            size_checker.name(),
+                            key
+                        );
+                        size_split_key = Some(key);
+                        break;
+                    }
                 }
             });
+        size_checker.finish();
+        priority_checker.as_mut().map(|c| c.finish());
         timer.observe_duration();
 
         if let Err(e) = res {
@@ -280,21 +402,8 @@ impl<C: Sender<Msg>> Runner<C> {
         }
 
         let split_key = match (priority_split_key, size_split_key) {
-            (Some(key), _) => key,
-            (None, Some(key)) => if size < self.region_max_size {
-                debug!(
-                    "[region {}] no need to send for {} < {}",
-                    region_id,
-                    size,
-                    self.region_max_size
-                );
-
-                CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
-                return;
-            } else {
-                key
-            },
-            _ => {
+            (Some(key), _) | (None, Some(key)) => key,
+            (None, None) => {
                 CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
                 return;
             }
@@ -313,13 +422,9 @@ impl<C: Sender<Msg>> Runner<C> {
     }
 }
 
-impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
+impl<C: Sender<Msg> + Send> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
-        let region = &task.region;
-        if self.filter_region(region) {
-            return;
-        }
-        self.check_split(region);
+        self.check_split(&task.region);
     }
 }
 
@@ -474,7 +579,7 @@ mod tests {
 
         let (table_tx, table_rx) = mpsc::sync_channel(100);
         let table_ch = RetryableSendCh::new(table_tx, "test-split-table");
-        let mut table_runnable = Runner::new(engine.clone(), table_ch, 100, 60);
+        let mut table_runnable = Runner::new(engine.clone(), table_ch, 200, 120);
         table_runnable.set_priority_checker(Box::new(SplitTableChecker::default()));
 
         let check = |msg: Msg, key: Vec<u8>| match msg {
@@ -521,14 +626,14 @@ mod tests {
         check(table_rx.try_recv().unwrap(), table::gen_table_prefix(3));
 
         // Put some data to table 3.
-        for i in 0..3 {
+        for i in 0..5 {
             // Each kv entry takes about 56 bytes.
             let mut key = table::gen_table_prefix(3);
             key.extend_from_slice(format!("_r0000000{}", i).as_bytes());
             let s = keys::data_key(Key::from_raw(&key).encoded());
             engine.put(&s, &s).unwrap();
         }
-        // Since region_max_size = 100, split_size = 60
+        // Since region_max_size = 200, split_size = 120
         // for ["t3", ""), the split key should be in table 3.
         region.set_start_key(Key::from_raw(&table::gen_table_prefix(3)).encoded().clone());
         region.set_end_key(vec![]);

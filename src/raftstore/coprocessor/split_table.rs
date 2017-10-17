@@ -13,14 +13,19 @@
 
 use coprocessor::codec::table;
 use storage::types::Key;
-
 use raftstore::store::{keys, SplitChecker};
 
-pub struct Checker;
+use kvproto::metapb::Region;
+
+pub struct Checker {
+    prev_key: Vec<u8>,
+}
 
 impl Default for Checker {
     fn default() -> Checker {
-        Checker
+        Checker {
+            prev_key: Vec::new(),
+        }
     }
 }
 
@@ -28,8 +33,42 @@ impl SplitChecker for Checker {
     fn name(&self) -> &str {
         "TableSplitChecker"
     }
-    fn check(&self, prev_key: &[u8], current_key: &[u8]) -> Option<Vec<u8>> {
-        cross_table(prev_key, current_key)
+
+    fn skip_check(&self, _: &Region, actual_keys: &Option<(Vec<u8>, Vec<u8>)>) -> bool {
+        if actual_keys.is_none() {
+            return true;
+        }
+        let &(ref actual_start_key, ref actual_end_key) = actual_keys.as_ref().unwrap();
+        if !keys::validate_data_key(actual_start_key) || !keys::validate_data_key(actual_end_key) {
+            return true;
+        }
+        match table::in_same_table(
+            &Key::from_encoded(keys::origin_key(actual_start_key).to_vec())
+                .raw()
+                .unwrap(),
+            &Key::from_encoded(keys::origin_key(actual_end_key).to_vec())
+                .raw()
+                .unwrap(),
+        ) {
+            // This region's actual start_key and actual end_key are valid table keys,
+            // and they come from different tables. So false for splitting at table bound.
+            Ok(false) => false,
+            _ => true,
+        }
+    }
+
+    fn find_gap(&mut self, key: &[u8], _: u64) -> Option<Vec<u8>> {
+        let split_key = cross_table(&self.prev_key, key);
+
+        // Avoid allocation.
+        self.prev_key.clear();
+        self.prev_key.extend_from_slice(key);
+
+        split_key
+    }
+
+    fn finish(&mut self) {
+        self.prev_key.clear();
     }
 }
 
