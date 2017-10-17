@@ -193,12 +193,6 @@ enum RequestPolicy {
 pub struct PeerStat {
     pub written_bytes: u64,
     pub written_keys: u64,
-    pub last_written_bytes: u64,
-    pub last_written_keys: u64,
-    pub read_bytes: u64,
-    pub read_keys: u64,
-    pub last_read_bytes: u64,
-    pub last_read_keys: u64,
 }
 
 pub struct Peer {
@@ -741,6 +735,7 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
+            fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             self.send(ctx.trans, msgs, &mut ctx.metrics.message)
                 .unwrap_or_else(|e| {
@@ -776,6 +771,7 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
 
         if !self.is_leader() {
+            fail_point!("raft_before_follower_send");
             self.send(trans, ready.messages.drain(..), &mut metrics.message)
                 .unwrap_or_else(|e| {
                     warn!("{} follower send messages err {:?}", self.tag, e);
@@ -1573,10 +1569,8 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.peer_stat.written_bytes - self.peer_stat.last_written_bytes,
-            written_keys: self.peer_stat.written_keys - self.peer_stat.last_written_keys,
-            read_bytes: self.peer_stat.read_bytes - self.peer_stat.last_read_bytes,
-            read_keys: self.peer_stat.read_keys - self.peer_stat.last_read_keys,
+            written_bytes: self.peer_stat.written_bytes,
+            written_keys: self.peer_stat.written_keys,
             region_size: self.approximate_size,
         };
         if let Err(e) = worker.schedule(task) {

@@ -130,6 +130,7 @@ impl Simulator for ServerCluster {
             sim_router.clone(),
             resolver,
             snap_mgr.clone(),
+            pd_worker.scheduler(),
             Some(engines.clone()),
         ).unwrap();
         let addr = server.listening_addr();

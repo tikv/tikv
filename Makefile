@@ -12,6 +12,10 @@ ifeq ($(ROCKSDB_SYS_SSE),1)
 ENABLE_FEATURES += sse
 endif
 
+ifneq ($(FAIL_POINT),1)
+ENABLE_FEATURES += no-fail
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 DEPS_PATH = $(CURDIR)/tmp
@@ -37,7 +41,7 @@ run:
 release:
 	cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
-	cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
+	cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 
 static_release:
 	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 ROCKSDB_SYS_SSE=1  make release
@@ -47,6 +51,9 @@ static_unportable_release:
 
 static_prof_release:
 	ENABLE_FEATURES=mem-profiling make static_release
+
+static_fail_release:
+	FAIL_POINT=1 make static_release
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:

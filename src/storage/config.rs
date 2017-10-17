@@ -23,7 +23,11 @@ const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 102400;
-const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 4000;
+
+// According to "Little's law", assuming you can write 100_000 KVs
+// per second, and it takes about 100ms to process the write requests
+// on average, hence using the 10_000 as the default value here.
+const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 10_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
