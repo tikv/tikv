@@ -58,7 +58,7 @@ impl CoprocessorHost {
 
     pub fn split_checker(&self) -> Option<Box<SplitChecker>> {
         if self.config.split_region_on_table {
-            Some(Box::new(SplitTableChecker::default()))
+            Some(Box::new(SplitTableChecker::new()))
         } else {
             None
         }
