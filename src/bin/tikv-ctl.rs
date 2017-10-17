@@ -172,24 +172,24 @@ trait DebugExecutor {
             process::exit(-1);
         }
         let scan_future = self.get_mvcc_infos(from, to, limit).for_each(
-            move |(key, mut mvcc)| {
+            move |(key, mvcc)| {
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
-                    let lock_info = mvcc.take_lock();
+                    let lock_info = mvcc.get_lock();
                     if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
                         // FIXME: "lock type" is lost in kvproto.
                         println!("\tlock cf value: {:?}", lock_info);
                     }
                 }
                 if cfs.contains(&CF_DEFAULT) {
-                    for value_info in mvcc.take_values().into_iter() {
+                    for value_info in mvcc.get_values() {
                         if commit_ts.map_or(true, |ts| value_info.get_ts() == ts) {
                             println!("\tdefault cf value: {:?}", value_info);
                         }
                     }
                 }
                 if cfs.contains(&CF_WRITE) {
-                    for write_info in mvcc.take_writes().into_iter() {
+                    for write_info in mvcc.get_writes() {
                         if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts) &&
                             commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                         {
