@@ -34,7 +34,7 @@ impl SplitChecker for Checker {
         "TableSplitChecker"
     }
 
-    fn skip_check(&self, _: &Region, actual_keys: &Option<(Vec<u8>, Vec<u8>)>) -> bool {
+    fn prev_check(&self, _: &Region, actual_keys: &Option<(Vec<u8>, Vec<u8>)>) -> bool {
         if actual_keys.is_none() {
             return true;
         }
@@ -57,7 +57,7 @@ impl SplitChecker for Checker {
         }
     }
 
-    fn find_gap(&mut self, key: &[u8], _: u64) -> Option<Vec<u8>> {
+    fn find_split_key(&mut self, key: &[u8], _: u64) -> Option<Vec<u8>> {
         let split_key = cross_table(&self.prev_key, key);
 
         // Avoid allocation.

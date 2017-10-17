@@ -187,10 +187,13 @@ fn bound_keys(
 
 /// An interface for writing split checker extensions.
 pub trait Checker: Send {
+    // The Checker's name.
     fn name(&self) -> &str;
-    /// Do some quick checks, true for skipping `iter_keys`.
-    fn skip_check(&self, region: &Region, actual_keys: &Option<(Vec<u8>, Vec<u8>)>) -> bool;
-    fn find_gap(&mut self, key: &[u8], value_size: u64) -> Option<Vec<u8>>;
+    /// Do some quick checks, true for skipping `find_split_key`.
+    fn prev_check(&self, region: &Region, actual_keys: &Option<(Vec<u8>, Vec<u8>)>) -> bool;
+    /// Feed keys and value sizes in order to find the split key.
+    fn find_split_key(&mut self, key: &[u8], value_size: u64) -> Option<Vec<u8>>;
+    /// Called at the end of check, for cleaning up.
     fn finish(&mut self);
 }
 
@@ -241,7 +244,7 @@ impl<C: Sender<Msg> + Send> Checker for SizeChecker<C> {
         "SizeChecker"
     }
 
-    fn skip_check(&self, region: &Region, _: &Option<(Vec<u8>, Vec<u8>)>) -> bool {
+    fn prev_check(&self, region: &Region, _: &Option<(Vec<u8>, Vec<u8>)>) -> bool {
         if let Some(region_size) = self.check_size(region) {
             if region_size < self.region_max_size {
                 true
@@ -259,7 +262,7 @@ impl<C: Sender<Msg> + Send> Checker for SizeChecker<C> {
         }
     }
 
-    fn find_gap(&mut self, key: &[u8], value_size: u64) -> Option<Vec<u8>> {
+    fn find_split_key(&mut self, key: &[u8], value_size: u64) -> Option<Vec<u8>> {
         self.current_size += key.len() as u64 + value_size;
         if self.split_key.is_none() && self.current_size > self.split_size {
             self.split_key = Some(key.to_vec());
@@ -339,10 +342,10 @@ impl<C: Sender<Msg> + Send> Runner<C> {
                 return;
             }
         };
-        let skip_size_checker = self.size_checker.skip_check(region, &bks);
+        let skip_size_checker = self.size_checker.prev_check(region, &bks);
         let skip_priority_checker = self.priority_checker
             .as_ref()
-            .map_or(true, |checker| checker.skip_check(region, &bks));
+            .map_or(true, |checker| checker.prev_check(region, &bks));
         if skip_priority_checker && skip_size_checker {
             return;
         }
@@ -365,7 +368,7 @@ impl<C: Sender<Msg> + Send> Runner<C> {
             .map(|mut iter| while let Some(e) = iter.next() {
                 if !skip_priority_checker {
                     if let Some(key) = priority_checker.as_mut().map_or(None, |checker| {
-                        checker.find_gap(e.key.as_ref().unwrap(), e.value_size as u64)
+                        checker.find_split_key(e.key.as_ref().unwrap(), e.value_size as u64)
                     }) {
                         info!(
                             "[region {}] priority split checker {} requires splitting at {:?}",
@@ -379,7 +382,7 @@ impl<C: Sender<Msg> + Send> Runner<C> {
                 }
                 if !skip_size_checker {
                     if let Some(key) =
-                        size_checker.find_gap(e.key.as_ref().unwrap(), e.value_size as u64)
+                        size_checker.find_split_key(e.key.as_ref().unwrap(), e.value_size as u64)
                     {
                         info!(
                             "[region {}] priority split checker {} requires splitting at {:?}",
