@@ -324,8 +324,8 @@ impl<C: Sender<Msg> + Send> Runner<C> {
         }
     }
 
-    pub fn set_priority_checker(&mut self, checker: Box<Checker>) {
-        self.priority_checker = Some(checker);
+    pub fn set_priority_checker(&mut self, checker: Option<Box<Checker>>) {
+        self.priority_checker = checker;
     }
 
     fn check_split(&mut self, region: &Region) {
@@ -580,7 +580,7 @@ mod tests {
         let (table_tx, table_rx) = mpsc::sync_channel(100);
         let table_ch = RetryableSendCh::new(table_tx, "test-split-table");
         let mut table_runnable = Runner::new(engine.clone(), table_ch, 200, 120);
-        table_runnable.set_priority_checker(Box::new(SplitTableChecker::default()));
+        table_runnable.set_priority_checker(Some(Box::new(SplitTableChecker::default())));
 
         let check = |msg: Msg, key: Vec<u8>| match msg {
             Msg::SplitRegion { split_key, .. } => {

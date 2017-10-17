@@ -68,6 +68,7 @@ use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
 use tikv::raftstore::store::{self, Engines, SnapManager};
+use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERVAL};
@@ -211,6 +212,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
+    // Create CoprocessorHost.
+    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone());
+
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
     node.start(
@@ -220,6 +224,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         snap_mgr,
         significant_msg_receiver,
         pd_worker,
+        coprocessor_host,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 

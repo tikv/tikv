@@ -17,6 +17,7 @@ use tikv::raftstore::store::{bootstrap_store, create_event_loop, keys, Engines, 
                              SnapManager};
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
+use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::rocksdb;
 use tikv::util::worker::FutureWorker;
 use tempdir::TempDir;
@@ -94,6 +95,9 @@ fn test_node_bootstrap_with_prepared_data() {
             .is_some()
     );
 
+    // Create coprocessor.
+    let coprocessor_host = CoprocessorHost::default();
+
     // try to restart this node, will clear the prepare data
     node.start(
         event_loop,
@@ -102,6 +106,7 @@ fn test_node_bootstrap_with_prepared_data() {
         snap_mgr,
         snapshot_status_receiver,
         pd_worker,
+        coprocessor_host,
     ).unwrap();
     assert!(
         engine

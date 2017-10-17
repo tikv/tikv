@@ -72,7 +72,7 @@ raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
 
-[raftstore.coprocessor]
+[coprocessor]
 split-region-on-table = true
 
 [rocksdb]

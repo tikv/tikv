@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ObserverContext, RegionObserver, Result, SplitTableChecker};
+use super::{Config, ObserverContext, RegionObserver, Result, SplitTableChecker};
+use super::super::store::SplitChecker;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
@@ -44,17 +45,23 @@ impl Registry {
 #[derive(Default)]
 pub struct CoprocessorHost {
     pub registry: Registry,
+    config: Config,
 }
 
 impl CoprocessorHost {
-    // TODO load from configuration.
-
-    pub fn new() -> CoprocessorHost {
-        CoprocessorHost::default()
+    pub fn new(cfg: Config) -> CoprocessorHost {
+        CoprocessorHost {
+            registry: Registry::default(),
+            config: cfg,
+        }
     }
 
-    pub fn split_table_checker(&self) -> SplitTableChecker {
-        SplitTableChecker::default()
+    pub fn split_checker(&self) -> Option<Box<SplitChecker>> {
+        if self.config.split_region_on_table {
+            Some(Box::new(SplitTableChecker::default()))
+        } else {
+            None
+        }
     }
 
     /// Call all prepose hook until bypass is set to true.

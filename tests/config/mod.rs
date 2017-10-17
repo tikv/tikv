@@ -106,9 +106,6 @@ fn test_serde_custom_tikv_config() {
         raft_store_max_leader_lease: ReadableDuration::secs(12),
         right_derive_when_split: false,
         allow_remove_leader: true,
-        coprocessor: CopConfig {
-            split_region_on_table: true,
-        },
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],
@@ -316,6 +313,9 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_too_busy_threshold: 123,
+    };
+    value.coprocessor = CopConfig {
+        split_region_on_table: true,
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");
