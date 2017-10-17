@@ -47,8 +47,6 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    // TODO load from configuration.
-
     pub fn new() -> CoprocessorHost {
         CoprocessorHost::default()
     }

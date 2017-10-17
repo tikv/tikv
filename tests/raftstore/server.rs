@@ -29,6 +29,7 @@ use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{store, Error, Result};
 use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{CfName, Engine};
@@ -137,6 +138,9 @@ impl Simulator for ServerCluster {
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
 
+        // Create coprocessor.
+        let coprocessor_host = CoprocessorHost::default();
+
         // Create node.
         let mut node = Node::new(
             &mut event_loop,
@@ -151,6 +155,7 @@ impl Simulator for ServerCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            coprocessor_host,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

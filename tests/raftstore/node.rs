@@ -29,6 +29,7 @@ use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::eraftpb::MessageType;
 use tikv::config::TiKvConfig;
 use tikv::raftstore::{Error, Result};
+use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 use tikv::util::transport::SendCh;
@@ -178,6 +179,9 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
+        // Create coprocessor.
+        let coprocessor_host = CoprocessorHost::default();
+
         node.start(
             event_loop,
             engines.clone(),
@@ -185,6 +189,7 @@ impl Simulator for NodeCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            coprocessor_host,
         ).unwrap();
         assert!(
             engines
