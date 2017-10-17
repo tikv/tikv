@@ -23,8 +23,6 @@ extern crate kvproto;
 extern crate rocksdb;
 extern crate grpcio;
 extern crate futures;
-#[cfg(test)]
-extern crate tempdir;
 extern crate rustc_serialize;
 
 use std::{process, str, u64};
@@ -39,7 +37,6 @@ use protobuf::Message;
 use futures::{future, stream, Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use protobuf::RepeatedField;
-use protobuf::text_format::print_to_string;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::PeerState;
@@ -53,8 +50,8 @@ use tikv::raftstore::store::{keys, Engines};
 use tikv::raftstore::store::debug::{Debugger, RegionInfo};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
-fn perror_and_exit<E: Error, T>(e: E) -> T {
-    eprintln!("{}", e);
+fn perror_and_exit<E: Error, T>(prefix: &str, e: E) -> T {
+    eprintln!("{}: {}", prefix, e);
     process::exit(-1);
 }
 
@@ -178,22 +175,16 @@ trait DebugExecutor {
             move |(key, mut mvcc)| {
                 println!("key: {}", escape(&key));
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
-                    let mut lock_info = mvcc.take_lock();
+                    let lock_info = mvcc.take_lock();
                     if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
                         // FIXME: "lock type" is lost in kvproto.
-                        let pk = escape(lock_info.get_primary_lock()).into_bytes();
-                        let k = escape(lock_info.get_key()).into_bytes();
-                        lock_info.set_primary_lock(pk);
-                        lock_info.set_key(k);
-                        println!("\tlock cf value: {}", print_to_string(&lock_info));
+                        println!("\tlock cf value: {:?}", lock_info);
                     }
                 }
                 if cfs.contains(&CF_DEFAULT) {
-                    for mut value_info in mvcc.take_values().into_iter() {
+                    for value_info in mvcc.take_values().into_iter() {
                         if commit_ts.map_or(true, |ts| value_info.get_ts() == ts) {
-                            let value = escape(value_info.get_value()).into_bytes();
-                            value_info.set_value(value);
-                            println!("\tdefault cf value: {}", print_to_string(&value_info));
+                            println!("\tdefault cf value: {:?}", value_info);
                         }
                     }
                 }
@@ -203,7 +194,7 @@ trait DebugExecutor {
                             commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
                         {
                             // FIXME: short_value is lost in kvproto.
-                            println!("\t write cf value: {}", print_to_string(&write_info));
+                            println!("\t write cf value: {:?}", write_info);
                         }
                     }
                 }
@@ -241,30 +232,36 @@ trait DebugExecutor {
                 return;
             }
             (Some(region_local_1), Some(region_local_2)) => {
-                let start_key = keys::data_key(region_local_1.get_region().get_start_key());
-                let end_key = keys::data_key(region_local_1.get_region().get_end_key());
-                if start_key != keys::data_key(region_local_2.get_region().get_start_key()) ||
-                    end_key != keys::data_key(region_local_2.get_region().get_end_key())
-                {
-                    println!("db1' range doesn't equal to db2' range.");
+                let region1 = region_local_1.get_region();
+                let region2 = region_local_2.get_region();
+                if region1 != region2 {
+                    println!("db1 and db2 have different region:");
+                    println!("db1 region: {:?}", region1);
+                    println!("db2 region: {:?}", region2);
                     return;
                 }
+                let start_key = keys::data_key(region1.get_start_key());
+                let end_key = keys::data_key(region1.get_end_key());
                 let mvcc_infos_1 = self.get_mvcc_infos(start_key.clone(), end_key.clone(), 0);
                 let mvcc_infos_2 = rhs_debug_executor.get_mvcc_infos(start_key, end_key, 0);
                 let cmp_future = mvcc_infos_1.zip(mvcc_infos_2).for_each(|(item_1, item_2)| {
-                    let (key1, mvcc1) = (escape(&item_1.0), item_1.1);
-                    let (key2, mvcc2) = (escape(&item_2.0), item_2.1);
+                    let (key1, mvcc1) = (item_1.0, item_1.1);
+                    let (key2, mvcc2) = (item_2.0, item_2.1);
                     if key1 != key2 {
-                        let err_msg = format!("db1 cur key: {}, db2 cur key: {}", key1, key2);
+                        let err_msg = format!(
+                            "db1 cur key: {}, db2 cur key: {}",
+                            escape(&key1),
+                            escape(&key2)
+                        );
                         return future::err::<(), String>(err_msg);
                     }
                     if mvcc1 != mvcc2 {
                         let err_msg = format!(
-                            "db1 key: {}, mvcc: {}\ndb2 key: {}, mvcc: {}",
-                            key1,
-                            print_to_string(&mvcc1),
-                            key2,
-                            print_to_string(&mvcc1),
+                            "db1 key: {}, mvcc: {:?}\ndb2 key: {}, mvcc: {:?}",
+                            escape(&key1),
+                            mvcc1,
+                            escape(&key2),
+                            mvcc1
                         );
                         return future::err::<(), String>(err_msg);
                     }
@@ -315,8 +312,9 @@ impl DebugExecutor for DebugClient {
         req.set_db(DBType::KV);
         req.set_cf(cf.to_owned());
         req.set_key(key);
-        let mut resp = self.get(req).unwrap_or_else(perror_and_exit);
-        resp.take_value()
+        self.get(req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get", e))
+            .take_value()
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
@@ -324,8 +322,9 @@ impl DebugExecutor for DebugClient {
         let mut req = RegionSizeRequest::new();
         req.set_cfs(RepeatedField::from_vec(cfs));
         req.set_region_id(region);
-        let mut resp = self.region_size(req).unwrap_or_else(perror_and_exit);
-        resp.take_entries()
+        self.region_size(req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::region_size", e))
+            .take_entries()
             .into_iter()
             .map(|mut entry| (entry.take_cf(), entry.get_size() as usize))
             .collect()
@@ -334,7 +333,8 @@ impl DebugExecutor for DebugClient {
     fn get_region_info(&self, region: u64) -> RegionInfo {
         let mut req = RegionInfoRequest::new();
         req.set_region_id(region);
-        let mut resp = self.region_info(req).unwrap_or_else(perror_and_exit);
+        let mut resp = self.region_info(req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::region_info", e));
 
         let mut region_info = RegionInfo::default();
         if resp.has_raft_local_state() {
@@ -353,8 +353,9 @@ impl DebugExecutor for DebugClient {
         let mut req = RaftLogRequest::new();
         req.set_region_id(region);
         req.set_log_index(index);
-        let mut resp = self.raft_log(req).unwrap_or_else(perror_and_exit);
-        resp.take_entry()
+        self.raft_log(req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::raft_log", e))
+            .take_entry()
     }
 
     fn get_mvcc_infos(
@@ -380,35 +381,39 @@ impl DebugExecutor for DebugClient {
         req.set_cf(cf.to_owned());
         req.set_from_key(from);
         req.set_to_key(to);
-        self.compact(req).unwrap_or_else(perror_and_exit);
+        self.compact(req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
         println!("success!");
     }
 }
 
 impl DebugExecutor for Debugger {
     fn get_all_meta_regions(&self) -> Vec<u64> {
-        self.get_all_meta_regions().unwrap_or_else(perror_and_exit)
+        self.get_all_meta_regions()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_meta_regions", e))
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
         self.get(DBType::KV, cf, &key)
-            .unwrap_or_else(perror_and_exit)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get", e))
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
         self.region_size(region, cfs)
-            .unwrap_or_else(perror_and_exit)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::region_size", e))
             .into_iter()
             .map(|(cf, size)| (cf.to_owned(), size as usize))
             .collect()
     }
 
     fn get_region_info(&self, region: u64) -> RegionInfo {
-        self.region_info(region).unwrap_or_else(perror_and_exit)
+        self.region_info(region)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::region_info", e))
     }
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry {
-        self.raft_log(region, index).unwrap_or_else(perror_and_exit)
+        self.raft_log(region, index)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::raft_log", e))
     }
 
     fn get_mvcc_infos(
@@ -418,7 +423,7 @@ impl DebugExecutor for Debugger {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
         let iter = self.scan_mvcc(&from, &to, limit)
-            .unwrap_or_else(perror_and_exit);
+            .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
         #[allow(deprecated)]
         let stream = stream::iter(iter).map_err(|e| e.to_string());
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
@@ -426,7 +431,7 @@ impl DebugExecutor for Debugger {
 
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>) {
         self.compact(db, cf, &from, &to)
-            .unwrap_or_else(perror_and_exit);
+            .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
         println!("success!");
     }
 }
@@ -705,7 +710,8 @@ fn main() {
             println!("{}", &unescape(escaped).to_hex().to_uppercase());
             return;
         }
-        _ => {}
+        (None, None) => {}
+        _ => unreachable!(),
     };
 
     let db = matches.value_of("db");
