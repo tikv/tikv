@@ -50,7 +50,7 @@ use tikv::raftstore::store::{keys, Engines};
 use tikv::raftstore::store::debug::{Debugger, RegionInfo};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
-fn perror_and_exit<E: Error, T>(prefix: &str, e: E) -> T {
+fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
     process::exit(-1);
 }
