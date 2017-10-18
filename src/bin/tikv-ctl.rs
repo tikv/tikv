@@ -50,6 +50,7 @@ use tikv::util::{self, escape, unescape};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::raftstore::store::debug::{Debugger, RegionInfo};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::pd::{PdClient, RpcClient};
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
@@ -323,6 +324,33 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
+    fn set_region_tombstone(&self, region: u64, endpoints: Vec<String>) {
+        let debugger = self.get_local_debugger().unwrap_or_else(|| {
+            eprintln!("This command is only for local mode");
+            process::exit(-1);
+        });
+        match RpcClient::new(&endpoints)
+            .unwrap_or_else(perror_and_exit)
+            .get_region_by_id(region)
+            .wait()
+            .unwrap_or_else(perror_and_exit)
+        {
+            Some(mut meta_region) => {
+                let epoch = meta_region.take_region_epoch();
+                let peers = meta_region.take_peers();
+                debugger
+                    .set_region_tombstone(region, epoch, peers)
+                    .unwrap_or_else(perror_and_exit);
+            }
+            None => {
+                eprintln!("no such region in pd: {}", region);
+                process::exit(-1);
+            }
+        }
+    }
+
+    fn get_local_debugger(&self) -> Option<&Debugger>;
+
     fn get_all_meta_regions(&self) -> Vec<u64>;
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
@@ -345,6 +373,10 @@ trait DebugExecutor {
 
 
 impl DebugExecutor for DebugClient {
+    fn get_local_debugger(&self) -> Option<&Debugger> {
+        unimplemented!();
+    }
+
     fn get_all_meta_regions(&self) -> Vec<u64> {
         unimplemented!();
     }
@@ -430,6 +462,10 @@ impl DebugExecutor for DebugClient {
 }
 
 impl DebugExecutor for Debugger {
+    fn get_local_debugger(&self) -> Option<&Debugger> {
+        Some(self)
+    }
+
     fn get_all_meta_regions(&self) -> Vec<u64> {
         self.get_all_meta_regions()
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_meta_regions", e))
@@ -486,20 +522,24 @@ fn main() {
         )
         .arg(
             Arg::with_name("db")
+                .required(true)
+                .conflicts_with_all(&["host", "hex-to-escaped", "escaped-to-hex"])
                 .long("db")
                 .takes_value(true)
                 .help("set rocksdb path"),
         )
         .arg(
             Arg::with_name("raftdb")
+                .conflicts_with_all(&["host", "hex-to-escaped", "escaped-to-hex"])
                 .long("raftdb")
                 .takes_value(true)
                 .help("set raft rocksdb path"),
         )
         .arg(
             Arg::with_name("host")
+                .required(true)
+                .conflicts_with_all(&["db", "raftdb", "hex-to-escaped", "escaped-to-hex"])
                 .long("host")
-                .conflicts_with_all(&["db", "raftdb"])
                 .takes_value(true)
                 .help("set remote host"),
         )
@@ -738,6 +778,26 @@ fn main() {
                         .takes_value(true)
                         .help("set the end raw key, in escaped form"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("tombstone")
+                .about("set a region on the node to tombstone by manual")
+                .arg(
+                    Arg::with_name("region")
+                        .short("r")
+                        .takes_value(true)
+                        .help("the target region"),
+                )
+                .arg(
+                    Arg::with_name("pd")
+                        .short("p")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("the pd url"),
+                ),
         );
     let matches = app.clone().get_matches();
 
@@ -819,6 +879,10 @@ fn main() {
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
         debug_executor.compact(db_type, cf, from_key, to_key);
+    } else if let Some(matches) = matches.subcommand_matches("tombstone") {
+        let region = matches.value_of("region").unwrap().parse().unwrap();
+        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+        debug_executor.set_region_tombstone(region, pd_urls);
     } else {
         let _ = app.print_help();
     }
