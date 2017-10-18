@@ -262,8 +262,8 @@ trait DebugExecutor {
                     }
                 };
 
-                let show_only = |i: i32, k: &[u8], mvcc: &MvccInfo| {
-                    println!("only db{} has: {}, mvcc: {:?}", i, escape(k), mvcc);
+                let show_only = |i: i32, k: &[u8]| {
+                    println!("only db{} has: {}", i, escape(k));
                 };
 
                 let (mut item1, mut item2) = (take_item(1), take_item(2));
@@ -272,24 +272,19 @@ trait DebugExecutor {
                     let t2 = item2.take().unwrap();
                     match t1.0.cmp(&t2.0) {
                         Ordering::Less => {
-                            show_only(1, &t1.0, &t1.1);
+                            show_only(1, &t1.0);
                             has_diff = true;
                             item1 = take_item(1);
                             item2 = Some(t2);
                         }
                         Ordering::Greater => {
-                            show_only(2, &t2.0, &t2.1);
+                            show_only(2, &t2.0);
                             has_diff = true;
                             item1 = Some(t1);
                             item2 = take_item(2);
                         }
                         _ => if t1.1 != t2.1 {
-                            println!(
-                                "diff mvccmvcc on key: {}\ndb1: {:?}\n, db2: {:?}",
-                                escape(&t1.0),
-                                t1.1,
-                                t2.1,
-                            );
+                            println!("diff mvcc on key: {}", escape(&t1.0));
                             item1 = take_item(1);
                             item2 = take_item(2);
                             has_diff = true;
@@ -297,8 +292,8 @@ trait DebugExecutor {
                     }
                 }
                 let mut item = item1.map(|t| (1, t)).or_else(|| item2.map(|t| (2, t)));
-                while let Some((i, (key, mvcc))) = item.take() {
-                    show_only(i, &key, &mvcc);
+                while let Some((i, (key, _))) = item.take() {
+                    show_only(i, &key);
                     has_diff = true;
                     item = take_item(i).map(|t| (i, t));
                 }
