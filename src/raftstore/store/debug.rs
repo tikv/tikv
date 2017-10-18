@@ -18,13 +18,14 @@ use std::sync::Arc;
 use protobuf::RepeatedField;
 
 use rocksdb::{Kv, SeekKey, DB};
+use kvproto::metapb::{Peer, RegionEpoch};
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
 use raftstore::store::{keys, Engines, Iterable, Peekable};
-use raftstore::store::engine::IterOption;
+use raftstore::store::engine::{IterOption, Mutable};
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
@@ -218,6 +219,31 @@ impl Debugger {
         let end = if end.is_empty() { None } else { Some(end) };
         compact_range(db, handle, start, end, false);
         Ok(())
+    }
+
+    /// Set a region to tombstone by manual.
+    pub fn set_region_tombstone(
+        &self,
+        region: u64,
+        epoch: RegionEpoch,
+        peers: RepeatedField<Peer>,
+    ) -> Result<()> {
+        let db = &self.engines.kv_engine;
+        let key = keys::region_state_key(region);
+        match box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)) {
+            Some(mut region_state) => {
+                region_state.set_state(PeerState::Tombstone);
+                region_state.mut_region().set_region_epoch(epoch);
+                region_state.mut_region().set_peers(peers);
+                if let Some(cf_raft) = db.cf_handle(CF_RAFT) {
+                    box_try!(db.put_msg_cf(cf_raft, &key, &region_state));
+                    Ok(())
+                } else {
+                    Err(box_err!("can't get raft cf"))
+                }
+            }
+            None => Err(box_err!("not a valid region")),
+        }
     }
 }
 
