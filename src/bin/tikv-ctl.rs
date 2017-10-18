@@ -247,8 +247,9 @@ trait DebugExecutor {
                 let mut mvcc_infos_2 = rhs_debug_executor.get_mvcc_infos(start_key, end_key, 0);
 
                 let mut has_diff = false;
+                let mut key_counts = [0; 2];
 
-                let mut take_item = |i: i32| -> Option<(Vec<u8>, MvccInfo)> {
+                let mut take_item = |i: usize| -> Option<(Vec<u8>, MvccInfo)> {
                     let wait = match i {
                         1 => future::poll_fn(|| mvcc_infos_1.poll()).wait(),
                         _ => future::poll_fn(|| mvcc_infos_2.poll()).wait(),
@@ -262,12 +263,14 @@ trait DebugExecutor {
                     }
                 };
 
-                let show_only = |i: i32, k: &[u8]| {
+                let show_only = |i: usize, k: &[u8]| {
                     println!("only db{} has: {}", i, escape(k));
                 };
 
                 let (mut item1, mut item2) = (take_item(1), take_item(2));
                 while item1.is_some() && item2.is_some() {
+                    key_counts[0] += 1;
+                    key_counts[1] += 1;
                     let t1 = item1.take().unwrap();
                     let t2 = item2.take().unwrap();
                     match t1.0.cmp(&t2.0) {
@@ -293,6 +296,7 @@ trait DebugExecutor {
                 }
                 let mut item = item1.map(|t| (1, t)).or_else(|| item2.map(|t| (2, t)));
                 while let Some((i, (key, _))) = item.take() {
+                    key_counts[i - 1] += 1;
                     show_only(i, &key);
                     has_diff = true;
                     item = take_item(i).map(|t| (i, t));
@@ -300,6 +304,11 @@ trait DebugExecutor {
                 if !has_diff {
                     println!("db1 and db2 have same data in region: {}", region);
                 }
+                println!(
+                    "db1 has {} keys, db2 has {} keys",
+                    key_counts[0],
+                    key_counts[1]
+                );
             }
         }
     }
