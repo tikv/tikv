@@ -330,17 +330,17 @@ trait DebugExecutor {
             process::exit(-1);
         });
         match RpcClient::new(&endpoints)
-            .unwrap_or_else(perror_and_exit)
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
             .get_region_by_id(region)
             .wait()
-            .unwrap_or_else(perror_and_exit)
+            .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
         {
             Some(mut meta_region) => {
                 let epoch = meta_region.take_region_epoch();
                 let peers = meta_region.take_peers();
                 debugger
                     .set_region_tombstone(region, epoch, peers)
-                    .unwrap_or_else(perror_and_exit);
+                    .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
             }
             None => {
                 eprintln!("no such region in pd: {}", region);
@@ -374,7 +374,7 @@ trait DebugExecutor {
 
 impl DebugExecutor for DebugClient {
     fn get_local_debugger(&self) -> Option<&Debugger> {
-        unimplemented!();
+        None
     }
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
