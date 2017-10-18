@@ -279,12 +279,14 @@ trait DebugExecutor {
                             has_diff = true;
                             item1 = take_item(1);
                             item2 = Some(t2);
+                            key_counts[1] -= 1;
                         }
                         Ordering::Greater => {
                             show_only(2, &t2.0);
                             has_diff = true;
                             item1 = Some(t1);
                             item2 = take_item(2);
+                            key_counts[0] -= 1;
                         }
                         _ => {
                             if t1.1 != t2.1 {
