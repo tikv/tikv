@@ -286,12 +286,14 @@ trait DebugExecutor {
                             item1 = Some(t1);
                             item2 = take_item(2);
                         }
-                        _ => if t1.1 != t2.1 {
-                            println!("diff mvcc on key: {}", escape(&t1.0));
+                        _ => {
+                            if t1.1 != t2.1 {
+                                println!("diff mvcc on key: {}", escape(&t1.0));
+                                has_diff = true;
+                            }
                             item1 = take_item(1);
                             item2 = take_item(2);
-                            has_diff = true;
-                        },
+                        }
                     }
                 }
                 let mut item = item1.map(|t| (1, t)).or_else(|| item2.map(|t| (2, t)));
