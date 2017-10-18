@@ -27,6 +27,7 @@ extern crate rustc_serialize;
 
 use std::{process, str, u64};
 use std::iter::FromIterator;
+use std::cmp::Ordering;
 use std::error::Error;
 use std::sync::Arc;
 use std::path::PathBuf;
@@ -242,34 +243,67 @@ trait DebugExecutor {
                 }
                 let start_key = keys::data_key(region1.get_start_key());
                 let end_key = keys::data_key(region1.get_end_key());
-                let mvcc_infos_1 = self.get_mvcc_infos(start_key.clone(), end_key.clone(), 0);
-                let mvcc_infos_2 = rhs_debug_executor.get_mvcc_infos(start_key, end_key, 0);
-                let cmp_future = mvcc_infos_1.zip(mvcc_infos_2).for_each(|(item_1, item_2)| {
-                    let (key1, mvcc1) = (item_1.0, item_1.1);
-                    let (key2, mvcc2) = (item_2.0, item_2.1);
-                    if key1 != key2 {
-                        let err_msg = format!(
-                            "db1 cur key: {}, db2 cur key: {}",
-                            escape(&key1),
-                            escape(&key2)
-                        );
-                        return future::err::<(), String>(err_msg);
+                let mut mvcc_infos_1 = self.get_mvcc_infos(start_key.clone(), end_key.clone(), 0);
+                let mut mvcc_infos_2 = rhs_debug_executor.get_mvcc_infos(start_key, end_key, 0);
+
+                let mut has_diff = false;
+
+                let mut take_item = |i: i32| -> Option<(Vec<u8>, MvccInfo)> {
+                    let wait = match i {
+                        1 => future::poll_fn(|| mvcc_infos_1.poll()).wait(),
+                        _ => future::poll_fn(|| mvcc_infos_2.poll()).wait(),
+                    };
+                    match wait {
+                        Ok(item1) => item1,
+                        Err(e) => {
+                            println!("db{} scan data in region {} fail: {}", i, region, e);
+                            process::exit(-1);
+                        }
                     }
-                    if mvcc1 != mvcc2 {
-                        let err_msg = format!(
-                            "db1 key: {}, mvcc: {:?}\ndb2 key: {}, mvcc: {:?}",
-                            escape(&key1),
-                            mvcc1,
-                            escape(&key2),
-                            mvcc1
-                        );
-                        return future::err::<(), String>(err_msg);
+                };
+
+                let show_only = |i: i32, k: &[u8], mvcc: &MvccInfo| {
+                    println!("only db{} has: {}, mvcc: {:?}", i, escape(k), mvcc);
+                };
+
+                let (mut item1, mut item2) = (take_item(1), take_item(2));
+                while item1.is_some() && item2.is_some() {
+                    let t1 = item1.take().unwrap();
+                    let t2 = item2.take().unwrap();
+                    match t1.0.cmp(&t2.0) {
+                        Ordering::Less => {
+                            show_only(1, &t1.0, &t1.1);
+                            has_diff = true;
+                            item1 = take_item(1);
+                            item2 = Some(t2);
+                        }
+                        Ordering::Greater => {
+                            show_only(2, &t2.0, &t2.1);
+                            has_diff = true;
+                            item1 = Some(t1);
+                            item2 = take_item(2);
+                        }
+                        _ => if t1.1 != t2.1 {
+                            println!(
+                                "diff mvccmvcc on key: {}\ndb1: {:?}\n, db2: {:?}",
+                                escape(&t1.0),
+                                t1.1,
+                                t2.1,
+                            );
+                            item1 = take_item(1);
+                            item2 = take_item(2);
+                            has_diff = true;
+                        },
                     }
-                    future::ok::<(), String>(())
-                });
-                match cmp_future.wait() {
-                    Err(msg) => println!("{}", msg),
-                    Ok(_) => println!("The region of db1 and db2 are equal."),
+                }
+                let mut item = item1.map(|t| (1, t)).or_else(|| item2.map(|t| (2, t)));
+                while let Some((i, (key, mvcc))) = item.take() {
+                    show_only(i, &key, &mvcc);
+                    has_diff = true;
+                    item = take_item(i).map(|t| (i, t));
+                }
+                if !has_diff {
+                    println!("db1 and db2 have same data in region: {}", region);
                 }
             }
         }
