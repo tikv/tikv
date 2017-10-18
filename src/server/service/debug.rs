@@ -131,15 +131,15 @@ impl debugpb_grpc::Debug for Service {
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.region_info(region_id)),
             )
-            .map(|(raft_local_state, raft_apply_state, region_state)| {
+            .map(|region_info| {
                 let mut resp = RegionInfoResponse::new();
-                if let Some(raft_local_state) = raft_local_state {
+                if let Some(raft_local_state) = region_info.raft_local_state {
                     resp.set_raft_local_state(raft_local_state);
                 }
-                if let Some(raft_apply_state) = raft_apply_state {
+                if let Some(raft_apply_state) = region_info.raft_apply_state {
                     resp.set_raft_apply_state(raft_apply_state);
                 }
-                if let Some(region_state) = region_state {
+                if let Some(region_state) = region_info.region_local_state {
                     resp.set_region_local_state(region_state);
                 }
                 resp
