@@ -75,7 +75,9 @@ impl<T: Debug + Send + 'static> Stream for StreamChunk<T> {
     type Error = grpc::Error;
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         match self.rc.recv().unwrap() {
-            Some(resp) => Ok(Async::Ready(Some((resp, WriteFlags::default())))),
+            Some(resp) => Ok(Async::Ready(
+                Some((resp, WriteFlags::default().buffer_hint(true))),
+            )),
             None => Ok(Async::Ready(None)),
             //TODO: process error
         }
