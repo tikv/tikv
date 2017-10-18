@@ -784,12 +784,14 @@ fn main() {
                 .about("set a region on the node to tombstone by manual")
                 .arg(
                     Arg::with_name("region")
+                        .required(true)
                         .short("r")
                         .takes_value(true)
                         .help("the target region"),
                 )
                 .arg(
                     Arg::with_name("pd")
+                        .required(true)
                         .short("p")
                         .takes_value(true)
                         .multiple(true)
