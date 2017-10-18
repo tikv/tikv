@@ -828,7 +828,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (cb, future) = make_stream_callback();
+        let (cb, stream) = make_stream_callback();
         let res = self.end_point_scheduler.schedule(EndPointTask::Request(
             RequestTask::new(req, OnResponse::Stream(cb)),
         ));
@@ -842,7 +842,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return;
         }
 
-        let future = sink.send_all(future)
+        let future = sink.send_all(stream)
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);

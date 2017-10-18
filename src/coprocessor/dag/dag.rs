@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::rc::Rc;
+use std::mem;
 
 use tipb::executor::{ExecType, Executor};
 use tipb::schema::ColumnInfo;
@@ -71,13 +72,10 @@ impl<'s> DAGContext<'s> {
         let is_stream = on_resp.is_stream();
         loop {
             if is_stream && cur_chunk_count >= BATCH_ROW_COUNT {
-                let mut resp = Response::new();
-                let mut sel_resp = SelectResponse::new();
-                sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-                let data = box_try!(sel_resp.write_to_bytes());
-                resp.set_data(data);
+                let mut cur_chunks: Vec<Chunk> = vec![];
+                chunks = mem::replace(&mut cur_chunks, chunks);
+                let resp = response_from_chunks(cur_chunks)?;
                 on_resp.resp(resp);
-                chunks = vec![];
             }
 
             match exec.next() {
@@ -103,12 +101,8 @@ impl<'s> DAGContext<'s> {
                     if is_stream && chunks.is_empty() {
                         return Ok(None);
                     }
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
-                    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-                    let data = box_try!(sel_resp.write_to_bytes());
-                    resp.set_data(data);
-                    return Ok(Some(resp));
+                    let resp = response_from_chunks(chunks);
+                    return resp.map(Some);
                 }
                 Err(e) => if let Error::Other(_) = e {
                     let mut resp = Response::new();
@@ -246,4 +240,14 @@ fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Resul
         }
     }
     Ok(values)
+}
+
+fn response_from_chunks(chunks: Vec<Chunk>) -> Result<Response> {
+
+    let mut resp = Response::new();
+    let mut sel_resp = SelectResponse::new();
+    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+    let data = box_try!(sel_resp.write_to_bytes());
+    resp.set_data(data);
+    Ok(resp)
 }
