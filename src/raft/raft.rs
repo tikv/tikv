@@ -32,12 +32,11 @@ use rand::{self, Rng};
 use kvproto::eraftpb::{Entry, EntryType, HardState, Message, MessageType, Snapshot};
 use protobuf::repeated::RepeatedField;
 
-use raft::storage::Storage;
-use raft::progress::{Inflights, Progress, ProgressState};
-use raft::errors::{Error, Result, StorageError};
-use raft::raft_log::{self, RaftLog};
-use raft::read_only::{ReadOnly, ReadOnlyOption, ReadState};
-
+use super::storage::Storage;
+use super::progress::{Inflights, Progress, ProgressState};
+use super::errors::{Error, Result, StorageError};
+use super::raft_log::{self, RaftLog};
+use super::read_only::{ReadOnly, ReadOnlyOption, ReadState};
 use super::FlatMap;
 
 // CAMPAIGN_PRE_ELECTION represents the first phase of a normal election when
@@ -459,7 +458,7 @@ impl<T: Storage> Raft<T> {
         if let Err(e) = snapshot_r {
             if e == Error::Store(StorageError::SnapshotTemporarilyUnavailable) {
                 debug!(
-                    "{} failed to send snapshot to {} because snapshot is termporarily \
+                    "{} failed to send snapshot to {} because snapshot is temporarily \
                      unavailable",
                     self.tag,
                     to
@@ -600,16 +599,21 @@ impl<T: Storage> Raft<T> {
     // the commit index changed (in which case the caller should call
     // r.bcast_append).
     pub fn maybe_commit(&mut self) -> bool {
-        // TODO: optimize
-        let mut mis = Vec::with_capacity(self.prs.len());
-        for p in self.prs.values() {
-            mis.push(p.matched);
+        let mut mis_arr = [0; 5];
+        let mut mis_vec;
+        let mis = if self.prs.len() <= 5 {
+            &mut mis_arr[..self.prs.len()]
+        } else {
+            mis_vec = vec![0; self.prs.len()];
+            mis_vec.as_mut_slice()
+        };
+        for (i, pr) in self.prs.values().enumerate() {
+            mis[i] = pr.matched;
         }
         // reverse sort
         mis.sort_by(|a, b| b.cmp(a));
         let mci = mis[self.quorum() - 1];
-        let term = self.term;
-        self.raft_log.maybe_commit(mci, term)
+        self.raft_log.maybe_commit(mci, self.term)
     }
 
     pub fn reset(&mut self, term: u64) {
@@ -857,7 +861,7 @@ impl<T: Storage> Raft<T> {
                 let in_lease = self.check_quorum && self.leader_id != INVALID_ID &&
                     self.election_elapsed < self.election_timeout;
                 if !force && in_lease {
-                    // if a server receives ReqeustVote request within the minimum election
+                    // if a server receives RequestVote request within the minimum election
                     // timeout of hearing from a current leader, it does not update its term
                     // or grant its vote
                     info!(
@@ -1354,7 +1358,7 @@ impl<T: Storage> Raft<T> {
             MessageType::MsgReadIndex => {
                 if self.raft_log.term(self.raft_log.committed).unwrap_or(0) != self.term {
                     // Reject read only request when this leader has not committed any log entry
-                    // it its term.
+                    // in its term.
                     return;
                 }
 
@@ -1548,7 +1552,7 @@ impl<T: Storage> Raft<T> {
                         self.term,
                         m.get_from()
                     );
-                    // Leadership trnasfers never use pre-vote even if self.pre_vote is true; we
+                    // Leadership transfers never use pre-vote even if self.pre_vote is true; we
                     // know we are not recovering from a partition so there is no need for the
                     // extra round trip.
                     self.campaign(CAMPAIGN_TRANSFER);
@@ -1758,7 +1762,7 @@ impl<T: Storage> Raft<T> {
         self.del_progress(id);
         self.pending_conf = false;
 
-        // do not try to commit or abort transferring if there is no nodes in the cluster.
+        // do not try to commit or abort transferring if there are no nodes in the cluster.
         if self.prs.is_empty() {
             return;
         }
