@@ -1,6 +1,6 @@
 [root]
 name = "tikv"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
