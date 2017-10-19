@@ -18,7 +18,7 @@ use std::sync::Arc;
 use protobuf::RepeatedField;
 
 use rocksdb::{Kv, SeekKey, DB};
-use kvproto::metapb::{Peer, RegionEpoch};
+use kvproto::metapb::Peer;
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
@@ -225,7 +225,7 @@ impl Debugger {
     pub fn set_region_tombstone(
         &self,
         region: u64,
-        epoch: RegionEpoch,
+        conf_ver: u64,
         peers: RepeatedField<Peer>,
     ) -> Result<()> {
         let store_id = self.get_store_id()?;
@@ -239,9 +239,15 @@ impl Debugger {
         let key = keys::region_state_key(region);
         match box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)) {
             Some(mut region_state) => {
+                if conf_ver == region_state.get_region().get_region_epoch().get_conf_ver() {
+                    return Err(box_err!("The conf_ver hasn't changed."));
+                }
                 region_state.set_state(PeerState::Tombstone);
-                region_state.mut_region().set_region_epoch(epoch);
                 region_state.mut_region().set_peers(peers);
+                region_state
+                    .mut_region()
+                    .mut_region_epoch()
+                    .set_conf_ver(conf_ver);
                 if let Some(cf_raft) = db.cf_handle(CF_RAFT) {
                     box_try!(db.put_msg_cf(cf_raft, &key, &region_state));
                     Ok(())

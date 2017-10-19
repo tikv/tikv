@@ -336,10 +336,10 @@ trait DebugExecutor {
             .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
         {
             Some(mut meta_region) => {
-                let epoch = meta_region.take_region_epoch();
+                let conf_ver = meta_region.take_region_epoch().get_conf_ver();
                 let peers = meta_region.take_peers();
                 debugger
-                    .set_region_tombstone(region, epoch, peers)
+                    .set_region_tombstone(region, conf_ver, peers)
                     .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
             }
             None => {
