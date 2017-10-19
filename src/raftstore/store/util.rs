@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::option::Option;
+use std::u64;
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
@@ -19,7 +20,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use storage::{CF_WRITE, LARGE_CFS};
+use storage::{Key, CF_WRITE, LARGE_CFS};
 use util::properties::SizeProperties;
 use util::rocksdb as rocksdb_util;
 use super::engine::{IterOption, Iterable};
@@ -117,25 +118,18 @@ pub fn delete_all_in_range_cf(
     use_delete_range: bool,
 ) -> Result<()> {
     let handle = rocksdb_util::get_cf_handle(db, cf)?;
-    let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
-    let mut it = db.new_iterator_cf(cf, iter_opt)?;
     let mut wb = WriteBatch::new();
-    it.seek(start_key.into());
     if use_delete_range {
-        if it.valid() {
-            let handle = box_try!(rocksdb_util::get_cf_handle(db, cf));
-            if cf == CF_WRITE {
-                // We enable memtable prefix bloom for CF_WRITE, for delete_range operation
-                // RocksDB will add start key to bloom, and the start key will go through
-                // function prefix_extractor->Transform, in our case the prefix_extractor is
-                // FixedSuffixSliceTransform, if the length of start key less than 8, we
-                // will encounter index out of range error.
-                wb.delete_range_cf(handle, it.key(), end_key)?;
-            } else {
-                wb.delete_range_cf(handle, start_key, end_key)?;
-            }
+        if cf == CF_WRITE {
+            let start = Key::from_encoded(start_key.to_vec()).append_ts(u64::MAX);
+            wb.delete_range_cf(handle, start.encoded(), end_key)?;
+        } else {
+            wb.delete_range_cf(handle, start_key, end_key)?;
         }
     } else {
+        let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
+        let mut it = db.new_iterator_cf(cf, iter_opt)?;
+        it.seek(start_key.into());
         while it.valid() {
             wb.delete_cf(handle, it.key())?;
             if wb.count() == MAX_DELETE_KEYS_COUNT {
