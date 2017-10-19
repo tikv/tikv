@@ -335,13 +335,9 @@ trait DebugExecutor {
             .wait()
             .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
         {
-            Some(mut meta_region) => {
-                let conf_ver = meta_region.take_region_epoch().get_conf_ver();
-                let peers = meta_region.take_peers();
-                debugger
-                    .set_region_tombstone(region, conf_ver, peers)
-                    .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
-            }
+            Some(meta_region) => debugger
+                .set_region_tombstone(region, meta_region)
+                .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e)),
             None => {
                 eprintln!("no such region in pd: {}", region);
                 process::exit(-1);

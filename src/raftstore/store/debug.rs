@@ -18,7 +18,7 @@ use std::sync::Arc;
 use protobuf::RepeatedField;
 
 use rocksdb::{Kv, SeekKey, DB};
-use kvproto::metapb::Peer;
+use kvproto::metapb::Region;
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
@@ -221,33 +221,28 @@ impl Debugger {
         Ok(())
     }
 
-    /// Set a region to tombstone by manual.
-    pub fn set_region_tombstone(
-        &self,
-        region: u64,
-        conf_ver: u64,
-        peers: RepeatedField<Peer>,
-    ) -> Result<()> {
+    /// Set a region to tombstone by manual, and apply other status(such as
+    /// peers, version, and key range) from `region` which comes from PD normaly.
+    pub fn set_region_tombstone(&self, id: u64, region: Region) -> Result<()> {
         let store_id = self.get_store_id()?;
-        if <&RepeatedField<_> as IntoIterator>::into_iter(&peers)
+        if region
+            .get_peers()
+            .iter()
             .any(|peer| peer.get_store_id() == store_id)
         {
             return Err(box_err!("The peer is still in new peers list"));
         }
 
         let db = &self.engines.kv_engine;
-        let key = keys::region_state_key(region);
+        let key = keys::region_state_key(id);
         match box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)) {
             Some(mut region_state) => {
+                let conf_ver = region.get_region_epoch().get_conf_ver();
                 if conf_ver == region_state.get_region().get_region_epoch().get_conf_ver() {
                     return Err(box_err!("The conf_ver hasn't changed."));
                 }
                 region_state.set_state(PeerState::Tombstone);
-                region_state.mut_region().set_peers(peers);
-                region_state
-                    .mut_region()
-                    .mut_region_epoch()
-                    .set_conf_ver(conf_ver);
+                region_state.set_region(region);
                 if let Some(cf_raft) = db.cf_handle(CF_RAFT) {
                     box_try!(db.put_msg_cf(cf_raft, &key, &region_state));
                     Ok(())
