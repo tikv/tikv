@@ -32,12 +32,11 @@ use rand::{self, Rng};
 use kvproto::eraftpb::{Entry, EntryType, HardState, Message, MessageType, Snapshot};
 use protobuf::repeated::RepeatedField;
 
-use raft::storage::Storage;
-use raft::progress::{Inflights, Progress, ProgressState};
-use raft::errors::{Error, Result, StorageError};
-use raft::raft_log::{self, RaftLog};
-use raft::read_only::{ReadOnly, ReadOnlyOption, ReadState};
-
+use super::storage::Storage;
+use super::progress::{Inflights, Progress, ProgressState};
+use super::errors::{Error, Result, StorageError};
+use super::raft_log::{self, RaftLog};
+use super::read_only::{ReadOnly, ReadOnlyOption, ReadState};
 use super::FlatMap;
 
 // CAMPAIGN_PRE_ELECTION represents the first phase of a normal election when
@@ -600,16 +599,21 @@ impl<T: Storage> Raft<T> {
     // the commit index changed (in which case the caller should call
     // r.bcast_append).
     pub fn maybe_commit(&mut self) -> bool {
-        // TODO: optimize
-        let mut mis = Vec::with_capacity(self.prs.len());
-        for p in self.prs.values() {
-            mis.push(p.matched);
+        let mut mis_arr = [0; 5];
+        let mut mis_vec;
+        let mis = if self.prs.len() <= 5 {
+            &mut mis_arr[..self.prs.len()]
+        } else {
+            mis_vec = vec![0; self.prs.len()];
+            mis_vec.as_mut_slice()
+        };
+        for (i, pr) in self.prs.values().enumerate() {
+            mis[i] = pr.matched;
         }
         // reverse sort
         mis.sort_by(|a, b| b.cmp(a));
         let mci = mis[self.quorum() - 1];
-        let term = self.term;
-        self.raft_log.maybe_commit(mci, term)
+        self.raft_log.maybe_commit(mci, self.term)
     }
 
     pub fn reset(&mut self, term: u64) {
