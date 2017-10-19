@@ -135,6 +135,7 @@ mod size {
 }
 
 pub use self::table::TableCheckObserver;
+
 mod table {
     use raftstore::store::engine::Iterable;
 
@@ -181,9 +182,9 @@ mod table {
                     .unwrap(),
             ) {
                 // This region's actual start_key and actual end_key are valid table keys,
-                // and they come from different tables. So false for splitting at table bound.
-                Ok(false) => false,
-                _ => true,
+                // and they come from the same table.
+                Ok(true) => true,
+                _ => false,
             }
         }
 
