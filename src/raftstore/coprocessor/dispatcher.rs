@@ -11,11 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Config, ObserverContext, RegionObserver, Result, SplitTableChecker};
-use super::super::store::SplitChecker;
-
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
+
+use raftstore::store::Msg;
+use util::transport::{SendCh};
+
+use super::{Config, ObserverContext, RegionObserver, Result, SizeCheckObserver,
+            SplitCheckObserver, TableCheckObserver};
 
 struct ObserverEntry {
     priority: u32,
@@ -56,12 +59,21 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn split_checker(&self) -> Option<Box<SplitChecker>> {
+    pub fn split_check_observers(
+        &self,
+        ch: SendCh<Msg>,
+        region_max_size: u64,
+        split_size: u64,
+    ) -> Vec<Box<SplitCheckObserver>> {
+        let mut checkers = Vec::new();
         if self.config.split_region_on_table {
-            Some(Box::new(SplitTableChecker::new()))
-        } else {
-            None
+            checkers.push(Box::new(TableCheckObserver::new()) as
+                Box<SplitCheckObserver>);
         }
+        checkers.push(Box::new(
+            SizeCheckObserver::new(ch, region_max_size, split_size),
+        ) as Box<SplitCheckObserver>);
+        checkers
     }
 
     /// Call all prepose hook until bypass is set to true.

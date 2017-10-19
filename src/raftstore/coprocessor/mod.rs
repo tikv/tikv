@@ -15,11 +15,13 @@ mod region_snapshot;
 pub mod dispatcher;
 pub mod split_observer;
 mod error;
-mod split_table;
+mod split_check_observer;
 mod config;
+mod metrics;
 
 pub use self::config::Config;
-pub use self::split_table::Checker as SplitTableChecker;
+pub use self::split_check_observer::{Observer as SplitCheckObserver, SizeCheckObserver,
+                                     TableCheckObserver};
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 

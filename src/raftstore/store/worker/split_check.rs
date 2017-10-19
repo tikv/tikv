@@ -21,9 +21,9 @@ use rocksdb::DB;
 use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
 
+use raftstore::coprocessor::SplitCheckObserver;
 use raftstore::store::{keys, Msg};
 use raftstore::store::engine::{IterOption, Iterable};
-use raftstore::store::util;
 use raftstore::Result;
 use rocksdb::DBIterator;
 use util::escape;
@@ -121,99 +121,6 @@ impl<'a> MergedIterator<'a> {
     }
 }
 
-/// An interface for writing split checker extensions.
-pub trait Checker: Send {
-    // The Checker's name.
-    fn name(&self) -> &str;
-    /// Do some quick checks, true for skipping `find_split_key`.
-    fn prev_check(&self, engine: &DB, region: &Region) -> bool;
-    /// Feed keys and value sizes in order to find the split key.
-    fn find_split_key(&mut self, key: &[u8], value_size: u64) -> Option<Vec<u8>>;
-    /// Called at the end of check, for cleaning up.
-    fn finish(&mut self);
-}
-
-struct SizeChecker<C> {
-    ch: RetryableSendCh<Msg, C>,
-    region_max_size: u64,
-    split_size: u64,
-
-    split_key: Option<Vec<u8>>,
-    current_size: u64,
-}
-
-impl<C: Sender<Msg> + Send + 'static> SizeChecker<C> {
-    fn check_size(&self, engine: &DB, region: &Region) -> Option<u64> {
-        let region_id = region.get_id();
-        let region_size = match util::get_region_approximate_size(engine, region) {
-            Ok(size) => size,
-            Err(e) => {
-                error!(
-                    "[region {}] failed to get approximate size: {}",
-                    region_id,
-                    e
-                );
-                return None;
-            }
-        };
-
-        let res = Msg::ApproximateRegionSize {
-            region_id: region_id,
-            region_size: region_size,
-        };
-        if let Err(e) = self.ch.try_send(res) {
-            error!(
-                "[region {}] failed to send approximate region size: {}",
-                region_id,
-                e
-            );
-        }
-
-        REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        Some(region_size)
-    }
-}
-
-impl<C: Sender<Msg> + Send + 'static> Checker for SizeChecker<C> {
-    fn name(&self) -> &str {
-        "SizeChecker"
-    }
-
-    fn prev_check(&self, engine: &DB, region: &Region) -> bool {
-        if let Some(region_size) = self.check_size(engine, region) {
-            if region_size < self.region_max_size {
-                true
-            } else {
-                info!(
-                    "[region {}] approximate size {} >= {}, need to do split check",
-                    region.get_id(),
-                    region_size,
-                    self.region_max_size
-                );
-                false
-            }
-        } else {
-            false
-        }
-    }
-
-    fn find_split_key(&mut self, key: &[u8], value_size: u64) -> Option<Vec<u8>> {
-        self.current_size += key.len() as u64 + value_size;
-        if self.split_key.is_none() && self.current_size > self.split_size {
-            self.split_key = Some(key.to_vec());
-        }
-        if self.split_key.is_some() && self.current_size >= self.region_max_size {
-            return self.split_key.take();
-        }
-        None
-    }
-
-    fn finish(&mut self) {
-        self.split_key = None;
-        self.current_size = 0;
-    }
-}
-
 /// Split checking task.
 pub struct Task {
     region: Region,
@@ -236,41 +143,30 @@ impl Display for Task {
 pub struct Runner<C> {
     ch: RetryableSendCh<Msg, C>,
     engine: Arc<DB>,
-    checkers: Vec<Box<Checker>>,
+    checkers: Vec<Box<SplitCheckObserver>>,
 }
 
-impl<C: Sender<Msg> + Send + 'static> Runner<C> {
+impl<C: Sender<Msg>> Runner<C> {
     pub fn new(
         engine: Arc<DB>,
         ch: RetryableSendCh<Msg, C>,
-        region_max_size: u64,
-        split_size: u64,
+        checkers: Vec<Box<SplitCheckObserver>>,
     ) -> Runner<C> {
-
         Runner {
-            engine: engine,
-            ch: ch.clone(),
-            checkers: vec![
-                Box::new(SizeChecker {
-                    ch: ch,
-                    region_max_size: region_max_size,
-                    split_size: split_size,
-                    split_key: None,
-                    current_size: 0,
-                }),
-            ],
+            engine,
+            ch,
+            checkers,
         }
     }
 
-    pub fn set_priority_checker(&mut self, checker: Box<Checker>) {
-        self.checkers.insert(0, checker)
-    }
-
     fn check_split(&mut self, region: &Region) {
-        let skips: Vec<_> = self.checkers
-            .iter()
-            .map(|c| c.prev_check(&self.engine, region))
-            .collect();
+        let skips: Vec<_> = {
+            let engine = &self.engine;
+            self.checkers
+                .iter_mut()
+                .map(|c| c.before_check(engine, region))
+                .collect()
+        };
         if skips.iter().all(|&s| s) {
             return;
         }
@@ -294,7 +190,7 @@ impl<C: Sender<Msg> + Send + 'static> Runner<C> {
                 for (i, checker) in checkers.iter_mut().enumerate() {
                     if !skips[i] {
                         if let Some(key) =
-                            checker.find_split_key(e.key.as_ref().unwrap(), e.value_size as u64)
+                            checker.check_key_value_len(e.key.as_ref().unwrap(), e.value_size as u64)
                         {
                             info!(
                                 "[region {}] checker {} requires splitting at {:?}",
@@ -308,9 +204,6 @@ impl<C: Sender<Msg> + Send + 'static> Runner<C> {
                     }
                 }
             });
-        for checker in checkers {
-            checker.finish();
-        }
         timer.observe_duration();
 
         if let Err(e) = res {
@@ -339,7 +232,7 @@ impl<C: Sender<Msg> + Send + 'static> Runner<C> {
     }
 }
 
-impl<C: Sender<Msg> + Send + 'static> Runnable<Task> for Runner<C> {
+impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
         self.check_split(&task.region);
     }
@@ -370,7 +263,7 @@ mod tests {
     use util::rocksdb::{new_engine, new_engine_opt, CFOptions};
     use util::properties::SizePropertiesCollectorFactory;
     use coprocessor::codec::table;
-    use raftstore::coprocessor::SplitTableChecker;
+    use raftstore::coprocessor::{SizeCheckObserver, TableCheckObserver};
     use super::*;
 
     #[test]
@@ -397,7 +290,11 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
-        let mut runnable = Runner::new(engine.clone(), ch, 100, 60);
+        let mut runnable = Runner::new(
+            engine.clone(),
+            ch.clone(),
+            vec![Box::new(SizeCheckObserver::new(ch, 100, 60))],
+        );
 
         // so split key will be z0006
         for i in 0..7 {
@@ -496,8 +393,14 @@ mod tests {
 
         let (table_tx, table_rx) = mpsc::sync_channel(100);
         let table_ch = RetryableSendCh::new(table_tx, "test-split-table");
-        let mut table_runnable = Runner::new(engine.clone(), table_ch, 200, 120);
-        table_runnable.set_priority_checker(Box::new(SplitTableChecker::new()));
+        let mut table_runnable = Runner::new(
+            engine.clone(),
+            table_ch.clone(),
+            vec![
+                Box::new(TableCheckObserver::new()),
+                Box::new(SizeCheckObserver::new(table_ch, 200, 120)),
+            ],
+        );
 
         let check = |msg: Msg, key: Vec<u8>| match msg {
             Msg::SplitRegion { split_key, .. } => {
