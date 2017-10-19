@@ -458,7 +458,7 @@ impl<T: Storage> Raft<T> {
         if let Err(e) = snapshot_r {
             if e == Error::Store(StorageError::SnapshotTemporarilyUnavailable) {
                 debug!(
-                    "{} failed to send snapshot to {} because snapshot is termporarily \
+                    "{} failed to send snapshot to {} because snapshot is temporarily \
                      unavailable",
                     self.tag,
                     to
@@ -861,7 +861,7 @@ impl<T: Storage> Raft<T> {
                 let in_lease = self.check_quorum && self.leader_id != INVALID_ID &&
                     self.election_elapsed < self.election_timeout;
                 if !force && in_lease {
-                    // if a server receives ReqeustVote request within the minimum election
+                    // if a server receives RequestVote request within the minimum election
                     // timeout of hearing from a current leader, it does not update its term
                     // or grant its vote
                     info!(
@@ -1358,7 +1358,7 @@ impl<T: Storage> Raft<T> {
             MessageType::MsgReadIndex => {
                 if self.raft_log.term(self.raft_log.committed).unwrap_or(0) != self.term {
                     // Reject read only request when this leader has not committed any log entry
-                    // it its term.
+                    // in its term.
                     return;
                 }
 
@@ -1552,7 +1552,7 @@ impl<T: Storage> Raft<T> {
                         self.term,
                         m.get_from()
                     );
-                    // Leadership trnasfers never use pre-vote even if self.pre_vote is true; we
+                    // Leadership transfers never use pre-vote even if self.pre_vote is true; we
                     // know we are not recovering from a partition so there is no need for the
                     // extra round trip.
                     self.campaign(CAMPAIGN_TRANSFER);
@@ -1762,7 +1762,7 @@ impl<T: Storage> Raft<T> {
         self.del_progress(id);
         self.pending_conf = false;
 
-        // do not try to commit or abort transferring if there is no nodes in the cluster.
+        // do not try to commit or abort transferring if there are no nodes in the cluster.
         if self.prs.is_empty() {
             return;
         }
