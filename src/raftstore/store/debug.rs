@@ -228,6 +228,13 @@ impl Debugger {
         epoch: RegionEpoch,
         peers: RepeatedField<Peer>,
     ) -> Result<()> {
+        let store_id = self.get_store_id()?;
+        if <&RepeatedField<_> as IntoIterator>::into_iter(&peers)
+            .any(|peer| peer.get_store_id() == store_id)
+        {
+            return Err(box_err!("The peer is still in new peers list"));
+        }
+
         let db = &self.engines.kv_engine;
         let key = keys::region_state_key(region);
         match box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)) {
@@ -244,6 +251,16 @@ impl Debugger {
             }
             None => Err(box_err!("not a valid region")),
         }
+    }
+
+    fn get_store_id(&self) -> Result<u64> {
+        let db = &self.engines.kv_engine;
+        db.get_msg::<StoreIdent>(&keys::store_ident_key())
+            .map_err(|e| box_err!(e))
+            .and_then(|ident| match ident {
+                Some(ident) => Ok(ident.get_store_id()),
+                None => Err(Error::NotFound("No store ident key".to_owned())),
+            })
     }
 }
 
