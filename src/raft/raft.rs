@@ -599,22 +599,20 @@ impl<T: Storage> Raft<T> {
     // the commit index changed (in which case the caller should call
     // r.bcast_append).
     pub fn maybe_commit(&mut self) -> bool {
-        let mci = if self.prs.len() <= 5 {
-            let mut mis = [0; 5];
-            for (pr, m) in self.prs.values().zip(&mut mis) {
-                *m = pr.matched;
-            }
-            mis[..self.prs.len()].sort_by(|a, b| b.cmp(a));
-            mis[self.quorum() - 1]
+        let mut mis_arr = [0; 5];
+        let mut mis_vec;
+        let mis = if self.prs.len() <= 5 {
+            &mut mis_arr[..self.prs.len()]
         } else {
-            let mut mis = Vec::with_capacity(self.prs.len());
-            for p in self.prs.values() {
-                mis.push(p.matched);
-            }
-            // reverse sort
-            mis.sort_by(|a, b| b.cmp(a));
-            mis[self.quorum() - 1]
+            mis_vec = vec![0; self.prs.len()];
+            mis_vec.as_mut_slice()
         };
+        for (i, pr) in self.prs.values().enumerate() {
+            mis[i] = pr.matched;
+        }
+        // reverse sort
+        mis.sort_by(|a, b| b.cmp(a));
+        let mci = mis[self.quorum() - 1];
         self.raft_log.maybe_commit(mci, self.term)
     }
 
