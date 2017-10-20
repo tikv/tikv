@@ -225,27 +225,43 @@ impl Debugger {
     /// Set a region to tombstone by manual, and apply other status(such as
     /// peers, version, and key range) from `region` which comes from PD normaly.
     pub fn set_region_tombstone(&self, id: u64, region: Region) -> Result<()> {
-        let store_id = self.get_store_id()?;
-        if region
-            .get_peers()
-            .iter()
-            .any(|peer| peer.get_store_id() == store_id)
-        {
-            return Err(box_err!("The peer is still in new peers list"));
-        }
-
         let db = &self.engines.kv_engine;
         let key = keys::region_state_key(id);
-        match box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)) {
-            Some(_) => {
-                let wb = WriteBatch::new();
-                box_try!(write_peer_state(db, &wb, &region, PeerState::Tombstone));
-                let mut write_opts = WriteOptions::new();
-                write_opts.set_sync(true);
-                box_try!(db.write_opt(wb, &write_opts));
-                Ok(())
-            }
-            None => Err(box_err!("not a valid region")),
+
+        let old_region = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key))
+            .ok_or_else(|| Error::Other("Not a valid region".into()))
+            .map(|mut region_local_state| region_local_state.take_region())?;
+
+        let store_id = self.get_store_id()?;
+        let peer_id = old_region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == store_id)
+            .map(|p| p.get_id())
+            .ok_or_else(|| {
+                Error::Other("RegionLocalState doesn't contains the peer itself".into())
+            })?;
+
+        let new_conf_ver = region.get_region_epoch().get_conf_ver();
+        let old_conf_ver = old_region.get_region_epoch().get_conf_ver();
+
+        // If the store is not in peers, or it's still in but its peer_id
+        // has changed, we know the peer is marked as tombstone success.
+        let scheduled = region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == store_id)
+            .map_or(true, |p| p.get_id() != peer_id);
+
+        if new_conf_ver > old_conf_ver && scheduled {
+            let wb = WriteBatch::new();
+            box_try!(write_peer_state(db, &wb, &region, PeerState::Tombstone));
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            box_try!(db.write_opt(wb, &write_opts));
+            Ok(())
+        } else {
+            Err(box_err!("The peer is still in target peers"))
         }
     }
 
