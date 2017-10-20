@@ -41,6 +41,7 @@ use protobuf::RepeatedField;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::PeerState;
+use kvproto::metapb::Region;
 use kvproto::eraftpb::Entry;
 use kvproto::kvrpcpb::MvccInfo;
 use kvproto::debugpb::*;
@@ -324,20 +325,15 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
-    fn set_region_tombstone(&self, region_id: u64, endpoints: Vec<String>) {
-        let debugger = self.get_local_debugger().unwrap_or_else(|| {
-            eprintln!("This command is only for local mode");
-            process::exit(-1);
-        });
+    fn set_region_tombstone_after_remove_peer(&self, region_id: u64, endpoints: Vec<String>) {
+        self.check_local_mode();
         match RpcClient::new(&endpoints)
             .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
             .get_region_by_id(region_id)
             .wait()
             .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
         {
-            Some(region) => debugger
-                .set_region_tombstone(region_id, region)
-                .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e)),
+            Some(region) => self.set_region_tombstone(region_id, region),
             None => {
                 eprintln!("no such region in pd: {}", region_id);
                 process::exit(-1);
@@ -345,7 +341,7 @@ trait DebugExecutor {
         }
     }
 
-    fn get_local_debugger(&self) -> Option<&Debugger>;
+    fn check_local_mode(&self);
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
 
@@ -365,12 +361,15 @@ trait DebugExecutor {
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
+
+    fn set_region_tombstone(&self, region_id: u64, region: Region);
 }
 
 
 impl DebugExecutor for DebugClient {
-    fn get_local_debugger(&self) -> Option<&Debugger> {
-        None
+    fn check_local_mode(&self) {
+        eprintln!("This command is only for local mode");
+        process::exit(-1);
     }
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
@@ -455,12 +454,14 @@ impl DebugExecutor for DebugClient {
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
         println!("success!");
     }
+
+    fn set_region_tombstone(&self, _: u64, _: Region) {
+        unimplemented!();
+    }
 }
 
 impl DebugExecutor for Debugger {
-    fn get_local_debugger(&self) -> Option<&Debugger> {
-        Some(self)
-    }
+    fn check_local_mode(&self) {}
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
         self.get_all_meta_regions()
@@ -507,6 +508,11 @@ impl DebugExecutor for Debugger {
         self.compact(db, cf, &from, &to)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
         println!("success!");
+    }
+
+    fn set_region_tombstone(&self, region_id: u64, region: Region) {
+        self.set_region_tombstone(region_id, region)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e))
     }
 }
 
@@ -880,7 +886,7 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
-        debug_executor.set_region_tombstone(region, pd_urls);
+        debug_executor.set_region_tombstone_after_remove_peer(region, pd_urls);
     } else {
         let _ = app.print_help();
     }
