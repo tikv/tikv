@@ -238,8 +238,8 @@ impl Debugger {
         let key = keys::region_state_key(id);
         match box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)) {
             Some(_) => {
-                let mut wb = WriteBatch::new();
-                box_try!(write_peer_state(db, &mut wb, &region, PeerState::Tombstone));
+                let wb = WriteBatch::new();
+                box_try!(write_peer_state(db, &wb, &region, PeerState::Tombstone));
                 let mut write_opts = WriteOptions::new();
                 write_opts.set_sync(true);
                 box_try!(db.write_opt(wb, &write_opts));
