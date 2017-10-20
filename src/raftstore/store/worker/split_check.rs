@@ -189,8 +189,8 @@ impl<C: Sender<Msg>> Runner<C> {
             .map(|mut iter| 'out: while let Some(e) = iter.next() {
                 for (i, checker) in checkers.iter_mut().enumerate() {
                     if !skips[i] {
-                        if let Some(key) =
-                            checker.check_key_value_len(e.key.as_ref().unwrap(), e.value_size as u64)
+                        if let Some(key) = checker
+                            .check_key_value_len(e.key.as_ref().unwrap(), e.value_size as u64)
                         {
                             info!(
                                 "[region {}] checker {} requires splitting at {:?}",

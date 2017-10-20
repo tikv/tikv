@@ -15,7 +15,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
 
 use raftstore::store::Msg;
-use util::transport::{SendCh};
+use util::transport::SendCh;
 
 use super::{Config, ObserverContext, RegionObserver, Result, SizeCheckObserver,
             SplitCheckObserver, TableCheckObserver};

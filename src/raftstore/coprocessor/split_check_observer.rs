@@ -12,11 +12,11 @@
 // limitations under the License.
 
 use rocksdb::{SeekKey, DB};
-use kvproto::metapb::{Region};
+use kvproto::metapb::Region;
 
 use coprocessor::codec::table as table_codec;
 use storage::types::Key;
-use storage::{CfName, LARGE_CFS};
+use storage::{CfName, CF_WRITE};
 use util::transport::{RetryableSendCh, Sender};
 
 use super::super::store::{keys, util, Msg};
@@ -142,13 +142,15 @@ mod table {
     use super::*;
 
     pub struct TableCheckObserver {
-        prev_key: Vec<u8>,
+        prev_table_id: i64,
+        last_table_prefix: Option<Vec<u8>>,
     }
 
     impl TableCheckObserver {
         pub fn new() -> TableCheckObserver {
             TableCheckObserver {
-                prev_key: Vec::new(),
+                prev_table_id: 0,
+                last_table_prefix: None,
             }
         }
     }
@@ -159,73 +161,109 @@ mod table {
         }
 
         fn before_check(&mut self, engine: &DB, region: &Region) -> bool {
-            self.prev_key.clear();
+            self.prev_table_id = 0;
+            self.last_table_prefix = None;
 
-            let (actual_start_key, actual_end_key) = match bound_keys(engine, LARGE_CFS, region) {
-                Ok(Some((actual_start_key, actual_end_key))) => (actual_start_key, actual_end_key),
-                Ok(None) => return true,
-                Err(err) => {
-                    error!(
-                        "[region {}] failed to get region bound: {}",
-                        region.get_id(),
-                        err
-                    );
-                    return true;
-                }
-            };
-            match table_codec::in_same_table(
-                &Key::from_encoded(keys::origin_key(&actual_start_key).to_vec())
-                    .raw()
-                    .unwrap(),
-                &Key::from_encoded(keys::origin_key(&actual_end_key).to_vec())
-                    .raw()
-                    .unwrap(),
+            let (actual_start_key, actual_end_key) =
+                match bound_keys(engine, &[CF_WRITE], region) {
+                    Ok(Some((actual_start_key, actual_end_key))) => {
+                        (actual_start_key, actual_end_key)
+                    }
+                    Ok(None) => return true,
+                    Err(err) => {
+                        error!(
+                            "[region {}] failed to get region bound: {}",
+                            region.get_id(),
+                            err
+                        );
+                        return true;
+                    }
+                };
+
+            if !keys::validate_data_key(&actual_start_key) ||
+                !keys::validate_data_key(&actual_end_key)
+            {
+                return true;
+            }
+
+            let raw_start_key =
+                match Key::from_encoded(keys::origin_key(&actual_start_key).to_vec()).raw() {
+                    Ok(k) => k,
+                    Err(_) => return true,
+                };
+
+            let raw_end_key =
+                match Key::from_encoded(keys::origin_key(&actual_end_key).to_vec()).raw() {
+                    Ok(k) => k,
+                    Err(_) => return true,
+                };
+
+            let start_table_id = table_codec::decode_table_id(&raw_start_key).unwrap_or(0);
+            let end_table_id = table_codec::decode_table_id(&raw_end_key).unwrap_or(0);
+
+            use std::cmp::{Ord, Ordering};
+            match (
+                raw_start_key[0].cmp(&table_codec::TABLE_PREFIX[0]),
+                raw_end_key[0].cmp(&table_codec::TABLE_PREFIX[0]),
             ) {
-                // This region's actual start_key and actual end_key are valid table keys,
-                // and they come from the same table.
-                Ok(true) => true,
-                _ => false,
+                (Ordering::Less, Ordering::Less) | (Ordering::Greater, Ordering::Greater) => true,
+                (Ordering::Less, Ordering::Equal) => {
+                    if end_table_id != 0 {
+                        self.last_table_prefix = Some(table_codec::gen_table_prefix(end_table_id));
+                    }
+                    false
+                }
+                (Ordering::Less, Ordering::Greater) => false,
+                (Ordering::Equal, Ordering::Equal) => {
+                    if start_table_id == end_table_id {
+                        // Same table.
+                        // TODO: what if start_table_id equals to 0.
+                        true
+                    } else {
+                        self.last_table_prefix = Some(table_codec::gen_table_prefix(end_table_id));
+                        false
+                    }
+                }
+                (Ordering::Equal, Ordering::Greater) => {
+                    self.prev_table_id = start_table_id;
+                    false
+                }
+                _ => panic!(
+                    "start_key {:?} and end_key {:?} out of order",
+                    actual_end_key,
+                    actual_end_key
+                ),
             }
         }
 
         fn check_key_value_len(&mut self, key: &[u8], _: u64) -> Option<Vec<u8>> {
-            let split_key = cross_table(&self.prev_key, key);
-
-            // Avoid allocation.
-            self.prev_key.clear();
-            self.prev_key.extend_from_slice(key);
-
-            split_key
+            if let Some(last_table_prefix) = self.last_table_prefix.take() {
+                Some(keys::data_key(Key::from_raw(&last_table_prefix).encoded()))
+            } else {
+                cross_table(self.prev_table_id, key)
+            }
         }
     }
 
-    /// If `left_key` and `right_key` are in different tables,
-    /// it returns the `right_key`'s table prefix.
-    fn cross_table(left_key: &[u8], right_key: &[u8]) -> Option<Vec<u8>> {
-        if !keys::validate_data_key(left_key) || !keys::validate_data_key(right_key) {
+    /// If `current_key` is not in the table `table_id`,
+    /// it returns the `current_key`'s table prefix.
+    fn cross_table(table_id: i64, current_key: &[u8]) -> Option<Vec<u8>> {
+        if !keys::validate_data_key(current_key) {
             return None;
         }
-        let origin_right_key = keys::origin_key(right_key);
-        let raw_right_key = match Key::from_encoded(origin_right_key.to_vec()).raw() {
+        let origin_current_key = keys::origin_key(current_key);
+        let raw_current_key = match Key::from_encoded(origin_current_key.to_vec()).raw() {
             Ok(k) => k,
             Err(_) => return None,
         };
 
-        let origin_left_key = keys::origin_key(left_key);
-        let raw_left_key = match Key::from_encoded(origin_left_key.to_vec()).raw() {
-            Ok(k) => k,
-            Err(_) => return None,
+        let current_table_id = match table_codec::decode_table_id(&raw_current_key) {
+            Ok(id) => id,
+            _ => return None,
         };
 
-        if let Ok(false) = table_codec::in_same_table(&raw_left_key, &raw_right_key) {
-            let table_id = match table_codec::decode_table_id(&raw_right_key) {
-                Ok(id) => id,
-                _ => return None,
-            };
-
-            Some(keys::data_key(
-                Key::from_raw(&table_codec::gen_table_prefix(table_id)).encoded(),
-            ))
+        if table_id != current_table_id {
+            Some(table_codec::gen_table_prefix(current_table_id))
         } else {
             None
         }
@@ -294,12 +332,11 @@ mod table {
 
         #[test]
         fn test_cross_table() {
-            let t1 = keys::data_key(Key::from_raw(&table_codec::gen_table_prefix(1)).encoded());
-            let t5 = keys::data_key(Key::from_raw(&table_codec::gen_table_prefix(5)).encoded());
+            let t2 = keys::data_key(Key::from_raw(&table_codec::gen_table_prefix(2)).encoded());
 
-            assert_eq!(cross_table(&t1, &t5).unwrap(), t5);
-            assert_eq!(cross_table(&t5, &t5), None);
-            assert_eq!(cross_table(b"foo", b"bar"), None);
+            assert_eq!(cross_table(1, &t2).unwrap(), t2);
+            assert_eq!(cross_table(2, &t2), None);
+            assert_eq!(cross_table(2, b"bar"), None);
         }
 
         #[test]
