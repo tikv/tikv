@@ -324,22 +324,22 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
-    fn set_region_tombstone(&self, region: u64, endpoints: Vec<String>) {
+    fn set_region_tombstone(&self, region_id: u64, endpoints: Vec<String>) {
         let debugger = self.get_local_debugger().unwrap_or_else(|| {
             eprintln!("This command is only for local mode");
             process::exit(-1);
         });
         match RpcClient::new(&endpoints)
             .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
-            .get_region_by_id(region)
+            .get_region_by_id(region_id)
             .wait()
             .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
         {
-            Some(meta_region) => debugger
-                .set_region_tombstone(region, meta_region)
+            Some(region) => debugger
+                .set_region_tombstone(region_id, region)
                 .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e)),
             None => {
-                eprintln!("no such region in pd: {}", region);
+                eprintln!("no such region in pd: {}", region_id);
                 process::exit(-1);
             }
         }
@@ -794,7 +794,7 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("the pd url"),
+                        .help("PD endpoints"),
                 ),
         );
     let matches = app.clone().get_matches();

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use protobuf::RepeatedField;
 
-use rocksdb::{Kv, SeekKey, DB};
+use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
@@ -25,7 +25,8 @@ use kvproto::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
 use raftstore::store::{keys, Engines, Iterable, Peekable};
-use raftstore::store::engine::{IterOption, Mutable};
+use raftstore::store::peer_storage::write_peer_state;
+use raftstore::store::engine::IterOption;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
@@ -236,19 +237,13 @@ impl Debugger {
         let db = &self.engines.kv_engine;
         let key = keys::region_state_key(id);
         match box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)) {
-            Some(mut region_state) => {
-                let conf_ver = region.get_region_epoch().get_conf_ver();
-                if conf_ver == region_state.get_region().get_region_epoch().get_conf_ver() {
-                    return Err(box_err!("The conf_ver hasn't changed."));
-                }
-                region_state.set_state(PeerState::Tombstone);
-                region_state.set_region(region);
-                if let Some(cf_raft) = db.cf_handle(CF_RAFT) {
-                    box_try!(db.put_msg_cf(cf_raft, &key, &region_state));
-                    Ok(())
-                } else {
-                    Err(box_err!("can't get raft cf"))
-                }
+            Some(_) => {
+                let mut wb = WriteBatch::new();
+                box_try!(write_peer_state(db, &mut wb, &region, PeerState::Tombstone));
+                let mut write_opts = WriteOptions::new();
+                write_opts.set_sync(true);
+                box_try!(db.write_opt(wb, &write_opts));
+                Ok(())
             }
             None => Err(box_err!("not a valid region")),
         }
