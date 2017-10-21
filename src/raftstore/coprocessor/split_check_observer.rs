@@ -11,12 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
 use rocksdb::{SeekKey, DB};
 use kvproto::metapb::Region;
 
 use coprocessor::codec::table as table_codec;
 use storage::types::Key;
-use storage::{CfName, CF_WRITE};
+use storage::CF_WRITE;
 use util::transport::{RetryableSendCh, Sender};
 
 use super::super::store::{keys, util, Msg};
@@ -164,21 +165,18 @@ mod table {
             self.prev_table_id = 0;
             self.last_table_prefix = None;
 
-            let (actual_start_key, actual_end_key) =
-                match bound_keys(engine, &[CF_WRITE], region) {
-                    Ok(Some((actual_start_key, actual_end_key))) => {
-                        (actual_start_key, actual_end_key)
-                    }
-                    Ok(None) => return true,
-                    Err(err) => {
-                        error!(
-                            "[region {}] failed to get region bound: {}",
-                            region.get_id(),
-                            err
-                        );
-                        return true;
-                    }
-                };
+            let (actual_start_key, actual_end_key) = match bound_keys(engine, region) {
+                Ok(Some((actual_start_key, actual_end_key))) => (actual_start_key, actual_end_key),
+                Ok(None) => return true,
+                Err(err) => {
+                    error!(
+                        "[region {}] failed to get region bound: {}",
+                        region.get_id(),
+                        err
+                    );
+                    return true;
+                }
+            };
 
             if !keys::validate_data_key(&actual_start_key) ||
                 !keys::validate_data_key(&actual_end_key)
@@ -201,10 +199,11 @@ mod table {
             let start_table_id = table_codec::decode_table_id(&raw_start_key).unwrap_or(0);
             let end_table_id = table_codec::decode_table_id(&raw_end_key).unwrap_or(0);
 
-            use std::cmp::{Ord, Ordering};
             match (
-                raw_start_key[0].cmp(&table_codec::TABLE_PREFIX[0]),
-                raw_end_key[0].cmp(&table_codec::TABLE_PREFIX[0]),
+                raw_start_key[..table_codec::TABLE_PREFIX_LEN]
+                    .cmp(&table_codec::TABLE_PREFIX[..table_codec::TABLE_PREFIX_LEN]),
+                raw_end_key[..table_codec::TABLE_PREFIX_LEN]
+                    .cmp(&table_codec::TABLE_PREFIX[..table_codec::TABLE_PREFIX_LEN]),
             ) {
                 (Ordering::Less, Ordering::Less) | (Ordering::Greater, Ordering::Greater) => true,
                 (Ordering::Less, Ordering::Equal) => {
@@ -239,8 +238,12 @@ mod table {
         fn check_key_value_len(&mut self, key: &[u8], _: u64) -> Option<Vec<u8>> {
             if let Some(last_table_prefix) = self.last_table_prefix.take() {
                 Some(keys::data_key(Key::from_raw(&last_table_prefix).encoded()))
+            } else if let Some(current_table_prefix) = cross_table(self.prev_table_id, key) {
+                Some(keys::data_key(
+                    Key::from_raw(&current_table_prefix).encoded(),
+                ))
             } else {
-                cross_table(self.prev_table_id, key)
+                None
             }
         }
     }
@@ -270,40 +273,26 @@ mod table {
     }
 
     #[allow(collapsible_if)]
-    fn bound_keys(db: &DB, cfs: &[CfName], region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    fn bound_keys(db: &DB, region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let start_key = keys::enc_start_key(region);
         let end_key = keys::enc_end_key(region);
         let mut first_key = None;
         let mut last_key = None;
 
-        for cf in cfs {
-            let iter_opt = IterOption::new(Some(end_key.clone()), false);
-            let mut iter = box_try!(db.new_iterator_cf(cf, iter_opt));
+        let iter_opt = IterOption::new(Some(end_key), false);
+        let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
 
-            // the first key
-            if iter.seek(start_key.as_slice().into()) {
-                let key = iter.key().to_vec();
-                if first_key.is_some() {
-                    if &key < first_key.as_ref().unwrap() {
-                        first_key = Some(key);
-                    }
-                } else {
-                    first_key = Some(key);
-                }
-            } // else { No data in this CF }
+        // the first key
+        if iter.seek(start_key.as_slice().into()) {
+            let key = iter.key().to_vec();
+            first_key = Some(key);
+        } // else { No data in this CF }
 
-            // the last key
-            if iter.seek(SeekKey::End) {
-                let key = iter.key().to_vec();
-                if last_key.is_some() {
-                    if &key < last_key.as_ref().unwrap() {
-                        last_key = Some(key);
-                    }
-                } else {
-                    last_key = Some(key);
-                }
-            } // else { No data in this CF }
-        }
+        // the last key
+        if iter.seek(SeekKey::End) {
+            let key = iter.key().to_vec();
+            last_key = Some(key);
+        } // else { No data in this CF }
 
         match (first_key, last_key) {
             (Some(fk), Some(lk)) => Ok(Some((fk, lk))),
@@ -319,6 +308,7 @@ mod table {
     #[cfg(test)]
     mod test {
         use std::sync::Arc;
+        use std::sync::mpsc;
 
         use tempdir::TempDir;
         use rocksdb::Writable;
@@ -327,15 +317,18 @@ mod table {
         use storage::ALL_CFS;
         use storage::types::Key;
         use util::rocksdb::new_engine;
+        use util::worker::Runnable;
 
+        use super::super::super::super::store::{SplitCheckRunner, SplitCheckTask};
         use super::*;
 
         #[test]
         fn test_cross_table() {
-            let t2 = keys::data_key(Key::from_raw(&table_codec::gen_table_prefix(2)).encoded());
+            let t2 = table_codec::gen_table_prefix(2);
+            let data_t2 = keys::data_key(Key::from_raw(&t2).encoded());
 
-            assert_eq!(cross_table(1, &t2).unwrap(), t2);
-            assert_eq!(cross_table(2, &t2), None);
+            assert_eq!(cross_table(1, &data_t2).unwrap(), t2);
+            assert_eq!(cross_table(2, &data_t2), None);
             assert_eq!(cross_table(2, b"bar"), None);
         }
 
@@ -343,6 +336,7 @@ mod table {
         fn test_bound_keys() {
             let path = TempDir::new("test-split-table").unwrap();
             let engine = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
+            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
 
             let mut region = Region::new();
             region.set_id(1);
@@ -350,7 +344,7 @@ mod table {
             region.mut_region_epoch().set_version(2);
             region.mut_region_epoch().set_conf_ver(5);
 
-            assert_eq!(bound_keys(&engine, LARGE_CFS, &region).unwrap(), None);
+            assert_eq!(bound_keys(&engine, &region).unwrap(), None);
 
             // arbitrary padding.
             let padding = b"_r00000005";
@@ -358,130 +352,212 @@ mod table {
             let mut key = table_codec::gen_table_prefix(1);
             key.extend_from_slice(padding);
             let s1 = keys::data_key(Key::from_raw(&key).encoded());
-            engine.put(&s1, &s1).unwrap();
+            engine.put_cf(write_cf, &s1, &s1).unwrap();
+
+            let mut check = |start_id: Option<i64>, end_id: Option<i64>, result| {
+                region.set_start_key(
+                    start_id
+                        .map(|id| {
+                            Key::from_raw(&table_codec::gen_table_prefix(id))
+                                .encoded()
+                                .to_vec()
+                        })
+                        .unwrap_or_else(Vec::new),
+                );
+                region.set_end_key(
+                    end_id
+                        .map(|id| {
+                            Key::from_raw(&table_codec::gen_table_prefix(id))
+                                .encoded()
+                                .to_vec()
+                        })
+                        .unwrap_or_else(Vec::new),
+                );
+                assert_eq!(bound_keys(&engine, &region).unwrap(), result);
+            };
 
             // ["", "") => {t1_xx, t1_xx}
-            assert_eq!(
-                bound_keys(&engine, LARGE_CFS, &region).unwrap(),
-                Some((s1.clone(), s1.clone()))
-            );
+            check(None, None, Some((s1.clone(), s1.clone())));
 
             // ["", "t1") => None
-            region.set_start_key(vec![]);
-            region.set_end_key(
-                Key::from_raw(&table_codec::gen_table_prefix(1))
-                    .encoded()
-                    .to_vec(),
-            );
-            assert_eq!(bound_keys(&engine, LARGE_CFS, &region).unwrap(), None);
+            check(None, Some(1), None);
 
             // ["t1", "") => {t1_xx, t1_xx}
-            region.set_start_key(
-                Key::from_raw(&table_codec::gen_table_prefix(1))
-                    .encoded()
-                    .to_vec(),
-            );
-            region.set_end_key(vec![]);
-            assert_eq!(
-                bound_keys(&engine, LARGE_CFS, &region).unwrap(),
-                Some((s1.clone(), s1.clone()))
-            );
+            check(Some(1), None, Some((s1.clone(), s1.clone())));
 
             // ["t1", "t2") => {t1_xx, t1_xx}
-            region.set_start_key(
-                Key::from_raw(&table_codec::gen_table_prefix(1))
-                    .encoded()
-                    .to_vec(),
-            );
-            region.set_end_key(
-                Key::from_raw(&table_codec::gen_table_prefix(2))
-                    .encoded()
-                    .to_vec(),
-            );
-            assert_eq!(
-                bound_keys(&engine, LARGE_CFS, &region).unwrap(),
-                Some((s1.clone(), s1.clone()))
-            );
+            check(Some(1), Some(2), Some((s1.clone(), s1.clone())));
 
             // Put t2_xx
             let mut key = table_codec::gen_table_prefix(2);
             key.extend_from_slice(padding);
             let s2 = keys::data_key(Key::from_raw(&key).encoded());
-            engine.put(&s2, &s2).unwrap();
+            engine.put_cf(write_cf, &s2, &s2).unwrap();
 
             // ["t1", "") => {t1_xx, t2_xx}
-            region.set_start_key(
-                Key::from_raw(&table_codec::gen_table_prefix(1))
-                    .encoded()
-                    .to_vec(),
-            );
-            region.set_end_key(vec![]);
-            assert_eq!(
-                bound_keys(&engine, LARGE_CFS, &region).unwrap(),
-                Some((s1.clone(), s2.clone()))
-            );
+            check(Some(1), None, Some((s1.clone(), s2.clone())));
 
             // ["", "t2") => {t1_xx, t1_xx}
-            region.set_start_key(vec![]);
-            region.set_end_key(
-                Key::from_raw(&table_codec::gen_table_prefix(2))
-                    .encoded()
-                    .to_vec(),
-            );
-            assert_eq!(
-                bound_keys(&engine, LARGE_CFS, &region).unwrap(),
-                Some((s1.clone(), s1.clone()))
-            );
+            check(None, Some(2), Some((s1.clone(), s1.clone())));
 
             // ["t1", "t2") => {t1_xx, t1_xx}
-            region.set_start_key(
-                Key::from_raw(&table_codec::gen_table_prefix(1))
-                    .encoded()
-                    .to_vec(),
-            );
-            region.set_end_key(
-                Key::from_raw(&table_codec::gen_table_prefix(2))
-                    .encoded()
-                    .to_vec(),
-            );
-            assert_eq!(
-                bound_keys(&engine, LARGE_CFS, &region).unwrap(),
-                Some((s1.clone(), s1.clone()))
-            );
+            check(Some(1), Some(2), Some((s1.clone(), s1.clone())));
 
             // Put t3_xx
             let mut key = table_codec::gen_table_prefix(3);
             key.extend_from_slice(padding);
             let s3 = keys::data_key(Key::from_raw(&key).encoded());
-            engine.put(&s3, &s3).unwrap();
+            engine.put_cf(write_cf, &s3, &s3).unwrap();
 
             // ["", "t3") => {t1_xx, t2_xx}
-            region.set_start_key(vec![]);
-            region.set_end_key(
-                Key::from_raw(&table_codec::gen_table_prefix(3))
-                    .encoded()
-                    .to_vec(),
-            );
-            assert_eq!(
-                bound_keys(&engine, LARGE_CFS, &region).unwrap(),
-                Some((s1.clone(), s2.clone()))
-            );
+            check(None, Some(3), Some((s1.clone(), s2.clone())));
 
             // ["t1", "t3") => {t1_xx, t2_xx}
-            region.set_start_key(
-                Key::from_raw(&table_codec::gen_table_prefix(1))
+            check(Some(1), Some(3), Some((s1.clone(), s2.clone())));
+        }
+
+        #[test]
+        fn test_table_check_observer() {
+            let path = TempDir::new("test-raftstore").unwrap();
+            let engine = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
+            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+
+            let mut region = Region::new();
+            region.set_id(1);
+            region.mut_peers().push(Peer::new());
+            region.mut_region_epoch().set_version(2);
+            region.mut_region_epoch().set_conf_ver(5);
+
+            let (tx, rx) = mpsc::sync_channel(100);
+            let ch = RetryableSendCh::new(tx, "test-split");
+            let mut runnable = SplitCheckRunner::new(
+                engine.clone(),
+                ch.clone(),
+                vec![Box::new(TableCheckObserver::new())],
+            );
+
+            let mut check = |encoded_start_key: Option<Vec<u8>>,
+                             encoded_end_key: Option<Vec<u8>>,
+                             table_id: Option<i64>| {
+                region.set_start_key(encoded_start_key.unwrap_or_else(Vec::new));
+                region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
+                runnable.run(SplitCheckTask::new(&region));
+
+                if let Some(id) = table_id {
+                    let key = Key::from_raw(&table_codec::gen_table_prefix(id));
+                    match rx.try_recv() {
+                        Ok(Msg::SplitRegion { split_key, .. }) => {
+                            assert_eq!(&split_key, key.encoded());
+                        }
+                        others => panic!("expect split check result, but got {:?}", others),
+                    }
+                } else {
+                    match rx.try_recv() {
+                        Err(mpsc::TryRecvError::Empty) => (),
+                        others => panic!("expect empty, but got {:?}", others),
+                    }
+                }
+            };
+
+            let gen_data_table_prefix = |table_id| {
+                Key::from_raw(&table_codec::gen_table_prefix(table_id))
                     .encoded()
-                    .to_vec(),
+                    .clone()
+            };
+
+            // arbitrary padding.
+            let padding = b"_r00000005";
+            let mut array = vec![];
+
+            // Put some tables
+            // t1_xx, t3_xx
+            for i in 1..4 {
+                if i % 2 == 0 {
+                    // leave some space.
+                    continue;
+                }
+
+                let mut key = table_codec::gen_table_prefix(i);
+                key.extend_from_slice(padding);
+                let s = keys::data_key(Key::from_raw(&key).encoded());
+                engine.put_cf(write_cf, &s, &s).unwrap();
+                array.push(s);
+            }
+
+            // ["", "") => t3
+            check(None, None, Some(3));
+
+            // ["t1", "") => t3
+            check(Some(gen_data_table_prefix(1)), None, Some(3));
+
+
+            // ["t1", "t5") => t3
+            check(
+                Some(gen_data_table_prefix(1)),
+                Some(gen_data_table_prefix(5)),
+                Some(3),
             );
-            region.set_end_key(
-                Key::from_raw(&table_codec::gen_table_prefix(3))
-                    .encoded()
-                    .to_vec(),
+
+
+            // Put some data to t3
+            for i in 1..4 {
+                let mut key = table_codec::gen_table_prefix(3);
+                key.extend_from_slice(format!("{:?}{}", padding, i).as_bytes());
+                let s = keys::data_key(Key::from_raw(&key).encoded());
+                engine.put_cf(write_cf, &s, &s).unwrap();
+                array.push(s);
+            }
+
+            // ["t1", "") => t3
+            check(Some(gen_data_table_prefix(1)), None, Some(3));
+
+            // ["t3", "") => skip
+            check(Some(gen_data_table_prefix(3)), None, None);
+
+            // ["t3", "t5") => skip
+            check(
+                Some(gen_data_table_prefix(3)),
+                Some(gen_data_table_prefix(5)),
+                None,
             );
-            assert_eq!(
-                bound_keys(&engine, LARGE_CFS, &region).unwrap(),
-                Some((s1.clone(), s2.clone()))
-            );
+
+            // Put some data before t and after t.
+            for i in 0..3 {
+                {
+                    let key = format!("s{:?}{}", padding, i);
+                    let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
+                    engine.put_cf(write_cf, &s, &s).unwrap();
+                    array.push(s);
+                }
+                {
+                    let key = format!("u{:?}{}", padding, i);
+                    let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
+                    engine.put_cf(write_cf, &s, &s).unwrap();
+                    array.push(s);
+                }
+            }
+            array.sort();
+
+            // ["", "") => t1
+            check(None, None, Some(1));
+
+            // ["", "t1"] => skip
+            check(None, Some(gen_data_table_prefix(1)), None);
+
+            // ["", "t3"] => t1
+            check(None, Some(gen_data_table_prefix(3)), Some(1));
+
+            // ["", "s"] => skip
+            check(None, Some(b"s".to_vec()), None);
+
+            // ["u", ""] => skip
+            check(Some(b"u".to_vec()), None, None);
+
+            // ["t3", ""] => None
+            check(Some(gen_data_table_prefix(3)), None, None);
+
+            // ["t1", ""] => t3
+            check(Some(gen_data_table_prefix(1)), None, Some(3));
         }
     }
 }
