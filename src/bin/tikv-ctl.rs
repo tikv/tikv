@@ -323,6 +323,38 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
+    fn check_log_behind(&self, region: u64, leader_host: &str) {
+        let rhs_debug_executor = new_debug_executor(None, None, Some(leader_host));
+        let r1 = self.get_region_info(region);
+        let r2 = rhs_debug_executor.get_region_info(region);
+
+        let no_raft_local = |pos: &str| {
+            println!("No such RaftLocalState on {} for region: {}", pos, region);
+            process::exit(0);
+        };
+
+        let follower_last = r1.raft_local_state
+            .unwrap_or_else(|| no_raft_local("local"))
+            .get_last_index();
+        let leader_last = r2.raft_local_state
+            .unwrap_or_else(|| no_raft_local("remote"))
+            .get_last_index();
+
+        let leader_min = r2.raft_apply_state.map_or(
+            0,
+            |apply_state| apply_state.get_truncated_state().get_index(),
+        );
+
+        let behind = leader_last - follower_last;
+        println!("Follower behind leader: {} logs", behind);
+
+        if leader_last + 1 > leader_min {
+            println!("Please transfer leader to reactive the region");
+        } else {
+            println!("Please remove the peer and set it to tombstone");
+        }
+    }
+
     fn get_all_meta_regions(&self) -> Vec<u64>;
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
@@ -738,6 +770,24 @@ fn main() {
                         .takes_value(true)
                         .help("set the end raw key, in escaped form"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("log-behind")
+                .about("check how many logs behind to the leader")
+                .arg(
+                    Arg::with_name("region")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .help("the target region"),
+                )
+                .arg(
+                    Arg::with_name("leader-host")
+                        .required(true)
+                        .long("leader-host")
+                        .takes_value(true)
+                        .help("the remote leader host"),
+                ),
         );
     let matches = app.clone().get_matches();
 
@@ -819,6 +869,10 @@ fn main() {
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
         debug_executor.compact(db_type, cf, from_key, to_key);
+    } else if let Some(matches) = matches.subcommand_matches("log-behind") {
+        let region = matches.value_of("region").unwrap().parse().unwrap();
+        let leader_host = matches.value_of("leader-host").unwrap();
+        debug_executor.check_log_behind(region, leader_host);
     } else {
         let _ = app.print_help();
     }
