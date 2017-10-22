@@ -255,7 +255,8 @@ impl Debugger {
 
         if new_conf_ver > old_conf_ver && scheduled {
             let wb = WriteBatch::new();
-            box_try!(write_peer_state(db, &wb, &region, PeerState::Tombstone));
+            // Here we can keep the other metas as original.
+            box_try!(write_peer_state(db, &wb, &old_region, PeerState::Tombstone));
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             box_try!(db.write_opt(wb, &write_opts));
