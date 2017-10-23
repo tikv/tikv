@@ -1680,7 +1680,7 @@ pub fn handle_request_with_stream(end_point: &Worker<EndPointTask>, req: Request
     let req = RequestTask::new(req, OnResponse::Stream(box move |r| tx.send(r).unwrap()));
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     let mut resp = vec![];
-    while let Some(res) = rx.recv().unwrap() {
+    while let Ok(res) = rx.recv() {
         resp.push(res);
     }
     resp

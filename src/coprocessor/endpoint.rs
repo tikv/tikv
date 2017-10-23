@@ -49,6 +49,7 @@ pub const REQ_TYPE_INDEX: i64 = 102;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const BATCH_ROW_COUNT: usize = 64;
+pub const CHUNKS_PER_STREAM: usize = 1024;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.

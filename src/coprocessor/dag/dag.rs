@@ -24,7 +24,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext, BATCH_ROW_COUNT};
+use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext, BATCH_ROW_COUNT, CHUNKS_PER_STREAM};
 use storage::{Snapshot, SnapshotStore, Statistics};
 use server::OnResponse;
 
@@ -71,7 +71,9 @@ impl<'s> DAGContext<'s> {
         let mut cur_chunk_count = 0;
         let is_stream = on_resp.is_stream();
         loop {
-            if is_stream && cur_chunk_count >= BATCH_ROW_COUNT {
+            if is_stream && cur_chunk_count >= BATCH_ROW_COUNT &&
+                chunks.len() >= CHUNKS_PER_STREAM
+            {
                 let mut cur_chunks: Vec<Chunk> = vec![];
                 chunks = mem::replace(&mut cur_chunks, chunks);
                 let resp = response_from_chunks(cur_chunks)?;

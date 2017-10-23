@@ -36,7 +36,7 @@ pub use self::raft_client::RaftClient;
 
 pub enum OnResponse {
     Unary(Box<FnBox(Response) + Send>),
-    Stream(Box<FnMut(Option<Response>) + Send>),
+    Stream(Box<FnMut(Response) + Send>),
 }
 
 impl OnResponse {
@@ -51,7 +51,7 @@ impl OnResponse {
     pub fn resp(&mut self, res: Response) {
         match *self {
             OnResponse::Unary(_) => {}
-            OnResponse::Stream(ref mut cb) => cb(Some(res)),
+            OnResponse::Stream(ref mut cb) => cb(res),
         }
     }
 
@@ -63,10 +63,10 @@ impl OnResponse {
 
     pub fn finish_stream(&mut self, res: Option<Response>) {
         if let OnResponse::Stream(ref mut cb) = *self {
-            if res.is_some() {
+            if let Some(res) = res {
                 cb(res);
             }
-            cb(None)
+            //TODO:close
         }
     }
 
