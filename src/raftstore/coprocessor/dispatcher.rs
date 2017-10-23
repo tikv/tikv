@@ -11,14 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocksdb::DB;
+
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
 
-use raftstore::store::Msg;
-use util::transport::SendCh;
-
-use super::{Config, ObserverContext, RegionObserver, Result, SizeCheckObserver,
-            SplitCheckObserver, TableCheckObserver};
+use super::{Config, ObserverContext, RegionObserver, Result, SplitCheckContext, TableCheckObserver};
 
 struct ObserverEntry {
     priority: u32,
@@ -48,32 +46,15 @@ impl Registry {
 #[derive(Default)]
 pub struct CoprocessorHost {
     pub registry: Registry,
-    config: Config,
 }
 
 impl CoprocessorHost {
     pub fn new(cfg: Config) -> CoprocessorHost {
-        CoprocessorHost {
-            registry: Registry::default(),
-            config: cfg,
+        let mut registry = Registry::default();
+        if cfg.split_region_on_table {
+            registry.register_observer(100, Box::new(TableCheckObserver::default()));
         }
-    }
-
-    pub fn split_check_observers(
-        &self,
-        ch: SendCh<Msg>,
-        region_max_size: u64,
-        split_size: u64,
-    ) -> Vec<Box<SplitCheckObserver>> {
-        let mut checkers = Vec::new();
-        if self.config.split_region_on_table {
-            checkers.push(Box::new(TableCheckObserver::new()) as
-                Box<SplitCheckObserver>);
-        }
-        checkers.push(Box::new(
-            SizeCheckObserver::new(ch, region_max_size, split_size),
-        ) as Box<SplitCheckObserver>);
-        checkers
+        CoprocessorHost { registry: registry }
     }
 
     /// Call all prepose hook until bypass is set to true.
@@ -119,6 +100,40 @@ impl CoprocessorHost {
                 }
             }
         }
+    }
+
+    pub fn pre_split_check(
+        &self,
+        region: &Region,
+        engine: &DB,
+    ) -> Result<Option<SplitCheckContext>> {
+        let mut ob_ctx = ObserverContext::new(region);
+        let mut split_ctx = None;
+        for entry in &self.registry.observers {
+            split_ctx = entry.observer.pre_split_check(&mut ob_ctx, engine)?;
+            if ob_ctx.bypass {
+                break;
+            }
+        }
+        Ok(split_ctx)
+    }
+
+    /// Hook to call for every check during split.
+    pub fn each_split_check(
+        &self,
+        region: &Region,
+        split_ctx: &mut SplitCheckContext,
+        key: &[u8],
+    ) -> Option<Vec<u8>> {
+        let mut ob_ctx = ObserverContext::new(region);
+        let mut split_key = None;
+        for entry in &self.registry.observers {
+            split_key = entry.observer.each_split_check(&mut ob_ctx, split_ctx, key);
+            if ob_ctx.bypass {
+                break;
+            }
+        }
+        split_key
     }
 
     pub fn shutdown(&self) {

@@ -17,14 +17,13 @@ pub mod split_observer;
 mod error;
 mod split_check_observer;
 mod config;
-mod metrics;
 
 pub use self::config::Config;
-pub use self::split_check_observer::{Observer as SplitCheckObserver, SizeCheckObserver,
-                                     TableCheckObserver};
+pub use self::split_check_observer::{Context as SplitCheckContext, TableCheckObserver};
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 
+use rocksdb::DB;
 use kvproto::raft_cmdpb::{AdminRequest, Request};
 use kvproto::metapb::Region;
 use protobuf::RepeatedField;
@@ -75,4 +74,24 @@ pub trait RegionObserver: Coprocessor {
     ///
     /// Please note that improper implementation can lead to data inconsistency.
     fn pre_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) {}
+
+    /// Hook to call before handle split region task. If it returns a None,
+    /// then `each_split_check` can be skippped.
+    fn pre_split_check(
+        &self,
+        _: &mut ObserverContext,
+        _: &DB,
+    ) -> Result<Option<SplitCheckContext>> {
+        Ok(None)
+    }
+
+    /// Hook to call for every check during split.
+    fn each_split_check(
+        &self,
+        _: &mut ObserverContext,
+        _: &mut SplitCheckContext,
+        _: &[u8],
+    ) -> Option<Vec<u8>> {
+        None
+    }
 }

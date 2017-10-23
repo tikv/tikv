@@ -16,16 +16,14 @@ use std::fmt::{self, Display, Formatter};
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;
 
-use rocksdb::DB;
-
+use rocksdb::{DBIterator, DB};
 use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
 
-use raftstore::coprocessor::SplitCheckObserver;
-use raftstore::store::{keys, Msg};
+use raftstore::coprocessor::{CoprocessorHost, SplitCheckContext as CopSplitContext};
+use raftstore::store::{keys, util, Msg};
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::Result;
-use rocksdb::DBIterator;
 use util::escape;
 use util::transport::{RetryableSendCh, Sender};
 use util::worker::Runnable;
@@ -140,34 +138,136 @@ impl Display for Task {
     }
 }
 
+#[derive(Default)]
+struct SizeContext {
+    region_max_size: u64,
+    split_size: u64,
+
+    skip: bool,
+    current_size: u64,
+    split_key: Option<Vec<u8>>,
+}
+
+impl SizeContext {
+    fn skip(&self) -> bool {
+        self.skip
+    }
+
+    fn pre_split_check<C: Sender<Msg>>(
+        &mut self,
+        ch: &RetryableSendCh<Msg, C>,
+        region: &Region,
+        engine: &DB,
+    ) {
+        // Restore state.
+        self.skip = false;
+        self.current_size = 0;
+        self.split_key = None;
+
+        let region_id = region.get_id();
+        let region_size = match util::get_region_approximate_size(engine, region) {
+            Ok(size) => size,
+            Err(e) => {
+                error!(
+                    "[region {}] failed to get approximate size: {}",
+                    region_id,
+                    e
+                );
+                self.skip = false;
+                return;
+            }
+        };
+
+        let res = Msg::ApproximateRegionSize {
+            region_id: region_id,
+            region_size: region_size,
+        };
+        if let Err(e) = ch.try_send(res) {
+            error!(
+                "[region {}] failed to send approximate region size: {}",
+                region_id,
+                e
+            );
+        }
+
+        REGION_SIZE_HISTOGRAM.observe(region_size as f64);
+        if region_size >= self.region_max_size {
+            info!(
+                "[region {}] approximate size {} >= {}, need to do split check",
+                region.get_id(),
+                region_size,
+                self.region_max_size
+            );
+            self.skip = false;
+        } else {
+            self.skip = true;
+        }
+    }
+
+    fn each_split_check(&mut self, key: &[u8], value_size: u64) -> Option<Vec<u8>> {
+        self.current_size += key.len() as u64 + value_size;
+        if self.current_size > self.split_size && self.split_key.is_none() {
+            self.split_key = Some(key.to_vec());
+        }
+        if self.current_size >= self.region_max_size {
+            self.split_key.take()
+        } else {
+            None
+        }
+    }
+}
+
 pub struct Runner<C> {
-    ch: RetryableSendCh<Msg, C>,
     engine: Arc<DB>,
-    checkers: Vec<Box<SplitCheckObserver>>,
+    ch: RetryableSendCh<Msg, C>,
+    coprocessor: Arc<CoprocessorHost>,
+
+    size_context: SizeContext,
+    cop_context: Option<CopSplitContext>,
 }
 
 impl<C: Sender<Msg>> Runner<C> {
     pub fn new(
         engine: Arc<DB>,
         ch: RetryableSendCh<Msg, C>,
-        checkers: Vec<Box<SplitCheckObserver>>,
+        region_max_size: u64,
+        split_size: u64,
+        coprocessor: Arc<CoprocessorHost>,
     ) -> Runner<C> {
         Runner {
-            engine,
-            ch,
-            checkers,
+            engine: engine,
+            ch: ch,
+            coprocessor: coprocessor,
+            cop_context: Default::default(),
+            size_context: SizeContext {
+                region_max_size: region_max_size,
+                split_size: split_size,
+                skip: false,
+                current_size: 0,
+                split_key: None,
+            },
+        }
+    }
+
+    fn pre_split_check(&mut self, region: &Region) {
+        self.size_context
+            .pre_split_check(&self.ch, region, &self.engine);
+
+        match self.coprocessor.pre_split_check(region, &self.engine) {
+            Ok(cop_context) => self.cop_context = cop_context,
+            Err(err) => {
+                info!(
+                    "[region {}] coprocessor split check error: {:?}",
+                    region.get_id(),
+                    err,
+                );
+                self.cop_context = None;
+            }
         }
     }
 
     fn check_split(&mut self, region: &Region) {
-        let engine = &self.engine;
-        let mut required_checkers = Vec::with_capacity(self.checkers.len());
-        for checker in &mut self.checkers {
-            if !checker.before_check(engine, region) {
-                required_checkers.push(checker);
-            }
-        }
-        if required_checkers.is_empty() {
+        if self.size_context.skip() && self.cop_context.as_ref().map_or(true, |c| c.skip()) {
             return;
         }
 
@@ -183,21 +283,28 @@ impl<C: Sender<Msg>> Runner<C> {
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
         let mut split_key = None;
+        let size_context = &mut self.size_context;
+        let cop_context = &mut self.cop_context;
+        let coprocessor = &mut self.coprocessor;
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let res = MergedIterator::new(self.engine.as_ref(), LARGE_CFS, &start_key, &end_key, false)
-            .map(|mut iter| 'out: while let Some(e) = iter.next() {
-                for checker in &mut required_checkers {
-                    if let Some(key) =
-                        checker.check_key_value_len(e.key.as_ref().unwrap(), e.value_size as u64)
+            .map(|mut iter| while let Some(e) = iter.next() {
+                if let Some(ref mut cop_context) = *cop_context {
+                    if !cop_context.skip() {
+                        if let Some(key) = coprocessor
+                            .each_split_check(region, cop_context, e.key.as_ref().unwrap())
+                        {
+                            split_key = Some(key);
+                            break;
+                        }
+                    }
+                }
+                if !size_context.skip() {
+                    if let Some(key) = size_context
+                        .each_split_check(e.key.as_ref().unwrap(), e.value_size as u64)
                     {
-                        info!(
-                            "[region {}] checker {} requires splitting at {:?}",
-                            region_id,
-                            checker.name(),
-                            key
-                        );
                         split_key = Some(key);
-                        break 'out;
+                        break;
                     }
                 }
             });
@@ -208,30 +315,33 @@ impl<C: Sender<Msg>> Runner<C> {
             return;
         }
 
-        let split_key = match split_key {
-            Some(key) => key,
-            None => {
-                CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
-                return;
+        if let Some(split_key) = split_key {
+            let region_epoch = region.get_region_epoch().clone();
+            let res = self.ch
+                .try_send(new_split_region(region_id, region_epoch, split_key));
+            if let Err(e) = res {
+                warn!("[region {}] failed to send check result: {}", region_id, e);
             }
-        };
 
-        let region_epoch = region.get_region_epoch().clone();
-        let res = self.ch
-            .try_send(new_split_region(region_id, region_epoch, split_key));
-        if let Err(e) = res {
-            warn!("[region {}] failed to send check result: {}", region_id, e);
+            CHECK_SPILT_COUNTER_VEC
+                .with_label_values(&["success"])
+                .inc();
+        } else {
+            debug!(
+                "[region {}] no need to send, split key not found",
+                region_id,
+            );
+
+            CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
         }
-
-        CHECK_SPILT_COUNTER_VEC
-            .with_label_values(&["success"])
-            .inc();
     }
 }
 
 impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
-        self.check_split(&task.region);
+        let region = &task.region;
+        self.pre_split_check(region);
+        self.check_split(region);
     }
 }
 
@@ -258,7 +368,6 @@ mod tests {
     use storage::ALL_CFS;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::properties::SizePropertiesCollectorFactory;
-    use raftstore::coprocessor::SizeCheckObserver;
     use super::*;
 
     #[test]
@@ -287,8 +396,10 @@ mod tests {
         let ch = RetryableSendCh::new(tx, "test-split");
         let mut runnable = Runner::new(
             engine.clone(),
-            ch.clone(),
-            vec![Box::new(SizeCheckObserver::new(ch, 100, 60))],
+            ch,
+            100,
+            60,
+            Arc::new(CoprocessorHost::new(Default::default())),
         );
 
         // so split key will be z0006

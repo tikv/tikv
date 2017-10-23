@@ -72,19 +72,6 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     }
 }
 
-/// Test if the left and right are in the same table.
-pub fn in_same_table(left: &[u8], right: &[u8]) -> Result<bool> {
-    if left.len() < TABLE_PREFIX_KEY_LEN || !left.starts_with(TABLE_PREFIX) {
-        Err(box_err!("table key expected, but got {}", escape(left)))
-    } else if right.len() < TABLE_PREFIX_KEY_LEN || !right.starts_with(TABLE_PREFIX) {
-        Err(box_err!("table key expected, but got {}", escape(right)))
-    } else if left[..TABLE_PREFIX_KEY_LEN] == right[..TABLE_PREFIX_KEY_LEN] {
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
 pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
@@ -605,29 +592,5 @@ mod test {
         assert!(decode_table_id(&[]).is_err());
         assert!(decode_table_id(TABLE_PREFIX).is_err());
         assert!(decode_table_id(b"t123").is_err());
-    }
-
-    #[test]
-    fn test_in_same_table() {
-        let (mut left, mut right) = (gen_table_prefix(1), gen_table_prefix(1));
-        left.extend_from_slice(b"foo");
-        right.extend_from_slice(b"bar");
-        assert_eq!(in_same_table(&left, &right).unwrap(), true);
-
-        assert_eq!(
-            in_same_table(&gen_table_prefix(1), &gen_table_prefix(1)).unwrap(),
-            true
-        );
-
-        assert_eq!(
-            in_same_table(&gen_table_prefix(1), &gen_table_prefix(2)).unwrap(),
-            false
-        );
-
-        let vacant = vec![];
-        let empty = vacant.as_slice();
-        assert!(in_same_table(empty, &gen_table_prefix(1)).is_err());
-        assert!(in_same_table(&gen_table_prefix(1), empty).is_err());
-        assert!(in_same_table(empty, empty).is_err());
     }
 }
