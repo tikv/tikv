@@ -170,6 +170,7 @@ pub struct RaftMessageDropMetrics {
     pub region_no_peer: u64,
     pub region_tombstone_peer: u64,
     pub region_nonexistent: u64,
+    pub applying_snap: u64,
 }
 
 impl RaftMessageDropMetrics {
@@ -229,6 +230,13 @@ impl RaftMessageDropMetrics {
                 .inc_by(self.region_nonexistent as f64)
                 .unwrap();
             self.region_nonexistent = 0;
+        }
+        if self.applying_snap > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["applying_snap"])
+                .inc_by(self.applying_snap as f64)
+                .unwrap();
+            self.applying_snap = 0;
         }
     }
 }

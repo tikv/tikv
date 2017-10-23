@@ -42,7 +42,7 @@ use util::Either;
 use util::time::monotonic_raw_now;
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
-use pd::{PdTask, INVALID_ID};
+use pd::{PdClient, PdTask, INVALID_ID};
 
 use super::store::{Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
@@ -193,6 +193,39 @@ enum RequestPolicy {
 pub struct PeerStat {
     pub written_bytes: u64,
     pub written_keys: u64,
+}
+
+pub struct DestroyJob {
+    initialized: bool,
+    async_remove: bool,
+    region_id: u64,
+    peer: metapb::Peer,
+}
+
+impl DestroyJob {
+    pub fn execute<T, C>(self, store: &mut Store<T, C>) -> bool
+    where
+        T: Transport,
+        C: PdClient,
+    {
+        if self.initialized {
+            store
+                .apply_worker
+                .schedule(ApplyTask::destroy(self.region_id))
+                .unwrap();
+        }
+        if self.async_remove {
+            info!(
+                "[region {}] {} is destroyed asychroniously",
+                self.region_id,
+                self.peer.get_id()
+            );
+            false
+        } else {
+            store.destroy_peer(self.region_id, self.peer);
+            true
+        }
+    }
 }
 
 pub struct Peer {
@@ -385,6 +418,32 @@ impl Peer {
             self.marked_to_be_checked = true;
             pending_raft_groups.insert(self.region_id);
         }
+    }
+
+    pub fn maybe_destroy(&mut self) -> Option<DestroyJob> {
+        let initialized = self.get_store().is_initialized();
+        let async_remove = if self.is_applying_snapshot() {
+            if !self.mut_store().cancel_applying_snap() {
+                info!(
+                    "{} Stale peer {} is applying snapshot, will destroy next \
+                     time.",
+                    self.tag,
+                    self.peer_id()
+                );
+                return None;
+            }
+            // There is no tasks in apply worker.
+            false
+        } else {
+            initialized
+        };
+        self.pending_remove = true;
+        Some(DestroyJob {
+            async_remove: async_remove,
+            initialized: initialized,
+            region_id: self.region_id,
+            peer: self.peer.clone(),
+        })
     }
 
     pub fn destroy(&mut self) -> Result<()> {
