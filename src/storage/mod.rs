@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::thread;
+use std::collections::HashMap;
 use std::boxed::FnBox;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::mpsc::{self, Receiver};
@@ -22,7 +23,6 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, LockInfo};
 use kvproto::errorpb;
 use self::metrics::*;
-use std::collections::HashMap;
 
 pub mod engine;
 pub mod mvcc;

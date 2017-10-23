@@ -31,6 +31,7 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
+use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -52,7 +53,6 @@ use raftstore::store::engine::IterOption;
 use util::transport::{Error as TransportError, SyncSendCh};
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
-use util::collections::HashMap;
 
 use super::Result;
 use super::Error;
@@ -887,7 +887,7 @@ fn process_write_impl(
             let mut scan_key = scan_key.take();
             let mut modifies: Vec<Modify> = vec![];
             let rows = key_locks.len();
-            for (current_key, current_lock) in key_locks {
+            for &(ref current_key, ref current_lock) in key_locks {
                 let mut txn = MvccTxn::new(
                     snapshot,
                     statistics,
@@ -896,7 +896,7 @@ fn process_write_impl(
                     ctx.get_isolation_level(),
                     !ctx.get_not_fill_cache(),
                 );
-                let status = txn2status.get(&current_lock.ts));
+                let status = txn2status.get(&current_lock.ts);
                 let ts = match status {
                     Some(ts) => *ts,
                     None => panic!("txn status not found!"),
@@ -908,9 +908,9 @@ fn process_write_impl(
                             commit_ts: ts,
                         });
                     }
-                    txn.commit(&current_key, ts)?;
+                    txn.commit(current_key, ts)?;
                 } else {
-                    txn.rollback(&current_key)?;
+                    txn.rollback(current_key)?;
                 }
                 modifies.append(&mut txn.modifies());
                 if modifies.len() >= MAX_TXN_WRITE_SIZE {
