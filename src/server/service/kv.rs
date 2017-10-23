@@ -16,7 +16,6 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::collections::HashMap;
 use mio::Token;
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 use futures::{future, Future, Stream};
@@ -28,6 +27,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
+use util::collections::HashMap;
 use util::worker::Scheduler;
 use util::buf::PipeBuffer;
 use storage::{self, Key, Mutation, Options, Storage, Value};
