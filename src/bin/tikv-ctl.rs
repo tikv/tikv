@@ -24,13 +24,21 @@ extern crate rocksdb;
 extern crate grpcio;
 extern crate futures;
 extern crate rustc_serialize;
+extern crate flat_map;
+extern crate hyper;
+
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+extern crate serde_json;
 
 use std::{process, str, u64};
 use std::iter::FromIterator;
 use std::cmp::Ordering;
-use std::error::Error;
+use std::fmt::Display;
 use std::sync::Arc;
 use std::path::PathBuf;
+use std::io::prelude::*;
 use rustc_serialize::hex::{FromHex, ToHex};
 
 use clap::{App, Arg, SubCommand};
@@ -50,10 +58,10 @@ use kvproto::debugpb_grpc::DebugClient;
 use tikv::util::{self, escape, unescape};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::raftstore::store::debug::{Debugger, RegionInfo};
-use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::pd::{PdClient, RpcClient};
+use tikv::storage::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::pd::{PdClient, PdCtlClient, RpcClient};
 
-fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
+fn perror_and_exit<E: Display>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
     process::exit(-1);
 }
@@ -63,14 +71,17 @@ fn new_debug_executor(
     raft_db: Option<&str>,
     host: Option<&str>,
 ) -> Box<DebugExecutor> {
+    let open_db = |path: &str, cfs: &[CfName]| {
+        util::rocksdb::open(path, cfs).unwrap_or_else(|e| perror_and_exit("rocksdb::open", e))
+    };
     match (host, db) {
         (None, Some(kv_path)) => {
-            let db = util::rocksdb::open(kv_path, ALL_CFS).unwrap();
+            let db = open_db(kv_path, ALL_CFS);
             let raft_db = if let Some(raft_path) = raft_db {
-                util::rocksdb::open(raft_path, &[CF_DEFAULT]).unwrap()
+                open_db(raft_path, &[CF_DEFAULT])
             } else {
                 let raft_path = PathBuf::from(kv_path).join("../raft");
-                util::rocksdb::open(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap()
+                open_db(raft_path.to_str().unwrap(), &[CF_DEFAULT])
             };
             Box::new(Debugger::new(Engines::new(Arc::new(db), Arc::new(raft_db)))) as
                 Box<DebugExecutor>
@@ -333,7 +344,10 @@ trait DebugExecutor {
             .wait()
             .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
         {
-            Some(region) => self.set_region_tombstone(region_id, region),
+            Some(region) => {
+                self.set_region_tombstone(region_id, region);
+                println!("success!");
+            }
             None => {
                 eprintln!("no such region in pd: {}", region_id);
                 process::exit(-1);
@@ -341,7 +355,60 @@ trait DebugExecutor {
         }
     }
 
+    fn transfer_leader_for_node_recovery(&self, region_id: u64, endpoints: Vec<String>) {
+        self.check_local_mode();
+        match RpcClient::new(&endpoints)
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+            .get_region_and_leader_by_id(region_id)
+            .wait()
+            .unwrap_or_else(|e| perror_and_exit("Get Region from PD", e))
+        {
+            Some((region, leader)) => {
+                let store_id = self.get_store_id();
+                let new_leader = region
+                    .get_peers()
+                    .into_iter()
+                    .find(|p| {
+                        let p_store_id = p.get_store_id();
+                        p_store_id != store_id && p_store_id != leader.get_store_id()
+                    })
+                    .expect("Cant get new leader");
+
+                #[derive(Serialize)]
+                struct Body {
+                    name: &'static str,
+                    region_id: u64,
+                    to_store_id: u64,
+                }
+
+                let url = format!("http://{}/pd/api/v1/operators", endpoints[0]);
+                let body = serde_json::to_vec(&Body {
+                    name: "transfer-leader",
+                    region_id: region_id,
+                    to_store_id: new_leader.get_store_id(),
+                }).unwrap_or_else(|e| perror_and_exit("serde::json_to_string", e));
+                let mut resp = hyper::Client::new()
+                    .post(&url)
+                    .body(body.as_slice())
+                    .send()
+                    .unwrap_or_else(|e| perror_and_exit("RequestBuilder::send", e));
+                if resp.status == hyper::status::StatusCode::Ok {
+                    println!("success");
+                } else {
+                    let mut body = String::new();
+                    resp.read_to_string(&mut body).unwrap();
+                    println!("fail with http status: {}, body: {}", resp.status, body);
+                }
+            }
+            None => {
+                println!("no such region: {} on PD", region_id);
+            }
+        }
+    }
+
     fn check_local_mode(&self);
+
+    fn get_store_id(&self) -> u64;
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
 
@@ -370,6 +437,10 @@ impl DebugExecutor for DebugClient {
     fn check_local_mode(&self) {
         eprintln!("This command is only for local mode");
         process::exit(-1);
+    }
+
+    fn get_store_id(&self) -> u64 {
+        unimplemented!();
     }
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
@@ -462,6 +533,11 @@ impl DebugExecutor for DebugClient {
 
 impl DebugExecutor for Debugger {
     fn check_local_mode(&self) {}
+
+    fn get_store_id(&self) -> u64 {
+        self.get_store_id()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_store_id", e))
+    }
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
         self.get_all_meta_regions()
@@ -800,7 +876,29 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("PD endpoints"),
+                        .help("PD endpoints, form: ip:port[,ip:port]*"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("transfer-leader")
+                .about("transfer-leader for a region")
+                .arg(
+                    Arg::with_name("region")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .help("the target region"),
+                )
+                .arg(
+                    Arg::with_name("pd")
+                        .required(true)
+                        .short("p")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .help("PD endpoints, form: ip:port[,ip:port]*"),
                 ),
         );
     let matches = app.clone().get_matches();
@@ -887,10 +985,13 @@ fn main() {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
         debug_executor.set_region_tombstone_after_remove_peer(region, pd_urls);
+    } else if let Some(matches) = matches.subcommand_matches("transfer-leader") {
+        let region = matches.value_of("region").unwrap().parse().unwrap();
+        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(String::from));
+        debug_executor.transfer_leader_for_node_recovery(region, pd_urls);
     } else {
         let _ = app.print_help();
     }
-
 }
 
 fn from_hex(key: &str) -> Vec<u8> {

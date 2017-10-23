@@ -266,7 +266,7 @@ impl Debugger {
         }
     }
 
-    fn get_store_id(&self) -> Result<u64> {
+    pub fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
         db.get_msg::<StoreIdent>(&keys::store_ident_key())
             .map_err(|e| box_err!(e))
