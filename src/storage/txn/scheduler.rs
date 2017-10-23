@@ -887,34 +887,34 @@ fn process_write_impl(
             let mut scan_key = scan_key.take();
             let mut modifies: Vec<Modify> = vec![];
             let rows = key_locks.len();
-            for key_lock in key_locks {
+            for (current_key, current_lock) in key_locks {
                 let mut txn = MvccTxn::new(
                     snapshot,
                     statistics,
-                    key_lock.1.ts,
+                    current_lock.ts,
                     None,
                     ctx.get_isolation_level(),
                     !ctx.get_not_fill_cache(),
                 );
-                let status = txn2status.get(&(key_lock.1.ts));
+                let status = txn2status.get(&current_lock.ts));
                 let ts = match status {
                     Some(ts) => *ts,
                     None => panic!("txn status not found!"),
                 };
                 if ts > 0 {
-                    if key_lock.1.ts >= ts {
+                    if current_lock.ts >= ts {
                         return Err(Error::InvalidTxnTso {
-                            start_ts: key_lock.1.ts,
+                            start_ts: current_lock.ts,
                             commit_ts: ts,
                         });
                     }
-                    txn.commit(&key_lock.0, ts)?;
+                    txn.commit(&current_key, ts)?;
                 } else {
-                    txn.rollback(&key_lock.0)?;
+                    txn.rollback(&current_key)?;
                 }
                 modifies.append(&mut txn.modifies());
                 if modifies.len() >= MAX_TXN_WRITE_SIZE {
-                    scan_key = Some(key_lock.0.to_owned());
+                    scan_key = Some(current_key.to_owned());
                     break;
                 }
             }
@@ -1371,7 +1371,6 @@ impl Scheduler {
         to_be_write: Vec<Modify>,
         rows: usize,
     ) {
-        info!("we are going to write");
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[self.get_ctx_tag(cid), "write"])
             .inc();
@@ -1396,7 +1395,6 @@ impl Scheduler {
             .with_label_values(&[self.get_ctx_tag(cid), "write_finish"])
             .inc();
         debug!("write finished for command, cid={}", cid);
-        info!("write finished for command, cid={}", cid);
         let mut ctx = self.remove_ctx(cid);
         let cb = ctx.callback.take().unwrap();
         let pr = match result {
