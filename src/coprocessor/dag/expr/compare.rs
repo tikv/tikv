@@ -161,6 +161,46 @@ impl FnCall {
         do_coalesce(self, |v| v.eval_json(ctx, row))
     }
 
+    pub fn in_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_in(
+            self,
+            |v| v.eval_int(ctx, row),
+            |l, r| {
+                let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+                let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+                Ok(cmp_i64_with_unsigned_flag(l, lhs_unsigned, r, rhs_unsigned))
+            },
+        )
+    }
+
+    pub fn in_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_in(
+            self,
+            |v| v.eval_real(ctx, row),
+            |l, r| datum::cmp_f64(l, r).map_err(Error::from),
+        )
+    }
+
+    pub fn in_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_decimal(ctx, row), |l, r| Ok(l.cmp(&r)))
+    }
+
+    pub fn in_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_time(ctx, row), |l, r| Ok(l.cmp(&r)))
+    }
+
+    pub fn in_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_duration(ctx, row), |l, r| Ok(l.cmp(&r)))
+    }
+
+    pub fn in_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_string(ctx, row), |l, r| Ok(l.cmp(&r)))
+    }
+
+    pub fn in_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_json(ctx, row), |l, r| Ok(l.cmp(&r)))
+    }
+
     #[inline]
     pub fn like(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
@@ -243,6 +283,37 @@ where
         }
     }
     Ok(None)
+}
+
+fn do_in<'a, T, E, F>(expr: &'a FnCall, f: F, get_order: E) -> Result<Option<i64>>
+where
+    T: Clone,
+    F: Fn(&'a Expression) -> Result<Option<T>>,
+    E: Fn(T, T) -> Result<Ordering>,
+{
+    let (first, others) = expr.children.split_first().unwrap();
+    let arg = f(first)?;
+    if arg.is_none() {
+        return Ok(None);
+    }
+    let arg0 = arg.unwrap();
+    let mut has_null = false;
+    for exp in others {
+        let arg1 = f(exp)?;
+        if arg1.is_none() {
+            has_null = true;
+            continue;
+        }
+        let cmp_result = get_order(arg0.clone(), arg1.unwrap())?;
+        if cmp_result == Ordering::Equal {
+            return Ok(Some(1));
+        }
+    }
+    if has_null {
+        Ok(None)
+    } else {
+        Ok(Some(0))
+    }
 }
 
 // Do match until '%' is found.
@@ -410,6 +481,137 @@ mod test {
                 ScalarFuncSig::CoalesceTime,
                 vec![Datum::Time(t.clone())],
                 Datum::Time(t),
+            ),
+        ];
+
+        let ctx = StatementContext::default();
+
+        for (sig, row, exp) in cases {
+            let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
+            let mut expr = Expr::new();
+            expr.set_tp(ExprType::ScalarFunc);
+            expr.set_sig(sig);
+
+            expr.set_children(RepeatedField::from_vec(children));
+            let e = Expression::build(&ctx, expr).unwrap();
+            let res = e.eval(&ctx, &row).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_in() {
+        let dec1 = "1.1".parse::<Decimal>().unwrap();
+        let dec2 = "1.11".parse::<Decimal>().unwrap();
+        let dur1 = Duration::parse(b"01:00:00", 0).unwrap();
+        let dur2 = Duration::parse(b"02:00:00", 0).unwrap();
+        let json1 = Json::I64(11);
+        let json2 = Json::I64(12);
+        let s1 = "你好".as_bytes().to_owned();
+        let s2 = "你好啊".as_bytes().to_owned();
+        let t1 = Time::parse_utc_datetime("2012-12-12 12:00:39", 0).unwrap();
+        let t2 = Time::parse_utc_datetime("2012-12-12 13:00:39", 0).unwrap();
+        let cases = vec![
+            (ScalarFuncSig::CoalesceInt, vec![Datum::Null], Datum::Null),
+            (
+                ScalarFuncSig::InInt,
+                vec![Datum::I64(1), Datum::I64(2)],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::InInt,
+                vec![Datum::I64(1), Datum::I64(2), Datum::I64(1)],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::InInt,
+                vec![Datum::I64(1), Datum::I64(2), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::InInt,
+                vec![Datum::Null, Datum::I64(2), Datum::I64(1)],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::InReal,
+                vec![Datum::F64(3.1), Datum::F64(3.2), Datum::F64(3.3)],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::InReal,
+                vec![Datum::F64(3.1), Datum::F64(3.2), Datum::F64(3.1)],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::InDecimal,
+                vec![Datum::Dec(dec1.clone()), Datum::Dec(dec2.clone())],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::InDecimal,
+                vec![
+                    Datum::Dec(dec1.clone()),
+                    Datum::Dec(dec2.clone()),
+                    Datum::Dec(dec1.clone()),
+                ],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::InDuration,
+                vec![Datum::Dur(dur1.clone()), Datum::Dur(dur2.clone())],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::InDuration,
+                vec![
+                    Datum::Dur(dur1.clone()),
+                    Datum::Dur(dur2.clone()),
+                    Datum::Dur(dur1.clone()),
+                ],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::InJson,
+                vec![Datum::Json(json1.clone()), Datum::Json(json2.clone())],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::InJson,
+                vec![
+                    Datum::Json(json1.clone()),
+                    Datum::Json(json2.clone()),
+                    Datum::Json(json1.clone()),
+                ],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::InString,
+                vec![Datum::Bytes(s1.clone()), Datum::Bytes(s2.clone())],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::InString,
+                vec![
+                    Datum::Bytes(s1.clone()),
+                    Datum::Bytes(s2.clone()),
+                    Datum::Bytes(s1.clone()),
+                ],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::InTime,
+                vec![Datum::Time(t1.clone()), Datum::Time(t2.clone())],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::InTime,
+                vec![
+                    Datum::Time(t1.clone()),
+                    Datum::Time(t2.clone()),
+                    Datum::Time(t1.clone()),
+                ],
+                Datum::I64(1),
             ),
         ];
 
