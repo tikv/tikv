@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashMap;
 use mio::Token;
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 use futures::{future, Future, Stream};
@@ -475,14 +476,21 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let commit_ts = match req.get_commit_version() {
-            0 => None,
-            x => Some(x),
-        };
+        let mut txn_2_status: HashMap<u64, u64> = HashMap::new();
+
+        let start_ts = req.get_start_version();
+        if start_ts > 0 {
+            let commit_ts = req.get_commit_version();
+            txn_2_status.insert(start_ts, commit_ts);
+        } else {
+            for temp in req.take_txn_infos().into_iter() {
+                txn_2_status.insert(temp.txn, temp.status);
+            }
+        }
 
         let (cb, future) = make_callback();
         let res = self.storage
-            .async_resolve_lock(req.take_context(), req.get_start_version(), commit_ts, cb);
+            .async_resolve_lock(req.take_context(), txn_2_status, cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -507,6 +515,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             });
 
         ctx.spawn(future);
+
     }
 
     fn kv_gc(&self, ctx: RpcContext, mut req: GCRequest, sink: UnarySink<GCResponse>) {

@@ -585,12 +585,9 @@ fn process_read(
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
-        // Scan the locks with timestamp `start_ts`, then either commit them if the command has
-        // commit timestamp populated or rollback otherwise.
         Command::ResolveLock {
             ref ctx,
-            start_ts,
-            commit_ts,
+            ref txn2status,
             ref mut scan_key,
             ..
         } => {
@@ -605,24 +602,23 @@ fn process_read(
             let res = reader
                 .scan_lock(
                     scan_key.take(),
-                    |lock| lock.ts == start_ts,
+                    |lock| txn2status.contains_key(&lock.ts),
                     Some(RESOLVE_LOCK_BATCH_SIZE),
                 )
                 .map_err(Error::from)
                 .and_then(|(v, next_scan_key)| {
-                    let keys: Vec<Key> = v.into_iter().map(|x| x.0).collect();
+                    let key_locks: Vec<_> = v.into_iter().map(|x| x).collect();
                     KV_COMMAND_KEYREAD_HISTOGRAM_VEC
                         .with_label_values(&[tag])
-                        .observe(keys.len() as f64);
-                    if keys.is_empty() {
+                        .observe(key_locks.len() as f64);
+                    if key_locks.is_empty() {
                         Ok(None)
                     } else {
                         Ok(Some(Command::ResolveLock {
                             ctx: ctx.clone(),
-                            start_ts: start_ts,
-                            commit_ts: commit_ts,
+                            txn2status: txn2status.clone(),
                             scan_key: next_scan_key,
-                            keys: keys,
+                            key_locks: key_locks,
                         }))
                     }
                 });
@@ -884,52 +880,56 @@ fn process_write_impl(
         }
         Command::ResolveLock {
             ref ctx,
-            start_ts,
-            commit_ts,
+            ref txn2status,
             ref mut scan_key,
-            ref keys,
+            ref key_locks,
         } => {
-            if let Some(cts) = commit_ts {
-                if cts <= start_ts {
-                    return Err(Error::InvalidTxnTso {
-                        start_ts: start_ts,
-                        commit_ts: cts,
-                    });
-                }
-            }
             let mut scan_key = scan_key.take();
-            let mut txn = MvccTxn::new(
-                snapshot,
-                statistics,
-                start_ts,
-                None,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let rows = keys.len();
-            for k in keys {
-                match commit_ts {
-                    Some(ts) => txn.commit(k, ts)?,
-                    None => txn.rollback(k)?,
+            let mut modifies: Vec<Modify> = vec![];
+            let rows = key_locks.len();
+            for key_lock in key_locks {
+                let mut txn = MvccTxn::new(
+                    snapshot,
+                    statistics,
+                    key_lock.1.ts,
+                    None,
+                    ctx.get_isolation_level(),
+                    !ctx.get_not_fill_cache(),
+                );
+                let status = txn2status.get(&(key_lock.1.ts));
+                let ts = match status {
+                    Some(ts) => *ts,
+                    None => panic!("txn status not found!"),
+                };
+                if ts > 0 {
+                    if key_lock.1.ts >= ts {
+                        return Err(Error::InvalidTxnTso {
+                            start_ts: key_lock.1.ts,
+                            commit_ts: ts,
+                        });
+                    }
+                    txn.commit(&key_lock.0, ts)?;
+                } else {
+                    txn.rollback(&key_lock.0)?;
                 }
-                if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-                    scan_key = Some(k.to_owned());
+                modifies.append(&mut txn.modifies());
+                if modifies.len() >= MAX_TXN_WRITE_SIZE {
+                    scan_key = Some(key_lock.0.to_owned());
                     break;
                 }
             }
             if scan_key.is_none() {
-                (ProcessResult::Res, txn.modifies(), rows)
+                (ProcessResult::Res, modifies, rows)
             } else {
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
                         ctx: ctx.clone(),
-                        start_ts: start_ts,
-                        commit_ts: commit_ts,
+                        txn2status: txn2status.clone(),
                         scan_key: scan_key.take(),
-                        keys: vec![],
+                        key_locks: vec![],
                     },
                 };
-                (pr, txn.modifies(), rows)
+                (pr, modifies, rows)
             }
         }
         Command::Gc {
@@ -1371,10 +1371,12 @@ impl Scheduler {
         to_be_write: Vec<Modify>,
         rows: usize,
     ) {
+        info!("we are going to write");
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[self.get_ctx_tag(cid), "write"])
             .inc();
         if to_be_write.is_empty() {
+            info!("modifies is empty");
             return self.on_write_finished(cid, pr, Ok(()));
         }
         let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.schedch.clone(), rows);
@@ -1394,6 +1396,7 @@ impl Scheduler {
             .with_label_values(&[self.get_ctx_tag(cid), "write_finish"])
             .inc();
         debug!("write finished for command, cid={}", cid);
+        info!("write finished for command, cid={}", cid);
         let mut ctx = self.remove_ctx(cid);
         let cb = ctx.callback.take().unwrap();
         let pr = match result {
@@ -1521,9 +1524,13 @@ pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
             let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
             latches.gen_lock(&keys)
         }
-        Command::Commit { ref keys, .. } |
-        Command::Rollback { ref keys, .. } |
-        Command::ResolveLock { ref keys, .. } => latches.gen_lock(keys),
+        Command::ResolveLock { ref key_locks, .. } => {
+            let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
+            latches.gen_lock(&keys)
+        }
+        Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
+            latches.gen_lock(keys)
+        }
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         _ => Lock::new(vec![]),
     }
@@ -1532,12 +1539,16 @@ pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use kvproto::kvrpcpb::Context;
     use storage::txn::latch::*;
     use storage::{make_key, Command, Mutation, Options};
+    use storage::mvcc;
 
     #[test]
     fn test_command_latches() {
+        let mut temp_map = HashMap::new();
+        temp_map.insert(10, 20);
         let readonly_cmds = vec![
             Command::Get {
                 ctx: Context::new(),
@@ -1562,10 +1573,9 @@ mod tests {
             },
             Command::ResolveLock {
                 ctx: Context::new(),
-                start_ts: 10,
-                commit_ts: Some(20),
+                txn2status: temp_map.clone(),
                 scan_key: None,
-                keys: vec![],
+                key_locks: vec![],
             },
             Command::Gc {
                 ctx: Context::new(),
@@ -1609,10 +1619,14 @@ mod tests {
             },
             Command::ResolveLock {
                 ctx: Context::new(),
-                start_ts: 10,
-                commit_ts: Some(20),
+                txn2status: temp_map.clone(),
                 scan_key: None,
-                keys: vec![make_key(b"k")],
+                key_locks: vec![
+                    (
+                        make_key(b"k"),
+                        mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None),
+                    ),
+                ],
             },
         ];
 

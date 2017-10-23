@@ -188,9 +188,11 @@ impl<'a> MvccTxn<'a> {
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
         let (lock_type, short_value) = match self.reader.load_lock(key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
+                println!("commit branch 1");
                 (lock.lock_type, lock.short_value.take())
             }
             _ => {
+                println!("commit branch 2");
                 return match self.reader.get_txn_commit_info(key, self.start_ts)? {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER

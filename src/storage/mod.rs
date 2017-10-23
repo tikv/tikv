@@ -22,6 +22,7 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, LockInfo};
 use kvproto::errorpb;
 use self::metrics::*;
+use std::collections::HashMap;
 
 pub mod engine;
 pub mod mvcc;
@@ -35,6 +36,7 @@ pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as 
                        FlowStatistics, Modify, ScanMode, Snapshot, Statistics, StatisticsSummary,
                        TEMP_DIR};
 pub use self::engine::raftkv::RaftKv;
+use self::mvcc::Lock;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
@@ -131,10 +133,9 @@ pub enum Command {
     ScanLock { ctx: Context, max_ts: u64 },
     ResolveLock {
         ctx: Context,
-        start_ts: u64,
-        commit_ts: Option<u64>,
+        txn2status: HashMap<u64, u64>,
         scan_key: Option<Key>,
-        keys: Vec<Key>,
+        key_locks: Vec<(Key, Lock)>,
     },
     Gc {
         ctx: Context,
@@ -241,18 +242,7 @@ impl Display for Command {
             Command::ScanLock {
                 ref ctx, max_ts, ..
             } => write!(f, "kv::scan_lock {} | {:?}", max_ts, ctx),
-            Command::ResolveLock {
-                ref ctx,
-                start_ts,
-                commit_ts,
-                ..
-            } => write!(
-                f,
-                "kv::resolve_txn {} -> {:?} | {:?}",
-                start_ts,
-                commit_ts,
-                ctx
-            ),
+            Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
             Command::Gc {
                 ref ctx,
                 safe_point,
@@ -328,7 +318,7 @@ impl Command {
             Command::Pause { .. } |
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
-            Command::ResolveLock { ref keys, .. } |
+            Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
@@ -379,11 +369,11 @@ impl Command {
             Command::Prewrite { start_ts, .. } |
             Command::Cleanup { start_ts, .. } |
             Command::Rollback { start_ts, .. } |
-            Command::ResolveLock { start_ts, .. } |
             Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
+            Command::ResolveLock { .. } |
             Command::RawGet { .. } |
             Command::RawScan { .. } |
             Command::DeleteRange { .. } |
@@ -449,8 +439,8 @@ impl Command {
             Command::Gc { ref keys, .. } |
             Command::BatchGet { ref keys, .. } |
             Command::Commit { ref keys, .. } |
-            Command::Rollback { ref keys, .. } |
-            Command::ResolveLock { ref keys, .. } => keys.len(),
+            Command::Rollback { ref keys, .. } => keys.len(),
+            Command::ResolveLock { ref key_locks, .. } => key_locks.len(),
             Command::Prewrite { ref mutations, .. } => mutations.len(),
         }
     }
@@ -768,16 +758,14 @@ impl Storage {
     pub fn async_resolve_lock(
         &self,
         ctx: Context,
-        start_ts: u64,
-        commit_ts: Option<u64>,
+        txn2status: HashMap<u64, u64>,
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::ResolveLock {
             ctx: ctx,
-            start_ts: start_ts,
-            commit_ts: commit_ts,
+            txn2status: txn2status,
             scan_key: None,
-            keys: vec![],
+            key_locks: vec![],
         };
         let tag = cmd.tag();
         self.send(cmd, StorageCb::Boolean(callback))?;
