@@ -24,7 +24,6 @@ extern crate rocksdb;
 extern crate grpcio;
 extern crate futures;
 extern crate rustc_serialize;
-extern crate flat_map;
 extern crate hyper;
 
 #[macro_use]
