@@ -105,28 +105,43 @@ fn before_check(ctx: &mut Context, engine: &DB, region: &Region) -> bool {
             return true;
         };
 
+    // Table data starts with `TABLE_PREFIX`.
+    // Find out the actually range of this region by comparing with `TABLE_PREFIX`.
     match (
         encoded_actual_start_table_prefix[..table_codec::TABLE_PREFIX_LEN]
-            .cmp(&table_codec::TABLE_PREFIX[..table_codec::TABLE_PREFIX_LEN]),
+            .cmp(table_codec::TABLE_PREFIX),
         encoded_actual_end_table_prefix[..table_codec::TABLE_PREFIX_LEN]
-            .cmp(&table_codec::TABLE_PREFIX[..table_codec::TABLE_PREFIX_LEN]),
+            .cmp(table_codec::TABLE_PREFIX),
     ) {
+        // The range does not cover table data.
         (Ordering::Less, Ordering::Less) | (Ordering::Greater, Ordering::Greater) => true,
+
+        // Following arms matches when the region contains table data.
+        // Covers all table data.
+        (Ordering::Less, Ordering::Greater) => false,
+        // The later part contains table data.
         (Ordering::Less, Ordering::Equal) => {
+            // It starts from non-table area to table area,
+            // `encoded_actual_end_table_prefix` can be a split key, save it in context.
             ctx.last_encoded_table_prefix = Some(encoded_actual_end_table_prefix.to_vec());
             false
         }
-        (Ordering::Less, Ordering::Greater) => false,
+        // Region is in table area.
         (Ordering::Equal, Ordering::Equal) => {
             if encoded_actual_start_table_prefix == encoded_actual_end_table_prefix {
                 // Same table.
                 true
             } else {
+                // Different tables, choose `encoded_actual_end_table_prefix` as a split key.
+                // Note that table id does not grow by 1, so have to use `encoded_actual_end_table_prefix`.
+                // See more: https://github.com/pingcap/tidb/issues/4727
                 ctx.last_encoded_table_prefix = Some(encoded_actual_end_table_prefix.to_vec());
                 false
             }
         }
+        // The region starts from tabel area to non-table area.
         (Ordering::Equal, Ordering::Greater) => {
+            // As the comment above, outside needs scan for finding a split key.
             ctx.first_encoded_table_prefix = encoded_actual_start_table_prefix.to_vec();
             false
         }
@@ -141,6 +156,7 @@ fn before_check(ctx: &mut Context, engine: &DB, region: &Region) -> bool {
 /// Feed keys in order to find the split key.
 fn check_key(ctx: &mut Context, key: &[u8]) -> Option<Vec<u8>> {
     if let Some(last_encoded_table_prefix) = ctx.last_encoded_table_prefix.take() {
+        // `before_check` found a split key.
         Some(keys::data_key(&last_encoded_table_prefix))
     } else if let Some(current_encoded_table_prefix) =
         cross_table(&ctx.first_encoded_table_prefix, key)
@@ -151,8 +167,8 @@ fn check_key(ctx: &mut Context, key: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// If `current_key` is not in the table `table_id`,
-/// it returns the `current_key`'s encoded table prefix.
+/// If `current_data_key` does not belong to `encoded_table_prefix`.
+/// it returns the `current_data_key`'s encoded table prefix.
 fn cross_table(encoded_table_prefix: &[u8], current_data_key: &[u8]) -> Option<Vec<u8>> {
     if !keys::validate_data_key(current_data_key) {
         return None;
@@ -210,13 +226,13 @@ fn bound_keys(db: &DB, region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
 }
 
 // Encode a key like `t{i64}` will append some unecessary bytes to the output,
-// Handle encoded table prefix, extract the first 10 bytes, they are enough
-// for finding table that this key belongs to.
+// This function extracts the first 10 bytes, they are enough to find out which
+// table this key belongs to.
 #[inline]
-fn extract_encoded_table_prefix(key: &[u8]) -> Option<&[u8]> {
+fn extract_encoded_table_prefix(encode_key: &[u8]) -> Option<&[u8]> {
     const LEN: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
-    if key.len() >= LEN {
-        Some(&key[..LEN])
+    if encode_key.len() >= LEN {
+        Some(&encode_key[..LEN])
     } else {
         None
     }
