@@ -232,7 +232,7 @@
 # backup-dir = "/tmp/tikv/store/backup"
 
 # Allows OS to incrementally sync WAL to disk while it is being written.
-# wal-bytes-per-sync = "1MB"
+# wal-bytes-per-sync = 0
 
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
@@ -389,4 +389,4 @@
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
-# wal-bytes-per-sync = "1MB"
+# wal-bytes-per-sync = 0
