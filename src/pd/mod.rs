@@ -146,4 +146,13 @@ pub trait PdClient: Send + Sync {
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()>;
 }
 
+// PdClient and some other manage commands.
+pub trait PdCtlClient: PdClient {
+    // Get region and its leader by id.
+    fn get_region_and_leader_by_id(
+        &self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>>;
+}
+
 const REQUEST_TIMEOUT: u64 = 2; // 2s

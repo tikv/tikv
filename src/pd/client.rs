@@ -20,12 +20,12 @@ use futures::{future, Future, Sink, Stream};
 use futures::sync::mpsc;
 use grpc::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
-use kvproto::pdpb::{self, Member};
+use kvproto::pdpb::{self, GetRegionResponse, Member};
 
 use util::{Either, HandyRwLock};
 use util::time::duration_to_sec;
 use pd::PdFuture;
-use super::{Error, PdClient, RegionStat, Result, REQUEST_TIMEOUT};
+use super::{Error, PdClient, PdCtlClient, RegionStat, Result, REQUEST_TIMEOUT};
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::metrics::*;
 
@@ -61,6 +61,38 @@ impl RpcClient {
 
     pub fn get_leader(&self) -> Member {
         self.leader_client.get_leader()
+    }
+
+    fn do_get_region_rpc<T: Send + 'static>(
+        &self,
+        region_id: u64,
+        extract: fn(GetRegionResponse) -> T,
+    ) -> PdFuture<Option<T>> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetRegionByIDRequest::new();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIDRequest| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client.rl().client.get_region_by_id_async_opt(req, option);
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["get_region_by_id"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                if resp.has_region() {
+                    Ok(Some(extract(resp)))
+                } else {
+                    Ok(None)
+                }
+            })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 }
 
@@ -204,31 +236,7 @@ impl PdClient for RpcClient {
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        let timer = Instant::now();
-
-        let mut req = pdpb::GetRegionByIDRequest::new();
-        req.set_header(self.header());
-        req.set_region_id(region_id);
-
-        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIDRequest| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            let handler = client.rl().client.get_region_by_id_async_opt(req, option);
-            Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
-                PD_REQUEST_HISTOGRAM_VEC
-                    .with_label_values(&["get_region_by_id"])
-                    .observe(duration_to_sec(timer.elapsed()));
-                check_resp_header(resp.get_header())?;
-                if resp.has_region() {
-                    Ok(Some(resp.take_region()))
-                } else {
-                    Ok(None)
-                }
-            })) as PdFuture<_>
-        };
-
-        self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
-            .execute()
+        self.do_get_region_rpc(region_id, |mut resp| resp.take_region())
     }
 
     fn region_heartbeat(
@@ -367,5 +375,17 @@ impl PdClient for RpcClient {
         self.leader_client
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
+    }
+}
+
+impl PdCtlClient for RpcClient {
+    fn get_region_and_leader_by_id(
+        &self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        self.do_get_region_rpc(
+            region_id,
+            |mut resp| (resp.take_region(), resp.take_leader()),
+        )
     }
 }
