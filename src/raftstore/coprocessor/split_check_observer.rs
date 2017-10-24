@@ -16,7 +16,6 @@ use rocksdb::{SeekKey, DB};
 use kvproto::metapb::Region;
 
 use coprocessor::codec::table as table_codec;
-use storage::types::Key;
 use storage::CF_WRITE;
 
 use super::super::store::keys;
@@ -26,8 +25,8 @@ use super::{Coprocessor, ObserverContext, RegionObserver, Result};
 
 #[derive(Default)]
 pub struct Context {
-    prev_table_id: i64,
-    last_table_prefix: Option<Vec<u8>>,
+    first_encoded_table_prefix: Vec<u8>,
+    last_encoded_table_prefix: Option<Vec<u8>>,
     skip: bool,
 }
 
@@ -90,88 +89,88 @@ fn before_check(ctx: &mut Context, engine: &DB, region: &Region) -> bool {
         return true;
     }
 
-    let raw_start_key =
-        match Key::from_encoded(keys::origin_key(&actual_start_key).to_vec()).raw() {
-            Ok(k) => k,
-            Err(_) => return true,
+    let encoded_actual_start_key = keys::origin_key(&actual_start_key);
+    let encoded_actual_start_table_prefix =
+        if let Some(key) = extract_encoded_table_prefix(encoded_actual_start_key) {
+            key
+        } else {
+            return true;
         };
 
-    let raw_end_key = match Key::from_encoded(keys::origin_key(&actual_end_key).to_vec()).raw() {
-        Ok(k) => k,
-        Err(_) => return true,
-    };
-
-    let start_table_id = table_codec::decode_table_id(&raw_start_key).unwrap_or(0);
-    let end_table_id = table_codec::decode_table_id(&raw_end_key).unwrap_or(0);
+    let encoded_actual_end_key = keys::origin_key(&actual_end_key);
+    let encoded_actual_end_table_prefix =
+        if let Some(key) = extract_encoded_table_prefix(encoded_actual_end_key) {
+            key
+        } else {
+            return true;
+        };
 
     match (
-        raw_start_key[..table_codec::TABLE_PREFIX_LEN]
+        encoded_actual_start_table_prefix[..table_codec::TABLE_PREFIX_LEN]
             .cmp(&table_codec::TABLE_PREFIX[..table_codec::TABLE_PREFIX_LEN]),
-        raw_end_key[..table_codec::TABLE_PREFIX_LEN]
+        encoded_actual_end_table_prefix[..table_codec::TABLE_PREFIX_LEN]
             .cmp(&table_codec::TABLE_PREFIX[..table_codec::TABLE_PREFIX_LEN]),
     ) {
         (Ordering::Less, Ordering::Less) | (Ordering::Greater, Ordering::Greater) => true,
         (Ordering::Less, Ordering::Equal) => {
-            if end_table_id != 0 {
-                ctx.last_table_prefix = Some(table_codec::gen_table_prefix(end_table_id));
-            }
+            ctx.last_encoded_table_prefix = Some(encoded_actual_end_table_prefix.to_vec());
             false
         }
         (Ordering::Less, Ordering::Greater) => false,
         (Ordering::Equal, Ordering::Equal) => {
-            if start_table_id == end_table_id {
+            if encoded_actual_start_table_prefix == encoded_actual_end_table_prefix {
                 // Same table.
-                // TODO: what if start_table_id equals to 0.
                 true
             } else {
-                ctx.last_table_prefix = Some(table_codec::gen_table_prefix(end_table_id));
+                ctx.last_encoded_table_prefix = Some(encoded_actual_end_table_prefix.to_vec());
                 false
             }
         }
         (Ordering::Equal, Ordering::Greater) => {
-            ctx.prev_table_id = start_table_id;
+            ctx.first_encoded_table_prefix = encoded_actual_start_table_prefix.to_vec();
             false
         }
         _ => panic!(
             "start_key {:?} and end_key {:?} out of order",
-            actual_end_key,
+            actual_start_key,
             actual_end_key
         ),
     }
 }
 
-/// Feed keys and value sizes in order to find the split key.
+/// Feed keys in order to find the split key.
 fn check_key(ctx: &mut Context, key: &[u8]) -> Option<Vec<u8>> {
-    if let Some(last_table_prefix) = ctx.last_table_prefix.take() {
-        Some(keys::data_key(Key::from_raw(&last_table_prefix).encoded()))
-    } else if let Some(current_table_prefix) = cross_table(ctx.prev_table_id, key) {
-        Some(keys::data_key(
-            Key::from_raw(&current_table_prefix).encoded(),
-        ))
+    if let Some(last_encoded_table_prefix) = ctx.last_encoded_table_prefix.take() {
+        Some(keys::data_key(&last_encoded_table_prefix))
+    } else if let Some(current_encoded_table_prefix) =
+        cross_table(&ctx.first_encoded_table_prefix, key)
+    {
+        Some(keys::data_key(&current_encoded_table_prefix))
     } else {
         None
     }
 }
 
 /// If `current_key` is not in the table `table_id`,
-/// it returns the `current_key`'s table prefix.
-fn cross_table(table_id: i64, current_key: &[u8]) -> Option<Vec<u8>> {
-    if !keys::validate_data_key(current_key) {
+/// it returns the `current_key`'s encoded table prefix.
+fn cross_table(encoded_table_prefix: &[u8], current_data_key: &[u8]) -> Option<Vec<u8>> {
+    if !keys::validate_data_key(current_data_key) {
         return None;
     }
-    let origin_current_key = keys::origin_key(current_key);
-    let raw_current_key = match Key::from_encoded(origin_current_key.to_vec()).raw() {
-        Ok(k) => k,
-        Err(_) => return None,
-    };
+    let current_encoded_key = keys::origin_key(current_data_key);
+    if !current_encoded_key.starts_with(table_codec::TABLE_PREFIX) {
+        return None;
+    }
 
-    let current_table_id = match table_codec::decode_table_id(&raw_current_key) {
-        Ok(id) => id,
-        _ => return None,
-    };
+    let current_encoded_table_prefix =
+        if let Some(key) = extract_encoded_table_prefix(current_encoded_key) {
+            key
+        } else {
+            return None;
+        };
 
-    if table_id != current_table_id {
-        Some(table_codec::gen_table_prefix(current_table_id))
+    if encoded_table_prefix != current_encoded_table_prefix {
+        Some(current_encoded_table_prefix.to_vec())
     } else {
         None
     }
@@ -210,6 +209,19 @@ fn bound_keys(db: &DB, region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     }
 }
 
+// Encode a key like `t{i64}` will append some unecessary bytes to the output,
+// Handle encoded table prefix, extract the first 10 bytes, they are enough
+// for finding table that this key belongs to.
+#[inline]
+fn extract_encoded_table_prefix(key: &[u8]) -> Option<&[u8]> {
+    const LEN: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
+    if key.len() >= LEN {
+        Some(&key[..LEN])
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
@@ -231,12 +243,32 @@ mod test {
 
     #[test]
     fn test_cross_table() {
-        let t2 = table_codec::gen_table_prefix(2);
-        let data_t2 = keys::data_key(Key::from_raw(&t2).encoded());
+        let encoded_t1 = Key::from_raw(&table_codec::gen_table_prefix(1));
+        let encoded_t2 = Key::from_raw(&table_codec::gen_table_prefix(2));
+        let data_t2 = keys::data_key(encoded_t2.encoded());
 
-        assert_eq!(cross_table(1, &data_t2).unwrap(), t2);
-        assert_eq!(cross_table(2, &data_t2), None);
-        assert_eq!(cross_table(2, b"bar"), None);
+        assert_eq!(
+            cross_table(
+                extract_encoded_table_prefix(encoded_t1.encoded()).unwrap(),
+                &data_t2
+            ).unwrap()
+                .as_slice(),
+            extract_encoded_table_prefix(encoded_t2.encoded()).unwrap()
+        );
+        assert_eq!(
+            cross_table(
+                extract_encoded_table_prefix(encoded_t2.encoded()).unwrap(),
+                &data_t2
+            ),
+            None
+        );
+        assert_eq!(
+            cross_table(
+                extract_encoded_table_prefix(encoded_t2.encoded()).unwrap(),
+                b"bar"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -362,7 +394,10 @@ mod test {
                 let key = Key::from_raw(&table_codec::gen_table_prefix(id));
                 match rx.try_recv() {
                     Ok(Msg::SplitRegion { split_key, .. }) => {
-                        assert_eq!(&split_key, key.encoded());
+                        assert_eq!(
+                            split_key.as_slice(),
+                            extract_encoded_table_prefix(key.encoded()).unwrap()
+                        );
                     }
                     others => panic!("expect split check result, but got {:?}", others),
                 }
@@ -375,9 +410,10 @@ mod test {
         };
 
         let gen_data_table_prefix = |table_id| {
-            Key::from_raw(&table_codec::gen_table_prefix(table_id))
-                .encoded()
-                .clone()
+            let key = Key::from_raw(&table_codec::gen_table_prefix(table_id));
+            extract_encoded_table_prefix(key.encoded())
+                .unwrap()
+                .to_vec()
         };
 
         // arbitrary padding.
