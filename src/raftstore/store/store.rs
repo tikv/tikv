@@ -46,7 +46,6 @@ use util::RingQueue;
 use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
                     RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
@@ -187,18 +186,13 @@ impl<T, C> Store<T, C> {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        mut coprocessor_host: CoprocessorHost,
+        coprocessor_host: CoprocessorHost,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
 
         let sendch = SendCh::new(ch.sender, "raftstore");
         let tag = format!("[store {}]", meta.get_id());
-
-        // TODO load coprocessors from configuration
-        coprocessor_host
-            .registry
-            .register_observer(100, box SplitObserver);
 
         let mut s = Store {
             cfg: Rc::new(cfg),

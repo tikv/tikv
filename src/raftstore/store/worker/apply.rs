@@ -1668,7 +1668,7 @@ mod tests {
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
         let (_tmp, db) = create_tmp_engine("apply-basic");
-        let host = Arc::new(CoprocessorHost::default());
+        let host = Arc::new(CoprocessorHost::new());
         let mut runner = new_runner(db.clone(), host, tx);
 
         let mut reg = Registration::default();
@@ -1908,7 +1908,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let host = CoprocessorHost::default();
+        let host = CoprocessorHost::new();
         let mut apply_ctx = ApplyContext::new(&host);
         let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();

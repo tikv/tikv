@@ -139,7 +139,7 @@ impl Simulator for ServerCluster {
         let simulate_trans = SimulateTransport::new(trans.clone());
 
         // Create coprocessor.
-        let coprocessor_host = CoprocessorHost::default();
+        let coprocessor_host = CoprocessorHost::new();
 
         // Create node.
         let mut node = Node::new(

@@ -96,7 +96,7 @@ fn test_node_bootstrap_with_prepared_data() {
     );
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::default();
+    let coprocessor_host = CoprocessorHost::new();
 
     // try to restart this node, will clear the prepare data
     node.start(
