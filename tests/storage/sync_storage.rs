@@ -164,6 +164,23 @@ impl SyncStorage {
         }).unwrap()
     }
 
+    pub fn resolve_lock_batch(
+        &self,
+        ctx: Context,
+        start_ts: Vec<u64>,
+        commit_ts: Vec<u64>,
+    ) -> Result<()> {
+        let mut txn_status = HashMap::default();
+        for i in 0..start_ts.len() {
+            txn_status.insert(start_ts[i], commit_ts[i]);
+        }
+        wait_op!(|cb| {
+            self.store
+                .async_resolve_lock(ctx, txn_status.clone(), cb)
+                .unwrap()
+        }).unwrap()
+    }
+
     pub fn gc(&self, ctx: Context, safe_point: u64) -> Result<()> {
         wait_op!(|cb| self.store.async_gc(ctx, safe_point, cb).unwrap()).unwrap()
     }
