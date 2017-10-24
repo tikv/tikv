@@ -24,12 +24,6 @@ extern crate rocksdb;
 extern crate grpcio;
 extern crate futures;
 extern crate rustc_serialize;
-extern crate hyper;
-
-#[macro_use]
-extern crate serde_derive;
-extern crate serde;
-extern crate serde_json;
 
 use std::{process, str, u64};
 use std::iter::FromIterator;
@@ -354,7 +348,12 @@ trait DebugExecutor {
         }
     }
 
-    fn transfer_leader_for_node_recovery(&self, region_id: u64, endpoints: Vec<String>) {
+    fn transfer_leader_for_node_recovery(
+        &self,
+        region_id: u64,
+        pd_ctl: &str,
+        endpoints: Vec<String>,
+    ) {
         self.check_local_mode();
         match RpcClient::new(&endpoints)
             .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
@@ -373,30 +372,32 @@ trait DebugExecutor {
                     })
                     .expect("Cant get new leader");
 
-                #[derive(Serialize)]
-                struct Body {
-                    name: &'static str,
-                    region_id: u64,
-                    to_store_id: u64,
-                }
+                let cmd = format!(
+                    "operator add transfer-leader {} {}",
+                    region_id,
+                    new_leader.get_store_id()
+                );
 
-                let url = format!("http://{}/pd/api/v1/operators", endpoints[0]);
-                let body = serde_json::to_vec(&Body {
-                    name: "transfer-leader",
-                    region_id: region_id,
-                    to_store_id: new_leader.get_store_id(),
-                }).unwrap_or_else(|e| perror_and_exit("serde::json_to_string", e));
-                let mut resp = hyper::Client::new()
-                    .post(&url)
-                    .body(body.as_slice())
-                    .send()
-                    .unwrap_or_else(|e| perror_and_exit("RequestBuilder::send", e));
-                if resp.status == hyper::status::StatusCode::Ok {
+                let mut child = process::Command::new(pd_ctl)
+                    .args(&["-u", &format!("http://{}", &endpoints[0])])
+                    .stdin(process::Stdio::piped())
+                    .stdout(process::Stdio::piped())
+                    .stderr(process::Stdio::piped())
+                    .spawn()
+                    .unwrap_or_else(|e| perror_and_exit("Command::spawn", e));
+
+                child
+                    .stdin
+                    .as_mut()
+                    .expect("Can't get child process's stdin")
+                    .write_all(cmd.as_bytes())
+                    .expect("write_all into child's stdin");
+
+                let output = child.wait_with_output().expect("Can't get output");
+                if output.stderr.is_empty() {
                     println!("success");
                 } else {
-                    let mut body = String::new();
-                    resp.read_to_string(&mut body).unwrap();
-                    println!("fail with http status: {}, body: {}", resp.status, body);
+                    println!("fail: {:?}", String::from_utf8(output.stderr));
                 }
             }
             None => {
@@ -898,6 +899,13 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints, form: ip:port[,ip:port]*"),
+                )
+                .arg(
+                    Arg::with_name("pd-ctl")
+                        .required(true)
+                        .long("pd-ctl")
+                        .takes_value(true)
+                        .help("the pd-ctl binary path"),
                 ),
         );
     let matches = app.clone().get_matches();
@@ -986,8 +994,9 @@ fn main() {
         debug_executor.set_region_tombstone_after_remove_peer(region, pd_urls);
     } else if let Some(matches) = matches.subcommand_matches("transfer-leader") {
         let region = matches.value_of("region").unwrap().parse().unwrap();
+        let pd_ctl = matches.value_of("pd-ctl").unwrap();
         let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(String::from));
-        debug_executor.transfer_leader_for_node_recovery(region, pd_urls);
+        debug_executor.transfer_leader_for_node_recovery(region, pd_ctl, pd_urls);
     } else {
         let _ = app.print_help();
     }
