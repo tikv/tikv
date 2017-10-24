@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::thread;
-use std::collections::HashMap;
 use std::boxed::FnBox;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::mpsc::{self, Receiver};
@@ -22,6 +21,7 @@ use std::io::Error as IoError;
 use std::u64;
 use kvproto::kvrpcpb::{CommandPri, LockInfo};
 use kvproto::errorpb;
+use util::collections::HashMap;
 use self::metrics::*;
 
 pub mod engine;
@@ -133,7 +133,7 @@ pub enum Command {
     ScanLock { ctx: Context, max_ts: u64 },
     ResolveLock {
         ctx: Context,
-        txn2status: HashMap<u64, u64>,
+        txn_status: HashMap<u64, u64>,
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
     },
@@ -758,12 +758,12 @@ impl Storage {
     pub fn async_resolve_lock(
         &self,
         ctx: Context,
-        txn2status: HashMap<u64, u64>,
+        txn_status: HashMap<u64, u64>,
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::ResolveLock {
             ctx: ctx,
-            txn2status: txn2status,
+            txn_status: txn_status,
             scan_key: None,
             key_locks: vec![],
         };

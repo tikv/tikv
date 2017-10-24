@@ -13,8 +13,8 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::collections::HashMap;
 
+use tikv::util::collections::HashMap;
 use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::{Context, LockInfo};
@@ -151,7 +151,7 @@ impl SyncStorage {
     }
 
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {
-        let mut temp_map = HashMap::new();
+        let mut temp_map = HashMap::default();
         let temp = match commit_ts {
             None => 0,
             Some(x) => x,

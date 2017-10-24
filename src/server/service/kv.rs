@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::boxed::FnBox;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
@@ -29,6 +28,7 @@ use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
 use util::worker::Scheduler;
+use util::collections::HashMap;
 use util::buf::PipeBuffer;
 use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
@@ -476,21 +476,21 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let mut txn_2_status: HashMap<u64, u64> = HashMap::new();
+        let mut txn_status = HashMap::default();
 
         let start_ts = req.get_start_version();
         if start_ts > 0 {
             let commit_ts = req.get_commit_version();
-            txn_2_status.insert(start_ts, commit_ts);
+            txn_status.insert(start_ts, commit_ts);
         } else {
             for temp in req.take_txn_infos().into_iter() {
-                txn_2_status.insert(temp.txn, temp.status);
+                txn_status.insert(temp.txn, temp.status);
             }
         }
 
         let (cb, future) = make_callback();
         let res = self.storage
-            .async_resolve_lock(req.take_context(), txn_2_status, cb);
+            .async_resolve_lock(req.take_context(), txn_status, cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;

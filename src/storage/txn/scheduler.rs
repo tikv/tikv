@@ -587,7 +587,7 @@ fn process_read(
         }
         Command::ResolveLock {
             ref ctx,
-            ref txn2status,
+            ref txn_status,
             ref mut scan_key,
             ..
         } => {
@@ -602,7 +602,7 @@ fn process_read(
             let res = reader
                 .scan_lock(
                     scan_key.take(),
-                    |lock| txn2status.contains_key(&lock.ts),
+                    |lock| txn_status.contains_key(&lock.ts),
                     Some(RESOLVE_LOCK_BATCH_SIZE),
                 )
                 .map_err(Error::from)
@@ -616,7 +616,7 @@ fn process_read(
                     } else {
                         Ok(Some(Command::ResolveLock {
                             ctx: ctx.clone(),
-                            txn2status: txn2status.clone(),
+                            txn_status: txn_status.clone(),
                             scan_key: next_scan_key,
                             key_locks: key_locks,
                         }))
@@ -880,7 +880,7 @@ fn process_write_impl(
         }
         Command::ResolveLock {
             ref ctx,
-            ref txn2status,
+            ref txn_status,
             ref mut scan_key,
             ref key_locks,
         } => {
@@ -896,7 +896,7 @@ fn process_write_impl(
                     ctx.get_isolation_level(),
                     !ctx.get_not_fill_cache(),
                 );
-                let status = txn2status.get(&current_lock.ts);
+                let status = txn_status.get(&current_lock.ts);
                 let ts = match status {
                     Some(ts) => *ts,
                     None => panic!("txn status not found!"),
@@ -924,7 +924,7 @@ fn process_write_impl(
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
                         ctx: ctx.clone(),
-                        txn2status: txn2status.clone(),
+                        txn_status: txn_status.clone(),
                         scan_key: scan_key.take(),
                         key_locks: vec![],
                     },
@@ -1537,15 +1537,15 @@ pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use kvproto::kvrpcpb::Context;
+    use util::collections::HashMap;
     use storage::txn::latch::*;
     use storage::{make_key, Command, Mutation, Options};
     use storage::mvcc;
 
     #[test]
     fn test_command_latches() {
-        let mut temp_map = HashMap::new();
+        let mut temp_map = HashMap::default();
         temp_map.insert(10, 20);
         let readonly_cmds = vec![
             Command::Get {
@@ -1571,7 +1571,7 @@ mod tests {
             },
             Command::ResolveLock {
                 ctx: Context::new(),
-                txn2status: temp_map.clone(),
+                txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![],
             },
@@ -1617,7 +1617,7 @@ mod tests {
             },
             Command::ResolveLock {
                 ctx: Context::new(),
-                txn2status: temp_map.clone(),
+                txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![
                     (
