@@ -56,7 +56,7 @@
 # scheduler-worker-pool-size = 4
 
 # When the pending write bytes exceeds this threshold,
-# the "too busy" error is displayed.
+# the "scheduler too busy" error is displayed.
 # scheduler_pending_write_threshold = "10MB"
 
 [pd]
