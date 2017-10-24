@@ -168,7 +168,12 @@ impl FnCall {
             |l, r| {
                 let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
                 let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
-                Ok(cmp_i64_with_unsigned_flag(l, lhs_unsigned, r, rhs_unsigned))
+                Ok(cmp_i64_with_unsigned_flag(
+                    *l,
+                    lhs_unsigned,
+                    *r,
+                    rhs_unsigned,
+                ))
             },
         )
     }
@@ -177,28 +182,28 @@ impl FnCall {
         do_in(
             self,
             |v| v.eval_real(ctx, row),
-            |l, r| datum::cmp_f64(l, r).map_err(Error::from),
+            |l, r| datum::cmp_f64(*l, *r).map_err(Error::from),
         )
     }
 
     pub fn in_decimal(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_decimal(ctx, row), |l, r| Ok(l.cmp(&r)))
+        do_in(self, |v| v.eval_decimal(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
     pub fn in_time(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_time(ctx, row), |l, r| Ok(l.cmp(&r)))
+        do_in(self, |v| v.eval_time(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
     pub fn in_duration(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_duration(ctx, row), |l, r| Ok(l.cmp(&r)))
+        do_in(self, |v| v.eval_duration(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
     pub fn in_string(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_string(ctx, row), |l, r| Ok(l.cmp(&r)))
+        do_in(self, |v| v.eval_string(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
     pub fn in_json(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_json(ctx, row), |l, r| Ok(l.cmp(&r)))
+        do_in(self, |v| v.eval_json(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
     #[inline]
@@ -289,14 +294,10 @@ fn do_in<'a, T, E, F>(expr: &'a FnCall, f: F, get_order: E) -> Result<Option<i64
 where
     T: Clone,
     F: Fn(&'a Expression) -> Result<Option<T>>,
-    E: Fn(T, T) -> Result<Ordering>,
+    E: Fn(&T, &T) -> Result<Ordering>,
 {
     let (first, others) = expr.children.split_first().unwrap();
-    let arg = f(first)?;
-    if arg.is_none() {
-        return Ok(None);
-    }
-    let arg0 = arg.unwrap();
+    let arg = try_opt!(f(first));
     let mut has_null = false;
     for exp in others {
         let arg1 = f(exp)?;
@@ -304,7 +305,7 @@ where
             has_null = true;
             continue;
         }
-        let cmp_result = get_order(arg0.clone(), arg1.unwrap())?;
+        let cmp_result = get_order(&arg, &arg1.unwrap())?;
         if cmp_result == Ordering::Equal {
             return Ok(Some(1));
         }
@@ -527,6 +528,11 @@ mod test {
                 ScalarFuncSig::InInt,
                 vec![Datum::I64(1), Datum::I64(2), Datum::Null],
                 Datum::Null,
+            ),
+            (
+                ScalarFuncSig::InInt,
+                vec![Datum::I64(1), Datum::I64(2), Datum::Null, Datum::I64(1)],
+                Datum::I64(1),
             ),
             (
                 ScalarFuncSig::InInt,
