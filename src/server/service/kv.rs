@@ -483,8 +483,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             let commit_ts = req.get_commit_version();
             txn_status.insert(start_ts, commit_ts);
         } else {
-            for temp in req.take_txn_infos().into_iter() {
-                txn_status.insert(temp.txn, temp.status);
+            for info in req.take_txn_infos().into_iter() {
+                txn_status.insert(info.txn, info.status);
             }
         }
 

@@ -151,16 +151,10 @@ impl SyncStorage {
     }
 
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {
-        let mut temp_map = HashMap::default();
-        let temp = match commit_ts {
-            None => 0,
-            Some(x) => x,
-        };
-        temp_map.insert(start_ts, temp);
+        let mut txn_status = HashMap::default();
+        txn_status.insert(start_ts, commit_ts.unwrap_or(0));
         wait_op!(|cb| {
-            self.store
-                .async_resolve_lock(ctx, temp_map.clone(), cb)
-                .unwrap()
+            self.store.async_resolve_lock(ctx, txn_status, cb).unwrap()
         }).unwrap()
     }
 
@@ -175,9 +169,7 @@ impl SyncStorage {
             txn_status.insert(start_ts[i], commit_ts[i]);
         }
         wait_op!(|cb| {
-            self.store
-                .async_resolve_lock(ctx, txn_status.clone(), cb)
-                .unwrap()
+            self.store.async_resolve_lock(ctx, txn_status, cb).unwrap()
         }).unwrap()
     }
 

@@ -1375,7 +1375,6 @@ impl Scheduler {
             .with_label_values(&[self.get_ctx_tag(cid), "write"])
             .inc();
         if to_be_write.is_empty() {
-            info!("modifies is empty");
             return self.on_write_finished(cid, pr, Ok(()));
         }
         let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.schedch.clone(), rows);
