@@ -292,17 +292,16 @@ where
 
 fn do_in<'a, T, E, F>(expr: &'a FnCall, f: F, get_order: E) -> Result<Option<i64>>
 where
-    T: Clone,
     F: Fn(&'a Expression) -> Result<Option<T>>,
     E: Fn(&T, &T) -> Result<Ordering>,
 {
     let (first, others) = expr.children.split_first().unwrap();
     let arg = try_opt!(f(first));
-    let mut has_null = false;
+    let mut ret_when_not_matched = Ok(Some(0));
     for exp in others {
         let arg1 = f(exp)?;
         if arg1.is_none() {
-            has_null = true;
+            ret_when_not_matched = Ok(None);
             continue;
         }
         let cmp_result = get_order(&arg, &arg1.unwrap())?;
@@ -310,11 +309,7 @@ where
             return Ok(Some(1));
         }
     }
-    if has_null {
-        Ok(None)
-    } else {
-        Ok(Some(0))
-    }
+    ret_when_not_matched
 }
 
 // Do match until '%' is found.
