@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_distsql_cache_flush_lru_when_reach_capacity() {
-        let result: Vec<u8> = vec![1,2,3,4,5];
+        let result: Vec<u8> = vec![1, 2, 3, 4, 5];
         let mut cache: DistSQLCache = DistSQLCache::new(110);
         let key1: DistSQLCacheKey = "test1".to_string();
         let epoch1: RegionEpoch = create_epoch(1, 2);
