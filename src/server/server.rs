@@ -18,10 +18,11 @@ use std::str::FromStr;
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
+use kvproto::importpb_grpc::create_import;
 
 use util::worker::{FutureScheduler, Worker};
 use storage::Storage;
-use raftstore::store::{Engines, SnapManager};
+use raftstore::store::{Engines, SnapManager, Uploader};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
@@ -64,6 +65,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snap_mgr: SnapManager,
         pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
+        uploader: Option<Arc<Uploader>>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -97,6 +99,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .register_service(create_tikv(kv_service));
             if let Some(engines) = debug_engines {
                 sb = sb.register_service(create_debug(DebugService::new(engines)));
+            }
+            if let Some(uploader) = uploader {
+                let service = ImportService::new(cfg.import_concurrency, uploader);
+                sb = sb.register_service(create_import(service));
             }
             sb.build()?
         };

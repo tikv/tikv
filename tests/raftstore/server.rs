@@ -131,6 +131,7 @@ impl Simulator for ServerCluster {
             snap_mgr.clone(),
             pd_worker.scheduler(),
             Some(engines.clone()),
+            None,
         ).unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
