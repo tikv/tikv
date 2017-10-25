@@ -58,9 +58,6 @@ macro_rules! count_args {
 /// assert_eq!(m["key2"], "value2");
 /// # }
 /// ```
-///
-/// This macro may be removed once
-/// [official implementation](https://github.com/rust-lang/rfcs/issues/542) is provided.
 #[macro_export]
 macro_rules! map {
     () => {
