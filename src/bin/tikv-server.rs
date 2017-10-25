@@ -213,11 +213,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
-    // Create CoprocessorHost.
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone());
-
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
+
+    // Create CoprocessorHost.
+    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_sendch());
+
     node.start(
         event_loop,
         engines.clone(),

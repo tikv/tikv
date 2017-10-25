@@ -11,11 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+use util::config::ReadableSize;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     /// When it is true, it will try to split a region with table prefix if
     /// that region crosses tables.
     pub split_region_on_table: bool,
+    pub region_max_size: ReadableSize,
+    pub region_split_size: ReadableSize,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        let split_size = ReadableSize::mb(96);
+        Config {
+            split_region_on_table: false,
+            region_max_size: split_size / 2 * 3,
+            region_split_size: split_size,
+        }
+    }
 }

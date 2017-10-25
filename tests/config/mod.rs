@@ -316,6 +316,8 @@ fn test_serde_custom_tikv_config() {
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,
+        region_max_size: ReadableSize::mb(12),
+        region_split_size: ReadableSize::mb(12),
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");

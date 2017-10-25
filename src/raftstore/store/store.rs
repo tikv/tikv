@@ -497,10 +497,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let split_check_runner = SplitCheckRunner::new(
             self.kv_engine.clone(),
             self.sendch.clone(),
-            self.cfg.region_max_size.0,
-            self.cfg.region_split_size.0,
             self.coprocessor_host.clone(),
         );
+
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(

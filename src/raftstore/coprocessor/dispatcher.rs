@@ -16,7 +16,11 @@ use rocksdb::DB;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
 
-use super::{Config, ObserverContext, RegionObserver, Result, SplitCheckContext, TableCheckObserver};
+use util::transport::{RetryableSendCh, Sender};
+use raftstore::store::msg::Msg;
+
+use super::{Config, ObserverContext, RegionObserver, Result, SizeCheckObserver, SplitCheckContext,
+            TableCheckObserver};
 
 struct ObserverEntry {
     priority: u32,
@@ -49,10 +53,16 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new(cfg: Config) -> CoprocessorHost {
+    pub fn new<C: Sender<Msg> + Send + Sync + 'static>(
+        cfg: Config,
+        ch: RetryableSendCh<Msg, C>,
+    ) -> CoprocessorHost {
         let mut registry = Registry::default();
+        let split_size_check_observer =
+            SizeCheckObserver::new(cfg.region_max_size.0, cfg.region_split_size.0, ch);
+        registry.register_observer(100, Box::new(split_size_check_observer));
         if cfg.split_region_on_table {
-            registry.register_observer(100, Box::new(TableCheckObserver::default()));
+            registry.register_observer(99, Box::new(TableCheckObserver::default()));
         }
         CoprocessorHost { registry: registry }
     }
@@ -102,18 +112,13 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn pre_split_check(
-        &self,
-        region: &Region,
-        engine: &DB,
-    ) -> Result<Option<SplitCheckContext>> {
+    pub fn pre_split_check(&self, region: &Region, engine: &DB) -> Result<SplitCheckContext> {
         let mut ob_ctx = ObserverContext::new(region);
-        let mut split_ctx = None;
+        let mut split_ctx = SplitCheckContext::default();
         for entry in &self.registry.observers {
-            split_ctx = entry.observer.pre_split_check(&mut ob_ctx, engine)?;
-            if ob_ctx.bypass {
-                break;
-            }
+            entry
+                .observer
+                .pre_split_check(&mut ob_ctx, &mut split_ctx, engine);
         }
         Ok(split_ctx)
     }
@@ -124,11 +129,14 @@ impl CoprocessorHost {
         region: &Region,
         split_ctx: &mut SplitCheckContext,
         key: &[u8],
+        value_size: u64,
     ) -> Option<Vec<u8>> {
         let mut ob_ctx = ObserverContext::new(region);
         let mut split_key = None;
         for entry in &self.registry.observers {
-            split_key = entry.observer.each_split_check(&mut ob_ctx, split_ctx, key);
+            split_key = entry
+                .observer
+                .each_split_check(&mut ob_ctx, split_ctx, key, value_size);
             if ob_ctx.bypass {
                 break;
             }
