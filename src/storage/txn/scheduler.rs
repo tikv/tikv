@@ -1233,6 +1233,11 @@ impl Scheduler {
     fn batch_get_snapshot(&mut self, batch: Vec<(Context, Vec<u64>)>) {
         let mut all_cids = Vec::with_capacity(batch.iter().map(|&(_, ref cids)| cids.len()).sum());
         for &(_, ref cids) in &batch {
+            for cid in cids {
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[self.get_ctx_tag(*cid), "snapshot"])
+                    .inc();
+            }
             all_cids.extend(cids);
         }
 
@@ -1285,6 +1290,17 @@ impl Scheduler {
                 });
                 self.finish_with_err(cid, Error::from(e));
             }
+        }
+    }
+
+    fn on_retry_get_snapshots(&mut self, batch: Vec<(Context, Vec<u64>)>) {
+        for (ctx, cids) in batch {
+            for cid in &cids {
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[self.get_ctx_tag(*cid), "snapshot_retry"])
+                    .inc();
+            }
+            self.get_snapshot(&ctx, cids);
         }
     }
 
@@ -1452,9 +1468,7 @@ impl Scheduler {
                 match msg {
                     Msg::Quit => return self.shutdown(),
                     Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-                    Msg::RetryGetSnapshots(tasks) => for (ctx, cids) in tasks {
-                        self.get_snapshot(&ctx, cids);
-                    },
+                    Msg::RetryGetSnapshots(batch) => self.on_retry_get_snapshots(batch),
                     Msg::SnapshotFinished {
                         cids,
                         cb_ctx,
