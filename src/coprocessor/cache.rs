@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_distsql_cache() {
-        let mut cache: DistSQLCache = DistSQLCache::new(100);
+        let mut cache: DistSQLCache = DistSQLCache::new(200);
         let key: DistSQLCacheKey = "test1".to_string();
         let result: Vec<u8> = vec![100, 101, 102];
         let epoch: RegionEpoch = create_epoch(1, 2);
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_distsql_cache_evict_entry_by_stale_epoch() {
-        let mut cache: DistSQLCache = DistSQLCache::new(100);
+        let mut cache: DistSQLCache = DistSQLCache::new(200);
         let key: DistSQLCacheKey = "test1".to_string();
         let epoch: RegionEpoch = create_epoch(1, 2);
         let epoch2: RegionEpoch = create_epoch(1, 3);
@@ -343,8 +343,35 @@ mod tests {
     }
 
     #[test]
+    fn test_distsql_cache_flush_lru_when_reach_capacity() {
+        let result: Vec<u8> = vec![1,2,3,4,5];
+        let mut cache: DistSQLCache = DistSQLCache::new(110);
+        let key1: DistSQLCacheKey = "test1".to_string();
+        let epoch1: RegionEpoch = create_epoch(1, 2);
+        let version1 = cache.get_region_version(10);
+        cache.put(10, epoch1.clone(), key1.clone(), version1, result.clone());
+        assert_eq!(1, cache.len());
+        let key2: DistSQLCacheKey = "test2".to_string();
+        let epoch2: RegionEpoch = create_epoch(1, 2);
+        let version2 = cache.get_region_version(11);
+        cache.put(11, epoch2.clone(), key2.clone(), version2, result.clone());
+        assert_eq!(2, cache.len());
+        let key3: DistSQLCacheKey = "test3".to_string();
+        let epoch3: RegionEpoch = create_epoch(1, 2);
+        let version3 = cache.get_region_version(12);
+        cache.put(12, epoch3.clone(), key3.clone(), version3, result.clone());
+        assert_eq!(2, cache.len());
+        match cache.get(10, &epoch1, &key1) {
+            None => (),
+            Some(_) => {
+                assert!(false);
+            }
+        }
+    }
+
+    #[test]
     fn test_distsql_cache_evict_region() {
-        let mut cache: DistSQLCache = DistSQLCache::new(100);
+        let mut cache: DistSQLCache = DistSQLCache::new(200);
         let key: DistSQLCacheKey = "test1".to_string();
         let key2: DistSQLCacheKey = "test2".to_string();
         let epoch: RegionEpoch = create_epoch(1, 2);
@@ -373,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_distsql_cache_should_be_evict() {
-        let mut cache: DistSQLCache = DistSQLCache::new(100);
+        let mut cache: DistSQLCache = DistSQLCache::new(200);
         let key: DistSQLCacheKey = "test1".to_string();
         let epoch: RegionEpoch = create_epoch(1, 2);
         let result: Vec<u8> = vec![100, 101, 102];
