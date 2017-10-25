@@ -17,13 +17,15 @@ use std::sync::Arc;
 
 use protobuf::RepeatedField;
 
-use rocksdb::{Kv, SeekKey, DB};
+use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
+use kvproto::metapb::Region;
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
 use raftstore::store::{keys, Engines, Iterable, Peekable};
+use raftstore::store::peer_storage::write_peer_state;
 use raftstore::store::engine::IterOption;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
@@ -218,6 +220,60 @@ impl Debugger {
         let end = if end.is_empty() { None } else { Some(end) };
         compact_range(db, handle, start, end, false);
         Ok(())
+    }
+
+    /// Set a region to tombstone by manual, and apply other status(such as
+    /// peers, version, and key range) from `region` which comes from PD normaly.
+    pub fn set_region_tombstone(&self, id: u64, region: Region) -> Result<()> {
+        let db = &self.engines.kv_engine;
+        let key = keys::region_state_key(id);
+
+        let old_region = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key))
+            .ok_or_else(|| Error::Other("Not a valid region".into()))
+            .map(|mut region_local_state| region_local_state.take_region())?;
+
+        let store_id = self.get_store_id()?;
+        let peer_id = old_region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == store_id)
+            .map(|p| p.get_id())
+            .ok_or_else(|| {
+                Error::Other("RegionLocalState doesn't contains the peer itself".into())
+            })?;
+
+        let new_conf_ver = region.get_region_epoch().get_conf_ver();
+        let old_conf_ver = old_region.get_region_epoch().get_conf_ver();
+
+        // If the store is not in peers, or it's still in but its peer_id
+        // has changed, we know the peer is marked as tombstone success.
+        let scheduled = region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == store_id)
+            .map_or(true, |p| p.get_id() != peer_id);
+
+        if new_conf_ver > old_conf_ver && scheduled {
+            let wb = WriteBatch::new();
+            // Here we can keep the other metas as original.
+            box_try!(write_peer_state(db, &wb, &old_region, PeerState::Tombstone));
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            box_try!(db.write_opt(wb, &write_opts));
+            Ok(())
+        } else {
+            Err(box_err!("The peer is still in target peers"))
+        }
+    }
+
+    fn get_store_id(&self) -> Result<u64> {
+        let db = &self.engines.kv_engine;
+        db.get_msg::<StoreIdent>(&keys::store_ident_key())
+            .map_err(|e| box_err!(e))
+            .and_then(|ident| match ident {
+                Some(ident) => Ok(ident.get_store_id()),
+                None => Err(Error::NotFound("No store ident key".to_owned())),
+            })
     }
 }
 

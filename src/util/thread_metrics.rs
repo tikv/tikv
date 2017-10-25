@@ -118,8 +118,8 @@ fn get_thread_name(tid: pid_t, stat: &str) -> Result<(String, usize)> {
     let end = stat.rfind(')');
 
     if let (Some(start), Some(end)) = (start, end) {
-        let mut name = String::with_capacity(THD_NAME_LEN);
         let raw = &stat[start + 1..end];
+        let mut name = String::with_capacity(raw.len());
 
         // sanitize thread name.
         for c in raw.chars() {
@@ -148,10 +148,6 @@ fn get_thread_name(tid: pid_t, stat: &str) -> Result<(String, usize)> {
 fn to_err(s: String) -> Error {
     Error::new(ErrorKind::Other, s)
 }
-
-// Thread name's length is restricted to 16 characters,
-// including the terminating null byte ('\0').
-const THD_NAME_LEN: usize = 16;
 
 // See more man proc.
 // Index of utime and stime.
