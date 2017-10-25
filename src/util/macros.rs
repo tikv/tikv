@@ -144,6 +144,7 @@ macro_rules! thd_name {
 /// Simulating go's defer.
 ///
 /// Please note that, different from go, this defer is bound to scope.
+/// When exiting the scope, its deferred calls are executed in last-in-first-out order.
 #[macro_export]
 macro_rules! defer {
     ($t:expr) => (
