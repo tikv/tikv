@@ -26,8 +26,9 @@ const DEFAULT_SCHED_CONCURRENCY: usize = 102400;
 
 // According to "Little's law", assuming you can write 100MB per
 // second, and it takes about 100ms to process the write requests
-// on average, hence using the 10MB as the default value here.
-const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 10;
+// on average, in that situation the writing bytes estimated 10MB,
+// here we use 100MB as default value for tolerate 1s latency.
+const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

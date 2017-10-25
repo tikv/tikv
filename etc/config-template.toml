@@ -57,7 +57,7 @@
 
 # When the pending write bytes exceeds this threshold,
 # the "scheduler too busy" error is displayed.
-# scheduler-pending-write-threshold = "10MB"
+# scheduler-pending-write-threshold = "100MB"
 
 [pd]
 # pd endpoints
