@@ -508,7 +508,6 @@ mod test {
         let t1 = Time::parse_utc_datetime("2012-12-12 12:00:39", 0).unwrap();
         let t2 = Time::parse_utc_datetime("2012-12-12 13:00:39", 0).unwrap();
         let cases = vec![
-            (ScalarFuncSig::CoalesceInt, vec![Datum::Null], Datum::Null),
             (
                 ScalarFuncSig::InInt,
                 vec![Datum::I64(1), Datum::I64(2)],
