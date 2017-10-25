@@ -418,6 +418,7 @@ fn test_txn_store_resolve_lock_in_a_batch() {
     store.get_ok(b"s2", 30, b"v10");
     store.scan_lock_ok(30, vec![]);
 }
+
 #[test]
 fn test_txn_store_resolve_lock2() {
     for &i in &[

@@ -886,6 +886,7 @@ fn process_write_impl(
         } => {
             let mut scan_key = scan_key.take();
             let mut modifies: Vec<Modify> = vec![];
+            let mut write_size = 0;
             let rows = key_locks.len();
             for &(ref current_key, ref current_lock) in key_locks {
                 let mut txn = MvccTxn::new(
@@ -897,23 +898,24 @@ fn process_write_impl(
                     !ctx.get_not_fill_cache(),
                 );
                 let status = txn_status.get(&current_lock.ts);
-                let ts = match status {
+                let commit_ts = match status {
                     Some(ts) => *ts,
                     None => panic!("txn status not found!"),
                 };
-                if ts > 0 {
-                    if current_lock.ts >= ts {
+                if commit_ts > 0 {
+                    if current_lock.ts >= commit_ts {
                         return Err(Error::InvalidTxnTso {
                             start_ts: current_lock.ts,
-                            commit_ts: ts,
+                            commit_ts: commit_ts,
                         });
                     }
-                    txn.commit(current_key, ts)?;
+                    txn.commit(current_key, commit_ts)?;
                 } else {
                     txn.rollback(current_key)?;
                 }
+                write_size += txn.write_size();
                 modifies.append(&mut txn.modifies());
-                if modifies.len() >= MAX_TXN_WRITE_SIZE {
+                if write_size >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(current_key.to_owned());
                     break;
                 }
