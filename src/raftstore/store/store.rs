@@ -112,6 +112,13 @@ impl Default for StoreStat {
     }
 }
 
+pub struct DestroyPeerJob {
+    pub initialized: bool,
+    pub async_remove: bool,
+    pub region_id: u64,
+    pub peer: metapb::Peer,
+}
+
 pub struct StoreInfo {
     pub engine: Arc<DB>,
     pub capacity: u64,
@@ -672,18 +679,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // we may encounter a message with larger peer id, which means
         // current peer is stale, then we should remove current peer
         let mut has_peer = false;
-        let mut state = None;
+        let mut job = None;
         if let Some(p) = self.region_peers.get_mut(&region_id) {
             has_peer = true;
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
-                state = match p.maybe_destroy() {
-                    None => {
-                        self.raft_metrics.message_dropped.applying_snap += 1;
-                        return Ok(false);
-                    }
-                    Some(job) => Some((job, p.peer.clone())),
-                };
+                job = p.maybe_destroy();
+                if job.is_none() {
+                    self.raft_metrics.message_dropped.applying_snap += 1;
+                    return Ok(false);
+                }
             } else if p.peer_id() > target_peer_id {
                 info!(
                     "[region {}] target peer id {} is less than {}, msg maybe stale.",
@@ -696,9 +701,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        if let Some((job, p)) = state {
-            info!("[region {}] try to destroy stale peer {:?}", region_id, p);
-            if !job.execute(self) {
+        if let Some(job) = job {
+            info!(
+                "[region {}] try to destroy stale peer {:?}",
+                region_id,
+                job.peer
+            );
+            if !self.handle_destroy_peer(job) {
                 return Ok(false);
             }
             has_peer = false;
@@ -983,7 +992,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if let Some(job) = job {
-            job.execute(self);
+            self.handle_destroy_peer(job);
         }
     }
 
@@ -1169,6 +1178,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.trans.flush();
 
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
+    }
+
+    fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+        if job.initialized {
+            self.apply_worker
+                .schedule(ApplyTask::destroy(job.region_id))
+                .unwrap();
+        }
+        if job.async_remove {
+            info!(
+                "[region {}] {} is destroyed asychroniously",
+                job.region_id,
+                job.peer.get_id()
+            );
+            false
+        } else {
+            self.destroy_peer(job.region_id, job.peer);
+            true
+        }
     }
 
     pub fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
