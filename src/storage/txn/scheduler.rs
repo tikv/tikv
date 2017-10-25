@@ -587,7 +587,7 @@ fn process_read(
         }
         Command::ResolveLock {
             ref ctx,
-            ref txn_status,
+            ref mut txn_status,
             ref mut scan_key,
             ..
         } => {
@@ -616,7 +616,7 @@ fn process_read(
                     } else {
                         Ok(Some(Command::ResolveLock {
                             ctx: ctx.clone(),
-                            txn_status: txn_status.clone(),
+                            txn_status: txn_status.drain().collect(),
                             scan_key: next_scan_key,
                             key_locks: key_locks,
                         }))
