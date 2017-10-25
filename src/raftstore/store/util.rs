@@ -20,7 +20,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use storage::{Key, CF_WRITE, LARGE_CFS};
+use storage::{Key, CF_RAFT, CF_WRITE, LARGE_CFS};
 use util::properties::SizeProperties;
 use util::rocksdb as rocksdb_util;
 use super::engine::{IterOption, Iterable};
@@ -104,6 +104,10 @@ pub fn delete_all_in_range(
     }
 
     for cf in db.cf_names() {
+        // Skip raft column family
+        if cf == CF_RAFT {
+            continue;
+        }
         delete_all_in_range_cf(db, cf, start_key, end_key, use_delete_range)?;
     }
 
