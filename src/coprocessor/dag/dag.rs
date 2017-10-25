@@ -108,7 +108,8 @@ impl<'s> DAGContext<'s> {
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                     let data = box_try!(sel_resp.write_to_bytes());
-                    if self.can_cache() {
+                    // If result data is greater than 5MB should not cache it.
+                    if self.can_cache() && data.len() <= 5 * 1024 * 1024 {
                         debug!(
                             "Cache It: {}, region_id: {}, epoch: {:?}",
                             &key,

@@ -65,6 +65,7 @@ pub struct DistSQLCache {
 }
 
 impl DistSQLCache {
+    // capacity is memory size unit is byte
     pub fn new(capacity: usize) -> DistSQLCache {
         DistSQLCache {
             regions: HashMap::new(),
@@ -113,11 +114,14 @@ impl DistSQLCache {
             Some(entry) => {
                 self.map.insert(k.clone(), entry);
                 self.update_regions(region_id, k);
-                if self.len() > self.capacity() {
-                    self.remove_lru();
-                }
             }
         }
+
+        // Remove entry untile cache size is less or equals than capacity
+        while self.size() > self.capacity() {
+            self.remove_lru();
+        }
+
         CORP_DISTSQL_CACHE_SIZE_GAUGE_VEC
             .with_label_values(&["size"])
             .set(self.size() as f64);
@@ -282,7 +286,8 @@ fn validate_epoch(entry: &DistSQLCacheEntry, region_id: u64, epoch: &RegionEpoch
     true
 }
 
-pub const DISTSQL_CACHE_SIZE: usize = 1000;
+// DistSQL Cache Size unit is byte, for now just use 256MB
+pub const DISTSQL_CACHE_SIZE: usize = 256 * 1024 * 1024;
 
 lazy_static! {
     pub static ref DISTSQL_CACHE: Arc<Mutex<DistSQLCache>> =
