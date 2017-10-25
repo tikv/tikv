@@ -210,7 +210,14 @@ impl FnCall {
 
             ScalarFuncSig::JsonExtractSig |
             ScalarFuncSig::JsonRemoveSig |
-            ScalarFuncSig::JsonMergeSig => (2, usize::MAX),
+            ScalarFuncSig::JsonMergeSig |
+            ScalarFuncSig::InInt |
+            ScalarFuncSig::InReal |
+            ScalarFuncSig::InString |
+            ScalarFuncSig::InDecimal |
+            ScalarFuncSig::InTime |
+            ScalarFuncSig::InDuration |
+            ScalarFuncSig::InJson => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig |
             ScalarFuncSig::JsonInsertSig |
@@ -416,6 +423,14 @@ dispatch_call! {
         CastTimeAsInt => cast_time_as_int,
         CastDurationAsInt => cast_duration_as_int,
         CastJsonAsInt => cast_json_as_int,
+
+        InInt => in_int,
+        InReal => in_real,
+        InDecimal => in_decimal,
+        InString => in_string,
+        InTime => in_time,
+        InDuration => in_duration,
+        InJson => in_json,
 
         PlusInt => plus_int,
         MinusInt => minus_int,
