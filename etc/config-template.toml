@@ -55,9 +55,9 @@
 # also should less than total cpu cores.
 # scheduler-worker-pool-size = 4
 
-# When the number of concurrent running writes exceeds this threshold,
-# the "too busy" error is displayed.
-# scheduler-too-busy-threshold = 10000
+# When the pending write bytes exceeds this threshold,
+# the "scheduler too busy" error is displayed.
+# scheduler-pending-write-threshold = "100MB"
 
 [pd]
 # pd endpoints
@@ -231,6 +231,9 @@
 # set backup path, if not set, use "backup" under store path.
 # backup-dir = "/tmp/tikv/store/backup"
 
+# Allows OS to incrementally sync WAL to disk while it is being written.
+# wal-bytes-per-sync = 0
+
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
 # compression method (if any) is used to compress a block.
@@ -386,3 +389,4 @@
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
+# wal-bytes-per-sync = 0

@@ -23,7 +23,7 @@ scheduler-notify-capacity = 123
 scheduler-messages-per-tick = 123
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
-scheduler-too-busy-threshold = 123
+scheduler-pending-write-threshold = "123KB"
 
 [pd]
 endpoints = [
@@ -89,6 +89,7 @@ info-log-max-size = "1KB"
 info-log-roll-time = "12s"
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
+wal-bytes-per-sync = "1MB"
 max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
@@ -235,6 +236,7 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 allow-concurrent-memtable-write = true
+wal-bytes-per-sync = "1MB"
 
 [raftdb.defaultcf]
 block-size = "12KB"

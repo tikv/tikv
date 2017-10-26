@@ -26,9 +26,6 @@
 /// assert_eq!(count_args!(1, 2, 3), 3);
 /// # }
 /// ```
-///
-/// [rfc#88](https://github.com/rust-lang/rfcs/pull/88) proposes to use $# to count the number
-/// of args, but it has not been implemented yet.
 #[macro_export]
 macro_rules! count_args {
     () => { 0 };
@@ -58,9 +55,6 @@ macro_rules! count_args {
 /// assert_eq!(m["key2"], "value2");
 /// # }
 /// ```
-///
-/// This macro may be removed once
-/// [official implementation](https://github.com/rust-lang/rfcs/issues/542) is provided.
 #[macro_export]
 macro_rules! map {
     () => {
@@ -147,6 +141,7 @@ macro_rules! thd_name {
 /// Simulating go's defer.
 ///
 /// Please note that, different from go, this defer is bound to scope.
+/// When exiting the scope, its deferred calls are executed in last-in-first-out order.
 #[macro_export]
 macro_rules! defer {
     ($t:expr) => (
