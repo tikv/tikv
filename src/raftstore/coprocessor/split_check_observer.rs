@@ -501,12 +501,15 @@ mod table {
             region.mut_region_epoch().set_conf_ver(5);
 
             let (tx, rx) = mpsc::sync_channel(100);
-            let ch = RetryableSendCh::new(tx, "test-split");
+            let ch = RetryableSendCh::new(tx, "test-split-table");
+            let (stx, _rx) = mpsc::sync_channel::<Msg>(100);
+            let sch = RetryableSendCh::new(stx, "test-split-size");
 
             // The default split is 96mb, it will not affect table split for this test.
             let mut cfg = Config::default();
             cfg.split_region_on_table = true;
-            let coprocessor = CoprocessorHost::new(cfg, ch.clone());
+            // Try to ignore the ApproximateRegionSize
+            let coprocessor = CoprocessorHost::new(cfg, sch);
             let mut runnable =
                 SplitCheckRunner::new(engine.clone(), ch.clone(), Arc::new(coprocessor));
 
@@ -517,8 +520,6 @@ mod table {
                 region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
                 runnable.run(SplitCheckTask::new(&region));
 
-                // Try to ignore the ApproximateRegionSize
-                if let Ok(Msg::ApproximateRegionSize { .. }) = rx.try_recv() {}
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&table_codec::gen_table_prefix(id));
                     match rx.try_recv() {

@@ -158,18 +158,7 @@ impl<C: Sender<Msg>> Runner<C> {
     }
 
     fn check_split(&mut self, region: &Region) {
-        let mut split_ctx = match self.coprocessor.pre_split_check(region, &self.engine) {
-            Ok(split_ctx) => split_ctx,
-            Err(err) => {
-                info!(
-                    "[region {}] coprocessor split check error: {:?}",
-                    region.get_id(),
-                    err,
-                );
-                return;
-            }
-        };
-
+        let mut split_ctx = self.coprocessor.pre_split_check(region, &self.engine);
         if split_ctx.skip() {
             return;
         }

@@ -138,9 +138,6 @@ impl Simulator for ServerCluster {
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
 
-        // Create coprocessor.
-        let coprocessor_host = CoprocessorHost::default();
-
         // Create node.
         let mut node = Node::new(
             &mut event_loop,
@@ -148,6 +145,10 @@ impl Simulator for ServerCluster {
             &cfg.raft_store,
             self.pd_client.clone(),
         );
+
+        // Create coprocessor.
+        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+
         node.start(
             event_loop,
             engines,

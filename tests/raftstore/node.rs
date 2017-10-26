@@ -180,7 +180,7 @@ impl Simulator for NodeCluster {
         };
 
         // Create coprocessor.
-        let coprocessor_host = CoprocessorHost::default();
+        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
         node.start(
             event_loop,

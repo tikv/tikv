@@ -176,7 +176,7 @@ trait DebugExecutor {
         }
         let scan_future = self.get_mvcc_infos(from, to, limit).for_each(
             move |(key, mvcc)| {
-                println!("key: {}", escape(&key));
+                println!("key: {:?}", key);
                 if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
                     let lock_info = mvcc.get_lock();
                     if start_ts.map_or(true, |ts| lock_info.get_lock_version() == ts) {
