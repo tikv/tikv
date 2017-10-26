@@ -28,9 +28,9 @@ lazy_static! {
             &["type", "stage"]
         ).unwrap();
 
-    pub static ref SCHED_WRITING_KV_GAUGE: Gauge =
+    pub static ref SCHED_WRITING_BYTES_GAUGE: Gauge =
         register_gauge!(
-            "tikv_scheduler_writing_kv_total",
+            "tikv_scheduler_writing_bytes",
             "Total number of writing kv."
         ).unwrap();
 
