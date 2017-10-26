@@ -112,19 +112,19 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn pre_split_check(&self, region: &Region, engine: &DB) -> SplitCheckContext {
+    pub fn prepare_split_check(&self, region: &Region, engine: &DB) -> SplitCheckContext {
         let mut ob_ctx = ObserverContext::new(region);
         let mut split_ctx = SplitCheckContext::default();
         for entry in &self.registry.observers {
             entry
                 .observer
-                .pre_split_check(&mut ob_ctx, &mut split_ctx, engine);
+                .prepare_split_check(&mut ob_ctx, &mut split_ctx, engine);
         }
         split_ctx
     }
 
     /// Hook to call for every check during split.
-    pub fn each_split_check(
+    pub fn on_split_check(
         &self,
         region: &Region,
         split_ctx: &mut SplitCheckContext,
@@ -135,7 +135,7 @@ impl CoprocessorHost {
         for entry in &self.registry.observers {
             if let Some(split_key) = entry
                 .observer
-                .each_split_check(&mut ob_ctx, split_ctx, key, value_size)
+                .on_split_check(&mut ob_ctx, split_ctx, key, value_size)
             {
                 return Some(split_key);
             }

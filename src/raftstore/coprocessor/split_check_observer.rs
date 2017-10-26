@@ -74,7 +74,12 @@ mod size {
     impl<C> Coprocessor for SizeCheckObserver<C> {}
 
     impl<C: Sender<Msg> + Send> RegionObserver for SizeCheckObserver<C> {
-        fn pre_split_check(&self, ob_ctx: &mut ObserverContext, ctx: &mut Context, engine: &DB) {
+        fn prepare_split_check(
+            &self,
+            ob_ctx: &mut ObserverContext,
+            ctx: &mut Context,
+            engine: &DB,
+        ) {
             let sctx = SizeContext::default();
             let region = ob_ctx.region();
             let region_id = region.get_id();
@@ -117,7 +122,7 @@ mod size {
             } // else { Does not need to check size. }
         }
 
-        fn each_split_check(
+        fn on_split_check(
             &self,
             _: &mut ObserverContext,
             ctx: &mut Context,
@@ -161,7 +166,12 @@ mod table {
     impl Coprocessor for TableCheckObserver {}
 
     impl RegionObserver for TableCheckObserver {
-        fn pre_split_check(&self, ob_ctx: &mut ObserverContext, ctx: &mut Context, engine: &DB) {
+        fn prepare_split_check(
+            &self,
+            ob_ctx: &mut ObserverContext,
+            ctx: &mut Context,
+            engine: &DB,
+        ) {
             let mut tctx = TableContext::default();
             let skip = before_check(&mut tctx, engine, ob_ctx.region());
             if !skip {
@@ -169,7 +179,7 @@ mod table {
             }
         }
 
-        fn each_split_check(
+        fn on_split_check(
             &self,
             _: &mut ObserverContext,
             ctx: &mut Context,

@@ -78,11 +78,11 @@ pub trait RegionObserver: Coprocessor {
     fn pre_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) {}
 
     /// Hook to call before handle split region task. If it returns a None,
-    /// then `each_split_check` can be skippped.
-    fn pre_split_check(&self, _: &mut ObserverContext, _: &mut SplitCheckContext, _: &DB) {}
+    /// then `on_split_check` can be skippped.
+    fn prepare_split_check(&self, _: &mut ObserverContext, _: &mut SplitCheckContext, _: &DB) {}
 
     /// Hook to call for every check during split.
-    fn each_split_check(
+    fn on_split_check(
         &self,
         _: &mut ObserverContext,
         _: &mut SplitCheckContext,
