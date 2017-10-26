@@ -158,7 +158,8 @@ impl<C: Sender<Msg>> Runner<C> {
     }
 
     fn check_split(&mut self, region: &Region) {
-        let mut split_ctx = self.coprocessor.prepare_split_check(region, &self.engine);
+        let mut split_ctx = self.coprocessor
+            .new_split_check_status(region, &self.engine);
         if split_ctx.skip() {
             return;
         }

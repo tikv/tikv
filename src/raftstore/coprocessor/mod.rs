@@ -20,7 +20,7 @@ mod split_check_observer;
 mod metrics;
 
 pub use self::config::Config;
-pub use self::split_check_observer::{Context as SplitCheckContext, SizeCheckObserver,
+pub use self::split_check_observer::{SizeCheckObserver, Status as SplitCheckStatus,
                                      TableCheckObserver};
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};
@@ -79,13 +79,13 @@ pub trait RegionObserver: Coprocessor {
 
     /// Hook to call before handle split region task. If it returns a None,
     /// then `on_split_check` can be skippped.
-    fn prepare_split_check(&self, _: &mut ObserverContext, _: &mut SplitCheckContext, _: &DB) {}
+    fn new_split_check_status(&self, _: &mut ObserverContext, _: &mut SplitCheckStatus, _: &DB) {}
 
     /// Hook to call for every check during split.
     fn on_split_check(
         &self,
         _: &mut ObserverContext,
-        _: &mut SplitCheckContext,
+        _: &mut SplitCheckStatus,
         _: &[u8],
         _: u64,
     ) -> Option<Vec<u8>> {

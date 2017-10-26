@@ -24,20 +24,20 @@ use super::{Coprocessor, ObserverContext, RegionObserver, Result};
 use super::metrics::*;
 
 #[derive(Default)]
-pub struct Context {
+pub struct Status {
     // For TableCheckObserver
-    table: Option<TableContext>,
+    table: Option<TableStatus>,
     // For SizeCheckObserver
-    size: Option<SizeContext>,
+    size: Option<SizeStatus>,
 }
 
-impl Context {
+impl Status {
     pub fn skip(&self) -> bool {
         self.table.is_none() && self.size.is_none()
     }
 }
 
-pub use self::size::{SizeCheckObserver, SizeContext};
+pub use self::size::{SizeCheckObserver, SizeStatus};
 
 mod size {
     use raftstore::store::{util, Msg};
@@ -46,7 +46,7 @@ mod size {
     use super::*;
 
     #[derive(Default)]
-    pub struct SizeContext {
+    pub struct SizeStatus {
         current_size: u64,
         split_key: Option<Vec<u8>>,
     }
@@ -74,14 +74,14 @@ mod size {
     impl<C> Coprocessor for SizeCheckObserver<C> {}
 
     impl<C: Sender<Msg> + Send> RegionObserver for SizeCheckObserver<C> {
-        fn prepare_split_check(
+        fn new_split_check_status(
             &self,
-            ob_ctx: &mut ObserverContext,
-            ctx: &mut Context,
+            ctx: &mut ObserverContext,
+            status: &mut Status,
             engine: &DB,
         ) {
-            let sctx = SizeContext::default();
-            let region = ob_ctx.region();
+            let size_status = SizeStatus::default();
+            let region = ctx.region();
             let region_id = region.get_id();
             let region_size = match util::get_region_approximate_size(engine, region) {
                 Ok(size) => size,
@@ -92,7 +92,7 @@ mod size {
                         e
                     );
                     // Need to check size.
-                    ctx.size = Some(sctx);
+                    status.size = Some(size_status);
                     return;
                 }
             };
@@ -118,24 +118,24 @@ mod size {
                     self.region_max_size
                 );
                 // Need to check size.
-                ctx.size = Some(sctx);
+                status.size = Some(size_status);
             } // else { Does not need to check size. }
         }
 
         fn on_split_check(
             &self,
             _: &mut ObserverContext,
-            ctx: &mut Context,
+            status: &mut Status,
             key: &[u8],
             value_size: u64,
         ) -> Option<Vec<u8>> {
-            if let Some(sctx) = ctx.size.as_mut() {
-                sctx.current_size += key.len() as u64 + value_size;
-                if sctx.current_size > self.split_size && sctx.split_key.is_none() {
-                    sctx.split_key = Some(key.to_vec());
+            if let Some(size_status) = status.size.as_mut() {
+                size_status.current_size += key.len() as u64 + value_size;
+                if size_status.current_size > self.split_size && size_status.split_key.is_none() {
+                    size_status.split_key = Some(key.to_vec());
                 }
-                if sctx.current_size >= self.region_max_size {
-                    sctx.split_key.take()
+                if size_status.current_size >= self.region_max_size {
+                    size_status.split_key.take()
                 } else {
                     None
                 }
@@ -146,7 +146,7 @@ mod size {
     }
 }
 
-pub use self::table::{TableCheckObserver, TableContext};
+pub use self::table::{TableCheckObserver, TableStatus};
 
 mod table {
     use coprocessor::codec::table as table_codec;
@@ -155,7 +155,7 @@ mod table {
     use super::*;
 
     #[derive(Default)]
-    pub struct TableContext {
+    pub struct TableStatus {
         first_encoded_table_prefix: Vec<u8>,
         last_encoded_table_prefix: Option<Vec<u8>>,
     }
@@ -166,28 +166,28 @@ mod table {
     impl Coprocessor for TableCheckObserver {}
 
     impl RegionObserver for TableCheckObserver {
-        fn prepare_split_check(
+        fn new_split_check_status(
             &self,
-            ob_ctx: &mut ObserverContext,
-            ctx: &mut Context,
+            ctx: &mut ObserverContext,
+            status: &mut Status,
             engine: &DB,
         ) {
-            let mut tctx = TableContext::default();
-            let skip = before_check(&mut tctx, engine, ob_ctx.region());
+            let mut table_status = TableStatus::default();
+            let skip = before_check(&mut table_status, engine, ctx.region());
             if !skip {
-                ctx.table = Some(tctx);
+                status.table = Some(table_status);
             }
         }
 
         fn on_split_check(
             &self,
             _: &mut ObserverContext,
-            ctx: &mut Context,
+            status: &mut Status,
             key: &[u8],
             _: u64,
         ) -> Option<Vec<u8>> {
-            if let Some(ref mut tctx) = ctx.table {
-                check_key(tctx, key)
+            if let Some(ref mut table_status) = status.table {
+                check_key(table_status, key)
             } else {
                 None
             }
@@ -195,7 +195,7 @@ mod table {
     }
 
     /// Do some quick checks, true for skipping `check_key`.
-    fn before_check(ctx: &mut TableContext, engine: &DB, region: &Region) -> bool {
+    fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool {
         let (actual_start_key, actual_end_key) = match bound_keys(engine, region) {
             Ok(Some((actual_start_key, actual_end_key))) => (actual_start_key, actual_end_key),
             Ok(None) => return true,
@@ -249,7 +249,7 @@ mod table {
             (Ordering::Less, Ordering::Equal) => {
                 // It starts from non-table area to table area,
                 // `encoded_actual_end_table_prefix` can be a split key, save it in context.
-                ctx.last_encoded_table_prefix = Some(encoded_actual_end_table_prefix.to_vec());
+                status.last_encoded_table_prefix = Some(encoded_actual_end_table_prefix.to_vec());
                 false
             }
             // Region is in table area.
@@ -262,14 +262,15 @@ mod table {
                     // Note that table id does not grow by 1, so have to use
                     // `encoded_actual_end_table_prefix`.
                     // See more: https://github.com/pingcap/tidb/issues/4727
-                    ctx.last_encoded_table_prefix = Some(encoded_actual_end_table_prefix.to_vec());
+                    status.last_encoded_table_prefix =
+                        Some(encoded_actual_end_table_prefix.to_vec());
                     false
                 }
             }
             // The region starts from tabel area to non-table area.
             (Ordering::Equal, Ordering::Greater) => {
                 // As the comment above, outside needs scan for finding a split key.
-                ctx.first_encoded_table_prefix = encoded_actual_start_table_prefix.to_vec();
+                status.first_encoded_table_prefix = encoded_actual_start_table_prefix.to_vec();
                 false
             }
             _ => panic!(
@@ -281,12 +282,12 @@ mod table {
     }
 
     /// Feed keys in order to find the split key.
-    fn check_key(ctx: &mut TableContext, key: &[u8]) -> Option<Vec<u8>> {
-        if let Some(last_encoded_table_prefix) = ctx.last_encoded_table_prefix.take() {
+    fn check_key(status: &mut TableStatus, key: &[u8]) -> Option<Vec<u8>> {
+        if let Some(last_encoded_table_prefix) = status.last_encoded_table_prefix.take() {
             // `before_check` found a split key.
             Some(keys::data_key(&last_encoded_table_prefix))
         } else if let Some(current_encoded_table_prefix) =
-            cross_table(&ctx.first_encoded_table_prefix, key)
+            cross_table(&status.first_encoded_table_prefix, key)
         {
             Some(keys::data_key(&current_encoded_table_prefix))
         } else {

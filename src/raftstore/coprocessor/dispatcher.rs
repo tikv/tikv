@@ -19,7 +19,7 @@ use kvproto::metapb::Region;
 use util::transport::{RetryableSendCh, Sender};
 use raftstore::store::msg::Msg;
 
-use super::{Config, ObserverContext, RegionObserver, Result, SizeCheckObserver, SplitCheckContext,
+use super::{Config, ObserverContext, RegionObserver, Result, SizeCheckObserver, SplitCheckStatus,
             TableCheckObserver};
 
 struct ObserverEntry {
@@ -112,22 +112,22 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn prepare_split_check(&self, region: &Region, engine: &DB) -> SplitCheckContext {
+    pub fn new_split_check_status(&self, region: &Region, engine: &DB) -> SplitCheckStatus {
         let mut ob_ctx = ObserverContext::new(region);
-        let mut split_ctx = SplitCheckContext::default();
+        let mut split_status = SplitCheckStatus::default();
         for entry in &self.registry.observers {
             entry
                 .observer
-                .prepare_split_check(&mut ob_ctx, &mut split_ctx, engine);
+                .new_split_check_status(&mut ob_ctx, &mut split_status, engine);
         }
-        split_ctx
+        split_status
     }
 
     /// Hook to call for every check during split.
     pub fn on_split_check(
         &self,
         region: &Region,
-        split_ctx: &mut SplitCheckContext,
+        split_status: &mut SplitCheckStatus,
         key: &[u8],
         value_size: u64,
     ) -> Option<Vec<u8>> {
@@ -135,7 +135,7 @@ impl CoprocessorHost {
         for entry in &self.registry.observers {
             if let Some(split_key) = entry
                 .observer
-                .on_split_check(&mut ob_ctx, split_ctx, key, value_size)
+                .on_split_check(&mut ob_ctx, split_status, key, value_size)
             {
                 return Some(split_key);
             }

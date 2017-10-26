@@ -50,7 +50,6 @@ pub struct Config {
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
-
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_diff: ReadableSize,
@@ -92,6 +91,13 @@ pub struct Config {
     pub right_derive_when_split: bool,
 
     pub allow_remove_leader: bool,
+
+    // Deprecated! These two configuration has been moved to Coprocessor.
+    // They are preserved for compatibility check.
+    #[doc(hidden)]
+    pub region_max_size: ReadableSize,
+    #[doc(hidden)]
+    pub region_split_size: ReadableSize,
 }
 
 impl Default for Config {
@@ -135,6 +141,10 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             allow_remove_leader: false,
+
+            // They are preserved for compatibility check.
+            region_max_size: ReadableSize(0),
+            region_split_size: ReadableSize(0),
         }
     }
 }
@@ -186,6 +196,15 @@ impl Config {
                 election_timeout,
                 lease
             ));
+        }
+
+        // Compatibility check.
+        if self.region_max_size.0 != 0 {
+            warn!("region-max-size has been moved to coprocessor");
+        }
+
+        if self.region_split_size.0 != 0 {
+            warn!("region-split-size has been moved to coprocessor",);
         }
 
         Ok(())
