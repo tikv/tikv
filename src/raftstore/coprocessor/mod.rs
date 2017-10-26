@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod region_snapshot;
 pub mod dispatcher;
-pub mod split_observer;
+mod region_snapshot;
+mod split_observer;
 mod error;
 
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};
+use self::split_observer::SplitObserver;
 
 use kvproto::raft_cmdpb::{AdminRequest, Request};
 use kvproto::metapb::Region;

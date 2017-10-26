@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ObserverContext, RegionObserver, Result};
+use super::{ObserverContext, RegionObserver, Result, SplitObserver};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
@@ -41,16 +41,20 @@ impl Registry {
 }
 
 /// Admin and invoke all coprocessors.
-#[derive(Default)]
 pub struct CoprocessorHost {
     pub registry: Registry,
 }
 
 impl CoprocessorHost {
-    // TODO load from configuration.
-
     pub fn new() -> CoprocessorHost {
-        CoprocessorHost::default()
+        let mut coprocessor_host = CoprocessorHost {
+            registry: Registry::default(),
+        };
+        // TODO load coprocessors from configuration
+        coprocessor_host
+            .registry
+            .register_observer(100, box SplitObserver);
+        coprocessor_host
     }
 
     /// Call all prepose hook until bypass is set to true.
@@ -195,7 +199,7 @@ mod test {
     fn test_coprocessor_host() {
         let (bypass1, called1, r1) = (share_bool(), share_usize(), share_bool());
         let observer1 = TestCoprocessor::new(bypass1.clone(), called1.clone(), r1.clone());
-        let mut host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::new();
         host.registry.register_observer(3, Box::new(observer1));
         let region = Region::new();
         let mut admin_req = RaftCmdRequest::new();
