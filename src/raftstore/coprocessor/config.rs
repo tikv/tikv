@@ -20,17 +20,20 @@ pub struct Config {
     /// When it is true, it will try to split a region with table prefix if
     /// that region crosses tables.
     pub split_region_on_table: bool,
+
+    // Same as region_max_size in raftstore::Config.
+    #[serde(skip)]
     pub region_max_size: ReadableSize,
+    #[serde(skip)]
     pub region_split_size: ReadableSize,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        let split_size = ReadableSize::mb(96);
         Config {
             split_region_on_table: false,
-            region_max_size: split_size / 2 * 3,
-            region_split_size: split_size,
+            region_max_size: ReadableSize(0),
+            region_split_size: ReadableSize(0),
         }
     }
 }

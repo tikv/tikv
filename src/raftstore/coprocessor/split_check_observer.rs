@@ -366,10 +366,11 @@ mod table {
 
         use storage::ALL_CFS;
         use storage::types::Key;
+        use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask};
         use util::rocksdb::new_engine;
         use util::worker::Runnable;
-        use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask};
         use util::transport::RetryableSendCh;
+        use util::config::ReadableSize;
 
         use super::super::super::{Config, CoprocessorHost};
         use super::*;
@@ -505,9 +506,14 @@ mod table {
             let (stx, _rx) = mpsc::sync_channel::<Msg>(100);
             let sch = RetryableSendCh::new(stx, "test-split-size");
 
-            // The default split is 96mb, it will not affect table split for this test.
             let mut cfg = Config::default();
+            // Enable table split.
             cfg.split_region_on_table = true;
+
+            // Try to "disable" size split.
+            cfg.region_max_size = ReadableSize::gb(2);
+            cfg.region_split_size = ReadableSize::gb(1);
+
             // Try to ignore the ApproximateRegionSize
             let coprocessor = CoprocessorHost::new(cfg, sch);
             let mut runnable =

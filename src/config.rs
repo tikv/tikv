@@ -696,6 +696,13 @@ impl TiKvConfig {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
+        if self.coprocessor.region_max_size.0 == 0 {
+            self.coprocessor.region_max_size = self.raft_store.region_max_size;
+        }
+        if self.coprocessor.region_split_size.0 == 0 {
+            self.coprocessor.region_split_size = self.raft_store.region_max_size;
+        }
+
         self.rocksdb.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;

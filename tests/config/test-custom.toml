@@ -74,8 +74,6 @@ allow-remove-leader = true
 
 [coprocessor]
 split-region-on-table = true
-region-max-size = "12MB"
-region-split-size = "12MB"
 
 [rocksdb]
 wal-recovery-mode = 1
