@@ -18,7 +18,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use rocksdb::{Writable, WriteBatch, DB};
+use rocksdb::{Writable, WriteBatch, DB, RateLimiter};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 
