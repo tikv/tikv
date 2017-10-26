@@ -179,7 +179,7 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
 pub struct RunningCtx {
     cid: u64,
     cmd: Option<Command>,
-    kv_count: usize,
+    write_bytes: usize,
     lock: Lock,
     callback: Option<StorageCb>,
     tag: &'static str,
@@ -196,11 +196,11 @@ impl RunningCtx {
         let tag = cmd.tag();
         let ts = cmd.ts();
         let region_id = cmd.get_context().get_region_id();
-        let kv_count = cmd.kv_count();
+        let write_bytes = cmd.write_bytes();
         RunningCtx {
             cid: cid,
             cmd: Some(cmd),
-            kv_count: kv_count,
+            write_bytes: write_bytes,
             lock: lock,
             callback: Some(cb),
             tag: tag,
@@ -310,7 +310,7 @@ pub struct Scheduler {
 
     // TODO: Dynamically calculate this value according to processing
     // speed of recent write requests.
-    sched_too_busy_threshold: usize,
+    sched_pending_write_threshold: usize,
 
     // worker pool
     worker_pool: ThreadPool<ScheContext>,
@@ -321,7 +321,7 @@ pub struct Scheduler {
     has_gc_command: bool,
 
     // used to control write flow
-    running_write_kv_count: usize,
+    running_write_bytes: usize,
 }
 
 // Make clippy happy.
@@ -368,7 +368,7 @@ impl Scheduler {
         schedch: SyncSendCh<Msg>,
         concurrency: usize,
         worker_pool_size: usize,
-        sched_too_busy_threshold: usize,
+        sched_pending_write_threshold: usize,
     ) -> Scheduler {
         Scheduler {
             engine: engine,
@@ -380,7 +380,7 @@ impl Scheduler {
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
-            sched_too_busy_threshold: sched_too_busy_threshold,
+            sched_pending_write_threshold: sched_pending_write_threshold,
             worker_pool: ThreadPoolBuilder::with_default_factory(thd_name!("sched-worker-pool"))
                 .thread_count(worker_pool_size)
                 .build(),
@@ -388,7 +388,7 @@ impl Scheduler {
                 thd_name!("sched-high-pri-pool"),
             ).build(),
             has_gc_command: false,
-            running_write_kv_count: 0,
+            running_write_bytes: 0,
         }
     }
 }
@@ -1021,7 +1021,7 @@ impl Scheduler {
 
     fn insert_ctx(&mut self, ctx: RunningCtx) {
         if ctx.lock.is_write_lock() {
-            self.running_write_kv_count += ctx.kv_count;
+            self.running_write_bytes += ctx.write_bytes;
         }
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = true;
@@ -1030,7 +1030,7 @@ impl Scheduler {
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
-        SCHED_WRITING_KV_GAUGE.set(self.running_write_kv_count as f64);
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
         SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
     }
 
@@ -1038,12 +1038,12 @@ impl Scheduler {
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
         if ctx.lock.is_write_lock() {
-            self.running_write_kv_count -= ctx.kv_count;
+            self.running_write_bytes -= ctx.write_bytes;
         }
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = false;
         }
-        SCHED_WRITING_KV_GAUGE.set(self.running_write_kv_count as f64);
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
         SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
         ctx
     }
@@ -1145,7 +1145,7 @@ impl Scheduler {
     }
 
     fn too_busy(&self) -> bool {
-        self.running_write_kv_count >= self.sched_too_busy_threshold
+        self.running_write_bytes >= self.sched_pending_write_threshold
     }
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
