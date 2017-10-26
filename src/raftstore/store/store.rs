@@ -111,6 +111,13 @@ impl Default for StoreStat {
     }
 }
 
+pub struct DestroyPeerJob {
+    pub initialized: bool,
+    pub async_remove: bool,
+    pub region_id: u64,
+    pub peer: metapb::Peer,
+}
+
 pub struct StoreInfo {
     pub engine: Arc<DB>,
     pub capacity: u64,
@@ -666,31 +673,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // we may encounter a message with larger peer id, which means
         // current peer is stale, then we should remove current peer
         let mut has_peer = false;
-        let mut async_remove = false;
-        let mut stale_peer = None;
-        let mut initialized = false;
+        let mut job = None;
         if let Some(p) = self.region_peers.get_mut(&region_id) {
             has_peer = true;
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
-                initialized = p.get_store().is_initialized();
-                async_remove = initialized;
-                if p.is_applying_snapshot() {
-                    if !p.mut_store().cancel_applying_snap() {
-                        info!(
-                            "[region {}] Stale peer {} is applying snapshot, will destroy next \
-                             time.",
-                            region_id,
-                            p.peer_id()
-                        );
-                        self.raft_metrics.message_dropped.stale_peer += 1;
-                        return Ok(false);
-                    }
-                    // There is no tasks in apply worker.
-                    async_remove = false;
+                job = p.maybe_destroy();
+                if job.is_none() {
+                    self.raft_metrics.message_dropped.applying_snap += 1;
+                    return Ok(false);
                 }
-                p.pending_remove = true;
-                stale_peer = Some(p.peer.clone());
             } else if p.peer_id() > target_peer_id {
                 info!(
                     "[region {}] target peer id {} is less than {}, msg maybe stale.",
@@ -702,23 +694,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(false);
             }
         }
-        if let Some(p) = stale_peer {
-            if initialized {
-                self.apply_worker
-                    .schedule(ApplyTask::destroy(region_id))
-                    .unwrap();
-            }
-            if async_remove {
-                info!(
-                    "[region {}] asking destroying stale peer {:?}",
-                    region_id,
-                    p
-                );
-                self.raft_metrics.message_dropped.stale_peer += 1;
+
+        if let Some(job) = job {
+            info!(
+                "[region {}] try to destroy stale peer {:?}",
+                region_id,
+                job.peer
+            );
+            if !self.handle_destroy_peer(job) {
                 return Ok(false);
             }
-            info!("[region {}] destroying stale peer {:?}", region_id, p);
-            self.destroy_peer(region_id, p);
             has_peer = false;
         }
 
@@ -980,32 +965,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn handle_gc_peer_msg(&mut self, msg: &RaftMessage) {
         let region_id = msg.get_region_id();
 
-        let mut need_remove = false;
-        let mut async_remove = true;
+        let mut job = None;
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
+            assert_eq!(peer.peer, *msg.get_to_peer());
             // TODO: need checking peer id changed?
             let from_epoch = msg.get_region_epoch();
             if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
                 // TODO: ask pd to guarantee we are stale now.
                 info!(
-                    "[region {}] peer {:?} receives gc message, remove",
+                    "[region {}] peer {:?} receives gc message, trying to remove",
                     region_id,
                     msg.get_to_peer()
                 );
-                need_remove = true;
-                peer.pending_remove = true;
-                async_remove = peer.get_store().is_initialized();
+                job = peer.maybe_destroy();
+                if job.is_none() {
+                    self.raft_metrics.message_dropped.applying_snap += 1;
+                    return;
+                }
             }
         }
 
-        if need_remove {
-            if async_remove {
-                self.apply_worker
-                    .schedule(ApplyTask::destroy(region_id))
-                    .unwrap();
-            } else {
-                self.destroy_peer(region_id, msg.get_to_peer().clone());
-            }
+        if let Some(job) = job {
+            self.handle_destroy_peer(job);
         }
     }
 
@@ -1193,7 +1174,26 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
 
-    fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
+    fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+        if job.initialized {
+            self.apply_worker
+                .schedule(ApplyTask::destroy(job.region_id))
+                .unwrap();
+        }
+        if job.async_remove {
+            info!(
+                "[region {}] {} is destroyed asychroniously",
+                job.region_id,
+                job.peer.get_id()
+            );
+            false
+        } else {
+            self.destroy_peer(job.region_id, job.peer);
+            true
+        }
+    }
+
+    pub fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
         // Can we destroy it in another thread later?
 
         // Suppose cluster removes peer a from store and then add a new

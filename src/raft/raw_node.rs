@@ -26,14 +26,16 @@
 // limitations under the License.
 
 
+use std::mem;
+
 use raft::errors::{Error, Result};
 use raft::Storage;
 use protobuf::{self, RepeatedField};
 use kvproto::eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState,
                        Message, MessageType, Snapshot};
-use raft::raft::{Config, Raft, SoftState, INVALID_ID};
-use raft::Status;
-use raft::read_only::ReadState;
+use super::raft::{Config, Raft, SoftState, INVALID_ID};
+use super::Status;
+use super::read_only::ReadState;
 
 #[derive(Debug, Default)]
 pub struct Peer {
@@ -126,9 +128,11 @@ impl Ready {
     ) -> Ready {
         let mut rd = Ready {
             entries: raft.raft_log.unstable_entries().unwrap_or(&[]).to_vec(),
-            messages: raft.msgs.drain(..).collect(),
             ..Default::default()
         };
+        if !raft.msgs.is_empty() {
+            mem::swap(&mut raft.msgs, &mut rd.messages);
+        }
         rd.committed_entries = Some(
             (match since_idx {
                 None => raft.raft_log.next_entries(),
