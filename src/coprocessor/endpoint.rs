@@ -632,6 +632,10 @@ impl TiDbEndPoint {
         };
         match resp {
             Ok(r) => respond(r, t),
+            Err(e @ Error::Other(_)) => {
+                error!("request fail {}: {:?}", t, e);
+                on_error(e, t)
+            }
             Err(e) => on_error(e, t),
         }
     }
