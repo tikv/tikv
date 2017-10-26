@@ -71,6 +71,9 @@ quick_error! {
             description("Truncated")
             display("error Truncated")
         }
+        StackOverLimit {
+            description("Recurse level is too deep")
+        }
         Overflow {
             description("Overflow")
             display("error Overflow")
@@ -294,7 +297,14 @@ impl Expression {
         Ok(data)
     }
 
-    pub fn build(ctx: &StatementContext, mut expr: Expr) -> Result<Self> {
+    pub fn build(ctx: &StatementContext, expr: Expr) -> Result<Self> {
+        Expression::safe_build(ctx, expr, 0)
+    }
+
+    fn safe_build(ctx: &StatementContext, mut expr: Expr, level: usize) -> Result<Self> {
+        if level > 500 {
+            return Err(Error::StackOverLimit);
+        }
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
@@ -345,7 +355,7 @@ impl Expression {
                 FnCall::check_args(expr.get_sig(), expr.get_children().len())?;
                 expr.take_children()
                     .into_iter()
-                    .map(|child| Expression::build(ctx, child))
+                    .map(|child| Expression::safe_build(ctx, child, level + 1))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
                         Expression::ScalarFn(FnCall {
