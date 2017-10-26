@@ -38,6 +38,7 @@ use std::time::Duration;
 use std::thread;
 use std::hash::{Hash, Hasher};
 use std::u64;
+use std::mem;
 
 use prometheus::HistogramTimer;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
@@ -616,7 +617,7 @@ fn process_read(
                     } else {
                         Ok(Some(Command::ResolveLock {
                             ctx: ctx.clone(),
-                            txn_status: txn_status.drain().collect(),
+                            txn_status: mem::replace(txn_status, Default::default()),
                             scan_key: next_scan_key,
                             key_locks: key_locks,
                         }))
