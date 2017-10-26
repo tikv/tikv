@@ -125,7 +125,7 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let mut server = Server::new(
             &cfg.server,
-            cfg.raft_store.region_split_size.0 as usize,
+            cfg.coprocessor.region_split_size.0 as usize,
             store.clone(),
             sim_router.clone(),
             resolver,

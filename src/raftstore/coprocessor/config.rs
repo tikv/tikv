@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use util::config::ReadableSize;
+use super::Result;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -21,19 +22,53 @@ pub struct Config {
     /// that region crosses tables.
     pub split_region_on_table: bool,
 
-    // Same as region_max_size in raftstore::Config.
-    #[serde(skip)]
+    /// When region [a, b) size meets region_max_size, it will be split
+    /// into two region into [a, c), [c, b). And the size of [a, c) will
+    /// be region_split_size (or a little bit smaller).
     pub region_max_size: ReadableSize,
-    #[serde(skip)]
     pub region_split_size: ReadableSize,
 }
 
+/// Default region split size.
+pub const SPLIT_SIZE_MB: u64 = 96;
+
 impl Default for Config {
     fn default() -> Config {
+        let split_size = ReadableSize::mb(SPLIT_SIZE_MB);
         Config {
             split_region_on_table: false,
-            region_max_size: ReadableSize(0),
-            region_split_size: ReadableSize(0),
+            region_split_size: split_size,
+            region_max_size: split_size / 2 * 3,
         }
+    }
+}
+
+impl Config {
+    pub fn validate(&self) -> Result<()> {
+        if self.region_max_size.0 < self.region_split_size.0 {
+            return Err(box_err!(
+                "region max size {} must >= split size {}",
+                self.region_max_size.0,
+                self.region_split_size.0
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_validate() {
+        let mut cfg = Config::default();
+        cfg.validate().unwrap();
+
+        cfg = Config::default();
+        cfg.region_max_size = ReadableSize(10);
+        cfg.region_split_size = ReadableSize(20);
+        assert!(cfg.validate().is_err());
     }
 }

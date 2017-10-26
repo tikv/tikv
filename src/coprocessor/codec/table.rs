@@ -54,24 +54,6 @@ trait TableEncoder: NumberEncoder {
 
 impl<T: Write> TableEncoder for T {}
 
-/// Composes table record and index prefix: `t[table_id]`.
-pub fn gen_table_prefix(table_id: i64) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(TABLE_PREFIX_KEY_LEN);
-    buf.write_all(TABLE_PREFIX).unwrap();
-    buf.encode_i64(table_id).unwrap();
-    buf
-}
-
-/// Decodes the table ID of the key.
-pub fn decode_table_id(key: &[u8]) -> Result<i64> {
-    if key.len() < TABLE_PREFIX_KEY_LEN || !key.starts_with(TABLE_PREFIX) {
-        Err(box_err!("table key expected, but got {}", escape(key)))
-    } else {
-        let mut key = &key[TABLE_PREFIX_LEN..TABLE_PREFIX_KEY_LEN];
-        key.decode_i64()
-    }
-}
-
 pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
@@ -579,18 +561,5 @@ mod test {
         res = cut_idx_key_as_owned(&bs, &[]);
         assert!(res.0.is_empty());
         assert!(res.1.is_none());
-    }
-
-    #[test]
-    fn test_encode_and_decode_table_perfix() {
-        let good = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
-        for t in good {
-            let key = gen_table_prefix(t);
-            assert_eq!(decode_table_id(&key).unwrap(), t);
-        }
-
-        assert!(decode_table_id(&[]).is_err());
-        assert!(decode_table_id(TABLE_PREFIX).is_err());
-        assert!(decode_table_id(b"t123").is_err());
     }
 }

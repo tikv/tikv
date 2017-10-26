@@ -203,7 +203,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     // Create server
     let mut server = Server::new(
         &cfg.server,
-        cfg.raft_store.region_split_size.0 as usize,
+        cfg.coprocessor.region_split_size.0 as usize,
         storage.clone(),
         raft_router,
         resolver,

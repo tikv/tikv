@@ -675,6 +675,7 @@ impl TiKvConfig {
             );
         }
 
+        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
         self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
             config::canonicalize_sub_path(&self.storage.data_dir, "raft")?
         } else {
@@ -696,17 +697,11 @@ impl TiKvConfig {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
-        if self.coprocessor.region_max_size.0 == 0 {
-            self.coprocessor.region_max_size = self.raft_store.region_max_size;
-        }
-        if self.coprocessor.region_split_size.0 == 0 {
-            self.coprocessor.region_split_size = self.raft_store.region_max_size;
-        }
-
         self.rocksdb.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;
         self.pd.validate()?;
+        self.coprocessor.validate()?;
         Ok(())
     }
 }

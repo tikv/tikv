@@ -359,6 +359,7 @@ mod table {
     mod test {
         use std::sync::Arc;
         use std::sync::mpsc;
+        use std::io::Write;
 
         use tempdir::TempDir;
         use rocksdb::Writable;
@@ -371,14 +372,24 @@ mod table {
         use util::worker::Runnable;
         use util::transport::RetryableSendCh;
         use util::config::ReadableSize;
+        use util::codec::number::NumberEncoder;
+        use coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
 
-        use super::super::super::{Config, CoprocessorHost};
+        use raftstore::coprocessor::{Config, CoprocessorHost};
         use super::*;
+
+        /// Composes table record and index prefix: `t[table_id]`.
+        fn gen_table_prefix(table_id: i64) -> Vec<u8> {
+            let mut buf = Vec::with_capacity(TABLE_PREFIX_KEY_LEN);
+            buf.write_all(TABLE_PREFIX).unwrap();
+            buf.encode_i64(table_id).unwrap();
+            buf
+        }
 
         #[test]
         fn test_cross_table() {
-            let encoded_t1 = Key::from_raw(&table_codec::gen_table_prefix(1));
-            let encoded_t2 = Key::from_raw(&table_codec::gen_table_prefix(2));
+            let encoded_t1 = Key::from_raw(&gen_table_prefix(1));
+            let encoded_t2 = Key::from_raw(&gen_table_prefix(2));
             let data_t2 = keys::data_key(encoded_t2.encoded());
 
             assert_eq!(
@@ -422,7 +433,7 @@ mod table {
             // arbitrary padding.
             let padding = b"_r00000005";
             // Put t1_xxx
-            let mut key = table_codec::gen_table_prefix(1);
+            let mut key = gen_table_prefix(1);
             key.extend_from_slice(padding);
             let s1 = keys::data_key(Key::from_raw(&key).encoded());
             engine.put_cf(write_cf, &s1, &s1).unwrap();
@@ -430,20 +441,12 @@ mod table {
             let mut check = |start_id: Option<i64>, end_id: Option<i64>, result| {
                 region.set_start_key(
                     start_id
-                        .map(|id| {
-                            Key::from_raw(&table_codec::gen_table_prefix(id))
-                                .encoded()
-                                .to_vec()
-                        })
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
                         .unwrap_or_else(Vec::new),
                 );
                 region.set_end_key(
                     end_id
-                        .map(|id| {
-                            Key::from_raw(&table_codec::gen_table_prefix(id))
-                                .encoded()
-                                .to_vec()
-                        })
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
                         .unwrap_or_else(Vec::new),
                 );
                 assert_eq!(bound_keys(&engine, &region).unwrap(), result);
@@ -462,7 +465,7 @@ mod table {
             check(Some(1), Some(2), Some((s1.clone(), s1.clone())));
 
             // Put t2_xx
-            let mut key = table_codec::gen_table_prefix(2);
+            let mut key = gen_table_prefix(2);
             key.extend_from_slice(padding);
             let s2 = keys::data_key(Key::from_raw(&key).encoded());
             engine.put_cf(write_cf, &s2, &s2).unwrap();
@@ -477,7 +480,7 @@ mod table {
             check(Some(1), Some(2), Some((s1.clone(), s1.clone())));
 
             // Put t3_xx
-            let mut key = table_codec::gen_table_prefix(3);
+            let mut key = gen_table_prefix(3);
             key.extend_from_slice(padding);
             let s3 = keys::data_key(Key::from_raw(&key).encoded());
             engine.put_cf(write_cf, &s3, &s3).unwrap();
@@ -527,7 +530,7 @@ mod table {
                 runnable.run(SplitCheckTask::new(&region));
 
                 if let Some(id) = table_id {
-                    let key = Key::from_raw(&table_codec::gen_table_prefix(id));
+                    let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
                         Ok(Msg::SplitRegion { split_key, .. }) => {
                             assert_eq!(
@@ -546,7 +549,7 @@ mod table {
             };
 
             let gen_data_table_prefix = |table_id| {
-                let key = Key::from_raw(&table_codec::gen_table_prefix(table_id));
+                let key = Key::from_raw(&gen_table_prefix(table_id));
                 extract_encoded_table_prefix(key.encoded())
                     .unwrap()
                     .to_vec()
@@ -564,7 +567,7 @@ mod table {
                     continue;
                 }
 
-                let mut key = table_codec::gen_table_prefix(i);
+                let mut key = gen_table_prefix(i);
                 key.extend_from_slice(padding);
                 let s = keys::data_key(Key::from_raw(&key).encoded());
                 engine.put_cf(write_cf, &s, &s).unwrap();
@@ -588,7 +591,7 @@ mod table {
 
             // Put some data to t3
             for i in 1..4 {
-                let mut key = table_codec::gen_table_prefix(3);
+                let mut key = gen_table_prefix(3);
                 key.extend_from_slice(format!("{:?}{}", padding, i).as_bytes());
                 let s = keys::data_key(Key::from_raw(&key).encoded());
                 engine.put_cf(write_cf, &s, &s).unwrap();

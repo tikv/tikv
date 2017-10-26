@@ -14,9 +14,9 @@
 mod region_snapshot;
 pub mod dispatcher;
 pub mod split_observer;
+pub mod config;
 mod error;
 mod split_check_observer;
-mod config;
 mod metrics;
 
 pub use self::config::Config;

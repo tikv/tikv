@@ -61,7 +61,7 @@ pub enum NotifyError<T> {
     Io(io::Error),
 }
 
-pub trait Sender<T: Sized>: Clone + Sized {
+pub trait Sender<T>: Clone {
     fn send(&self, t: T) -> Result<(), NotifyError<T>>;
 }
 

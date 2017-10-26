@@ -85,8 +85,6 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_count_limit: 12,
         raft_log_gc_size_limit: ReadableSize::kb(1),
         split_region_check_tick_interval: ReadableDuration::secs(12),
-        region_max_size: ReadableSize::mb(12),
-        region_split_size: ReadableSize::mb(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
         region_compact_delete_keys_count: 1_234,
@@ -316,8 +314,8 @@ fn test_serde_custom_tikv_config() {
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,
-        region_max_size: ReadableSize(0), // KEEP IT ZERO, it is skipped by serde.
-        region_split_size: ReadableSize(0), // KEEP IT ZERO, it is skipped by serde.
+        region_max_size: ReadableSize::mb(12),
+        region_split_size: ReadableSize::mb(12),
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");
