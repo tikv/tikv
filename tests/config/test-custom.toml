@@ -23,7 +23,7 @@ scheduler-notify-capacity = 123
 scheduler-messages-per-tick = 123
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
-scheduler-too-busy-threshold = 123
+scheduler-pending-write-threshold = "123KB"
 
 [pd]
 endpoints = [

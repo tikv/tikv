@@ -329,7 +329,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_messages_per_tick: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
-        scheduler_too_busy_threshold: 123,
+        scheduler_pending_write_threshold: ReadableSize::kb(123),
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");
