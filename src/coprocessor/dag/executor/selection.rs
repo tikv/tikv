@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
@@ -20,24 +20,25 @@ use coprocessor::metrics::*;
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::dag::expr::Expression;
 use coprocessor::Result;
+use storage::Statistics;
 
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
-pub struct SelectionExecutor<'a> {
+pub struct SelectionExecutor {
     conditions: Vec<Expression>,
-    cols: Rc<Vec<ColumnInfo>>,
+    cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
-    ctx: Rc<EvalContext>,
-    src: Box<Executor + 'a>,
+    ctx: Arc<EvalContext>,
+    src: Box<Executor>,
 }
 
-impl<'a> SelectionExecutor<'a> {
+impl SelectionExecutor {
     pub fn new(
         mut meta: Selection,
-        ctx: Rc<EvalContext>,
-        columns_info: Rc<Vec<ColumnInfo>>,
-        src: Box<Executor + 'a>,
-    ) -> Result<SelectionExecutor<'a>> {
+        ctx: Arc<EvalContext>,
+        columns_info: Arc<Vec<ColumnInfo>>,
+        src: Box<Executor>,
+    ) -> Result<SelectionExecutor> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
         visitor.batch_visit(&conditions)?;
@@ -53,13 +54,13 @@ impl<'a> SelectionExecutor<'a> {
 }
 
 #[allow(never_loop)]
-impl<'a> Executor for SelectionExecutor<'a> {
+impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
-                self.cols.clone(),
+                self.cols.as_ref(),
                 &self.related_cols_offset,
                 row.handle,
             )?;
@@ -73,11 +74,16 @@ impl<'a> Executor for SelectionExecutor<'a> {
         }
         Ok(None)
     }
+
+    fn take_statistics(&mut self) -> Statistics {
+        self.src.take_statistics()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::i64;
+    use std::sync::Arc;
 
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
@@ -86,7 +92,7 @@ mod tests {
 
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::Datum;
-    use storage::{SnapshotStore, Statistics};
+    use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
 
     use super::*;
@@ -188,10 +194,7 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut statistics = Statistics::default();
-
-        let inner_table_scan =
-            TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
+        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store);
 
         // selection executor
         let mut selection = Selection::new();
@@ -200,8 +203,8 @@ mod tests {
 
         let mut selection_executor = SelectionExecutor::new(
             selection,
-            Rc::new(EvalContext::default()),
-            Rc::new(cis),
+            Arc::new(EvalContext::default()),
+            Arc::new(cis),
             Box::new(inner_table_scan),
         ).unwrap();
 
@@ -245,10 +248,7 @@ mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut statistics = Statistics::default();
-
-        let inner_table_scan =
-            TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
+        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store);
 
         // selection executor
         let mut selection = Selection::new();
@@ -257,8 +257,8 @@ mod tests {
 
         let mut selection_executor = SelectionExecutor::new(
             selection,
-            Rc::new(EvalContext::default()),
-            Rc::new(cis),
+            Arc::new(EvalContext::default()),
+            Arc::new(cis),
             Box::new(inner_table_scan),
         ).unwrap();
 

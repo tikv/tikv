@@ -27,22 +27,21 @@ use super::{Executor, Row};
 use super::scanner::Scanner;
 
 
-pub struct IndexScanExecutor<'a> {
+pub struct IndexScanExecutor {
     desc: bool,
     col_ids: Vec<i64>,
     cursor: usize,
     key_ranges: Vec<KeyRange>,
-    scanner: Scanner<'a>,
+    scanner: Scanner,
     pk_col: Option<ColumnInfo>,
 }
 
-impl<'a> IndexScanExecutor<'a> {
+impl IndexScanExecutor {
     pub fn new(
         mut meta: IndexScan,
         mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<'a>,
-        statistics: &'a mut Statistics,
-    ) -> IndexScanExecutor<'a> {
+        store: SnapshotStore,
+    ) -> IndexScanExecutor {
         let mut pk_col = None;
         let desc = meta.get_desc();
         if desc {
@@ -53,7 +52,7 @@ impl<'a> IndexScanExecutor<'a> {
             pk_col = Some(cols.pop().unwrap());
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
-        let scanner = Scanner::new(store, desc, false, statistics);
+        let scanner = Scanner::new(store, desc, false);
 
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
@@ -69,12 +68,11 @@ impl<'a> IndexScanExecutor<'a> {
     pub fn new_with_cols_len(
         cols: i64,
         key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<'a>,
-        statistics: &'a mut Statistics,
-    ) -> IndexScanExecutor<'a> {
+        store: SnapshotStore,
+    ) -> IndexScanExecutor {
         let col_ids: Vec<i64> = (0..cols).collect();
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
-        let scanner = Scanner::new(store, false, false, statistics);
+        let scanner = Scanner::new(store, false, false);
         IndexScanExecutor {
             desc: false,
             col_ids: col_ids,
@@ -125,7 +123,7 @@ impl<'a> IndexScanExecutor<'a> {
     }
 }
 
-impl<'a> Executor for IndexScanExecutor<'a> {
+impl Executor for IndexScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         while self.cursor < self.key_ranges.len() {
             let data = self.get_row_from_range()?;
@@ -138,6 +136,10 @@ impl<'a> Executor for IndexScanExecutor<'a> {
             return Ok(data);
         }
         Ok(None)
+    }
+
+    fn take_statistics(&mut self) -> Statistics {
+        self.scanner.take_statistics()
     }
 }
 
@@ -153,7 +155,7 @@ mod test {
     use coprocessor::codec::datum::{self, Datum};
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
-    use storage::{SnapshotStore, Statistics};
+    use storage::SnapshotStore;
 
     use super::*;
     use super::super::scanner::test::{new_col_info, Data, TestStore};
@@ -256,7 +258,6 @@ mod test {
 
     #[test]
     fn test_multiple_ranges() {
-        let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::default();
         let (ref start_key, _) = wrapper.data.kv_data[0];
         let (ref split_key, _) = wrapper.data.kv_data[KEY_NUMBER / 3];
@@ -271,8 +272,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
+        let mut scanner = IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store);
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap();
@@ -290,7 +290,6 @@ mod test {
 
     #[test]
     fn test_reverse_scan() {
-        let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::default();
         wrapper.scan.set_desc(true);
 
@@ -302,8 +301,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
+        let mut scanner = IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -322,13 +320,11 @@ mod test {
 
     #[test]
     fn test_include_pk() {
-        let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::include_pk_cols();
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
+        let mut scanner = IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store);
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();

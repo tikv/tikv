@@ -23,13 +23,13 @@ use util::properties::MvccProperties;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
-pub struct MvccReader<'a> {
-    snapshot: &'a Snapshot,
-    statistics: &'a mut Statistics,
+pub struct MvccReader {
+    snapshot: Box<Snapshot>,
+    statistics: Statistics,
     // cursors are used for speeding up scans.
-    data_cursor: Option<Cursor<'a>>,
-    lock_cursor: Option<Cursor<'a>>,
-    write_cursor: Option<Cursor<'a>>,
+    data_cursor: Option<Cursor>,
+    lock_cursor: Option<Cursor>,
+    write_cursor: Option<Cursor>,
 
     scan_mode: Option<ScanMode>,
     key_only: bool,
@@ -39,15 +39,15 @@ pub struct MvccReader<'a> {
     isolation_level: IsolationLevel,
 }
 
-impl<'a> MvccReader<'a> {
+impl MvccReader {
     pub fn new(
-        snapshot: &'a Snapshot,
-        statistics: &'a mut Statistics,
+        snapshot: Box<Snapshot>,
+        statistics: Statistics,
         scan_mode: Option<ScanMode>,
         fill_cache: bool,
         upper_bound: Option<Vec<u8>>,
         isolation_level: IsolationLevel,
-    ) -> MvccReader<'a> {
+    ) -> MvccReader {
         MvccReader {
             snapshot: snapshot,
             statistics: statistics,
@@ -62,7 +62,7 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn close(self) -> &'a mut Statistics {
+    pub fn close(self) -> Statistics {
         self.statistics
     }
 
@@ -591,30 +591,51 @@ mod tests {
         }
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
-            let mut stat = Statistics::default();
+            let mut stat = Some(Statistics::default());
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(
+                Box::new(snap),
+                stat.take().unwrap(),
+                start_ts,
+                None,
+                IsolationLevel::SI,
+                true,
+            );
             txn.prewrite(m, pk, &Options::default()).unwrap();
-            self.write(txn.modifies());
+            self.write(txn.modifies(&mut stat));
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let k = make_key(pk);
-            let mut stat = Statistics::default();
+            let mut stat = Some(Statistics::default());
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(&snap, &mut stat, start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(
+                Box::new(snap),
+                stat.take().unwrap(),
+                start_ts,
+                None,
+                IsolationLevel::SI,
+                true,
+            );
             txn.commit(&k, commit_ts).unwrap();
-            self.write(txn.modifies());
+            self.write(txn.modifies(&mut stat));
         }
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
             let k = make_key(pk);
-            let mut stat = Statistics::default();
+            let stat = Statistics::default();
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn =
-                MvccTxn::new(&snap, &mut stat, safe_point, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(
+                Box::new(snap),
+                stat,
+                safe_point,
+                None,
+                IsolationLevel::SI,
+                true,
+            );
             txn.gc(&k, safe_point).unwrap();
-            self.write(txn.modifies());
+            let mut stat = Some(Statistics::default());
+            self.write(txn.modifies(&mut stat));
         }
 
         fn write(&mut self, modifies: Vec<Modify>) {
@@ -695,8 +716,8 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
-        let mut stat = Statistics::default();
-        let reader = MvccReader::new(&snap, &mut stat, None, false, None, IsolationLevel::SI);
+        let stat = Statistics::default();
+        let reader = MvccReader::new(Box::new(snap), stat, None, false, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }

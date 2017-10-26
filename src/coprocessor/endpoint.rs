@@ -13,7 +13,7 @@
 
 use std::usize;
 use std::time::Duration;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
@@ -38,7 +38,6 @@ use pd::PdTask;
 use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::select::select::SelectContext;
-use super::select::xeval::EvalContext;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
@@ -209,7 +208,6 @@ impl Host {
             return;
         }
 
-
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
@@ -294,10 +292,10 @@ pub struct RequestTask {
     start_ts: Option<u64>,
     wait_time: Option<f64>,
     timer: Instant,
-    statistics: Statistics,
+    statistics: Option<Statistics>,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
-    ctx: ReqContext,
+    ctx: Arc<ReqContext>,
 }
 
 impl RequestTask {
@@ -363,7 +361,7 @@ impl RequestTask {
             statistics: Default::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
-            ctx: req_ctx,
+            ctx: Arc::new(req_ctx),
         }
     }
 
@@ -396,10 +394,11 @@ impl RequestTask {
             .with_label_values(&[type_str])
             .observe(handle_time - wait_time);
 
+        let statistics = self.statistics.take().unwrap_or_default();
 
         COPR_SCAN_KEYS
             .with_label_values(&[type_str])
-            .observe(self.statistics.total_op_count() as f64);
+            .observe(statistics.total_op_count() as f64);
 
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
@@ -411,8 +410,8 @@ impl RequestTask {
                 type_str,
                 handle_time,
                 wait_time,
-                self.statistics.total_op_count(),
-                self.statistics.total_processed(),
+                statistics.total_op_count(),
+                statistics.total_processed(),
                 self.req.get_ranges().len(),
                 self.req.get_ranges().get(0)
             );
@@ -605,7 +604,7 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
 fn respond(resp: Response, mut t: RequestTask) -> Statistics {
     t.stop_record_handling();
     (t.on_resp)(resp);
-    t.statistics
+    t.statistics.unwrap_or_default()
 }
 
 pub struct TiDbEndPoint {
@@ -619,8 +618,9 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask) -> Statistics {
+    fn handle_request(self, mut t: RequestTask) -> Statistics {
         t.stop_record_waiting();
+
         if let Err(e) = t.check_outdated() {
             return on_error(e, t);
         }
@@ -636,32 +636,24 @@ impl TiDbEndPoint {
         }
     }
 
-    fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let ctx = SelectContext::new(sel, self.snap.as_ref(), &mut t.statistics, &t.ctx)?;
+    fn handle_select(self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
+        let ctx = SelectContext::new(sel, self.snap, t.ctx.clone())?;
         let range = t.req.get_ranges().to_vec();
-        ctx.handle_request(range)
+        ctx.handle_request(range, &mut t.statistics)
     }
 
-    pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
+    pub fn handle_dag(self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
         let ranges = t.req.get_ranges().to_vec();
-        let eval_ctx = Rc::new(box_try!(EvalContext::new(
-            dag.get_time_zone_offset(),
-            dag.get_flags()
-        )));
-        let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone())?;
+        let res = ctx.handle_request();
+        t.statistics = Some(ctx.take_statistics());
+        res
+    }
+
+    pub fn handle_analyze(self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
+        let ranges = t.req.get_ranges().to_vec();
+        let ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
         ctx.handle_request(&mut t.statistics)
-    }
-
-    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
-        let ranges = t.req.get_ranges().to_vec();
-        let ctx = AnalyzeContext::new(
-            analyze,
-            ranges,
-            self.snap.as_ref(),
-            &mut t.statistics,
-            &t.ctx,
-        );
-        ctx.handle_request()
     }
 }
 
@@ -774,13 +766,18 @@ mod tests {
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
-        task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
+        let ctx = ReqContext {
+            deadline: task.ctx.deadline - Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS),
+            isolation_level: task.ctx.isolation_level,
+            fill_cache: task.ctx.fill_cache,
+            table_scan: task.ctx.table_scan,
+        };
+        task.ctx = Arc::new(ctx);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
     }
-
     #[test]
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");

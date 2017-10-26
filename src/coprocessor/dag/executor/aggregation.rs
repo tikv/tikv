@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
@@ -26,6 +26,8 @@ use coprocessor::select::xeval::EvalContext;
 use coprocessor::dag::expr::Expression;
 use coprocessor::metrics::*;
 use coprocessor::Result;
+
+use storage::Statistics;
 
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
@@ -69,26 +71,26 @@ impl AggrFunc {
     }
 }
 
-pub struct AggregationExecutor<'a> {
+pub struct AggregationExecutor {
     group_by: Vec<Expression>,
     aggr_func: Vec<AggrFuncExpr>,
-    group_keys: Vec<Rc<Vec<u8>>>,
-    group_key_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
+    group_keys: Vec<Arc<Vec<u8>>>,
+    group_key_aggrs: HashMap<Arc<Vec<u8>>, Vec<Box<AggrFunc>>>,
     cursor: usize,
     executed: bool,
-    ctx: Rc<EvalContext>,
-    cols: Rc<Vec<ColumnInfo>>,
+    ctx: Arc<EvalContext>,
+    cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
-    src: Box<Executor + 'a>,
+    src: Box<Executor>,
 }
 
-impl<'a> AggregationExecutor<'a> {
+impl AggregationExecutor {
     pub fn new(
         mut meta: Aggregation,
-        ctx: Rc<EvalContext>,
-        columns: Rc<Vec<ColumnInfo>>,
-        src: Box<Executor + 'a>,
-    ) -> Result<AggregationExecutor<'a>> {
+        ctx: Arc<EvalContext>,
+        columns: Arc<Vec<ColumnInfo>>,
+        src: Box<Executor>,
+    ) -> Result<AggregationExecutor> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(columns.len());
         let group_by = meta.take_group_by().into_vec();
@@ -131,11 +133,11 @@ impl<'a> AggregationExecutor<'a> {
             let cols = inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
-                self.cols.clone(),
+                self.cols.as_ref(),
                 &self.related_cols_offset,
                 row.handle,
             )?;
-            let group_key = Rc::new(self.get_group_key(&cols)?);
+            let group_key = Arc::new(self.get_group_key(&cols)?);
             match self.group_key_aggrs.entry(group_key.clone()) {
                 Entry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
@@ -159,7 +161,7 @@ impl<'a> AggregationExecutor<'a> {
     }
 }
 
-impl<'a> Executor for AggregationExecutor<'a> {
+impl Executor for AggregationExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         if !self.executed {
             self.aggregate()?;
@@ -189,6 +191,10 @@ impl<'a> Executor for AggregationExecutor<'a> {
             data: RowColsDict::new(map![], value),
         }))
     }
+
+    fn take_statistics(&mut self) -> Statistics {
+        self.src.take_statistics()
+    }
 }
 
 #[cfg(test)]
@@ -203,7 +209,7 @@ mod test {
     use coprocessor::codec::datum::{Datum, DatumDecoder};
     use coprocessor::codec::mysql::decimal::Decimal;
     use coprocessor::codec::mysql::types;
-    use storage::{SnapshotStore, Statistics};
+    use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
 
     use super::*;
@@ -297,9 +303,7 @@ mod test {
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-
-        let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store);
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -312,8 +316,8 @@ mod test {
         // init Aggregation Executor
         let mut aggr_ect = AggregationExecutor::new(
             aggregation,
-            Rc::new(EvalContext::default()),
-            Rc::new(cis),
+            Arc::new(EvalContext::default()),
+            Arc::new(cis),
             Box::new(ts_ect),
         ).unwrap();
         let expect_row_cnt = 4;

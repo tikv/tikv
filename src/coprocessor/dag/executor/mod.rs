@@ -11,12 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use util::codec::number::NumberDecoder;
+use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
-use util::collections::HashSet;
+use kvproto::coprocessor::KeyRange;
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
@@ -24,6 +25,8 @@ use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
+use storage::{SnapshotStore, Statistics};
+use util::collections::HashSet;
 
 mod scanner;
 mod table_scan;
@@ -125,18 +128,90 @@ impl Row {
 
 pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
+    fn take_statistics(&mut self) -> Statistics;
+}
+
+type DAGExecutor = (Box<Executor>, Arc<Vec<ColumnInfo>>, bool);
+
+pub fn build_exec(
+    execs: Vec<executor::Executor>,
+    store: SnapshotStore,
+    ranges: Vec<KeyRange>,
+    ctx: Arc<EvalContext>,
+) -> Result<DAGExecutor> {
+    let mut execs = execs.into_iter();
+    let first = execs
+        .next()
+        .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
+    let (mut src, columns) = build_first_executor(first, store, ranges)?;
+    let mut has_aggr = false;
+    for mut exec in execs {
+        let curr: Box<Executor> = match exec.get_tp() {
+            ExecType::TypeTableScan | ExecType::TypeIndexScan => {
+                return Err(box_err!("got too much *scan exec, should be only one"))
+            }
+            ExecType::TypeSelection => Box::new(SelectionExecutor::new(
+                exec.take_selection(),
+                ctx.clone(),
+                columns.clone(),
+                src,
+            )?),
+            ExecType::TypeAggregation => {
+                has_aggr = true;
+                Box::new(AggregationExecutor::new(
+                    exec.take_aggregation(),
+                    ctx.clone(),
+                    columns.clone(),
+                    src,
+                )?)
+            }
+            ExecType::TypeTopN => Box::new(TopNExecutor::new(
+                exec.take_topN(),
+                ctx.clone(),
+                columns.clone(),
+                src,
+            )?),
+            ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
+        };
+        src = curr;
+    }
+    Ok((src, columns, has_aggr))
+}
+
+type FirstExecutor = (Box<Executor>, Arc<Vec<ColumnInfo>>);
+fn build_first_executor(
+    mut first: executor::Executor,
+    store: SnapshotStore,
+    ranges: Vec<KeyRange>,
+) -> Result<FirstExecutor> {
+    match first.get_tp() {
+        ExecType::TypeTableScan => {
+            let cols = Arc::new(first.get_tbl_scan().get_columns().to_vec());
+            let ex = Box::new(TableScanExecutor::new(first.get_tbl_scan(), ranges, store));
+            Ok((ex, cols))
+        }
+        ExecType::TypeIndexScan => {
+            let cols = Arc::new(first.get_idx_scan().get_columns().to_vec());
+            let ex = Box::new(IndexScanExecutor::new(first.take_idx_scan(), ranges, store));
+            Ok((ex, cols))
+        }
+        _ => Err(box_err!(
+            "first exec type should be *Scan, but get {:?}",
+            first.get_tp()
+        )),
+    }
 }
 
 pub fn inflate_with_col_for_dag(
     ctx: &EvalContext,
     values: &RowColsDict,
-    columns: Rc<Vec<ColumnInfo>>,
+    columns: &[ColumnInfo],
     offsets: &[usize],
     h: i64,
 ) -> Result<Vec<Datum>> {
     let mut res = vec![Datum::Null; columns.len()];
     for offset in offsets {
-        let col = columns.get(*offset).unwrap();
+        let col = &columns[*offset];
         if col.get_pk_handle() {
             let v = get_pk(col, h);
             res[*offset] = v;

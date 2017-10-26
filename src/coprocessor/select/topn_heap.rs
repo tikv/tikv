@@ -13,7 +13,7 @@
 
 use std::usize;
 use std::collections::BinaryHeap;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::cmp::{self, Ordering};
 use std::cell::RefCell;
 use tipb::expression::ByItem;
@@ -30,9 +30,9 @@ pub struct SortRow {
     pub handle: i64,
     pub data: RowColsDict,
     pub key: Vec<Datum>,
-    order_cols: Rc<Vec<ByItem>>,
-    ctx: Rc<EvalContext>,
-    err: Rc<RefCell<Option<String>>>,
+    order_cols: Arc<Vec<ByItem>>,
+    ctx: Arc<EvalContext>,
+    err: Arc<RefCell<Option<String>>>,
 }
 
 impl SortRow {
@@ -40,9 +40,9 @@ impl SortRow {
         handle: i64,
         data: RowColsDict,
         key: Vec<Datum>,
-        order_cols: Rc<Vec<ByItem>>,
-        ctx: Rc<EvalContext>,
-        err: Rc<RefCell<Option<String>>>,
+        order_cols: Arc<Vec<ByItem>>,
+        ctx: Arc<EvalContext>,
+        err: Arc<RefCell<Option<String>>>,
     ) -> SortRow {
         SortRow {
             handle: handle,
@@ -94,7 +94,7 @@ impl SortRow {
 pub struct TopNHeap {
     pub rows: BinaryHeap<SortRow>,
     limit: usize,
-    err: Rc<RefCell<Option<String>>>,
+    err: Arc<RefCell<Option<String>>>,
 }
 
 impl TopNHeap {
@@ -106,7 +106,7 @@ impl TopNHeap {
         Ok(TopNHeap {
             rows: BinaryHeap::with_capacity(cap),
             limit: limit,
-            err: Rc::new(RefCell::new(None)),
+            err: Arc::new(RefCell::new(None)),
         })
     }
 
@@ -123,8 +123,8 @@ impl TopNHeap {
         handle: i64,
         data: RowColsDict,
         values: Vec<Datum>,
-        order_cols: Rc<Vec<ByItem>>,
-        ctx: Rc<EvalContext>,
+        order_cols: Arc<Vec<ByItem>>,
+        ctx: Arc<EvalContext>,
     ) -> Result<()> {
         let row = SortRow::new(handle, data, values, order_cols, ctx, self.err.clone());
         // push into heap when heap is not full
@@ -177,7 +177,7 @@ impl PartialOrd for SortRow {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     use tipb::expression::{ByItem, Expr, ExprType};
 
@@ -204,8 +204,8 @@ mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
-        let order_cols = Rc::new(order_cols);
-        let ctx = Rc::new(EvalContext::default());
+        let order_cols = Arc::new(order_cols);
+        let ctx = Arc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(5).unwrap();
         let test_data = vec![
             (1, String::from("data1"), Datum::Null, Datum::I64(1)),
@@ -319,8 +319,8 @@ mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
-        let order_cols = Rc::new(order_cols);
-        let ctx = Rc::new(EvalContext::default());
+        let order_cols = Arc::new(order_cols);
+        let ctx = Arc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(5).unwrap();
 
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
@@ -364,8 +364,8 @@ mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
-        let order_cols = Rc::new(order_cols);
-        let ctx = Rc::new(EvalContext::default());
+        let order_cols = Arc::new(order_cols);
+        let ctx = Arc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(10).unwrap();
         let test_data = vec![
             (
