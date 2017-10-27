@@ -15,28 +15,29 @@ use std::io::{Error, ErrorKind, Result, Write};
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
 
 use crc::crc32::{self, Hasher32};
+use uuid::Uuid;
 use kvproto::importpb::*;
 
 pub type Token = usize;
 
 pub struct Uploader {
-    dir: UploadDir,
+    dir: Arc<UploadDir>,
     token: AtomicUsize,
     files: Mutex<HashMap<Token, UploadFile>>,
 }
 
 impl Uploader {
-    pub fn new<P: AsRef<Path>>(root: P) -> Result<Uploader> {
-        Ok(Uploader {
-            dir: UploadDir::new(root)?,
+    pub fn new(dir: Arc<UploadDir>) -> Uploader {
+        Uploader {
+            dir: dir,
             token: AtomicUsize::new(1),
             files: Mutex::new(HashMap::new()),
-        })
+        }
     }
 
     pub fn token(&self) -> Token {
@@ -106,6 +107,7 @@ impl Uploader {
 }
 
 // TODO: Add size limit and rate limit.
+#[derive(Debug)]
 pub struct UploadDir {
     root: Mutex<PathBuf>,
 }
@@ -126,7 +128,7 @@ impl UploadDir {
     }
 
     pub fn create(&self, meta: SSTMeta) -> Result<UploadFile> {
-        let path = sst_handle_to_path(meta.get_handle());
+        let path = sst_handle_to_path(meta.get_handle())?;
         let root = self.root.lock().unwrap();
         let save_path = root.join(&path);
         let temp_path = root.join(Self::TEMP_DIR).join(&path);
@@ -198,7 +200,7 @@ impl UploadFile {
 impl Drop for UploadFile {
     fn drop(&mut self) {
         if let Err(e) = self.remove() {
-            warn!("failed to remove {}: {:?}", self, e);
+            warn!("remove {}: {:?}", self, e);
         }
     }
 }
@@ -215,15 +217,23 @@ impl Display for UploadFile {
     }
 }
 
-fn sst_handle_to_path(h: &SSTHandle) -> PathBuf {
-    PathBuf::from(format!(
+fn sst_handle_to_path(h: &SSTHandle) -> Result<PathBuf> {
+    let uuid = match Uuid::from_bytes(h.get_uuid()) {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            let error = format!("invalid uuid {:?}: {:?}", h.get_uuid(), e);
+            return Err(Error::new(ErrorKind::InvalidInput, error));
+        }
+    };
+
+    Ok(PathBuf::from(format!(
         "{}_{}_{}_{}_{}.sst",
-        h.get_uuid(),
+        uuid.simple().to_string(),
         h.get_cfname(),
         h.get_region_id(),
         h.get_region_epoch().get_conf_ver(),
         h.get_region_epoch().get_version(),
-    ))
+    )))
 }
 
 fn file_exists<P: AsRef<Path>>(path: P) -> Error {

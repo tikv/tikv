@@ -67,7 +67,7 @@ use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
-use tikv::raftstore::store::{self, Engines, SnapManager, Uploader};
+use tikv::raftstore::store::{self, Engines, SnapManager, UploadDir};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERVAL};
@@ -199,8 +199,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
     );
-    let uploader = Arc::new(Uploader::new(upload_path).unwrap_or_else(|e| {
-        fatal!("failed to create uploader: {:?}", e);
+    let upload_dir = Arc::new(UploadDir::new(upload_path).unwrap_or_else(|e| {
+        fatal!("failed to create upload dir: {:?}", e);
     }));
 
     // Create server
@@ -211,9 +211,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         raft_router,
         resolver,
         snap_mgr.clone(),
+        upload_dir.clone(),
         pd_worker.scheduler(),
         Some(engines.clone()),
-        Some(uploader),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 

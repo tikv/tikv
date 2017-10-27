@@ -14,13 +14,32 @@
 use std::sync::Arc;
 
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
-use futures::{future, Future, Stream};
+use futures::{Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use kvproto::importpb::*;
 use kvproto::importpb_grpc;
 
+use server::metrics::*;
 use server::errors::Error;
-use raftstore::store::Uploader;
+use raftstore::store::{UploadDir, Uploader};
+
+macro_rules! send_rpc_response {
+    ($label:expr, $timer:expr, $sink:expr, $res:expr) => ({
+        let future = match $res {
+            Ok(resp) => $sink.success(resp),
+            Err(e) => {
+                let status = make_rpc_error(RpcStatusCode::Unknown, e);
+                $sink.fail(status)
+            }
+        };
+        future
+            .map(|_| $timer.observe_duration())
+            .map_err(move |e| {
+                warn!("send rpc response: {:?}", e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[$label]).inc();
+            })
+    })
+}
 
 #[derive(Clone)]
 pub struct Service {
@@ -29,14 +48,14 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn new(pool_size: usize, uploader: Arc<Uploader>) -> Service {
+    pub fn new(pool_size: usize, upload_dir: Arc<UploadDir>) -> Service {
         let pool = Builder::new()
             .name_prefix(thd_name!("import"))
             .pool_size(pool_size)
             .create();
         Service {
             pool: pool,
-            uploader: uploader,
+            uploader: Arc::new(Uploader::new(upload_dir)),
         }
     }
 }
@@ -48,6 +67,11 @@ impl importpb_grpc::Import for Service {
         stream: RequestStream<UploadSSTRequest>,
         sink: ClientStreamingSink<UploadSSTResponse>,
     ) {
+        let label = "upload_sst";
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .with_label_values(&[label])
+            .start_coarse_timer();
+
         let pool = self.pool.clone();
         let up1 = self.uploader.clone();
         let up2 = self.uploader.clone();
@@ -76,21 +100,12 @@ impl importpb_grpc::Import for Service {
                         Err(e)
                     }
                 })
-                .then(|res| match res {
-                    Ok(_) => {
-                        let resp = UploadSSTResponse::new();
-                        sink.success(resp).map_err(Error::from)
-                    }
-                    Err(e) => {
-                        let status = rpc_unknown_error(e);
-                        sink.fail(status).map_err(Error::from)
-                    }
-                })
-                .then(|_| future::ok::<_, ()>(())),
+                .map(|_| UploadSSTResponse::new())
+                .then(move |res| send_rpc_response!(label, timer, sink, res)),
         );
     }
 }
 
-fn rpc_unknown_error(e: Error) -> RpcStatus {
-    RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)))
+fn make_rpc_error(code: RpcStatusCode, err: Error) -> RpcStatus {
+    RpcStatus::new(code, Some(format!("{:?}", err)))
 }

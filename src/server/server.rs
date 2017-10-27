@@ -22,7 +22,7 @@ use kvproto::importpb_grpc::create_import;
 
 use util::worker::{FutureScheduler, Worker};
 use storage::Storage;
-use raftstore::store::{Engines, SnapManager, Uploader};
+use raftstore::store::{Engines, SnapManager, UploadDir};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
@@ -63,9 +63,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
+        upload_dir: Arc<UploadDir>,
         pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
-        uploader: Option<Arc<Uploader>>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -83,6 +83,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
         );
+        let import_service = ImportService::new(cfg.import_concurrency, upload_dir);
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
@@ -96,13 +97,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             let mut sb = ServerBuilder::new(env.clone())
                 .bind(ip, addr.port())
                 .channel_args(channel_args)
-                .register_service(create_tikv(kv_service));
+                .register_service(create_tikv(kv_service))
+                .register_service(create_import(import_service));
             if let Some(engines) = debug_engines {
                 sb = sb.register_service(create_debug(DebugService::new(engines)));
-            }
-            if let Some(uploader) = uploader {
-                let service = ImportService::new(cfg.import_concurrency, uploader);
-                sb = sb.register_service(create_import(service));
             }
             sb.build()?
         };

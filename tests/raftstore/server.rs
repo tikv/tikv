@@ -28,7 +28,7 @@ use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{store, Error, Result};
-use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager, UploadDir};
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{CfName, Engine};
@@ -118,6 +118,10 @@ impl Simulator for ServerCluster {
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
+        // Create upload dir.
+        let upload_path = TempDir::new("upload").unwrap();
+        let upload_dir = Arc::new(UploadDir::new(upload_path.path()).unwrap());
+
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch));
@@ -129,9 +133,9 @@ impl Simulator for ServerCluster {
             sim_router.clone(),
             resolver,
             snap_mgr.clone(),
+            upload_dir.clone(),
             pd_worker.scheduler(),
             Some(engines.clone()),
-            None,
         ).unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
