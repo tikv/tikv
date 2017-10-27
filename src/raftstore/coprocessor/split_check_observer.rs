@@ -568,7 +568,6 @@ mod table {
 
             // arbitrary padding.
             let padding = b"_r00000005";
-            let mut array = vec![];
 
             // Put some tables
             // t1_xx, t3_xx
@@ -582,7 +581,6 @@ mod table {
                 key.extend_from_slice(padding);
                 let s = keys::data_key(Key::from_raw(&key).encoded());
                 engine.put_cf(write_cf, &s, &s).unwrap();
-                array.push(s);
             }
 
             // ["", "") => t3
@@ -606,7 +604,6 @@ mod table {
                 key.extend_from_slice(format!("{:?}{}", padding, i).as_bytes());
                 let s = keys::data_key(Key::from_raw(&key).encoded());
                 engine.put_cf(write_cf, &s, &s).unwrap();
-                array.push(s);
             }
 
             // ["t1", "") => t3
@@ -628,16 +625,13 @@ mod table {
                     let key = format!("s{:?}{}", padding, i);
                     let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
                     engine.put_cf(write_cf, &s, &s).unwrap();
-                    array.push(s);
                 }
                 {
                     let key = format!("u{:?}{}", padding, i);
                     let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
                     engine.put_cf(write_cf, &s, &s).unwrap();
-                    array.push(s);
                 }
             }
-            array.sort();
 
             // ["", "") => t1
             check(None, None, Some(1));
