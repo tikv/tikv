@@ -140,6 +140,12 @@ impl UploadDir {
         }
         UploadFile::create(meta, save_path, temp_path)
     }
+
+    pub fn join_handle(&self, handle: &SSTHandle) -> Result<PathBuf> {
+        let path = sst_handle_to_path(handle)?;
+        let root = self.root.lock().unwrap();
+        Ok(root.join(&path))
+    }
 }
 
 pub struct UploadFile {

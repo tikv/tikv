@@ -80,7 +80,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch = "huachao/upload"
+branch = "huachao/ingest"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

@@ -21,6 +21,7 @@ use std::io::Error as IoError;
 use std::u64;
 use kvproto::kvrpcpb::{CommandPri, LockInfo};
 use kvproto::errorpb;
+use kvproto::importpb::SSTHandle;
 use self::metrics::*;
 
 pub mod engine;
@@ -897,6 +898,20 @@ impl Storage {
         let tag = cmd.tag();
         self.send(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        Ok(())
+    }
+
+    pub fn async_ingest_sst(
+        &self,
+        ctx: Context,
+        handles: Vec<SSTHandle>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        self.engine.async_ingest_sst(
+            &ctx,
+            handles,
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
         Ok(())
     }
 }

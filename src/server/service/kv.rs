@@ -979,7 +979,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     fn coprocessor_stream(&self, _: RpcContext, _: Request, _: ServerStreamingSink<Response>) {}
 }
 
-fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
+pub fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
     use storage::Error;
     match *res {
         // TODO: use `Error::cause` instead.

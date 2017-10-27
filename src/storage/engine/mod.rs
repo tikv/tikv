@@ -22,6 +22,7 @@ use rocksdb::TablePropertiesCollection;
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
+use kvproto::importpb::SSTHandle;
 
 mod rocksdb;
 pub mod raftkv;
@@ -80,6 +81,11 @@ pub trait Engine: Send + Debug {
         batch: Vec<Context>,
         on_finished: BatchCallback<Box<Snapshot>>,
     ) -> Result<()>;
+
+    // Ingest external SST files specified by the handles to the engine.
+    fn async_ingest_sst(&self, _: &Context, _: Vec<SSTHandle>, _: Callback<()>) -> Result<()> {
+        unimplemented!();
+    }
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);

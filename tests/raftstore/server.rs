@@ -156,6 +156,7 @@ impl Simulator for ServerCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            upload_dir.clone(),
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
