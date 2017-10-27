@@ -53,8 +53,8 @@ impl AnalyzeContext {
         }
     }
 
-    pub fn handle_request(mut self, statistics: &mut Option<Statistics>) -> Result<Response> {
-        let ret = match self.req.get_tp() {
+    pub fn handle_request(mut self, statistics: &mut Statistics) -> Result<Response> {
+        let (ret, st) = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
                 let mut scanner = IndexScanExecutor::new_with_cols_len(
@@ -63,17 +63,16 @@ impl AnalyzeContext {
                     self.snap,
                 );
                 let res = handle_index(&mut scanner, req.get_bucket_size() as usize);
-                *statistics = Some(scanner.take_statistics());
-                res
+                (res, scanner.take_statistics())
             }
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
                 let mut builder = SampleBuilder::new(col_req, self.snap, self.ranges)?;
                 let res = handle_column(&mut builder);
-                *statistics = Some(builder.data.take_statistics());
-                res
+                (res, builder.data.take_statistics())
             }
         };
+        statistics.add(&st);
         match ret {
             Ok(data) => {
                 let mut resp = Response::new();

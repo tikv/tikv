@@ -26,7 +26,6 @@ use coprocessor::select::xeval::EvalContext;
 use coprocessor::dag::expr::Expression;
 use coprocessor::metrics::*;
 use coprocessor::Result;
-
 use storage::Statistics;
 
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};

@@ -13,7 +13,6 @@
 
 use std::sync::Arc;
 
-use util::codec::number::NumberDecoder;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
@@ -26,6 +25,7 @@ use coprocessor::endpoint::get_pk;
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
 use storage::{SnapshotStore, Statistics};
+use util::codec::number::NumberDecoder;
 use util::collections::HashSet;
 
 mod scanner;

@@ -14,13 +14,13 @@
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 
-use util::collections::HashSet;
-use storage::SnapshotStore;
 use coprocessor::codec::table;
 use coprocessor::endpoint::{is_point, prefix_next};
 use coprocessor::Result;
 use coprocessor::metrics::*;
 use storage::Statistics;
+use storage::SnapshotStore;
+use util::collections::HashSet;
 
 use super::{Executor, Row};
 use super::scanner::Scanner;

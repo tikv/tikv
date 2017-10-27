@@ -292,7 +292,7 @@ pub struct RequestTask {
     start_ts: Option<u64>,
     wait_time: Option<f64>,
     timer: Instant,
-    statistics: Option<Statistics>,
+    statistics: Statistics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
     ctx: Arc<ReqContext>,
@@ -394,11 +394,9 @@ impl RequestTask {
             .with_label_values(&[type_str])
             .observe(handle_time - wait_time);
 
-        let statistics = self.statistics.take().unwrap_or_default();
-
         COPR_SCAN_KEYS
             .with_label_values(&[type_str])
-            .observe(statistics.total_op_count() as f64);
+            .observe(self.statistics.total_op_count() as f64);
 
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
@@ -410,8 +408,8 @@ impl RequestTask {
                 type_str,
                 handle_time,
                 wait_time,
-                statistics.total_op_count(),
-                statistics.total_processed(),
+                self.statistics.total_op_count(),
+                self.statistics.total_processed(),
                 self.req.get_ranges().len(),
                 self.req.get_ranges().get(0)
             );
@@ -604,7 +602,7 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
 fn respond(resp: Response, mut t: RequestTask) -> Statistics {
     t.stop_record_handling();
     (t.on_resp)(resp);
-    t.statistics.unwrap_or_default()
+    t.statistics
 }
 
 pub struct TiDbEndPoint {
@@ -646,7 +644,7 @@ impl TiDbEndPoint {
         let ranges = t.req.get_ranges().to_vec();
         let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone())?;
         let res = ctx.handle_request();
-        t.statistics = Some(ctx.take_statistics());
+        t.statistics.add(&ctx.take_statistics());
         res
     }
 

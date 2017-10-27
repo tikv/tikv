@@ -68,13 +68,13 @@ impl SelectContext {
     pub fn handle_request(
         mut self,
         mut ranges: Vec<KeyRange>,
-        statistics: &mut Option<Statistics>,
+        statistics: &mut Statistics,
     ) -> Result<Response> {
         if self.core.desc_scan {
             ranges.reverse();
         }
         let res = self.get_rows_from_ranges(ranges);
-        *statistics = self.statistics.take();
+        statistics.add(&self.statistics.take().unwrap_or_default());
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
 
