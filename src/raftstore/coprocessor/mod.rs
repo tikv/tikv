@@ -11,27 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod region_snapshot;
-pub mod dispatcher;
-pub mod split_observer;
-pub mod config;
-mod error;
-mod split_check_observer;
-mod metrics;
-
-pub use self::config::Config;
-pub use self::split_check_observer::{SizeCheckObserver, Status as SplitCheckStatus,
-                                     TableCheckObserver};
-pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
-pub use self::dispatcher::{CoprocessorHost, Registry};
-
 use rocksdb::DB;
 use kvproto::raft_cmdpb::{AdminRequest, Request};
 use kvproto::metapb::Region;
 use protobuf::RepeatedField;
 
-pub use self::error::{Error, Result};
+pub mod dispatcher;
+pub mod split_observer;
+pub mod config;
+mod region_snapshot;
+mod error;
+mod metrics;
+mod split_check;
 
+pub use self::config::Config;
+pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
+pub use self::dispatcher::{CoprocessorHost, Registry};
+pub use self::error::{Error, Result};
+pub use self::split_check::{SizeCheckObserver, Status as SplitCheckStatus, TableCheckObserver,
+                            SIZE_CHECK_OBSERVER_PRIORITY, TABLE_CHECK_OBSERVER_PRIORITY};
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.

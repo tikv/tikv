@@ -19,8 +19,7 @@ use kvproto::metapb::Region;
 use util::transport::{RetryableSendCh, Sender};
 use raftstore::store::msg::Msg;
 
-use super::{Config, ObserverContext, RegionObserver, Result, SizeCheckObserver, SplitCheckStatus,
-            TableCheckObserver};
+use super::*;
 
 struct ObserverEntry {
     priority: u32,
@@ -60,9 +59,15 @@ impl CoprocessorHost {
         let mut registry = Registry::default();
         let split_size_check_observer =
             SizeCheckObserver::new(cfg.region_max_size.0, cfg.region_split_size.0, ch);
-        registry.register_observer(100, Box::new(split_size_check_observer));
+        registry.register_observer(
+            SIZE_CHECK_OBSERVER_PRIORITY,
+            Box::new(split_size_check_observer),
+        );
         if cfg.split_region_on_table {
-            registry.register_observer(99, Box::new(TableCheckObserver::default()));
+            registry.register_observer(
+                TABLE_CHECK_OBSERVER_PRIORITY,
+                Box::new(TableCheckObserver::default()),
+            );
         }
         CoprocessorHost { registry: registry }
     }
