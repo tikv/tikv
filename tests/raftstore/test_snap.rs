@@ -12,7 +12,7 @@
 // limitations under the License.
 
 
-use std::fs;
+use std::*;
 use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::mpsc::{self, Sender};
@@ -227,10 +227,11 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k3", b"v3");
     // Pile up snapshots of overlapped region ranges and deliver them all at once.
     let (tx, rx) = mpsc::channel();
+    let active = Arc::new(AtomicBool::new(true));
     cluster
         .sim
         .wl()
-        .add_recv_filter(3, box CollectSnapshotFilter::new(tx));
+        .add_recv_filter(3, box CollectSnapshotFilter::new(tx, active.clone()));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let region = cluster.get_region(b"k1");
     // Ensure the snapshot of range ("", "") is sent and piled in filter.
@@ -239,6 +240,32 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     }
     // Split the region range and then there should be another snapshot for the split ranges.
     cluster.must_split(&region, b"k2");
+    while rx.recv_timeout(Duration::from_secs(3)).unwrap() > 0 {}
+
+    let timer = Instant::now();
+    let mut snap_applied = false;
+    while timer.elapsed() < Duration::from_secs(3) {
+        let k1_exist = get(&cluster.get_engine(3), b"k1").is_some();
+        let k3_exist = get(&cluster.get_engine(3), b"k3").is_some();
+        if k1_exist || k3_exist {
+            snap_applied = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(snap_applied, "snapshot is not applied after 3 secs.");
+
+    // Stale snapshot should be deleted. And gc is disabled (60 secs), so
+    // there should be at most two snapshots, one is not gc yet, the other is
+    // a rescheduled snapshot.
+    let snap_dir = cluster.get_snap_dir(3);
+    let snapfiles: Vec<_> = fs::read_dir(snap_dir)
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .collect();
+    assert!(snapfiles.len() <= 6, "too many snaps: {:?}", snapfiles);
+    active.store(false, Ordering::SeqCst);
+
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
     // Ensure the regions work after split.
     cluster.must_put(b"k11", b"v11");

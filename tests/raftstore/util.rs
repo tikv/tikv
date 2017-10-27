@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 
-use rocksdb::DB;
+use rocksdb::*;
 use protobuf;
 
 use kvproto::metapb::{self, RegionEpoch};
@@ -27,7 +27,7 @@ use kvproto::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::Config as StorageConfig;
+use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::escape;
 use tikv::util::config::*;
 use tikv::config::TiKvConfig;
@@ -36,9 +36,17 @@ pub use tikv::raftstore::store::util::find_peer;
 
 pub const MAX_LEADER_LEASE: u64 = 250; // 250ms
 
+pub fn get(engine: &Arc<DB>, key: &[u8]) -> Option<DBVector> {
+    get_cf(engine, CF_DEFAULT, key)
+}
+
+pub fn get_cf(engine: &Arc<DB>, cf: &str, key: &[u8]) -> Option<DBVector> {
+    engine.get_value_cf(cf, &keys::data_key(key)).unwrap()
+}
+
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
-        let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+        let res = get_cf(engine, cf, key);
         if value.is_some() && res.is_some() {
             assert_eq!(value.unwrap(), &*res.unwrap());
             return;
@@ -49,7 +57,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         thread::sleep(Duration::from_millis(20));
     }
     debug!("last try to get {}", escape(key));
-    let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+    let res = get_cf(engine, cf, key);
     if value.is_none() && res.is_none() ||
         value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {
