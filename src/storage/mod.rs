@@ -539,8 +539,8 @@ impl Storage {
                 ch,
                 sched_concurrency,
                 sched_worker_pool_size,
-                enable_distsql_cache,
                 sched_pending_write_threshold,
+                enable_distsql_cache,
             );
             if let Err(e) = sched.run(rx) {
                 panic!("scheduler run err:{:?}", e);

@@ -372,7 +372,6 @@ impl Scheduler {
         schedch: SyncSendCh<Msg>,
         concurrency: usize,
         worker_pool_size: usize,
-        sched_too_busy_threshold: usize,
         sched_pending_write_threshold: usize,
         enable_distsql_cache: bool,
     ) -> Scheduler {
