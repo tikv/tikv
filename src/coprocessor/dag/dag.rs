@@ -60,7 +60,8 @@ impl<'s> DAGContext<'s> {
 
     pub fn handle_request(mut self, statistics: &'s mut Statistics) -> Result<Response> {
         self.validate_dag()?;
-        let mut exec = self.build_dag(statistics)?;
+        let execs = self.req.take_executors().into_vec();
+        let mut exec = self.build_dag(execs, statistics)?;
         let mut chunks = vec![];
         loop {
             match exec.next() {
@@ -159,8 +160,12 @@ impl<'s> DAGContext<'s> {
         }
     }
 
-    fn build_dag(&'s self, statistics: &'s mut Statistics) -> Result<Box<DAGExecutor + 's>> {
-        let mut execs = self.req.get_executors().to_vec().into_iter();
+    fn build_dag(
+        &'s self,
+        execs: Vec<Executor>,
+        statistics: &'s mut Statistics,
+    ) -> Result<Box<DAGExecutor + 's>> {
+        let mut execs = execs.into_iter();
         let mut src = self.build_first(execs.next().unwrap(), statistics);
         for mut exec in execs {
             let curr: Box<DAGExecutor> = match exec.get_tp() {

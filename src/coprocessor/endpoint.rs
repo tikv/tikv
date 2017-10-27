@@ -29,6 +29,7 @@ use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 use util::time::{duration_to_sec, Instant};
 use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
 use util::collections::HashMap;
+use util::config::ReadableSize;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
 use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
@@ -171,20 +172,25 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
+            // Enpoints may occur a very deep recursion,
+            // so enlarge their stack size to 10 MB, default is 2 MB.
             pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-normal-pool"),
                 CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
+                .stack_size(ReadableSize::mb(10).0 as usize)
                 .build(),
             low_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-low-pool"),
                 CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
+                .stack_size(ReadableSize::mb(10).0 as usize)
                 .build(),
             high_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-high-pool"),
                 CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
+                .stack_size(ReadableSize::mb(10).0 as usize)
                 .build(),
         }
     }
@@ -632,6 +638,10 @@ impl TiDbEndPoint {
         };
         match resp {
             Ok(r) => respond(r, t),
+            Err(e @ Error::Other(_)) => {
+                error!("request fail {}: {:?}", t, e);
+                on_error(e, t)
+            }
             Err(e) => on_error(e, t),
         }
     }

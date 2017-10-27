@@ -96,6 +96,7 @@ pub struct ThreadPoolBuilder<C, F> {
     name: String,
     thread_count: usize,
     tasks_per_tick: usize,
+    stack_size: Option<usize>,
     factory: F,
     _ctx: PhantomData<C>,
 }
@@ -112,6 +113,7 @@ impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
             name: name,
             thread_count: DEFAULT_THREAD_COUNT,
             tasks_per_tick: DEFAULT_TASKS_PER_TICK,
+            stack_size: None,
             factory: factory,
             _ctx: PhantomData,
         }
@@ -127,11 +129,17 @@ impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
         self
     }
 
+    pub fn stack_size(mut self, size: usize) -> ThreadPoolBuilder<C, F> {
+        self.stack_size = Some(size);
+        self
+    }
+
     pub fn build(self) -> ThreadPool<C> {
         ThreadPool::new(
             self.name,
             self.thread_count,
             self.tasks_per_tick,
+            self.stack_size,
             self.factory,
         )
     }
@@ -160,6 +168,7 @@ where
         name: String,
         num_threads: usize,
         tasks_per_tick: usize,
+        stack_size: Option<usize>,
         f: C,
     ) -> ThreadPool<Ctx> {
         assert!(num_threads >= 1);
@@ -175,13 +184,14 @@ where
             let state = state.clone();
             let task_num = task_count.clone();
             let ctx = f.create();
-            let thread = Builder::new()
-                .name(name.clone())
-                .spawn(move || {
-                    let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
-                    worker.run();
-                })
-                .unwrap();
+            let mut tb = Builder::new().name(name.clone());
+            if let Some(stack_size) = stack_size {
+                tb = tb.stack_size(stack_size);
+            }
+            let thread = tb.spawn(move || {
+                let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
+                worker.run();
+            }).unwrap();
             threads.push(thread);
         }
 
