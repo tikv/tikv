@@ -46,7 +46,7 @@ use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
 use pd::{PdTask, INVALID_ID};
 
-use super::store::{Store, StoreStat};
+use super::store::{DestroyPeerJob, Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::util;
 use super::msg::Callback;
@@ -387,6 +387,32 @@ impl Peer {
             self.marked_to_be_checked = true;
             pending_raft_groups.insert(self.region_id);
         }
+    }
+
+    pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+        let initialized = self.get_store().is_initialized();
+        let async_remove = if self.is_applying_snapshot() {
+            if !self.mut_store().cancel_applying_snap() {
+                info!(
+                    "{} Stale peer {} is applying snapshot, will destroy next \
+                     time.",
+                    self.tag,
+                    self.peer_id()
+                );
+                return None;
+            }
+            // There is no tasks in apply worker.
+            false
+        } else {
+            initialized
+        };
+        self.pending_remove = true;
+        Some(DestroyPeerJob {
+            async_remove: async_remove,
+            initialized: initialized,
+            region_id: self.region_id,
+            peer: self.peer.clone(),
+        })
     }
 
     pub fn destroy(&mut self) -> Result<()> {

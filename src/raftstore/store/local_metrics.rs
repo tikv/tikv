@@ -165,11 +165,11 @@ pub struct RaftMessageDropMetrics {
     pub mismatch_store_id: u64,
     pub mismatch_region_epoch: u64,
     pub stale_msg: u64,
-    pub stale_peer: u64,
     pub region_overlap: u64,
     pub region_no_peer: u64,
     pub region_tombstone_peer: u64,
     pub region_nonexistent: u64,
+    pub applying_snap: u64,
 }
 
 impl RaftMessageDropMetrics {
@@ -187,13 +187,6 @@ impl RaftMessageDropMetrics {
                 .inc_by(self.mismatch_region_epoch as f64)
                 .unwrap();
             self.mismatch_region_epoch = 0;
-        }
-        if self.stale_peer > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["stale_peer"])
-                .inc_by(self.stale_peer as f64)
-                .unwrap();
-            self.stale_peer = 0;
         }
         if self.stale_msg > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
@@ -229,6 +222,13 @@ impl RaftMessageDropMetrics {
                 .inc_by(self.region_nonexistent as f64)
                 .unwrap();
             self.region_nonexistent = 0;
+        }
+        if self.applying_snap > 0 {
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
+                .with_label_values(&["applying_snap"])
+                .inc_by(self.applying_snap as f64)
+                .unwrap();
+            self.applying_snap = 0;
         }
     }
 }
