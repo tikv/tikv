@@ -97,6 +97,7 @@ struct SnapContext {
     raft_db: Arc<DB>,
     batch_size: usize,
     mgr: SnapManager,
+    enable_distsql_cache: bool,
 }
 
 impl SnapContext {
@@ -225,7 +226,9 @@ impl SnapContext {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
                 // DistSQL cache should be eviction
-                DISTSQL_CACHE.lock().unwrap().evict_region(region_id);
+                if self.enable_distsql_cache {
+                    DISTSQL_CACHE.lock().unwrap().evict_region(region_id);
+                }
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);
@@ -261,7 +264,7 @@ impl SnapContext {
                 escape(&end_key),
                 e
             );
-        } else {
+        } else if self.enable_distsql_cache {
             // DistSQL cache should be eviction
             DISTSQL_CACHE.lock().unwrap().evict_region(region_id);
         }
@@ -274,7 +277,13 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(kv_db: Arc<DB>, raft_db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
+    pub fn new(
+        kv_db: Arc<DB>,
+        raft_db: Arc<DB>,
+        mgr: SnapManager,
+        batch_size: usize,
+        enable_distsql_cache: bool,
+    ) -> Runner {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap generator"))
                 .thread_count(GENERATE_POOL_SIZE)
@@ -284,6 +293,7 @@ impl Runner {
                 raft_db: raft_db,
                 mgr: mgr,
                 batch_size: batch_size,
+                enable_distsql_cache: enable_distsql_cache,
             },
         }
     }

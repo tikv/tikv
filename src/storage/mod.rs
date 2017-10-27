@@ -487,6 +487,7 @@ pub struct Storage {
 
     // Storage configurations.
     gc_ratio_threshold: f64,
+    enable_distsql_cache: bool,
 }
 
 impl Storage {
@@ -503,6 +504,7 @@ impl Storage {
                 receiver: Some(rx),
             })),
             gc_ratio_threshold: config.gc_ratio_threshold,
+            enable_distsql_cache: config.enable_distsql_cache,
         })
     }
 
@@ -524,6 +526,7 @@ impl Storage {
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
         let sched_too_busy_threshold = config.scheduler_too_busy_threshold;
         let ch = self.sendch.clone();
+        let enable_distsql_cache = self.enable_distsql_cache;
         let h = builder.spawn(move || {
             let mut sched = Scheduler::new(
                 engine,
@@ -531,6 +534,7 @@ impl Storage {
                 sched_concurrency,
                 sched_worker_pool_size,
                 sched_too_busy_threshold,
+                enable_distsql_cache,
             );
             if let Err(e) = sched.run(rx) {
                 panic!("scheduler run err:{:?}", e);
@@ -902,6 +906,7 @@ impl Clone for Storage {
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
             gc_ratio_threshold: self.gc_ratio_threshold,
+            enable_distsql_cache: self.enable_distsql_cache,
         }
     }
 }

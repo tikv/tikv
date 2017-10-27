@@ -12,6 +12,8 @@ grpc-raft-conn-num = 123
 grpc-stream-initial-window-size = 12345
 end-point-concurrency = 12
 end-point-max-tasks = 12
+enable-distsql-cache = false
+distsql-cache-size = "256MB"
 
 [server.labels]
 a = "b"
@@ -24,6 +26,7 @@ scheduler-messages-per-tick = 123
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-too-busy-threshold = 123
+enable-distsql-cache = false
 
 [pd]
 endpoints = [
@@ -71,6 +74,7 @@ report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
+enable-distsql-cache = false
 
 [rocksdb]
 wal-recovery-mode = 1

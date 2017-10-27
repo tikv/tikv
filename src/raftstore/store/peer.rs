@@ -1264,7 +1264,9 @@ impl Peer {
         self.raft_group.transfer_leader(peer.get_id());
 
         // DistSQL cache eviction region after transfer leader
-        DISTSQL_CACHE.lock().unwrap().evict_region(self.region_id);
+        if self.cfg.enable_distsql_cache {
+            DISTSQL_CACHE.lock().unwrap().evict_region(self.region_id);
+        }
     }
 
     fn is_transfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {

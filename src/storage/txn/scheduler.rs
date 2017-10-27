@@ -323,6 +323,9 @@ pub struct Scheduler {
 
     // used to control write flow
     running_write_kv_count: usize,
+
+    // enable distsql cache
+    enable_distsql_cache: bool,
 }
 
 // Make clippy happy.
@@ -370,6 +373,7 @@ impl Scheduler {
         concurrency: usize,
         worker_pool_size: usize,
         sched_too_busy_threshold: usize,
+        enable_distsql_cache: bool,
     ) -> Scheduler {
         Scheduler {
             engine: engine,
@@ -390,6 +394,7 @@ impl Scheduler {
             ).build(),
             has_gc_command: false,
             running_write_kv_count: 0,
+            enable_distsql_cache: enable_distsql_cache,
         }
     }
 }
@@ -1090,10 +1095,13 @@ impl Scheduler {
                 ctx.add_statistics(tag, &s);
             });
         } else {
+            let enable_distsql_cache = self.enable_distsql_cache;
             worker_pool.execute(move |ctx: &mut ScheContext| {
                 let s = process_write(cid, cmd, ch, snapshot);
                 // Eviction region for DistSQL cache
-                DISTSQL_CACHE.lock().unwrap().evict_region(region_id);
+                if enable_distsql_cache {
+                    DISTSQL_CACHE.lock().unwrap().evict_region(region_id);
+                }
                 ctx.add_statistics(tag, &s);
             });
         }

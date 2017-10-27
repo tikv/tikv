@@ -73,6 +73,7 @@ pub struct Host {
     low_priority_pool: ThreadPool<CopContext>,
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
+    enable_distsql_cache: bool,
 }
 
 pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
@@ -171,6 +172,7 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
+            enable_distsql_cache: cfg.enable_distsql_cache,
             pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-normal-pool"),
                 CopContextFactory { sender: r.clone() },
@@ -217,7 +219,7 @@ impl Host {
             COPR_PENDING_REQS
                 .with_label_values(&[type_str, pri_str])
                 .add(1.0);
-            let end_point = TiDbEndPoint::new(snap.clone());
+            let end_point = TiDbEndPoint::new(snap.clone(), self.enable_distsql_cache);
 
             let pool = match pri {
                 CommandPri::Low => &mut self.low_priority_pool,
@@ -610,11 +612,15 @@ fn respond(resp: Response, mut t: RequestTask) -> Statistics {
 
 pub struct TiDbEndPoint {
     snap: Box<Snapshot>,
+    enable_distsql_cache: bool,
 }
 
 impl TiDbEndPoint {
-    pub fn new(snap: Box<Snapshot>) -> TiDbEndPoint {
-        TiDbEndPoint { snap: snap }
+    pub fn new(snap: Box<Snapshot>, enable_distsql_cache: bool) -> TiDbEndPoint {
+        TiDbEndPoint {
+            snap: snap,
+            enable_distsql_cache: enable_distsql_cache,
+        }
     }
 }
 
@@ -648,7 +654,14 @@ impl TiDbEndPoint {
             dag.get_time_zone_offset(),
             dag.get_flags()
         )));
-        let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
+        let ctx = DAGContext::new(
+            dag,
+            ranges,
+            self.snap.as_ref(),
+            eval_ctx.clone(),
+            &t.ctx,
+            self.enable_distsql_cache,
+        );
         let (region_id, epoch) = {
             let ctx = t.req.get_context();
             (ctx.get_region_id(), ctx.get_region_epoch().clone())

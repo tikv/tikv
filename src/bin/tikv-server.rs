@@ -71,6 +71,7 @@ use tikv::raftstore::store::{self, Engines, SnapManager};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERVAL};
+use tikv::coprocessor::cache::DISTSQL_CACHE;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -464,6 +465,22 @@ fn main() {
     util::print_tikv_info();
 
     panic_hook::set_exit_hook();
+
+    // Update enable_distsql_cache config
+    let edc = config.server.enable_distsql_cache;
+    config.storage.enable_distsql_cache = edc;
+    config.raft_store.enable_distsql_cache = edc;
+    if edc {
+        // Update DistSQL Cache Size
+        DISTSQL_CACHE
+            .lock()
+            .unwrap()
+            .update_capacity(config.server.distsql_cache_size.0 as usize);
+        info!(
+            "Enable DistSQL cache with size: {:?}",
+            config.server.distsql_cache_size
+        );
+    }
 
     info!(
         "using config: {}",

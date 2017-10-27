@@ -241,6 +241,15 @@ impl DistSQLCache {
         self.map.len() == 0
     }
 
+    pub fn update_capacity(&mut self, capacity: usize) {
+        self.max_size = capacity;
+
+        // Remove entry untile cache size is less or equals than capacity
+        while self.size() > self.capacity() {
+            self.remove_lru();
+        }
+    }
+
     fn update_regions(&mut self, region_id: u64, k: DistSQLCacheKey) {
         let opt = match self.regions.get_mut(&region_id) {
             Some(entry) => {
@@ -287,11 +296,11 @@ fn validate_epoch(entry: &DistSQLCacheEntry, region_id: u64, epoch: &RegionEpoch
 }
 
 // DistSQL Cache Size unit is byte, for now just use 256MB
-pub const DISTSQL_CACHE_SIZE: usize = 256 * 1024 * 1024;
+pub const DEFAULT_DISTSQL_CACHE_SIZE: usize = 256 * 1024 * 1024;
 
 lazy_static! {
     pub static ref DISTSQL_CACHE: Arc<Mutex<DistSQLCache>> =
-        Arc::new(Mutex::new(DistSQLCache::new(DISTSQL_CACHE_SIZE)));
+        Arc::new(Mutex::new(DistSQLCache::new(DEFAULT_DISTSQL_CACHE_SIZE)));
 }
 
 #[cfg(test)]

@@ -41,6 +41,7 @@ pub struct DAGContext<'s> {
     snap: &'s Snapshot,
     eval_ctx: Rc<EvalContext>,
     req_ctx: &'s ReqContext,
+    enable_distsql_cache: bool,
 }
 
 impl<'s> DAGContext<'s> {
@@ -50,6 +51,7 @@ impl<'s> DAGContext<'s> {
         snap: &'s Snapshot,
         eval_ctx: Rc<EvalContext>,
         req_ctx: &'s ReqContext,
+        enable_distsql_cache: bool,
     ) -> DAGContext<'s> {
         DAGContext {
             req: req,
@@ -60,6 +62,7 @@ impl<'s> DAGContext<'s> {
             has_topn: false,
             eval_ctx: eval_ctx,
             req_ctx: req_ctx,
+            enable_distsql_cache: enable_distsql_cache,
         }
     }
 
@@ -140,7 +143,7 @@ impl<'s> DAGContext<'s> {
     }
 
     fn can_cache(&'s self) -> bool {
-        self.has_aggr || self.has_topn
+        self.enable_distsql_cache && (self.has_aggr || self.has_topn)
     }
 
     fn validate_dag(&mut self) -> Result<()> {

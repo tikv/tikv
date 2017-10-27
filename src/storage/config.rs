@@ -40,6 +40,7 @@ pub struct Config {
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
     pub scheduler_too_busy_threshold: usize,
+    pub enable_distsql_cache: bool,
 }
 
 impl Default for Config {
@@ -53,6 +54,7 @@ impl Default for Config {
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
             scheduler_too_busy_threshold: DEFAULT_SCHED_TOO_BUSY_THRESHOLD,
+            enable_distsql_cache: false,
         }
     }
 }

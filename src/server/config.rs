@@ -19,6 +19,7 @@ use util::collections::HashMap;
 use util::config::{self, ReadableSize};
 
 use super::Result;
+use coprocessor::cache::DEFAULT_DISTSQL_CACHE_SIZE;
 
 pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;
@@ -60,6 +61,8 @@ pub struct Config {
     pub grpc_stream_initial_window_size: ReadableSize,
     pub end_point_concurrency: usize,
     pub end_point_max_tasks: usize,
+    pub enable_distsql_cache: bool,
+    pub distsql_cache_size: ReadableSize,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -86,6 +89,8 @@ impl Default for Config {
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             end_point_concurrency: concurrency,
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
+            enable_distsql_cache: false,
+            distsql_cache_size: ReadableSize(DEFAULT_DISTSQL_CACHE_SIZE as u64),
         }
     }
 }

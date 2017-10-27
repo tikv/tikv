@@ -63,6 +63,8 @@ fn test_serde_custom_tikv_config() {
         grpc_stream_initial_window_size: ReadableSize(12_345),
         end_point_concurrency: 12,
         end_point_max_tasks: 12,
+        enable_distsql_cache: false,
+        distsql_cache_size: ReadableSize(256 * 1024 * 1024),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -105,6 +107,7 @@ fn test_serde_custom_tikv_config() {
         raft_store_max_leader_lease: ReadableDuration::secs(12),
         right_derive_when_split: false,
         allow_remove_leader: true,
+        enable_distsql_cache: false,
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],
@@ -314,6 +317,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_too_busy_threshold: 123,
+        enable_distsql_cache: false,
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");

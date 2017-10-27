@@ -507,6 +507,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.raft_engine.clone(),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
+            self.cfg.enable_distsql_cache,
         );
         box_try!(self.region_worker.start(runner));
 

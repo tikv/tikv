@@ -38,6 +38,12 @@
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
 
+# enable or disable dist-sql cache feature
+# enable-distsql-cache = false
+
+# dist-sql cache size default is 256MB
+# distsql-cache-size = "256MB"
+
 [storage]
 # set the path to rocksdb directory.
 # data-dir = "/tmp/tikv/store"

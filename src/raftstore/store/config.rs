@@ -96,6 +96,8 @@ pub struct Config {
     pub right_derive_when_split: bool,
 
     pub allow_remove_leader: bool,
+
+    pub enable_distsql_cache: bool,
 }
 
 impl Default for Config {
@@ -141,6 +143,7 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             allow_remove_leader: false,
+            enable_distsql_cache: false,
         }
     }
 }
