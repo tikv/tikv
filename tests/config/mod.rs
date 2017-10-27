@@ -316,7 +316,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_messages_per_tick: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
-        scheduler_too_busy_threshold: 123,
+        scheduler_pending_write_threshold: ReadableSize::kb(123),
         enable_distsql_cache: false,
     };
 

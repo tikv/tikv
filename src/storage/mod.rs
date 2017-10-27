@@ -434,25 +434,31 @@ impl Command {
         }
     }
 
-    pub fn kv_count(&self) -> usize {
+    pub fn write_bytes(&self) -> usize {
+        let mut bytes = 0;
         match *self {
-            Command::Pause { .. } => 0,
-            Command::ScanLock { .. } |
-            Command::MvccByKey { .. } |
-            Command::MvccByStartTs { .. } |
-            Command::Get { .. } |
-            Command::RawGet { .. } |
-            Command::RawScan { .. } |
-            Command::Cleanup { .. } |
-            Command::DeleteRange { .. } => 1,
-            Command::Scan { limit, .. } => limit,
-            Command::Gc { ref keys, .. } |
-            Command::BatchGet { ref keys, .. } |
+            Command::Prewrite { ref mutations, .. } => for m in mutations {
+                match *m {
+                    Mutation::Put((ref key, ref value)) => {
+                        bytes += key.encoded().len();
+                        bytes += value.len();
+                    }
+                    Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                        bytes += key.encoded().len();
+                    }
+                }
+            },
             Command::Commit { ref keys, .. } |
             Command::Rollback { ref keys, .. } |
-            Command::ResolveLock { ref keys, .. } => keys.len(),
-            Command::Prewrite { ref mutations, .. } => mutations.len(),
+            Command::ResolveLock { ref keys, .. } => for key in keys {
+                bytes += key.encoded().len();
+            },
+            Command::Cleanup { ref key, .. } => {
+                bytes += key.encoded().len();
+            }
+            _ => {}
         }
+        bytes
     }
 }
 
@@ -524,7 +530,7 @@ impl Storage {
         let rx = handle.receiver.take().unwrap();
         let sched_concurrency = config.scheduler_concurrency;
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
-        let sched_too_busy_threshold = config.scheduler_too_busy_threshold;
+        let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
         let ch = self.sendch.clone();
         let enable_distsql_cache = self.enable_distsql_cache;
         let h = builder.spawn(move || {
@@ -533,8 +539,8 @@ impl Storage {
                 ch,
                 sched_concurrency,
                 sched_worker_pool_size,
-                sched_too_busy_threshold,
                 enable_distsql_cache,
+                sched_pending_write_threshold,
             );
             if let Err(e) = sched.run(rx) {
                 panic!("scheduler run err:{:?}", e);
@@ -971,6 +977,7 @@ mod tests {
     use super::*;
     use std::sync::mpsc::{channel, Sender};
     use kvproto::kvrpcpb::Context;
+    use util::config::ReadableSize;
 
     fn expect_get_none(done: Sender<i32>, id: i32) -> Callback<Option<Value>> {
         Box::new(move |x: Result<Option<Value>>| {
@@ -1305,7 +1312,7 @@ mod tests {
     #[test]
     fn test_sched_too_busy() {
         let mut config = Config::default();
-        config.scheduler_too_busy_threshold = 1;
+        config.scheduler_pending_write_threshold = ReadableSize(1);
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();

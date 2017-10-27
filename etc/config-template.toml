@@ -61,9 +61,9 @@
 # also should less than total cpu cores.
 # scheduler-worker-pool-size = 4
 
-# When the number of concurrent running writes exceeds this threshold,
-# the "too busy" error is displayed.
-# scheduler-too-busy-threshold = 10000
+# When the pending write bytes exceeds this threshold,
+# the "scheduler too busy" error is displayed.
+# scheduler-pending-write-threshold = "100MB"
 
 [pd]
 # pd endpoints
