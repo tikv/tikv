@@ -119,8 +119,8 @@ impl Simulator for ServerCluster {
         self.storages.insert(node_id, store.get_engine());
 
         // Create upload dir.
-        let upload_path = TempDir::new("upload").unwrap();
-        let upload_dir = Arc::new(UploadDir::new(upload_path.path()).unwrap());
+        let upload_path = TempDir::new("upload").unwrap().into_path();
+        let upload_dir = Arc::new(UploadDir::new(upload_path).unwrap());
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();

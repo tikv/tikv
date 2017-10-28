@@ -311,9 +311,9 @@ mod test {
         assert!(uploader.append(token, &data).is_err());
         assert!(uploader.finish(token).is_err());
 
-        assert!(uploader.create(token, &meta).is_ok());
-        assert!(uploader.append(token, &data).is_ok());
-        assert!(uploader.finish(token).is_ok());
+        uploader.create(token, &meta).unwrap();
+        uploader.append(token, &data).unwrap();
+        uploader.finish(token).unwrap();
     }
 
     #[test]
@@ -368,7 +368,7 @@ mod test {
 
         let mut f = create_upload_file(data.len(), crc32);
         f.append(&data).unwrap();
-        assert!(f.finish().is_ok());
+        f.finish().unwrap();
     }
 
     #[test]
