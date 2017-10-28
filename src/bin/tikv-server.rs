@@ -211,9 +211,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         raft_router,
         resolver,
         snap_mgr.clone(),
-        upload_dir.clone(),
         pd_worker.scheduler(),
         Some(engines.clone()),
+        upload_dir.clone(),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 

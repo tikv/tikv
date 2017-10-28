@@ -63,9 +63,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        upload_dir: Arc<UploadDir>,
         pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
+        upload_dir: Arc<UploadDir>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -184,6 +184,8 @@ mod tests {
     use std::sync::mpsc::{self, Sender};
     use std::net::SocketAddr;
 
+    use tempdir::TempDir;
+
     use super::*;
     use super::super::{Config, Result};
     use super::super::transport::RaftStoreRouter;
@@ -240,6 +242,9 @@ mod tests {
         let mut storage = Storage::new(&storage_cfg).unwrap();
         storage.start(&storage_cfg).unwrap();
 
+        let upload_path = TempDir::new("test").unwrap();
+        let upload_dir = Arc::new(UploadDir::new(upload_path.path()).unwrap());
+
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter {
@@ -258,6 +263,7 @@ mod tests {
             SnapManager::new("", None),
             pd_worker.scheduler(),
             None,
+            upload_dir,
         ).unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 

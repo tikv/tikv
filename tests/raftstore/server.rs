@@ -133,9 +133,9 @@ impl Simulator for ServerCluster {
             sim_router.clone(),
             resolver,
             snap_mgr.clone(),
-            upload_dir.clone(),
             pd_worker.scheduler(),
             Some(engines.clone()),
+            upload_dir.clone(),
         ).unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);

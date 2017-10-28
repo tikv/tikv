@@ -226,6 +226,13 @@ fn sst_handle_to_path(h: &SSTHandle) -> Result<PathBuf> {
         }
     };
 
+    if h.get_cfname().is_empty() || h.get_region_id() == 0 ||
+        h.get_region_epoch().get_conf_ver() == 0 || h.get_region_epoch().get_version() == 0
+    {
+        let error = format!("invalid sst handle {:?}", h);
+        return Err(Error::new(ErrorKind::InvalidInput, error));
+    }
+
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}_{}.sst",
         uuid.simple().to_string(),
@@ -246,4 +253,138 @@ fn file_corrupted<P: AsRef<Path>>(path: P) -> Error {
     let path = path.as_ref().as_os_str();
     let error = format!("file {:?} corrupted", path);
     Error::new(ErrorKind::InvalidData, error)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use uuid::Uuid;
+    use tempdir::TempDir;
+
+    fn make_sst_meta(len: usize, crc32: u32) -> SSTMeta {
+        let mut m = SSTMeta::new();
+        m.set_len(len as u64);
+        m.set_crc32(crc32);
+        m.set_handle(make_sst_handle());
+        m
+    }
+
+    fn make_sst_handle() -> SSTHandle {
+        let mut h = SSTHandle::new();
+        let uuid = Uuid::new_v4();
+        h.set_uuid(uuid.as_bytes().to_vec());
+        h.set_cfname("default".to_owned());
+        h.set_region_id(1);
+        h.mut_region_epoch().set_conf_ver(2);
+        h.mut_region_epoch().set_version(3);
+        h
+    }
+
+    fn create_upload_file(len: usize, crc32: u32) -> UploadFile {
+        let meta = make_sst_meta(len, crc32);
+        let path = TempDir::new("upload_file").unwrap().into_path();
+        let save_path = path.join("save");
+        let temp_path = path.join("temp");
+        UploadFile::create(meta, save_path, temp_path).unwrap()
+    }
+
+    #[test]
+    fn test_uploader() {
+        let root = TempDir::new("upload").unwrap().into_path();
+        let upload_dir = Arc::new(UploadDir::new(&root).unwrap());
+        let uploader = Uploader::new(upload_dir);
+
+        let data = vec![0, 1, 2, 3];
+        let mut hash = crc32::Digest::new(crc32::IEEE);
+        hash.write(&data);
+        let crc32 = hash.sum32();
+        let meta = make_sst_meta(data.len(), crc32);
+
+        let token = uploader.token();
+        assert_eq!(token, 1);
+
+        // Token not found.
+        assert!(uploader.append(token, &data).is_err());
+        assert!(uploader.finish(token).is_err());
+        assert!(uploader.create(token, &meta).is_ok());
+        assert!(uploader.remove(token).is_some());
+        assert!(uploader.append(token, &data).is_err());
+        assert!(uploader.finish(token).is_err());
+
+        assert!(uploader.create(token, &meta).is_ok());
+        assert!(uploader.append(token, &data).is_ok());
+        assert!(uploader.finish(token).is_ok());
+    }
+
+    #[test]
+    fn test_upload_dir() {
+        let root = TempDir::new("upload").unwrap().into_path();
+        let temp = root.join(UploadDir::TEMP_DIR);
+        // Create a test dir in the temp dir.
+        let test = temp.join("test");
+        fs::create_dir_all(&test).unwrap();
+
+        let dir = UploadDir::new(&root).unwrap();
+        assert!(root.exists());
+        assert!(temp.exists());
+        // The temp dir should be clean.
+        assert!(!test.exists());
+
+        let meta = make_sst_meta(0, 0);
+        let mut file = dir.create(meta.clone()).unwrap();
+        // The temp file exists.
+        assert!(dir.create(meta.clone()).is_err());
+        file.finish().unwrap();
+        // The save file exists.
+        assert!(dir.create(meta.clone()).is_err());
+    }
+
+    #[test]
+    fn test_upload_file() {
+        let mut f = create_upload_file(0, 0);
+        assert!(f.temp_path.exists());
+        f.finish().unwrap();
+        assert!(f.save_path.exists());
+        assert!(!f.temp_path.exists());
+
+        let mut f = create_upload_file(0, 0);
+        assert!(f.temp_path.exists());
+        f.remove().unwrap();
+        assert!(!f.temp_path.exists());
+
+        let data = vec![0, 1, 2, 3];
+        let mut hash = crc32::Digest::new(crc32::IEEE);
+        hash.write(&data);
+        let crc32 = hash.sum32();
+
+        // Mismatch size.
+        let mut f = create_upload_file(1, 0);
+        assert!(f.finish().is_err());
+
+        // Mismatch crc32.
+        let mut f = create_upload_file(data.len(), 0);
+        f.append(&data).unwrap();
+        assert!(f.finish().is_err());
+
+        let mut f = create_upload_file(data.len(), crc32);
+        f.append(&data).unwrap();
+        assert!(f.finish().is_ok());
+    }
+
+    #[test]
+    fn test_sst_handle() {
+        let mut h = SSTHandle::new();
+        h.set_uuid(vec![0]);
+        // invalid uuid
+        assert!(sst_handle_to_path(&h).is_err());
+        let uuid = Uuid::new_v4();
+        h.set_uuid(uuid.as_bytes().to_vec());
+        // invalid fields
+        assert!(sst_handle_to_path(&h).is_err());
+        h = make_sst_handle();
+        let path = sst_handle_to_path(&h).unwrap();
+        let uuid = Uuid::from_bytes(h.get_uuid()).unwrap().simple().to_string();
+        let expect = format!("{}_default_1_2_3.sst", uuid);
+        assert_eq!(expect.as_str(), path.to_str().unwrap());
+    }
 }
