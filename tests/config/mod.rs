@@ -63,6 +63,7 @@ fn test_serde_custom_tikv_config() {
         grpc_stream_initial_window_size: ReadableSize(12_345),
         end_point_concurrency: 12,
         end_point_max_tasks: 12,
+        end_point_stack_size: ReadableSize::mb(12),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
