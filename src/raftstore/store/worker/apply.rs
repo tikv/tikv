@@ -1685,7 +1685,7 @@ mod tests {
         (path, db)
     }
 
-    fn create_tmp_upload_dir<P: AsRef<Path>>(path: P) -> Arc<UploadDir> {
+    fn create_tmp_upload_dir(path: &str) -> Arc<UploadDir> {
         let upload_dir = TempDir::new(path).unwrap();
         Arc::new(UploadDir::new(upload_dir.path()).unwrap())
     }

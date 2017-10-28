@@ -103,10 +103,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             if let Some(engines) = debug_engines {
                 sb = sb.register_service(create_debug(DebugService::new(engines)));
             }
-            if let Some(uploader) = uploader {
-                let service = ImportService::new(cfg.import_concurrency, uploader);
-                sb = sb.register_service(create_import(service));
-            }
             sb.build()?
         };
 

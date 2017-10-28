@@ -31,7 +31,6 @@ const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
-const DEFAULT_IMPORT_CONCURRENCY: usize = 2;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 // Enpoints may occur very deep recursion,
 // so enlarge their stack size to 10 MB.
