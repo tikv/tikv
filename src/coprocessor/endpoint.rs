@@ -174,16 +174,19 @@ impl Host {
                 thd_name!("endpoint-normal-pool"),
                 CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
+                .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
             low_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-low-pool"),
                 CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
+                .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
             high_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-high-pool"),
                 CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
+                .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
         }
     }
