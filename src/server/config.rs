@@ -65,6 +65,7 @@ pub struct Config {
     pub end_point_concurrency: usize,
     pub end_point_max_tasks: usize,
     pub enable_distsql_cache: bool,
+    pub distsql_cache_size: ReadableSize,
     pub end_point_stack_size: ReadableSize,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
@@ -93,6 +94,7 @@ impl Default for Config {
             end_point_concurrency: concurrency,
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
             enable_distsql_cache: false,
+            distsql_cache_size: ReadableSize(DEFAULT_DISTSQL_CACHE_SIZE as u64),
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
         }
     }
