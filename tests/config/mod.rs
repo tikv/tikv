@@ -65,6 +65,7 @@ fn test_serde_custom_tikv_config() {
         end_point_max_tasks: 12,
         enable_distsql_cache: false,
         distsql_cache_size: ReadableSize(256 * 1024 * 1024),
+        end_point_stack_size: ReadableSize::mb(12),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
