@@ -94,7 +94,7 @@ impl<'a> MvccReader<'a> {
         };
 
         self.statistics.data.processed += 1;
-        self.statistics.data.flow_stats.read_bytes += res.len();
+        self.statistics.data.flow_stats.read_bytes += k.raw().unwrap_or_default().len() + res.len();
         self.statistics.data.flow_stats.read_keys += 1;
         Ok(res)
     }
@@ -184,7 +184,7 @@ impl<'a> MvccReader<'a> {
         }
         let write = Write::parse(cursor.value())?;
         self.statistics.write.processed += 1;
-        self.statistics.write.flow_stats.read_bytes += cursor.value().len();
+        self.statistics.write.flow_stats.read_bytes += cursor.key().len() + cursor.value().len();
         self.statistics.write.flow_stats.read_keys += 1;
         Ok(Some((commit_ts, write)))
     }
