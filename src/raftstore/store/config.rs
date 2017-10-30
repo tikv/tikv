@@ -95,8 +95,10 @@ pub struct Config {
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub region_max_size: ReadableSize,
     #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub region_split_size: ReadableSize,
 }
 

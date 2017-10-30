@@ -11,6 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/// There are two custom config files, `test-custom-latest.toml` is for testing
+/// lastest configuration, and `test-custom-compatible.toml` is for testing
+/// old configuration and it contains some deprecated configuration.
+
 use std::path::PathBuf;
 use std::io::Read;
 use std::fs::File;
@@ -320,9 +324,15 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(12),
     };
 
-    let custom = read_file_in_project_dir("tests/config/test-custom.toml");
-    let load = toml::from_str(&custom).unwrap();
-    assert_eq!(value, load);
-    let dump = toml::to_string_pretty(&load).unwrap();
-    assert_eq!(dump, custom);
+    let lastest_cfg = read_file_in_project_dir("tests/config/test-custom-latest.toml");
+    let lastest = toml::from_str(&lastest_cfg).unwrap();
+    assert_eq!(value, lastest);
+    let dump = toml::to_string_pretty(&lastest).unwrap();
+    assert_eq!(dump, lastest_cfg);
+
+    // Compatibility check.
+    let compatible = toml::from_str(&read_file_in_project_dir(
+        "tests/config/test-custom-compatible.toml",
+    )).unwrap();
+    assert_eq!(value, compatible);
 }
