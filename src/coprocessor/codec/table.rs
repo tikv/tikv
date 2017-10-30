@@ -183,7 +183,8 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
         types::LONG_BLOB |
         types::VARCHAR |
         types::STRING |
-        types::NEW_DECIMAL => Ok(datum),
+        types::NEW_DECIMAL |
+        types::JSON => Ok(datum),
         types::DATE | types::DATETIME | types::TIMESTAMP => {
             let fsp = col.get_decimal() as i8;
             let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, &ctx.tz)?;
