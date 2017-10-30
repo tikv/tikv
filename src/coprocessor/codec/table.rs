@@ -170,6 +170,15 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
     }
     match col.get_tp() as u8 {
         types::FLOAT => Ok(Datum::F64(datum.f64() as f32 as f64)),
+        types::DATE | types::DATETIME | types::TIMESTAMP => {
+            let fsp = col.get_decimal() as i8;
+            let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, &ctx.tz)?;
+            Ok(Datum::Time(t))
+        }
+        types::DURATION => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
+        types::ENUM | types::SET | types::BIT => {
+            Err(box_err!("unflatten column {:?} is not supported yet.", col))
+        }
         types::TINY |
         types::SHORT |
         types::YEAR |
@@ -185,17 +194,8 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
         types::STRING |
         types::NEW_DECIMAL |
         types::JSON => Ok(datum),
-        types::DATE | types::DATETIME | types::TIMESTAMP => {
-            let fsp = col.get_decimal() as i8;
-            let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, &ctx.tz)?;
-            Ok(Datum::Time(t))
-        }
-        types::DURATION => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
-        types::ENUM | types::SET | types::BIT => {
-            Err(box_err!("unflatten column {:?} is not supported yet.", col))
-        }
         t => {
-            error!("unknown type {} {:?}", t, datum);
+            debug_assert!(false, "unknown type {} {:?}", t, datum);
             Ok(datum)
         }
     }
