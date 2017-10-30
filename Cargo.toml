@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "0.9.0"
+version = "1.0.1"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -14,6 +14,7 @@ static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 mem-profiling = ["jemallocator"]
+no-fail = ["fail/no_fail"]
 
 [lib]
 name = "tikv"
@@ -27,6 +28,9 @@ path = "benches/bin/bench-tikv.rs"
 
 [[bin]]
 name = "tikv-ctl"
+
+[[bin]]
+name = "tikv-fail"
 
 [[test]]
 name = "tests"
@@ -89,6 +93,9 @@ git = "https://github.com/busyjay/jemallocator.git"
 branch = "dev"
 features = ["profiling"]
 optional = true
+
+[dependencies.fail]
+git = "https://github.com/pingcap/fail-rs.git"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

@@ -32,6 +32,9 @@ const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
+// Enpoints may occur very deep recursion,
+// so enlarge their stack size to 10 MB.
+const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
@@ -60,6 +63,7 @@ pub struct Config {
     pub grpc_stream_initial_window_size: ReadableSize,
     pub end_point_concurrency: usize,
     pub end_point_max_tasks: usize,
+    pub end_point_stack_size: ReadableSize,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -86,6 +90,7 @@ impl Default for Config {
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             end_point_concurrency: concurrency,
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
+            end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
         }
     }
 }
@@ -114,6 +119,14 @@ impl Config {
             return Err(box_err!("server.end-point-max-tasks should not be 0."));
         }
 
+        // 2MB is the default stack size for threads in rust, but endpoints may occur
+        // very deep recursion, 2MB considered too small.
+        //
+        // See more: https://doc.rust-lang.org/std/thread/struct.Builder.html#method.stack_size
+        if self.end_point_stack_size.0 < ReadableSize::mb(2).0 {
+            return Err(box_err!("server.end-point-stack-size is too small."));
+        }
+
         for (k, v) in &self.labels {
             validate_label(k, "key")?;
             validate_label(v, "value")?;
@@ -126,7 +139,7 @@ impl Config {
 fn validate_label(s: &str, tp: &str) -> Result<()> {
     let report_err = || {
         box_err!(
-            "store label {}: {:?} not match ^[a-z0-9]([a-z0-9-._]*[a-z0-9])?",
+            "store label {}: {:?} not match ^[a-zA-Z0-9]([a-zA-Z0-9-._]*[a-zA-Z0-9])?",
             tp,
             s
         )
@@ -136,18 +149,18 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
     }
     let mut chrs = s.chars();
     let first_char = chrs.next().unwrap();
-    if !first_char.is_ascii_lowercase() && !first_char.is_ascii_digit() {
+    if !first_char.is_ascii_alphanumeric() {
         return Err(report_err());
     }
     let last_char = match chrs.next_back() {
         None => return Ok(()),
         Some(c) => c,
     };
-    if !last_char.is_ascii_lowercase() && !last_char.is_ascii_digit() {
+    if !last_char.is_ascii_alphanumeric() {
         return Err(report_err());
     }
     for c in chrs {
-        if !c.is_ascii_lowercase() && !c.is_ascii_digit() && !"-._".contains(c) {
+        if !c.is_ascii_alphanumeric() && !"-._".contains(c) {
             return Err(report_err());
         }
     }
@@ -170,6 +183,10 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
+        invalid_cfg.end_point_stack_size = ReadableSize::mb(1);
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_max_tasks = 0;
         assert!(invalid_cfg.validate().is_err());
 
@@ -187,13 +204,22 @@ mod tests {
 
     #[test]
     fn test_store_labels() {
-        let invalid_cases = vec!["", "123*", ".123", "Cab", "abC", "💖"];
+        let invalid_cases = vec!["", "123*", ".123", "💖"];
 
         for case in invalid_cases {
             assert!(validate_label(case, "dummy").is_err());
         }
 
-        let valid_cases = vec!["a", "0", "a.1-2", "b_1.2", "cab-012", "3ac.8b2"];
+        let valid_cases = vec![
+            "a",
+            "0",
+            "a.1-2",
+            "Cab",
+            "abC",
+            "b_1.2",
+            "cab-012",
+            "3ac.8b2",
+        ];
 
         for case in valid_cases {
             validate_label(case, "dummy").unwrap();

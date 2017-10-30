@@ -44,7 +44,7 @@ use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
 use pd::{PdTask, INVALID_ID};
 
-use super::store::{Store, StoreStat};
+use super::store::{DestroyPeerJob, Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::util;
 use super::msg::Callback;
@@ -193,12 +193,6 @@ enum RequestPolicy {
 pub struct PeerStat {
     pub written_bytes: u64,
     pub written_keys: u64,
-    pub last_written_bytes: u64,
-    pub last_written_keys: u64,
-    pub read_bytes: u64,
-    pub read_keys: u64,
-    pub last_read_bytes: u64,
-    pub last_read_keys: u64,
 }
 
 pub struct Peer {
@@ -391,6 +385,32 @@ impl Peer {
             self.marked_to_be_checked = true;
             pending_raft_groups.insert(self.region_id);
         }
+    }
+
+    pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+        let initialized = self.get_store().is_initialized();
+        let async_remove = if self.is_applying_snapshot() {
+            if !self.mut_store().cancel_applying_snap() {
+                info!(
+                    "{} Stale peer {} is applying snapshot, will destroy next \
+                     time.",
+                    self.tag,
+                    self.peer_id()
+                );
+                return None;
+            }
+            // There is no tasks in apply worker.
+            false
+        } else {
+            initialized
+        };
+        self.pending_remove = true;
+        Some(DestroyPeerJob {
+            async_remove: async_remove,
+            initialized: initialized,
+            region_id: self.region_id,
+            peer: self.peer.clone(),
+        })
     }
 
     pub fn destroy(&mut self) -> Result<()> {
@@ -741,6 +761,7 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
+            fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             self.send(ctx.trans, msgs, &mut ctx.metrics.message)
                 .unwrap_or_else(|e| {
@@ -776,6 +797,7 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
 
         if !self.is_leader() {
+            fail_point!("raft_before_follower_send");
             self.send(trans, ready.messages.drain(..), &mut metrics.message)
                 .unwrap_or_else(|e| {
                     warn!("{} follower send messages err {:?}", self.tag, e);
@@ -1573,10 +1595,8 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.peer_stat.written_bytes - self.peer_stat.last_written_bytes,
-            written_keys: self.peer_stat.written_keys - self.peer_stat.last_written_keys,
-            read_bytes: self.peer_stat.read_bytes - self.peer_stat.last_read_bytes,
-            read_keys: self.peer_stat.read_keys - self.peer_stat.last_read_keys,
+            written_bytes: self.peer_stat.written_bytes,
+            written_keys: self.peer_stat.written_keys,
             region_size: self.approximate_size,
         };
         if let Err(e) = worker.schedule(task) {
