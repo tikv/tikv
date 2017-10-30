@@ -399,8 +399,7 @@ impl AssertionStorage {
         self.store
             .resolve_lock_batch(
                 self.ctx.clone(),
-                vec![start_ts_1, start_ts_2],
-                vec![commit_ts_1, commit_ts_2],
+                vec![(start_ts_1, commit_ts_1), (start_ts_2, commit_ts_2)],
             )
             .unwrap();
     }

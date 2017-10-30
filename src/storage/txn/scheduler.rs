@@ -31,7 +31,6 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -54,6 +53,7 @@ use raftstore::store::engine::IterOption;
 use util::transport::{Error as TransportError, SyncSendCh};
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
+use util::collections::HashMap;
 
 use super::Result;
 use super::Error;
@@ -883,7 +883,7 @@ fn process_write_impl(
         }
         Command::ResolveLock {
             ref ctx,
-            ref txn_status,
+            ref mut txn_status,
             ref mut scan_key,
             ref key_locks,
         } => {
@@ -903,7 +903,7 @@ fn process_write_impl(
                 let status = txn_status.get(&current_lock.ts);
                 let commit_ts = match status {
                     Some(ts) => *ts,
-                    None => panic!("txn status not found!"),
+                    None => panic!("txn status not found."),
                 };
                 if commit_ts > 0 {
                     if current_lock.ts >= commit_ts {
@@ -929,7 +929,7 @@ fn process_write_impl(
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
                         ctx: ctx.clone(),
-                        txn_status: txn_status.clone(),
+                        txn_status: mem::replace(txn_status, Default::default()),
                         scan_key: scan_key.take(),
                         key_locks: vec![],
                     },
