@@ -179,23 +179,29 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
         types::ENUM | types::SET | types::BIT => {
             Err(box_err!("unflatten column {:?} is not supported yet.", col))
         }
-        types::TINY |
-        types::SHORT |
-        types::YEAR |
-        types::INT24 |
-        types::LONG |
-        types::LONG_LONG |
-        types::DOUBLE |
-        types::TINY_BLOB |
-        types::MEDIUM_BLOB |
-        types::BLOB |
-        types::LONG_BLOB |
-        types::VARCHAR |
-        types::STRING |
-        types::NEW_DECIMAL |
-        types::JSON => Ok(datum),
         t => {
-            debug_assert!(false, "unknown type {} {:?}", t, datum);
+            debug_assert!(
+                [
+                    types::TINY,
+                    types::SHORT,
+                    types::YEAR,
+                    types::INT24,
+                    types::LONG,
+                    types::LONG_LONG,
+                    types::DOUBLE,
+                    types::TINY_BLOB,
+                    types::MEDIUM_BLOB,
+                    types::BLOB,
+                    types::LONG_BLOB,
+                    types::VARCHAR,
+                    types::STRING,
+                    types::NEW_DECIMAL,
+                    types::JSON
+                ].contains(&t),
+                "unknown type {} {:?}",
+                t,
+                datum
+            );
             Ok(datum)
         }
     }
