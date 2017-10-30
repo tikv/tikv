@@ -77,6 +77,10 @@ pub trait RegionObserver: Coprocessor {
 
     /// Hook to call before handle split region task. If it returns a None,
     /// then `on_split_check` can be skippped.
+    //
+    // This is a workaround for preserving status for split check observers.
+    // TODO: Refactor RegionObserver, requires Send + Clone,
+    //       so that ervery threads has its own RegionObservers.
     fn new_split_check_status(&self, _: &mut ObserverContext, _: &mut SplitCheckStatus, _: &DB) {}
 
     /// Hook to call for every check during split.
