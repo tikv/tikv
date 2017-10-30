@@ -170,20 +170,6 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
     }
     match col.get_tp() as u8 {
         types::FLOAT => Ok(Datum::F64(datum.f64() as f32 as f64)),
-        types::TINY |
-        types::SHORT |
-        types::YEAR |
-        types::INT24 |
-        types::LONG |
-        types::LONG_LONG |
-        types::DOUBLE |
-        types::TINY_BLOB |
-        types::MEDIUM_BLOB |
-        types::BLOB |
-        types::LONG_BLOB |
-        types::VARCHAR |
-        types::STRING |
-        types::NEW_DECIMAL => Ok(datum),
         types::DATE | types::DATETIME | types::TIMESTAMP => {
             let fsp = col.get_decimal() as i8;
             let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, &ctx.tz)?;
@@ -194,7 +180,28 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
             Err(box_err!("unflatten column {:?} is not supported yet.", col))
         }
         t => {
-            error!("unknown type {} {:?}", t, datum);
+            debug_assert!(
+                [
+                    types::TINY,
+                    types::SHORT,
+                    types::YEAR,
+                    types::INT24,
+                    types::LONG,
+                    types::LONG_LONG,
+                    types::DOUBLE,
+                    types::TINY_BLOB,
+                    types::MEDIUM_BLOB,
+                    types::BLOB,
+                    types::LONG_BLOB,
+                    types::VARCHAR,
+                    types::STRING,
+                    types::NEW_DECIMAL,
+                    types::JSON
+                ].contains(&t),
+                "unknown type {} {:?}",
+                t,
+                datum
+            );
             Ok(datum)
         }
     }
@@ -432,13 +439,15 @@ mod test {
         let mut cols = map![
             1 => new_col_info(types::LONG_LONG),
             2 => new_col_info(types::VARCHAR),
-            3 => new_col_info(types::NEW_DECIMAL)
+            3 => new_col_info(types::NEW_DECIMAL),
+            5 => new_col_info(types::JSON)
         ];
 
         let mut row = map![
             1 => Datum::I64(100),
             2 => Datum::Bytes(b"abc".to_vec()),
-            3 => Datum::Dec(10.into())
+            3 => Datum::Dec(10.into()),
+            5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap())
         ];
 
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
