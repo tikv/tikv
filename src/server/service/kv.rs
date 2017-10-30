@@ -12,14 +12,20 @@
 // limitations under the License.
 
 use std::boxed::FnBox;
+use std::ops::FnMut;
 use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::convert::From;
+
 use mio::Token;
-use grpc::{ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink};
+use grpc::{self, ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
+           ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, Future, Stream};
 use futures::sync::oneshot;
+use futures::Sink;
+use futures::sync::mpsc;
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
@@ -36,7 +42,7 @@ use storage::engine::Error as EngineError;
 use server::transport::RaftStoreRouter;
 use server::snap::Task as SnapTask;
 use server::metrics::*;
-use server::Error;
+use server::{Error, OnResponse};
 use raftstore::store::Msg as StoreMessage;
 use coprocessor::{EndPointTask, RequestTask};
 
@@ -81,11 +87,40 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         let status = RpcStatus::new(code, Some(format!("{}", err)));
         ctx.spawn(sink.fail(status).map_err(|_| ()));
     }
+
+    fn send_fail_status_to_stream<M>(
+        &self,
+        ctx: RpcContext,
+        sink: ServerStreamingSink<M>,
+        err: Error,
+        code: RpcStatusCode,
+    ) {
+        let status = RpcStatus::new(code, Some(format!("{}", err)));
+        ctx.spawn(sink.fail(status).map_err(|_| ()));
+    }
 }
 
 fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot::Receiver<T>) {
     let (tx, rx) = oneshot::channel();
     let callback = move |resp| { tx.send(resp).unwrap(); };
+    (box callback, rx)
+}
+
+fn make_stream_callback<T: Debug + Send + 'static>()
+    -> (Box<FnMut(T) + Send>, mpsc::Receiver<(T, WriteFlags)>)
+{
+    let (mut tx, rx) = mpsc::channel(1);
+    let callback = move |resp| {
+        let mut resp = (resp, WriteFlags::default().buffer_hint(true));
+        while let Err(ret) = tx.try_send(resp) {
+            if ret.is_full() {
+                resp = ret.into_inner();
+            } else {
+                warn!("{:?}", ret); //TODO
+                break;
+            }
+        }
+    };
     (box callback, rx)
 }
 
@@ -748,8 +783,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .start_coarse_timer();
 
         let (cb, future) = make_callback();
-        let res = self.end_point_scheduler
-            .schedule(EndPointTask::Request(RequestTask::new(req, cb)));
+        let res = self.end_point_scheduler.schedule(EndPointTask::Request(
+            RequestTask::new(req, OnResponse::Unary(cb)),
+        ));
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -758,6 +794,41 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = future
             .map_err(Error::from)
             .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+
+        ctx.spawn(future);
+    }
+
+    fn coprocessor_stream(
+        &self,
+        ctx: RpcContext,
+        req: Request,
+        sink: ServerStreamingSink<Response>,
+    ) {
+        let label = "coprocessor_stream";
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .with_label_values(&[label])
+            .start_coarse_timer();
+
+        let (cb, stream) = make_stream_callback();
+        let res = self.end_point_scheduler.schedule(EndPointTask::Request(
+            RequestTask::new(req, OnResponse::Stream(cb)),
+        ));
+        if let Err(e) = res {
+            self.send_fail_status_to_stream(
+                ctx,
+                sink,
+                Error::from(e),
+                RpcStatusCode::ResourceExhausted,
+            );
+            return;
+        }
+
+        let future = sink.send_all(stream.map_err(|_| grpc::Error::RpcFinished(None)))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);

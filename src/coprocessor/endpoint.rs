@@ -49,6 +49,7 @@ pub const REQ_TYPE_INDEX: i64 = 102;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const BATCH_ROW_COUNT: usize = 64;
+pub const CHUNKS_PER_STREAM: usize = 1024;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
@@ -425,6 +426,20 @@ impl RequestTask {
     pub fn priority(&self) -> CommandPri {
         self.req.get_context().get_priority()
     }
+
+    fn finish_with_err(self, e: Error) -> Statistics {
+        let resp = err_resp(e);
+        self.finish(Some(resp))
+    }
+
+    fn finish(mut self, resp: Option<Response>) -> Statistics {
+        self.stop_record_handling();
+        match resp {
+            Some(body) => self.on_resp.on_finish(body),
+            None => self.on_resp.finish_stream(None),
+        }
+        self.statistics
+    }
 }
 
 impl Display for RequestTask {
@@ -449,7 +464,7 @@ impl BatchRunnable<Task> for Host {
             match task {
                 Task::Request(req) => {
                     if let Err(e) = req.check_outdated() {
-                        on_error(e, req);
+                        req.finish_with_err(e);
                         continue;
                     }
                     let key = {
@@ -592,23 +607,12 @@ fn err_resp(e: Error) -> Response {
     resp
 }
 
-fn on_error(e: Error, req: RequestTask) -> Statistics {
-    let resp = err_resp(e);
-    respond(resp, req)
-}
-
 fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     debug!("failed to handle batch request: {:?}", e);
     let resp = err_resp(e.into());
     for t in reqs {
-        respond(resp.clone(), t);
+        t.finish(Some(resp.clone()));
     }
-}
-
-fn respond(resp: Response, mut t: RequestTask) -> Statistics {
-    t.stop_record_handling();
-    (t.on_resp)(resp);
-    t.statistics
 }
 
 pub struct TiDbEndPoint {
@@ -625,17 +629,17 @@ impl TiDbEndPoint {
     fn handle_request(&self, mut t: RequestTask) -> Statistics {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
-            return on_error(e, t);
+            return t.finish_with_err(e);
         }
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
+            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t).map(Some),
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t),
-            Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
+            Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t).map(Some),
             Err(err) => Err(err),
         };
         match resp {
-            Ok(r) => respond(r, t),
-            Err(e) => on_error(e, t),
+            Ok(r) => t.finish(r),
+            Err(e) => t.finish_with_err(e),
         }
     }
 
@@ -645,14 +649,14 @@ impl TiDbEndPoint {
         ctx.handle_request(range)
     }
 
-    pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
+    pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Option<Response>> {
         let ranges = t.req.get_ranges().to_vec();
         let eval_ctx = Rc::new(box_try!(EvalContext::new(
             dag.get_time_zone_offset(),
             dag.get_flags()
         )));
         let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
-        ctx.handle_request(&mut t.statistics)
+        ctx.handle_request(&mut t.statistics, &mut t.on_resp)
     }
 
     pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
@@ -752,6 +756,7 @@ mod tests {
 
     use util::worker::{FutureWorker, Worker};
     use util::time::Instant;
+    use server::OnResponse;
 
     #[test]
     fn test_get_reg_scan_tag() {
@@ -776,7 +781,10 @@ mod tests {
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
+        let mut task = RequestTask::new(
+            Request::new(),
+            OnResponse::Unary(box move |msg| { tx.send(msg).unwrap(); }),
+        );
         task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -805,10 +813,13 @@ mod tests {
             } else {
                 req.mut_context().set_priority(CommandPri::High);
             }
-            let task = RequestTask::new(req, box move |msg| {
-                thread::sleep(Duration::from_millis(100));
-                let _ = tx.send(msg);
-            });
+            let task = RequestTask::new(
+                req,
+                OnResponse::Unary(box move |msg| {
+                    thread::sleep(Duration::from_millis(100));
+                    let _ = tx.send(msg);
+                }),
+            );
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {

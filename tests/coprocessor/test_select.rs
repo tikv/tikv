@@ -26,7 +26,7 @@ use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
 use tikv::storage::{Key, Mutation, ALL_CFS};
-use tikv::server::Config;
+use tikv::server::{Config, OnResponse};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::{FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
@@ -1661,7 +1661,7 @@ fn test_reverse() {
 
 pub fn handle_request(end_point: &Worker<EndPointTask>, req: Request) -> Response {
     let (tx, rx) = mpsc::channel();
-    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
+    let req = RequestTask::new(req, OnResponse::Unary(box move |r| tx.send(r).unwrap()));
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     rx.recv().unwrap()
 }
@@ -1671,6 +1671,30 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     assert!(!resp.get_data().is_empty(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
+    sel_resp
+}
+
+
+pub fn handle_request_with_stream(end_point: &Worker<EndPointTask>, req: Request) -> Vec<Response> {
+    let (tx, rx) = mpsc::channel();
+    let req = RequestTask::new(req, OnResponse::Stream(box move |r| tx.send(r).unwrap()));
+    end_point.schedule(EndPointTask::Request(req)).unwrap();
+    let mut resp = vec![];
+    while let Ok(res) = rx.recv() {
+        resp.push(res);
+    }
+    resp
+}
+
+fn handle_select_with_stream(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
+    let mut sel_resp = SelectResponse::new();
+    let mut chunks = vec![];
+    for resp in handle_request_with_stream(end_point, req) {
+        let mut sel = SelectResponse::new();
+        sel.merge_from_bytes(resp.get_data()).unwrap();
+        chunks.append(&mut sel.take_chunks().to_vec());
+    }
+    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
     sel_resp
 }
 
@@ -2299,7 +2323,7 @@ fn test_where() {
 
 
 #[test]
-fn test_where_for_dag() {
+fn test_where_for_dag_with_stream() {
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
@@ -2333,7 +2357,7 @@ fn test_where_for_dag() {
     };
 
     let req = DAGSelect::from(&product.table).where_expr(cond).build();
-    let mut resp = handle_select(&end_point, req);
+    let mut resp = handle_select_with_stream(&end_point, req);
     let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     let row = spliter.next().unwrap();
     let (id, name, cnt) = data[2];
@@ -2427,7 +2451,7 @@ fn test_handle_truncate() {
             .where_expr(cond.clone())
             .build();
         let (tx, rx) = mpsc::channel();
-        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
+        let req = RequestTask::new(req, OnResponse::Unary(box move |r| tx.send(r).unwrap()));
         end_point.schedule(EndPointTask::Request(req)).unwrap();
         let resp = rx.recv().unwrap();
         assert!(!resp.get_other_error().is_empty());
@@ -2535,7 +2559,7 @@ fn test_handle_truncate_for_dag() {
             .where_expr(cond.clone())
             .build();
         let (tx, rx) = mpsc::channel();
-        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
+        let req = RequestTask::new(req, OnResponse::Unary(box move |r| tx.send(r).unwrap()));
         end_point.schedule(EndPointTask::Request(req)).unwrap();
         let resp = rx.recv().unwrap();
         assert!(!resp.get_other_error().is_empty());
