@@ -433,13 +433,15 @@ mod test {
         let mut cols = map![
             1 => new_col_info(types::LONG_LONG),
             2 => new_col_info(types::VARCHAR),
-            3 => new_col_info(types::NEW_DECIMAL)
+            3 => new_col_info(types::NEW_DECIMAL),
+            5 => new_col_info(types::JSON)
         ];
 
         let mut row = map![
             1 => Datum::I64(100),
             2 => Datum::Bytes(b"abc".to_vec()),
-            3 => Datum::Dec(10.into())
+            3 => Datum::Dec(10.into()),
+            5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap())
         ];
 
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
