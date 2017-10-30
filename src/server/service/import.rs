@@ -23,24 +23,6 @@ use server::metrics::*;
 use server::errors::Error;
 use raftstore::store::{UploadDir, Uploader};
 
-macro_rules! send_rpc_response {
-    ($label:expr, $timer:expr, $sink:expr, $res:expr) => ({
-        let future = match $res {
-            Ok(resp) => $sink.success(resp),
-            Err(e) => {
-                let status = make_rpc_error(RpcStatusCode::Unknown, e);
-                $sink.fail(status)
-            }
-        };
-        future
-            .map(|_| $timer.observe_duration())
-            .map_err(move |e| {
-                warn!("send rpc response: {:?}", e);
-                GRPC_MSG_FAIL_COUNTER.with_label_values(&[$label]).inc();
-            })
-    })
-}
-
 #[derive(Clone)]
 pub struct Service {
     pool: CpuPool,
@@ -101,7 +83,15 @@ impl importpb_grpc::Import for Service {
                     }
                 })
                 .map(|_| UploadSSTResponse::new())
-                .then(move |res| send_rpc_response!(label, timer, sink, res)),
+                .then(move |res| match res {
+                    Ok(resp) => sink.success(resp),
+                    Err(e) => sink.fail(make_rpc_error(RpcStatusCode::Unknown, e)),
+                })
+                .map(|_| timer.observe_duration())
+                .map_err(move |e| {
+                    warn!("send rpc response: {:?}", e);
+                    GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+                }),
         );
     }
 }

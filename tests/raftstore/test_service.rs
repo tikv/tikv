@@ -780,6 +780,28 @@ fn test_debug_scan_mvcc() {
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
 }
 
+#[test]
+fn test_upload_sst() {
+    let (_cluster, client, _) = must_new_cluster_and_import_client();
+
+    let data = vec![1; 1024];
+    let mut hash = crc32::Digest::new(crc32::IEEE);
+    hash.write(&data);
+    let crc32 = hash.sum32();
+
+    let mut upload = UploadSSTRequest::new();
+    upload.set_data(data.clone());
+
+    // Mismatch checksum
+    let meta = make_sst_meta(data.len(), 0);
+    upload.set_meta(meta);
+    assert!(send_upload_sst(&client, upload.clone()).is_err());
+
+    let meta = make_sst_meta(data.len(), crc32);
+    upload.set_meta(meta);
+    send_upload_sst(&client, upload.clone()).unwrap();
+}
+
 fn make_sst_meta(len: usize, crc32: u32) -> SSTMeta {
     let mut m = SSTMeta::new();
     m.set_len(len as u64);
@@ -799,30 +821,8 @@ fn make_sst_handle() -> SSTHandle {
     h
 }
 
-fn test_upload_sst(client: &ImportClient, m: UploadSSTRequest) -> Result<UploadSSTResponse> {
+fn send_upload_sst(client: &ImportClient, m: UploadSSTRequest) -> Result<UploadSSTResponse> {
     let (tx, rx) = client.upload_sst();
     let stream = stream::once({ Ok((m, WriteFlags::default().buffer_hint(true))) });
     stream.forward(tx).and_then(|_| rx).wait()
-}
-
-#[test]
-fn test_import_service() {
-    let (_cluster, client, _) = must_new_cluster_and_import_client();
-
-    let data = vec![1; 1024];
-    let mut hash = crc32::Digest::new(crc32::IEEE);
-    hash.write(&data);
-    let crc32 = hash.sum32();
-
-    let mut m = UploadSSTRequest::new();
-    m.set_data(data.clone());
-
-    let meta = make_sst_meta(data.len(), crc32);
-    m.set_meta(meta.clone());
-    test_upload_sst(&client, m.clone()).unwrap();
-
-    // Mismatch checksum
-    let meta = make_sst_meta(data.len(), 0);
-    m.set_meta(meta.clone());
-    assert!(test_upload_sst(&client, m.clone()).is_err());
 }

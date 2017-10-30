@@ -133,10 +133,10 @@ impl UploadDir {
         let save_path = root.join(&path);
         let temp_path = root.join(Self::TEMP_DIR).join(&path);
         if save_path.exists() {
-            return Err(file_exists(&save_path));
+            return Err(file_exists_error(&save_path));
         }
         if temp_path.exists() {
-            return Err(file_exists(&temp_path));
+            return Err(file_exists_error(&temp_path));
         }
         UploadFile::create(meta, save_path, temp_path)
     }
@@ -188,10 +188,10 @@ impl UploadFile {
     fn validate(&self) -> Result<()> {
         let f = self.temp_file.as_ref().unwrap();
         if f.metadata()?.len() != self.meta.get_len() {
-            return Err(file_corrupted(&self.temp_path));
+            return Err(file_corrupted_error(&self.temp_path));
         }
         if self.temp_digest.sum32() != self.meta.get_crc32() {
-            return Err(file_corrupted(&self.temp_path));
+            return Err(file_corrupted_error(&self.temp_path));
         }
         Ok(())
     }
@@ -243,13 +243,13 @@ fn sst_handle_to_path(h: &SSTHandle) -> Result<PathBuf> {
     )))
 }
 
-fn file_exists<P: AsRef<Path>>(path: P) -> Error {
+fn file_exists_error<P: AsRef<Path>>(path: P) -> Error {
     let path = path.as_ref().as_os_str();
     let error = format!("file {:?} exists", path);
     Error::new(ErrorKind::AlreadyExists, error)
 }
 
-fn file_corrupted<P: AsRef<Path>>(path: P) -> Error {
+fn file_corrupted_error<P: AsRef<Path>>(path: P) -> Error {
     let path = path.as_ref().as_os_str();
     let error = format!("file {:?} corrupted", path);
     Error::new(ErrorKind::InvalidData, error)
