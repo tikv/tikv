@@ -64,7 +64,9 @@ use super::super::metrics::*;
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
 
-pub const RESOLVE_LOCK_BATCH_SIZE: usize = 512;
+// To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
+// The write batch will be around 32KB if we scan 256 keys each time.
+pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 
 /// Process result of a command.
 pub enum ProcessResult {
