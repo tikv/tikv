@@ -35,6 +35,9 @@
 # max count of tasks being handled, new tasks will be rejected.
 # end-point-max-tasks = 2000
 
+# stack size of endpoint, complicated tasks may involve very deep recursion.
+# end-point-stack-size = "10MB"
+
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
 
@@ -55,9 +58,9 @@
 # also should less than total cpu cores.
 # scheduler-worker-pool-size = 4
 
-# When the number of concurrent running writes exceeds this threshold,
-# the "too busy" error is displayed.
-# scheduler-too-busy-threshold = 10000
+# When the pending write bytes exceeds this threshold,
+# the "scheduler too busy" error is displayed.
+# scheduler-pending-write-threshold = "100MB"
 
 [pd]
 # pd endpoints
