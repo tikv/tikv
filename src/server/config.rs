@@ -64,7 +64,7 @@ pub struct Config {
     pub end_point_concurrency: usize,
     pub end_point_max_tasks: usize,
     pub end_point_stack_size: ReadableSize,
-    pub end_point_recursion_limit: isize,
+    pub end_point_recursion_limit: u32,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,

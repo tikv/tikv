@@ -304,7 +304,7 @@ pub struct RequestTask {
 }
 
 impl RequestTask {
-    pub fn new(req: Request, on_resp: OnResponse, recursion_limit: isize) -> RequestTask {
+    pub fn new(req: Request, on_resp: OnResponse, recursion_limit: u32) -> RequestTask {
         let timer = Instant::now_coarse();
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;

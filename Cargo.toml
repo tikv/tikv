@@ -98,7 +98,7 @@ optional = true
 git = "https://github.com/pingcap/fail-rs.git"
 
 [replace]
-"protobuf:1.4.1" = { git = "https://github.com/busyjay/rust-protobuf.git", branch = "set-recurse-limit" }
+"protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

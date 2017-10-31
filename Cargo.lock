@@ -669,13 +669,13 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "1.4.1"
-source = "git+https://github.com/busyjay/rust-protobuf.git?branch=set-recurse-limit#35fb1a67f231b3f62f4750e81ec6d8ae829139af"
+source = "git+https://github.com/stepancheg/rust-protobuf.git#51f50fb4d9c937e37f0eaf61866738a254da4d0e"
 
 [[package]]
 name = "protobuf"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-replace = "protobuf 1.4.1 (git+https://github.com/busyjay/rust-protobuf.git?branch=set-recurse-limit)"
+replace = "protobuf 1.4.1 (git+https://github.com/stepancheg/rust-protobuf.git)"
 
 [[package]]
 name = "pulldown-cmark"
@@ -1155,7 +1155,7 @@ dependencies = [
 "checksum pkg-config 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)" = "8cee804ecc7eaf201a4a207241472cc870e825206f6c031e3ee2a72fa425f2fa"
 "checksum procinfo 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f42e8578852a3306838981aedad8c5642ba794929aa12af0c9eb6c072b77af6c"
 "checksum prometheus 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "276b782a9f116c6dc1e9dc63611e9e944b9dba5b29bb4bd24b55013af9c3fc00"
-"checksum protobuf 1.4.1 (git+https://github.com/busyjay/rust-protobuf.git?branch=set-recurse-limit)" = "<none>"
+"checksum protobuf 1.4.1 (git+https://github.com/stepancheg/rust-protobuf.git)" = "<none>"
 "checksum protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "568a15e4d572d9a5e63ae3a55f84328c984842887db179b40b4cc6a608bac6a4"
 "checksum pulldown-cmark 0.0.15 (registry+https://github.com/rust-lang/crates.io-index)" = "378e941dbd392c101f2cb88097fa4d7167bc421d4b88de3ff7dbee503bc3233b"
 "checksum quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7ac990ab4e038dd8481a5e3fd00641067fcfc674ad663f3222752ed5284e05d4"

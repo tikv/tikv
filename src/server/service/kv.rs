@@ -53,7 +53,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
     token: Arc<AtomicUsize>, // TODO: remove it.
-    recursion_limit: isize,
+    recursion_limit: u32,
 }
 
 impl<T: RaftStoreRouter + 'static> Service<T> {
@@ -62,7 +62,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         end_point_scheduler: Scheduler<EndPointTask>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        recursion_limit: isize,
+        recursion_limit: u32,
     ) -> Service<T> {
         Service {
             storage: storage,
