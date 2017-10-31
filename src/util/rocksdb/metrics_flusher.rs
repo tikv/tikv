@@ -20,7 +20,7 @@ use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
-pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 300000;
+pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;
 
 pub struct MetricsFlusher {
     engines: Engines,
