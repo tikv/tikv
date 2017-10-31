@@ -1205,13 +1205,13 @@ impl ApplyDelegate {
                 return Err(Error::StaleEpoch(error, new_regions));
             }
             match cfname {
-                Some(cf) => if h.get_cfname() != cf {
+                Some(cf) => if h.get_cf_name() != cf {
                     return Err(box_err!(
                         "can not ingest files of different column families"
                     ));
                 },
                 None => {
-                    cfname = Some(h.get_cfname());
+                    cfname = Some(h.get_cf_name());
                 }
             }
             match self.upload_dir.join_handle(h) {

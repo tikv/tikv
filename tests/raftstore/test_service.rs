@@ -852,7 +852,7 @@ fn test_ingest_sst() {
 
     // Different CFs in sst handle
     let mut handle = sst_handles[0].clone();
-    handle.set_cfname("testcf".to_owned());
+    handle.set_cf_name("testcf".to_owned());
     let mut ingest = IngestSSTRequest::new();
     ingest.set_context(ctx.clone());
     ingest.mut_handles().push(handle);
@@ -901,7 +901,7 @@ fn make_sst_handle() -> SSTHandle {
 fn make_sst_handle_from_ctx(ctx: &Context) -> SSTHandle {
     let mut h = SSTHandle::new();
     h.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-    h.set_cfname("default".to_owned());
+    h.set_cf_name("default".to_owned());
     h.set_region_id(ctx.get_region_id());
     h.set_region_epoch(ctx.get_region_epoch().clone());
     h
