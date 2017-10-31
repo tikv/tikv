@@ -320,15 +320,15 @@ fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: u32) -> Option<b
             Some(b'%') => return None,
             Some(c) => {
                 let (npc, escape) = if c as u32 == escape {
-                    pcs.next().map_or((c as u32, false), |&c| (c as u32, true))
+                    pcs.next().map_or((c, false), |&c| (c, true))
                 } else {
-                    (c as u32, false)
+                    (c, false)
                 };
                 let nsc = match tcs.next() {
                     None => return Some(false),
-                    Some(&c) => c as u32,
+                    Some(&c) => c,
                 };
-                if nsc != npc && (npc != b'_' as u32 || escape) {
+                if nsc != npc && (npc != b'_' || escape) {
                     return Some(false);
                 }
             }
