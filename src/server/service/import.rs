@@ -66,7 +66,7 @@ impl importpb_grpc::Import for Service {
         let res = self.storage
             .async_ingest_sst(req.take_context(), req.take_handles().to_vec(), cb);
         if let Err(e) = res {
-            ctx.spawn(send_rpc_error!(sink, RpcStatusCode::ResourceExhausted, e));
+            send_rpc_error(ctx, sink, RpcStatusCode::ResourceExhausted, e);
             return;
         }
 
@@ -164,4 +164,14 @@ fn extract_error<T>(res: &storage::Result<T>) -> Option<errorpb::Error> {
 
 fn make_rpc_error(code: RpcStatusCode, err: Error) -> RpcStatus {
     RpcStatus::new(code, Some(format!("{:?}", err)))
+}
+
+fn send_rpc_error<M, E>(ctx: RpcContext, sink: UnarySink<M>, code: RpcStatusCode, err: E)
+where
+    Error: From<E>,
+{
+    let error = make_rpc_error(code, Error::from(err));
+    ctx.spawn(sink.fail(error).map_err(|e| {
+        warn!("send rpc error: {:?}", e);
+    }));
 }
