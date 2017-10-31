@@ -68,6 +68,7 @@ fn test_serde_custom_tikv_config() {
         grpc_stream_initial_window_size: ReadableSize(12_345),
         end_point_concurrency: 12,
         end_point_max_tasks: 12,
+        end_point_stack_size: ReadableSize::mb(12),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -131,6 +132,7 @@ fn test_serde_custom_tikv_config() {
         info_log_roll_time: ReadableDuration::secs(12),
         info_log_dir: "/var".to_owned(),
         rate_bytes_per_sec: ReadableSize::kb(1),
+        wal_bytes_per_sync: ReadableSize::mb(1),
         max_sub_compactions: 12,
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
@@ -277,6 +279,7 @@ fn test_serde_custom_tikv_config() {
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
         allow_concurrent_memtable_write: true,
+        wal_bytes_per_sync: ReadableSize::mb(1),
         defaultcf: RaftDefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -316,7 +319,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_messages_per_tick: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
-        scheduler_too_busy_threshold: 123,
+        scheduler_pending_write_threshold: ReadableSize::kb(123),
     };
     value.coprocessor = CopConfig {
         region_max_size: ReadableSize::mb(12),

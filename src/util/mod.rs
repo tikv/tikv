@@ -50,34 +50,23 @@ mod thread_metrics;
 
 pub const NO_LIMIT: u64 = u64::MAX;
 
-pub fn get_limit_at_size<'a, T, I>(entries: I, max: u64) -> usize
-where
-    T: Message + Clone,
-    I: IntoIterator<Item = &'a T>,
-{
-    let mut iter = entries.into_iter();
-    // If max is NO_LIMIT, we can return directly.
-    if max == NO_LIMIT {
-        return iter.count();
-    }
-
-    let mut size = match iter.next() {
-        None => return 0,
-        Some(e) => Message::compute_size(e) as u64,
-    };
-    let mut limit = 1;
-    for e in iter {
-        size += Message::compute_size(e) as u64;
-        if size > max {
-            break;
-        }
-        limit += 1;
-    }
-    limit
-}
-
 pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
-    let limit = get_limit_at_size(entries.as_slice(), max);
+    if max == NO_LIMIT || entries.len() <= 1 {
+        return;
+    }
+
+    let mut size = 0;
+    let limit = entries
+        .iter()
+        .take_while(|&e| if size == 0 {
+            size += Message::compute_size(e) as u64;
+            true
+        } else {
+            size += Message::compute_size(e) as u64;
+            size <= max
+        })
+        .count();
+
     entries.truncate(limit);
 }
 
