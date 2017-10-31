@@ -85,13 +85,13 @@ impl importpb_grpc::Import for Service {
                 .map(|_| UploadSSTResponse::new())
                 .then(move |res| match res {
                     Ok(resp) => sink.success(resp),
-                    Err(e) => sink.fail(make_rpc_error(RpcStatusCode::Unknown, e)),
+                    Err(e) => {
+                        GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+                        sink.fail(make_rpc_error(RpcStatusCode::Unknown, e))
+                    }
                 })
                 .map(|_| timer.observe_duration())
-                .map_err(move |e| {
-                    warn!("send rpc response: {:?}", e);
-                    GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
-                }),
+                .map_err(|e| warn!("send rpc response: {:?}", e)),
         );
     }
 }

@@ -814,7 +814,7 @@ fn make_sst_handle() -> SSTHandle {
     let mut h = SSTHandle::new();
     let uuid = Uuid::new_v4();
     h.set_uuid(uuid.as_bytes().to_vec());
-    h.set_cfname("default".to_owned());
+    h.set_cf_name("default".to_owned());
     h.set_region_id(1);
     h.mut_region_epoch().set_conf_ver(2);
     h.mut_region_epoch().set_version(3);

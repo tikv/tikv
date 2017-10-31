@@ -226,7 +226,7 @@ fn sst_handle_to_path(h: &SSTHandle) -> Result<PathBuf> {
         }
     };
 
-    if h.get_cfname().is_empty() || h.get_region_id() == 0 ||
+    if h.get_cf_name().is_empty() || h.get_region_id() == 0 ||
         h.get_region_epoch().get_conf_ver() == 0 || h.get_region_epoch().get_version() == 0
     {
         let error = format!("invalid sst handle {:?}", h);
@@ -236,7 +236,7 @@ fn sst_handle_to_path(h: &SSTHandle) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}_{}.sst",
         uuid.simple().to_string(),
-        h.get_cfname(),
+        h.get_cf_name(),
         h.get_region_id(),
         h.get_region_epoch().get_conf_ver(),
         h.get_region_epoch().get_version(),
@@ -273,7 +273,7 @@ mod test {
         let mut h = SSTHandle::new();
         let uuid = Uuid::new_v4();
         h.set_uuid(uuid.as_bytes().to_vec());
-        h.set_cfname("default".to_owned());
+        h.set_cf_name("default".to_owned());
         h.set_region_id(1);
         h.mut_region_epoch().set_conf_ver(2);
         h.mut_region_epoch().set_version(3);
