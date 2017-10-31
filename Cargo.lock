@@ -23,6 +23,7 @@ dependencies = [
  "mio 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "murmur3 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "nix 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ordermap 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -631,6 +632,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "ordermap"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "percent-encoding"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1145,6 +1151,7 @@ dependencies = [
 "checksum num-traits 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)" = "51eab148f171aefad295f8cece636fc488b9b392ef544da31ea4b8ef6b9e9c39"
 "checksum num_cpus 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)" = "cee7e88156f3f9e19bdd598f8d6c9db7bf4078f99f8381f43a55b09648d1a6e3"
 "checksum num_cpus 1.6.2 (registry+https://github.com/rust-lang/crates.io-index)" = "aec53c34f2d0247c5ca5d32cca1478762f301740468ee9ee6dcb7a0dd7a0c584"
+"checksum ordermap 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "8c7790b1bc9bf27776cd5cdeaae1263758c2c597d4ae02b58aa63c320f94d778"
 "checksum percent-encoding 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "de154f638187706bde41d9b4738748933d64e6b37bdbffc0b47a97d16a6ae356"
 "checksum pkg-config 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)" = "8cee804ecc7eaf201a4a207241472cc870e825206f6c031e3ee2a72fa425f2fa"
 "checksum procinfo 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f42e8578852a3306838981aedad8c5642ba794929aa12af0c9eb6c072b77af6c"

@@ -476,7 +476,6 @@ impl Snapshot for RegionSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    #[allow(needless_lifetimes)]
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
         Ok(Cursor::new(
             Box::new(RegionSnapshot::iter(self, iter_opt)),
@@ -484,7 +483,6 @@ impl Snapshot for RegionSnapshot {
         ))
     }
 
-    #[allow(needless_lifetimes)]
     fn iter_cf(&self, cf: CfName, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
         Ok(Cursor::new(
             Box::new(RegionSnapshot::iter_cf(self, cf, iter_opt)?),

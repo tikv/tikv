@@ -131,7 +131,11 @@ pub trait Executor {
     fn take_statistics(&mut self) -> Statistics;
 }
 
-type DAGExecutor = (Box<Executor>, Arc<Vec<ColumnInfo>>, bool);
+pub struct DAGExecutor {
+    pub exec: Box<Executor>,
+    pub columns: Arc<Vec<ColumnInfo>>,
+    pub has_aggr: bool,
+}
 
 pub fn build_exec(
     execs: Vec<executor::Executor>,
@@ -175,7 +179,11 @@ pub fn build_exec(
         };
         src = curr;
     }
-    Ok((src, columns, has_aggr))
+    Ok(DAGExecutor {
+        exec: src,
+        columns: columns,
+        has_aggr: has_aggr,
+    })
 }
 
 type FirstExecutor = (Box<Executor>, Arc<Vec<ColumnInfo>>);

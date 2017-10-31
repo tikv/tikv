@@ -16,8 +16,8 @@ use std::sync::Arc;
 use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
-use util::collections::{HashMap, HashMapEntry as Entry};
 
+use util::collections::{OrderMap, OrderMapEntry};
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
@@ -73,8 +73,7 @@ impl AggrFunc {
 pub struct AggregationExecutor {
     group_by: Vec<Expression>,
     aggr_func: Vec<AggrFuncExpr>,
-    group_keys: Vec<Arc<Vec<u8>>>,
-    group_key_aggrs: HashMap<Arc<Vec<u8>>, Vec<Box<AggrFunc>>>,
+    group_key_aggrs: OrderMap<Arc<Vec<u8>>, Vec<Box<AggrFunc>>>,
     cursor: usize,
     executed: bool,
     ctx: Arc<EvalContext>,
@@ -102,8 +101,7 @@ impl AggregationExecutor {
         Ok(AggregationExecutor {
             group_by: box_try!(Expression::batch_build(ctx.as_ref(), group_by)),
             aggr_func: AggrFuncExpr::batch_build(ctx.as_ref(), aggr_func)?,
-            group_keys: vec![],
-            group_key_aggrs: map![],
+            group_key_aggrs: OrderMap::new(),
             cursor: 0,
             executed: false,
             ctx: ctx,
@@ -138,17 +136,16 @@ impl AggregationExecutor {
             )?;
             let group_key = Arc::new(self.get_group_key(&cols)?);
             match self.group_key_aggrs.entry(group_key.clone()) {
-                Entry::Vacant(e) => {
+                OrderMapEntry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
                     for expr in &self.aggr_func {
                         let mut aggr = aggregate::build_aggr_func(expr.tp)?;
                         aggr.update_with_expr(&self.ctx, expr, &cols)?;
                         aggrs.push(aggr);
                     }
-                    self.group_keys.push(group_key);
                     e.insert(aggrs);
                 }
-                Entry::Occupied(e) => {
+                OrderMapEntry::Occupied(e) => {
                     let aggrs = e.into_mut();
                     for (expr, aggr) in self.aggr_func.iter().zip(aggrs) {
                         aggr.update_with_expr(&self.ctx, expr, &cols)?;
@@ -167,28 +164,30 @@ impl Executor for AggregationExecutor {
             self.executed = true;
         }
 
-        if self.cursor >= self.group_keys.len() {
-            return Ok(None);
-        }
-        // calc all aggr func
         let mut aggr_cols = Vec::with_capacity(2 * self.aggr_func.len());
-        let group_key = &self.group_keys[self.cursor];
-        let mut aggrs = self.group_key_aggrs.remove(group_key).unwrap();
-        for aggr in &mut aggrs {
-            aggr.calc(&mut aggr_cols)?;
+        match self.group_key_aggrs.get_index_mut(self.cursor) {
+            Some((ref group_key, ref mut aggrs)) => {
+                self.cursor += 1;
+
+                // calc all aggr func
+                for aggr in aggrs.iter_mut() {
+                    aggr.calc(&mut aggr_cols)?;
+                }
+
+                // construct row data
+                let value_size = group_key.len() + approximate_size(&aggr_cols, false);
+                let mut value = Vec::with_capacity(value_size);
+                box_try!(value.encode(aggr_cols.as_slice(), false));
+                if !self.group_by.is_empty() {
+                    value.extend_from_slice(group_key);
+                }
+                Ok(Some(Row {
+                    handle: 0,
+                    data: RowColsDict::new(map![], value),
+                }))
+            }
+            None => Ok(None),
         }
-        // construct row data
-        let value_size = group_key.len() + approximate_size(&aggr_cols, false);
-        let mut value = Vec::with_capacity(value_size);
-        box_try!(value.encode(aggr_cols.as_slice(), false));
-        if !self.group_by.is_empty() {
-            value.extend_from_slice(group_key);
-        }
-        self.cursor += 1;
-        Ok(Some(Row {
-            handle: 0,
-            data: RowColsDict::new(map![], value),
-        }))
     }
 
     fn take_statistics(&mut self) -> Statistics {

@@ -53,13 +53,12 @@ impl DAGContext {
             req_ctx.fill_cache,
         );
 
-        let (exec, columns, has_aggr) =
-            build_exec(req.take_executors().to_vec(), store, ranges, eval_ctx)?;
+        let dag_executor = build_exec(req.take_executors().to_vec(), store, ranges, eval_ctx)?;
         Ok(DAGContext {
-            columns: columns,
-            has_aggr: has_aggr,
+            columns: dag_executor.columns,
+            has_aggr: dag_executor.has_aggr,
             req_ctx: req_ctx,
-            exec: exec,
+            exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
         })
     }
