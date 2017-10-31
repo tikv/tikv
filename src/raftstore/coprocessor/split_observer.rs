@@ -27,7 +27,7 @@ type Result<T> = StdResult<T, String>;
 
 impl SplitObserver {
     fn on_split(&self, ctx: &mut ObserverContext, split: &mut SplitRequest) -> Result<()> {
-        if !split.has_split_key() {
+        if split.get_split_key().is_empty() {
             return Err("split key is expected!".to_owned());
         }
 

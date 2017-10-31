@@ -79,8 +79,8 @@ fn read_on_peer<T: Simulator>(
     }
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
+    assert!(resp.get_responses()[0].has_get());
     let mut get = resp.mut_responses()[0].take_get();
-    assert!(get.has_value());
     Ok(get.take_value())
 }
 

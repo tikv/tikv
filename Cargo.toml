@@ -78,7 +78,8 @@ signal = "0.4"
 git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
+git = "https://github.com/busyjay/kvproto.git"
+branch = "merge"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

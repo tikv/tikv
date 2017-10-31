@@ -1522,6 +1522,7 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
                 check_ver = true;
                 check_conf_ver = true;
             }
+            AdminCmdType::PreMerge | AdminCmdType::Merge => unimplemented!(),
         };
     } else {
         // for get/set/delete, we don't care conf_version.
