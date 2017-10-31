@@ -35,6 +35,7 @@ pub const RECORD_PREFIX_SEP: &'static [u8] = b"_r";
 pub const INDEX_PREFIX_SEP: &'static [u8] = b"_i";
 pub const SEP_LEN: usize = 2;
 pub const TABLE_PREFIX_LEN: usize = 1;
+pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 
 
 trait TableEncoder: NumberEncoder {
