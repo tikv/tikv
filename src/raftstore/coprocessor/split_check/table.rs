@@ -26,7 +26,7 @@ use super::Status;
 
 #[derive(Default)]
 pub struct TableStatus {
-    first_encoded_table_prefix: Vec<u8>,
+    first_encoded_table_prefix: Option<Vec<u8>>,
     last_encoded_table_prefix: Option<Vec<u8>>,
 }
 
@@ -84,26 +84,21 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
     }
 
     let encoded_start_key = keys::origin_key(&start_key);
-    let encoded_start_table_prefix =
-        if let Some(key) = extract_encoded_table_prefix(encoded_start_key) {
-            key
-        } else {
-            return true;
-        };
-
     let encoded_end_key = keys::origin_key(&end_key);
-    let encoded_end_table_prefix =
-        if let Some(key) = extract_encoded_table_prefix(encoded_end_key) {
-            key
-        } else {
-            return true;
-        };
+
+    if encoded_start_key.len() < table_codec::TABLE_PREFIX_KEY_LEN ||
+        encoded_end_key.len() < table_codec::TABLE_PREFIX_KEY_LEN
+    {
+        // For now, let us scan region if encoded_start_key or encoded_end_key
+        // is less than TABLE_PREFIX_KEY_LEN.
+        return false;
+    }
 
     // Table data starts with `TABLE_PREFIX`.
-    // Find out the actually range of this region by comparing with `TABLE_PREFIX`.
+    // Find out the actual range of this region by comparing with `TABLE_PREFIX`.
     match (
-        encoded_start_table_prefix[..table_codec::TABLE_PREFIX_LEN].cmp(table_codec::TABLE_PREFIX),
-        encoded_end_table_prefix[..table_codec::TABLE_PREFIX_LEN].cmp(table_codec::TABLE_PREFIX),
+        encoded_start_key[..table_codec::TABLE_PREFIX_LEN].cmp(table_codec::TABLE_PREFIX),
+        encoded_end_key[..table_codec::TABLE_PREFIX_LEN].cmp(table_codec::TABLE_PREFIX),
     ) {
         // The range does not cover table data.
         (Ordering::Less, Ordering::Less) | (Ordering::Greater, Ordering::Greater) => true,
@@ -114,28 +109,31 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
         // The later part contains table data.
         (Ordering::Less, Ordering::Equal) => {
             // It starts from non-table area to table area,
-            // `encoded_end_table_prefix` can be a split key, save it in context.
-            status.last_encoded_table_prefix = Some(encoded_end_table_prefix.to_vec());
+            // try to extract a split key from `encoded_end_key`, and save it in status.
+            status.last_encoded_table_prefix =
+                extract_encoded_table_prefix(encoded_end_key).map(|k| k.to_vec());
             false
         }
         // Region is in table area.
         (Ordering::Equal, Ordering::Equal) => {
-            if encoded_start_table_prefix == encoded_end_table_prefix {
+            if is_same_table(encoded_start_key, encoded_end_key) {
                 // Same table.
                 true
             } else {
-                // Different tables, choose `encoded_end_table_prefix` as a split key.
+                // Different tables.
                 // Note that table id does not grow by 1, so have to use
-                // `encoded_end_table_prefix`.
+                // `encoded_end_key` to extract a table prefix.
                 // See more: https://github.com/pingcap/tidb/issues/4727
-                status.last_encoded_table_prefix = Some(encoded_end_table_prefix.to_vec());
+                status.last_encoded_table_prefix =
+                    extract_encoded_table_prefix(encoded_end_key).map(|k| k.to_vec());
                 false
             }
         }
         // The region starts from tabel area to non-table area.
         (Ordering::Equal, Ordering::Greater) => {
             // As the comment above, outside needs scan for finding a split key.
-            status.first_encoded_table_prefix = encoded_start_table_prefix.to_vec();
+            status.first_encoded_table_prefix =
+                extract_encoded_table_prefix(encoded_start_key).map(|k| k.to_vec());
             false
         }
         _ => panic!(
@@ -147,42 +145,37 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
 }
 
 /// Feed keys in order to find the split key.
-fn check_key(status: &mut TableStatus, key: &[u8]) -> Option<Vec<u8>> {
+/// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
+/// it returns the encoded table prefix of `current_data_key`.
+fn check_key(status: &mut TableStatus, current_data_key: &[u8]) -> Option<Vec<u8>> {
     if let Some(last_encoded_table_prefix) = status.last_encoded_table_prefix.take() {
         // `before_check` found a split key.
-        Some(keys::data_key(&last_encoded_table_prefix))
-    } else if let Some(current_encoded_table_prefix) =
-        cross_table(&status.first_encoded_table_prefix, key)
-    {
-        Some(keys::data_key(&current_encoded_table_prefix))
-    } else {
-        None
+        return Some(keys::data_key(&last_encoded_table_prefix));
     }
-}
 
-/// If `current_data_key` does not belong to `encoded_table_prefix`.
-/// it returns the `current_data_key`'s encoded table prefix.
-fn cross_table(encoded_table_prefix: &[u8], current_data_key: &[u8]) -> Option<Vec<u8>> {
     if !keys::validate_data_key(current_data_key) {
         return None;
     }
     let current_encoded_key = keys::origin_key(current_data_key);
-    if !current_encoded_key.starts_with(table_codec::TABLE_PREFIX) {
-        return None;
-    }
-
-    let current_encoded_table_prefix =
-        if let Some(key) = extract_encoded_table_prefix(current_encoded_key) {
-            key
+    let current_table_prefix = extract_encoded_table_prefix(current_encoded_key);
+    if status.first_encoded_table_prefix.is_some() && current_table_prefix.is_some() {
+        if current_table_prefix ==
+            status
+                .first_encoded_table_prefix
+                .as_ref()
+                .map(|k| k.as_slice())
+        {
+            // Same table
+            None
         } else {
-            return None;
-        };
-
-    if encoded_table_prefix != current_encoded_table_prefix {
-        Some(current_encoded_table_prefix.to_vec())
+            current_table_prefix
+        }
+    } else if status.first_encoded_table_prefix.is_none() && current_table_prefix.is_some() {
+        // Now we meet the very first table key of this region.
+        current_table_prefix
     } else {
         None
-    }
+    }.map(keys::data_key)
 }
 
 #[allow(collapsible_if)]
@@ -224,7 +217,9 @@ fn bound_keys(db: &DB, region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
 const ENCODED_TABLE_TABLE_PREFIX: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
 
 fn extract_encoded_table_prefix(encode_key: &[u8]) -> Option<&[u8]> {
-    if encode_key.len() >= ENCODED_TABLE_TABLE_PREFIX {
+    if encode_key.len() >= ENCODED_TABLE_TABLE_PREFIX &&
+        encode_key.starts_with(table_codec::TABLE_PREFIX)
+    {
         Some(&encode_key[..ENCODED_TABLE_TABLE_PREFIX])
     } else {
         None
@@ -271,36 +266,6 @@ mod test {
         buf.write_all(TABLE_PREFIX).unwrap();
         buf.encode_i64(table_id).unwrap();
         buf
-    }
-
-    #[test]
-    fn test_cross_table() {
-        let encoded_t1 = Key::from_raw(&gen_table_prefix(1));
-        let encoded_t2 = Key::from_raw(&gen_table_prefix(2));
-        let data_t2 = keys::data_key(encoded_t2.encoded());
-
-        assert_eq!(
-            cross_table(
-                extract_encoded_table_prefix(encoded_t1.encoded()).unwrap(),
-                &data_t2
-            ).unwrap()
-                .as_slice(),
-            extract_encoded_table_prefix(encoded_t2.encoded()).unwrap()
-        );
-        assert_eq!(
-            cross_table(
-                extract_encoded_table_prefix(encoded_t2.encoded()).unwrap(),
-                &data_t2
-            ),
-            None
-        );
-        assert_eq!(
-            cross_table(
-                extract_encoded_table_prefix(encoded_t2.encoded()).unwrap(),
-                b"bar"
-            ),
-            None
-        );
     }
 
     #[test]
