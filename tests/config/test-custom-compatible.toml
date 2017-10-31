@@ -73,7 +73,6 @@ region-max-size = "0KB"
 region-split-size = "0KB"
 
 [coprocessor]
-split-region-on-table = true
 region-max-size = "12MB"
 region-split-size = "12MB"
 

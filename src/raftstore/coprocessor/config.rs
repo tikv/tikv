@@ -18,10 +18,6 @@ use super::Result;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    /// When it is true, it will try to split a region with table prefix if
-    /// that region crosses tables.
-    pub split_region_on_table: bool,
-
     /// When region [a, b) size meets region_max_size, it will be split
     /// into two region into [a, c), [c, b). And the size of [a, c) will
     /// be region_split_size (or a little bit smaller).
@@ -36,7 +32,6 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(SPLIT_SIZE_MB);
         Config {
-            split_region_on_table: false,
             region_split_size: split_size,
             region_max_size: split_size / 2 * 3,
         }

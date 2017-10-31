@@ -28,8 +28,8 @@ pub use self::config::Config;
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
-pub use self::split_check::{SizeCheckObserver, Status as SplitCheckStatus, TableCheckObserver,
-                            SIZE_CHECK_OBSERVER_PRIORITY, TABLE_CHECK_OBSERVER_PRIORITY};
+pub use self::split_check::{SizeCheckObserver, Status as SplitCheckStatus,
+                            SIZE_CHECK_OBSERVER_PRIORITY};
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.

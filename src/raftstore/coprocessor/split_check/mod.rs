@@ -11,29 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod table;
 mod size;
 
 use self::size::SizeStatus;
-use self::table::TableStatus;
 
 pub use self::size::SizeCheckObserver;
 pub const SIZE_CHECK_OBSERVER_PRIORITY: u32 = 200;
-pub use self::table::TableCheckObserver;
-// TableCheckObserver has higher priority than TableCheckObserver.
-// Note that higher means less.
-pub const TABLE_CHECK_OBSERVER_PRIORITY: u32 = SIZE_CHECK_OBSERVER_PRIORITY - 1;
 
 #[derive(Default)]
 pub struct Status {
-    // For TableCheckObserver
-    table: Option<TableStatus>,
     // For SizeCheckObserver
     size: Option<SizeStatus>,
 }
 
 impl Status {
     pub fn skip(&self) -> bool {
-        self.table.is_none() && self.size.is_none()
+        self.size.is_none()
     }
 }
