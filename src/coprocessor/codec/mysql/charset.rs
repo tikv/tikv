@@ -37,5 +37,5 @@ const UTF8_CHARSETS: &'static [&'static str] = &[CHARSET_UTF8, CHARSET_UTF8MB4, 
 
 #[inline]
 pub fn compatible_with_utf8(chrst: &str) -> bool {
-    chrst == CHARSET_BIN || UTF8_CHARSETS.contains(&chrst)
+    UTF8_CHARSETS.contains(&chrst)
 }

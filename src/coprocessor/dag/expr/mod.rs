@@ -217,7 +217,7 @@ impl Expression {
             };
             return s.map(Some);
         }
-        Err(box_err!("unsupported codec"))
+        Err(box_err!("unsupported codec: {}", chrst))
     }
 
     fn eval_time<'a, 'b: 'a>(

@@ -213,11 +213,10 @@ impl FnCall {
     pub fn like(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = try_opt!(self.children[0].eval_string(ctx, row));
         let pattern = try_opt!(self.children[1].eval_string(ctx, row));
-        let escape = {
-            let c = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
-            char::from_u32(c)
-                .ok_or::<Error>(box_err!("invalid escape char: {}", c))?
-        };
+        let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
+        if char::from_u32(escape).is_none() {
+            return Err(box_err!("invalid escape char: {}", escape));
+        }
         Ok(Some(like(&target, &pattern, escape, 0)? as i64))
     }
 }
@@ -315,37 +314,34 @@ where
     ret_when_not_matched
 }
 
-#[inline]
-fn peek_as_char(it: &mut Iter<u8>) -> Option<char> {
-    it.next().map(|&c| c as char)
-}
-
 // Do match until '%' is found.
 #[inline]
-fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: char) -> Option<bool> {
+fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: u32) -> Option<bool> {
     loop {
-        match peek_as_char(pcs) {
-            None => return Some(peek_as_char(tcs).is_none()),
-            Some('%') => return None,
-            Some(c) => {
-                let (npc, escape) = if c == escape {
-                    peek_as_char(pcs).map_or((c, false), |c| (c, true))
+        if let Some(&c) = pcs.next() {
+            if c as char == '%' {
+                return None;
+            } else {
+                let (npc, escape) = if c as u32 == escape {
+                    pcs.next().map_or((c as u32, false), |&c| (c as u32, true))
                 } else {
-                    (c, false)
+                    (c as u32, false)
                 };
-                let nsc = match peek_as_char(tcs) {
+                let nsc = match tcs.next() {
                     None => return Some(false),
-                    Some(c) => c,
+                    Some(&c) => c as u32,
                 };
-                if nsc != npc && (npc != '_' || escape) {
+                if nsc != npc && (npc != '_' as u32 || escape) {
                     return Some(false);
                 }
             }
+        } else {
+            return Some(tcs.next().is_none());
         }
     }
 }
 
-fn like(target: &[u8], pattern: &[u8], escape: char, recurse_level: usize) -> Result<bool> {
+fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Result<bool> {
     let mut tcs = target.iter();
     let mut pcs = pattern.iter();
     loop {
@@ -353,20 +349,22 @@ fn like(target: &[u8], pattern: &[u8], escape: char, recurse_level: usize) -> Re
             return Ok(res);
         }
         let next_char = loop {
-            match peek_as_char(&mut pcs) {
-                Some('%') => {}
-                Some('_') => if peek_as_char(&mut tcs).is_none() {
-                    return Ok(false);
-                },
-                // So the pattern should be some thing like 'xxx%'
-                None => return Ok(true),
-                Some(c) => {
-                    break if c == escape {
-                        peek_as_char(&mut pcs).unwrap_or(escape)
-                    } else {
-                        c
-                    };
+            if let Some(&c) = pcs.next() {
+                match c as char {
+                    '%' => {}
+                    '_' => if tcs.next().is_none() {
+                        return Ok(false);
+                    },
+                    _ => {
+                        break if c as u32 == escape {
+                            pcs.next().map_or(escape, |&c| c as u32)
+                        } else {
+                            c as u32
+                        };
+                    }
                 }
+            } else {
+                return Ok(true);
             }
         };
         if recurse_level >= MAX_RECURSE_LEVEL {
@@ -378,9 +376,9 @@ fn like(target: &[u8], pattern: &[u8], escape: char, recurse_level: usize) -> Re
         }
         // Pattern must be something like "%xxx".
         loop {
-            let s = match peek_as_char(&mut tcs) {
+            let s = match tcs.next() {
                 None => return Ok(false),
-                Some(s) => s,
+                Some(&s) => s as u32,
             };
             if s == next_char && like(tcs.as_slice(), pcs.as_slice(), escape, recurse_level + 1)? {
                 return Ok(true);
