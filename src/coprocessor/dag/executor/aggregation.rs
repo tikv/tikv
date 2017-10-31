@@ -73,7 +73,7 @@ impl AggrFunc {
 pub struct AggregationExecutor {
     group_by: Vec<Expression>,
     aggr_func: Vec<AggrFuncExpr>,
-    group_key_aggrs: OrderMap<Arc<Vec<u8>>, Vec<Box<AggrFunc>>>,
+    group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<AggrFunc>>>,
     cursor: usize,
     executed: bool,
     ctx: Arc<EvalContext>,
@@ -134,8 +134,8 @@ impl AggregationExecutor {
                 &self.related_cols_offset,
                 row.handle,
             )?;
-            let group_key = Arc::new(self.get_group_key(&cols)?);
-            match self.group_key_aggrs.entry(group_key.clone()) {
+            let group_key = self.get_group_key(&cols)?;
+            match self.group_key_aggrs.entry(group_key) {
                 OrderMapEntry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
                     for expr in &self.aggr_func {
