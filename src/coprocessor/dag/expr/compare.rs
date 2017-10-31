@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{char, str, i64};
+use std::{str, i64};
 use std::slice::Iter;
 use std::cmp::Ordering;
 use std::borrow::Cow;
@@ -214,9 +214,6 @@ impl FnCall {
         let target = try_opt!(self.children[0].eval_string(ctx, row));
         let pattern = try_opt!(self.children[1].eval_string(ctx, row));
         let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
-        if char::from_u32(escape).is_none() {
-            return Err(box_err!("invalid escape char: {}", escape));
-        }
         Ok(Some(like(&target, &pattern, escape, 0)? as i64))
     }
 }
@@ -318,10 +315,10 @@ where
 #[inline]
 fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: u32) -> Option<bool> {
     loop {
-        if let Some(&c) = pcs.next() {
-            if c as char == '%' {
-                return None;
-            } else {
+        match pcs.next().cloned() {
+            None => return Some(tcs.next().is_none()),
+            Some(b'%') => return None,
+            Some(c) => {
                 let (npc, escape) = if c as u32 == escape {
                     pcs.next().map_or((c as u32, false), |&c| (c as u32, true))
                 } else {
@@ -331,12 +328,10 @@ fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: u32) -> Option<b
                     None => return Some(false),
                     Some(&c) => c as u32,
                 };
-                if nsc != npc && (npc != '_' as u32 || escape) {
+                if nsc != npc && (npc != b'_' as u32 || escape) {
                     return Some(false);
                 }
             }
-        } else {
-            return Some(tcs.next().is_none());
         }
     }
 }
@@ -349,22 +344,20 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
             return Ok(res);
         }
         let next_char = loop {
-            if let Some(&c) = pcs.next() {
-                match c as char {
-                    '%' => {}
-                    '_' => if tcs.next().is_none() {
-                        return Ok(false);
-                    },
-                    _ => {
-                        break if c as u32 == escape {
-                            pcs.next().map_or(escape, |&c| c as u32)
-                        } else {
-                            c as u32
-                        };
-                    }
+            match pcs.next().cloned() {
+                Some(b'%') => {}
+                Some(b'_') => if tcs.next().is_none() {
+                    return Ok(false);
+                },
+                // So the pattern should be some thing like 'xxx%'
+                None => return Ok(true),
+                Some(c) => {
+                    break if c as u32 == escape {
+                        pcs.next().map_or(escape, |&c| c as u32)
+                    } else {
+                        c as u32
+                    };
                 }
-            } else {
-                return Ok(true);
             }
         };
         if recurse_level >= MAX_RECURSE_LEVEL {
