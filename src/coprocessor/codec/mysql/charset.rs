@@ -33,4 +33,9 @@ pub const CHARSET_LATIN1: &'static str = "latin1";
 pub const COLLATION_LATIN1: &'static str = "latin1_bin";
 
 // All utf8 charsets.
-pub const UTF8_CHARSETS: &'static [&'static str] = &[CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_ASCII];
+const UTF8_CHARSETS: &'static [&'static str] = &[CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_ASCII];
+
+#[inline]
+pub fn compatible_with_utf8(chrst: &str) -> bool {
+    chrst == CHARSET_BIN || UTF8_CHARSETS.contains(&chrst)
+}

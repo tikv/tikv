@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::{char, str, i64};
-use std::str::Chars;
+use std::slice::Iter;
 use std::cmp::Ordering;
 use std::borrow::Cow;
 
@@ -206,10 +206,13 @@ impl FnCall {
         do_in(self, |v| v.eval_json(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
-    #[inline]
+    /// NOTE: LIKE compare target with pattern as bytes, even if they have different
+    /// charsets. This behaviour is for keeping compatible with TiDB. But MySQL
+    /// compare them as bytes only if any charset of pattern or target is binary,
+    /// otherwise MySQL will compare decoded string.
     pub fn like(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        let target = try_opt!(self.children[0].eval_string(ctx, row));
+        let pattern = try_opt!(self.children[1].eval_string(ctx, row));
         let escape = {
             let c = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
             char::from_u32(c)
@@ -312,20 +315,25 @@ where
     ret_when_not_matched
 }
 
+#[inline]
+fn peek_as_char(it: &mut Iter<u8>) -> Option<char> {
+    it.next().map(|&c| c as char)
+}
+
 // Do match until '%' is found.
 #[inline]
-fn partial_like<'a>(tcs: &mut Chars<'a>, pcs: &mut Chars<'a>, escape: char) -> Option<bool> {
+fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: char) -> Option<bool> {
     loop {
-        match pcs.next() {
-            None => return Some(tcs.next().is_none()),
+        match peek_as_char(pcs) {
+            None => return Some(peek_as_char(tcs).is_none()),
             Some('%') => return None,
             Some(c) => {
                 let (npc, escape) = if c == escape {
-                    pcs.next().map_or((c, false), |c| (c, true))
+                    peek_as_char(pcs).map_or((c, false), |c| (c, true))
                 } else {
                     (c, false)
                 };
-                let nsc = match tcs.next() {
+                let nsc = match peek_as_char(tcs) {
                     None => return Some(false),
                     Some(c) => c,
                 };
@@ -337,24 +345,24 @@ fn partial_like<'a>(tcs: &mut Chars<'a>, pcs: &mut Chars<'a>, escape: char) -> O
     }
 }
 
-fn like(target: &str, pattern: &str, escape: char, recurse_level: usize) -> Result<bool> {
-    let mut tcs = target.chars();
-    let mut pcs = pattern.chars();
+fn like(target: &[u8], pattern: &[u8], escape: char, recurse_level: usize) -> Result<bool> {
+    let mut tcs = target.iter();
+    let mut pcs = pattern.iter();
     loop {
         if let Some(res) = partial_like(&mut tcs, &mut pcs, escape) {
             return Ok(res);
         }
         let next_char = loop {
-            match pcs.next() {
+            match peek_as_char(&mut pcs) {
                 Some('%') => {}
-                Some('_') => if tcs.next().is_none() {
+                Some('_') => if peek_as_char(&mut tcs).is_none() {
                     return Ok(false);
                 },
                 // So the pattern should be some thing like 'xxx%'
                 None => return Ok(true),
                 Some(c) => {
                     break if c == escape {
-                        pcs.next().unwrap_or(escape)
+                        peek_as_char(&mut pcs).unwrap_or(escape)
                     } else {
                         c
                     };
@@ -370,11 +378,11 @@ fn like(target: &str, pattern: &str, escape: char, recurse_level: usize) -> Resu
         }
         // Pattern must be something like "%xxx".
         loop {
-            let s = match tcs.next() {
+            let s = match peek_as_char(&mut tcs) {
                 None => return Ok(false),
                 Some(s) => s,
             };
-            if s == next_char && like(tcs.as_str(), pcs.as_str(), escape, recurse_level + 1)? {
+            if s == next_char && like(tcs.as_slice(), pcs.as_slice(), escape, recurse_level + 1)? {
                 return Ok(true);
             }
         }
