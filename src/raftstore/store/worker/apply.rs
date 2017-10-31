@@ -1189,7 +1189,7 @@ impl ApplyDelegate {
     }
 
     fn handle_ingest_sst(&mut self, req: &Request) -> Result<Response> {
-        let mut cfname = None;
+        let mut cf_name = None;
         let ingest = req.get_ingest_sst();
         let region_id = self.region.get_id();
         let region_epoch = self.region.get_region_epoch();
@@ -1204,14 +1204,14 @@ impl ApplyDelegate {
                 let new_regions = vec![self.region.clone()];
                 return Err(Error::StaleEpoch(error, new_regions));
             }
-            match cfname {
+            match cf_name {
                 Some(cf) => if h.get_cf_name() != cf {
                     return Err(box_err!(
                         "can not ingest files of different column families"
                     ));
                 },
                 None => {
-                    cfname = Some(h.get_cf_name());
+                    cf_name = Some(h.get_cf_name());
                 }
             }
             match self.upload_dir.join_handle(h) {
@@ -1221,12 +1221,14 @@ impl ApplyDelegate {
                 }
             }
 
-            // TODO: Check SST file range
+            // TODO: Check SST file range to make sure it:
+            // 1. Is inside the region range
+            // 2. Is not overlapped with others (RocksDB doesn't support)
         }
 
         let resp = Response::new();
-        let cf = match cfname {
-            Some(cfname) => rocksdb::get_cf_handle(&self.engine, cfname)?,
+        let cf = match cf_name {
+            Some(cf_name) => rocksdb::get_cf_handle(&self.engine, cf_name)?,
             None => return Ok(resp),
         };
 
@@ -1236,7 +1238,16 @@ impl ApplyDelegate {
             .iter()
             .map(|path| path.to_str().unwrap())
             .collect();
-        self.engine.ingest_external_file_cf(cf, &opt, &files)?;
+        self.engine
+            .ingest_external_file_cf(cf, &opt, &files)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to ingest sst files {:?}: {:?}",
+                    self.tag,
+                    files,
+                    e
+                );
+            });
 
         Ok(resp)
     }
