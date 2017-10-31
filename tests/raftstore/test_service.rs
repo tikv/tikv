@@ -875,7 +875,7 @@ fn test_ingest_sst() {
         let resp = kv.raw_get(m).unwrap();
         assert!(resp.get_error().is_empty());
         assert!(!resp.has_region_error());
-        assert!(resp.get_value().cmp(&v) == Ordering::Equal);
+        assert_eq!(resp.get_value().cmp(&v), Ordering::Equal);
     }
 }
 

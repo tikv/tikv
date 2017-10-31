@@ -118,6 +118,7 @@ where
         }
     }
 
+    #[allow(too_many_arguments)]
     pub fn start<T>(
         &mut self,
         event_loop: EventLoop<Store<T, C>>,

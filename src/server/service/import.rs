@@ -152,9 +152,9 @@ fn make_cb<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot::Recei
 }
 
 fn extract_error<T>(res: &storage::Result<T>) -> Option<errorpb::Error> {
-    super::kv::extract_region_error(res).or(match res {
-        &Ok(_) => None,
-        &Err(ref e) => {
+    super::kv::extract_region_error(res).or(match *res {
+        Ok(_) => None,
+        Err(ref e) => {
             let mut err = errorpb::Error::new();
             err.set_message(format!("{:?}", e));
             Some(err)
