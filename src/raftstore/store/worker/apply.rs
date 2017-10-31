@@ -1220,6 +1220,8 @@ impl ApplyDelegate {
                     return Err(box_err!("invalid ingest handle {:?}: {:?}", h, e));
                 }
             }
+
+            // TODO: Check SST file range
         }
 
         let resp = Response::new();
