@@ -460,10 +460,10 @@ fn main() {
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
+    config.compatible_adjust();
     if let Err(e) = config.validate() {
         fatal!("invalid configuration: {:?}", e);
     }
-    config.compatible_adjust();
 
     init_log(&config);
 

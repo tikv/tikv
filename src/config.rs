@@ -723,15 +723,17 @@ impl TiKvConfig {
                 self.raft_store.region_max_size
             );
             self.coprocessor.region_max_size = self.raft_store.region_max_size;
+            self.raft_store.region_max_size = default_raft_store.region_max_size;
         }
         if self.raft_store.region_split_size != default_raft_store.region_split_size &&
             self.coprocessor.region_split_size == default_coprocessor.region_split_size
         {
             warn!(
-                "override coprocessor.region-split-size with raftstore.region-max-size, {:?}",
+                "override coprocessor.region-split-size with raftstore.region-split-size, {:?}",
                 self.raft_store.region_split_size
             );
             self.coprocessor.region_split_size = self.raft_store.region_split_size;
+            self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
     }
 }
