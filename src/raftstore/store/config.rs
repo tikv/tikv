@@ -202,11 +202,11 @@ impl Config {
 
         // Compatibility check.
         if self.region_max_size.0 != 0 {
-            warn!("region-max-size has been moved to coprocessor");
+            warn!("raftstore.region-max-size has been moved to coprocessor");
         }
 
         if self.region_split_size.0 != 0 {
-            warn!("region-split-size has been moved to coprocessor",);
+            warn!("raftstore.region-split-size has been moved to coprocessor",);
         }
 
         Ok(())

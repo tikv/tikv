@@ -463,6 +463,7 @@ fn main() {
     if let Err(e) = config.validate() {
         fatal!("invalid configuration: {:?}", e);
     }
+    config.compatible_adjust();
 
     init_log(&config);
 
