@@ -71,7 +71,7 @@ use tikv::raftstore::store::{self, Engines, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
-use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERVAL};
+use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -238,7 +238,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     let mut metrics_flusher = MetricsFlusher::new(
         engines.clone(),
-        Duration::from_millis(DEFAULT_FLUSER_INTERVAL),
+        Duration::from_millis(DEFAULT_FLUSHER_INTERVAL),
     );
 
     // Start metrics flusher
