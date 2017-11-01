@@ -715,24 +715,32 @@ impl TiKvConfig {
     pub fn compatible_adjust(&mut self) {
         let default_raft_store = RaftstoreConfig::default();
         let default_coprocessor = CopConfig::default();
-        if self.raft_store.region_max_size != default_raft_store.region_max_size &&
-            self.coprocessor.region_max_size == default_coprocessor.region_max_size
-        {
+        if self.raft_store.region_max_size != default_raft_store.region_max_size {
             warn!(
-                "override coprocessor.region-max-size with raftstore.region-max-size, {:?}",
-                self.raft_store.region_max_size
+                "deprecated configuration,\
+                 raftstore.region-max-size has been moved to coprocessor"
             );
-            self.coprocessor.region_max_size = self.raft_store.region_max_size;
+            if self.coprocessor.region_max_size == default_coprocessor.region_max_size {
+                warn!(
+                    "override coprocessor.region-max-size with raftstore.region-max-size, {:?}",
+                    self.raft_store.region_max_size
+                );
+                self.coprocessor.region_max_size = self.raft_store.region_max_size;
+            }
             self.raft_store.region_max_size = default_raft_store.region_max_size;
         }
-        if self.raft_store.region_split_size != default_raft_store.region_split_size &&
-            self.coprocessor.region_split_size == default_coprocessor.region_split_size
-        {
+        if self.raft_store.region_split_size != default_raft_store.region_split_size {
             warn!(
-                "override coprocessor.region-split-size with raftstore.region-split-size, {:?}",
-                self.raft_store.region_split_size
+                "deprecated configuration,\
+                 raftstore.region-split-size has been moved to coprocessor",
             );
-            self.coprocessor.region_split_size = self.raft_store.region_split_size;
+            if self.coprocessor.region_split_size == default_coprocessor.region_split_size {
+                warn!(
+                    "override coprocessor.region-split-size with raftstore.region-split-size, {:?}",
+                    self.raft_store.region_split_size
+                );
+                self.coprocessor.region_split_size = self.raft_store.region_split_size;
+            }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
     }
