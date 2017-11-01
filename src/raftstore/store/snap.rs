@@ -24,7 +24,7 @@ use std::time;
 use std::thread;
 
 use protobuf::Message;
-use rocksdb::{CFHandle, Writable, WriteBatch, DB, RateLimiter};
+use rocksdb::{CFHandle, Writable, WriteBatch, DB};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -171,14 +171,13 @@ pub trait Snapshot: Read + Write + Send {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: &RateLimiter,
     ) -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
     fn delete(&self);
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
-    fn save(&mut self, limiter: &RateLimiter) -> io::Result<()>;
+    fn save(&mut self) -> io::Result<()>;
     fn apply(&mut self, options: ApplyOptions) -> Result<()>;
 }
 
@@ -671,7 +670,6 @@ impl Snap {
         region: &Region,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: &RateLimiter,
     ) -> RaftStoreResult<()> {
         if self.exists() {
             match self.validate() {
@@ -713,9 +711,7 @@ impl Snap {
                     false,
                     &mut |key, value| {
                         key_count += 1;
-                        let l = key.len() + value.len();
-                        size += l;
-                        limiter.request(l as i64);
+                        size += key.len() + value.len();
                         self.add_kv(key, value)?;
                         Ok(true)
                     },
@@ -815,10 +811,9 @@ impl Snapshot for Snap {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: &RateLimiter,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build(snap, region, stat, deleter, limiter)?;
+        self.do_build(snap, region, stat, deleter)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -873,7 +868,7 @@ impl Snapshot for Snap {
         Ok(self.cf_files.iter().fold(0, |acc, x| acc + x.size))
     }
 
-    fn save(&mut self, limiter: &RateLimiter) -> io::Result<()> {
+    fn save(&mut self) -> io::Result<()> {
         debug!("saving to {}", self.path());
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
@@ -884,7 +879,6 @@ impl Snapshot for Snap {
             // Check each cf file has been fully written, and the checksum matches.
             {
                 let mut file = cf_file.file.take().unwrap();
-                limiter.request(cf_file.size as i64);
                 file.flush()?;
             }
             if cf_file.written_size != cf_file.size {
@@ -1088,7 +1082,6 @@ pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
     ch: Option<SendCh<Msg>>,
-    limiter: Arc<RateLimiter>,
 }
 
 impl SnapManager {
@@ -1100,10 +1093,6 @@ impl SnapManager {
                 snap_size: Arc::new(RwLock::new(0)),
             })),
             ch: ch,
-            limiter: Arc::new(RateLimiter::new(
-                10 * 1024 * 1024, // bytes_per_sec
-                100 * 1000,       // refill_period_us
-                10)),             // fairness
         }
     }
 
@@ -1326,10 +1315,6 @@ impl SnapManager {
             sending_count: sending_cnt,
             receiving_count: receiving_cnt,
         }
-    }
-
-    pub fn get_limiter(&self) -> &RateLimiter {
-        &self.limiter
     }
 }
 

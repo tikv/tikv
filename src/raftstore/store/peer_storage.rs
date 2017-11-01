@@ -1295,7 +1295,6 @@ pub fn do_snapshot(
         &mut snap_data,
         &mut stat,
         Box::new(mgr.clone()),
-        mgr.get_limiter(),
     )?;
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));
