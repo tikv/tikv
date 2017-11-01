@@ -460,11 +460,9 @@ fn main() {
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {:?}", e);
-    }
-
+    // Sets the global logger ASAP.
+    // It is okay to use the config w/o `validata()`,
+    // because `init_log()` handles various conditions.
     init_log(&config);
 
     // Print version information.
@@ -472,6 +470,10 @@ fn main() {
 
     panic_hook::set_exit_hook();
 
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {:?}", e);
+    }
     info!(
         "using config: {}",
         serde_json::to_string_pretty(&config).unwrap()

@@ -717,7 +717,7 @@ impl TiKvConfig {
         let default_coprocessor = CopConfig::default();
         if self.raft_store.region_max_size != default_raft_store.region_max_size {
             warn!(
-                "deprecated configuration,\
+                "deprecated configuration, \
                  raftstore.region-max-size has been moved to coprocessor"
             );
             if self.coprocessor.region_max_size == default_coprocessor.region_max_size {
@@ -731,7 +731,7 @@ impl TiKvConfig {
         }
         if self.raft_store.region_split_size != default_raft_store.region_split_size {
             warn!(
-                "deprecated configuration,\
+                "deprecated configuration, \
                  raftstore.region-split-size has been moved to coprocessor",
             );
             if self.coprocessor.region_split_size == default_coprocessor.region_split_size {
