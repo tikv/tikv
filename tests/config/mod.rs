@@ -63,6 +63,7 @@ fn test_serde_custom_tikv_config() {
         grpc_stream_initial_window_size: ReadableSize(12_345),
         end_point_concurrency: 12,
         end_point_max_tasks: 12,
+        end_point_stack_size: ReadableSize::mb(12),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -329,7 +330,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_messages_per_tick: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
-        scheduler_too_busy_threshold: 123,
+        scheduler_pending_write_threshold: ReadableSize::kb(123),
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");

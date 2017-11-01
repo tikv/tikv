@@ -15,7 +15,7 @@ use std::error::Error;
 
 use sys_info;
 
-use util::config;
+use util::config::{self, ReadableSize};
 
 pub const DEFAULT_DATA_DIR: &'static str = "";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &'static str = "db";
@@ -24,10 +24,11 @@ const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 102400;
 
-// According to "Little's law", assuming you can write 100_000 KVs
-// per second, and it takes about 100ms to process the write requests
-// on average, hence using the 10_000 as the default value here.
-const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 10_000;
+// According to "Little's law", assuming you can write 100MB per
+// second, and it takes about 100ms to process the write requests
+// on average, in that situation the writing bytes estimated 10MB,
+// here we use 100MB as default value for tolerate 1s latency.
+const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -39,7 +40,7 @@ pub struct Config {
     pub scheduler_messages_per_tick: usize,
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
-    pub scheduler_too_busy_threshold: usize,
+    pub scheduler_pending_write_threshold: ReadableSize,
 }
 
 impl Default for Config {
@@ -52,7 +53,7 @@ impl Default for Config {
             scheduler_messages_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
-            scheduler_too_busy_threshold: DEFAULT_SCHED_TOO_BUSY_THRESHOLD,
+            scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
         }
     }
 }
