@@ -23,7 +23,7 @@ use protobuf::RepeatedField;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftTruncatedState};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           RaftCmdRequest, RaftCmdResponse, Request, Response};
 
@@ -38,7 +38,7 @@ use raftstore::store::{cmd_resp, keys, util, Store};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
-                                     write_peer_state};
+                                     write_merge_state, write_peer_state};
 use raftstore::store::peer::{check_epoch, parse_data_at, Peer};
 use raftstore::store::metrics::*;
 
@@ -156,6 +156,7 @@ pub enum ExecResult {
         right: Region,
         right_derive: bool,
     },
+    PreMerge { region: Region, state: MergeState },
     ComputeHash {
         region: Region,
         index: u64,
@@ -597,6 +598,9 @@ impl ApplyDelegate {
                     self.metrics.size_diff_hint = 0;
                     self.metrics.delete_keys_hint = 0;
                 }
+                ExecResult::PreMerge { ref region, .. } => {
+                    self.region = region.clone();
+                }
             }
         }
 
@@ -703,8 +707,10 @@ impl ApplyDelegate {
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
+            // TODO: is it backward compatible to add new cmd_type?
+            AdminCmdType::PreMerge => self.exec_pre_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
-            AdminCmdType::PreMerge | AdminCmdType::Merge => unimplemented!(),
+            AdminCmdType::Merge => unimplemented!(),
         }?;
         response.set_cmd_type(cmd_type);
 
@@ -945,6 +951,67 @@ impl ApplyDelegate {
                 }),
             ))
         }
+    }
+
+    fn exec_pre_merge(
+        &mut self,
+        ctx: &ExecContext,
+        req: &AdminRequest,
+    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["pre_merge", "all"])
+            .inc();
+
+        let pre_merge = req.get_pre_merge();
+        let index = pre_merge.get_min_index();
+        let first_index = peer_storage::first_index(&ctx.apply_state);
+        if index < first_index {
+            warn!(
+                "{} first index {} < min_index {}, skip pre merge.",
+                self.tag,
+                first_index,
+                index
+            );
+            return Err(box_err!("log gap not covered."));
+        }
+        let mut region = self.region.clone();
+        let region_version = region.get_region_epoch().get_version() + 1;
+        region.mut_region_epoch().set_version(region_version);
+        // In theory conf version should not be increased when executing pre-merge.
+        // However, we don't want to do conf change after pre-merge is committed.
+        // This can also be done by iterating all proposal to find if pre-merge is
+        // proposed before proposing conf change, but it make things complicated.
+        // Another way is make conf change also check region version, but this is not
+        // backward compatible.
+        let conf_version = region.get_region_epoch().get_conf_ver() + 1;
+        region.mut_region_epoch().set_conf_ver(conf_version);
+        let mut merging_state = MergeState::new();
+        merging_state.set_min_index(index);
+        merging_state.set_direction(pre_merge.get_direction());
+        merging_state.set_commit_index(ctx.index);
+        write_merge_state(
+            &self.engine,
+            ctx.wb,
+            &region,
+            PeerState::Merging,
+            merging_state.clone(),
+        ).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to save merging state {:?} for region {:?}: {:?}",
+                self.tag,
+                merging_state,
+                region,
+                e
+            )
+        });
+
+        Ok((
+            AdminResponse::new(),
+            Some(ExecResult::PreMerge {
+                region: region,
+                state: merging_state,
+            }),
+        ))
     }
 
     fn exec_compact_log(

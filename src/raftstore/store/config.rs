@@ -96,6 +96,9 @@ pub struct Config {
     pub right_derive_when_split: bool,
 
     pub allow_remove_leader: bool,
+
+    /// Max log gap allowed to propose merge.
+    pub max_merge_log_gap: u64,
 }
 
 impl Default for Config {
@@ -141,6 +144,7 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             allow_remove_leader: false,
+            max_merge_log_gap: 10,
         }
     }
 }
@@ -202,6 +206,14 @@ impl Config {
             ));
         }
 
+        if self.max_merge_log_gap >= self.raft_log_gc_count_limit {
+            return Err(box_err!(
+                "merge log gap {} should be less than log gc limit {}.",
+                self.max_merge_log_gap,
+                self.raft_log_gc_count_limit
+            ));
+        }
+
         Ok(())
     }
 }
@@ -245,6 +257,11 @@ mod tests {
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(20);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_log_gc_count_limit = 100;
+        cfg.max_merge_log_gap = 110;
         assert!(cfg.validate().is_err());
     }
 }

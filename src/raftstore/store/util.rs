@@ -176,6 +176,22 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
     Ok(size)
 }
 
+pub fn region_on_same_store(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
+    if lhs.get_peers().len() != rhs.get_peers().len() {
+        return false;
+    }
+    for lp in lhs.get_peers() {
+        if rhs.get_peers()
+            .iter()
+            .all(|rp| rp.get_store_id() != lp.get_store_id())
+        {
+            return false;
+        }
+    }
+    // Do we need to switch lhs and rhs then check again?
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::process;
@@ -441,5 +457,28 @@ mod tests {
         // Delete all in ["k2", "k4").
         delete_all_in_range(&db, b"kabcdefg2", b"kabcdefg4").unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
+    }
+
+    #[test]
+    fn test_on_same_store() {
+        let cases = vec![
+            (vec![2, 3, 4], vec![1, 2, 3], false),
+            (vec![2, 3, 1], vec![1, 2, 3], true),
+            (vec![2, 3, 4], vec![1, 2], false),
+            (vec![1, 2, 3], vec![1, 2, 3], true),
+        ];
+
+        for (s1, s2, exp) in cases {
+            let mut r1 = metapb::Region::new();
+            for (store_id, peer_id) in s1.into_iter().zip(0..) {
+                r1.mut_peers().push(new_peer(store_id, peer_id));
+            }
+            let mut r2 = metapb::Region::new();
+            for (store_id, peer_id) in s2.into_iter().zip(5..) {
+                r2.mut_peers().push(new_peer(store_id, peer_id));
+            }
+            let res = super::region_on_same_store(&r1, &r2);
+            assert_eq!(res, exp, "{:?} vs {:?}", r1, r2);
+        }
     }
 }

@@ -27,9 +27,10 @@ use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use time::{self, Timespec};
 
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
-                             RegionLocalState};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
+                             RaftTruncatedState, RegionLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
+use kvproto::metapb::MergeDirection;
 use kvproto::pdpb::StoreStats;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
@@ -1439,6 +1440,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn on_ready_pre_merge(&mut self, _: metapb::Region, _: MergeState) {
+        unimplemented!()
+    }
+
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
         let left_region = left.region();
         let right_region = right.region();
@@ -1511,6 +1516,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     right,
                     right_derive,
                 } => self.on_ready_split_region(region_id, left, right, right_derive),
+                ExecResult::PreMerge { region, state } => {
+                    self.on_ready_pre_merge(region, state);
+                }
                 ExecResult::ComputeHash {
                     region,
                     index,
@@ -1524,6 +1532,59 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
+    }
+
+    fn get_slibing_region(
+        &self,
+        region: &metapb::Region,
+        direction: MergeDirection,
+    ) -> Option<&metapb::Region> {
+        let slibing_region_key = match direction {
+            MergeDirection::Forward => enc_start_key(region),
+            MergeDirection::Backward => enc_end_key(region),
+        };
+        self.region_ranges
+            .get(&slibing_region_key)
+            .map(|region_id| self.region_peers[region_id].region())
+    }
+
+    fn check_merge_proposal(&self, msg: &RaftCmdRequest) -> Result<()> {
+        if !msg.get_admin_request().has_pre_merge() && !msg.get_admin_request().has_merge() {
+            return Ok(());
+        }
+
+        let region_id = msg.get_header().get_region_id();
+        let region = self.region_peers[&region_id].region();
+
+        let slibing_region = if msg.get_admin_request().has_pre_merge() {
+            let direction = msg.get_admin_request().get_pre_merge().get_direction();
+            self.get_slibing_region(region, direction)
+        } else {
+            let region_id = msg.get_admin_request().get_merge().get_source_region_id();
+            self.region_peers.get(&region_id).map(|p| p.region())
+        };
+        let slibing_region = match slibing_region {
+            Some(r) => r,
+            None => {
+                error!("[region {}] slibing doesn't exist, reject merge", region_id);
+                return Err(box_err!("slibing doesn't exist"));
+            }
+        };
+        if !util::region_on_same_store(region, slibing_region) {
+            error!(
+                "[region {}] peers doesn't match {:?} != {:?}, reject merge",
+                region_id,
+                region.get_peers(),
+                slibing_region.get_peers()
+            );
+            return Err(box_err!(
+                "peers doesn't match {:?} != {:?}",
+                region.get_peers(),
+                slibing_region.get_peers()
+            ));
+        }
+
+        Ok(())
     }
 
     fn pre_propose_raft_command(
@@ -1551,6 +1612,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return;
             }
             _ => (),
+        }
+
+        if let Err(e) = self.check_merge_proposal(&msg) {
+            cb(new_error(e));
+            return;
         }
 
         // Note:

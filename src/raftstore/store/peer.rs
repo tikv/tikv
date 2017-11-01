@@ -1374,6 +1374,43 @@ impl Peer {
         true
     }
 
+    fn pre_propose(&self, req: &mut RaftCmdRequest) -> Result<()> {
+        self.coprocessor_host.pre_propose(self.region(), req)?;
+
+        if !req.get_admin_request().has_pre_merge() {
+            return Ok(());
+        }
+
+        let last_index = self.raft_group.raft.raft_log.last_index();
+        let mut min_index = last_index;
+        let status = self.raft_group.status();
+        for pr in status.progress.values() {
+            if pr.matched < min_index {
+                min_index = pr.matched;
+            }
+        }
+        // It's OK that min_index < first_index, it will be filtered out reliably
+        // when applied. Actually we can't ensure min_index >= first_index without
+        // iterating all proposed logs.
+        if min_index == 0 || last_index - min_index > self.cfg.max_merge_log_gap {
+            info!(
+                "{} log gap ({}, {}] is too large.",
+                self.tag,
+                min_index,
+                last_index
+            );
+            return Err(box_err!(
+                "log gap ({}, {}] is too large",
+                min_index,
+                last_index
+            ));
+        }
+        req.mut_admin_request()
+            .mut_pre_merge()
+            .set_min_index(min_index);
+        Ok(())
+    }
+
     fn propose_normal(
         &mut self,
         mut req: RaftCmdRequest,
@@ -1382,7 +1419,7 @@ impl Peer {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        self.coprocessor_host.pre_propose(self.region(), &mut req)?;
+        self.pre_propose(&mut req)?;
         let data = req.write_to_bytes()?;
 
         // TODO: use local histogram metrics
@@ -1510,7 +1547,10 @@ impl Peer {
 
 pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> {
     let (mut check_ver, mut check_conf_ver) = (false, false);
-    if req.has_admin_request() {
+    if !req.has_admin_request() {
+        // for get/set/delete, we don't care conf_version.
+        check_ver = true;
+    } else {
         match req.get_admin_request().get_cmd_type() {
             AdminCmdType::CompactLog |
             AdminCmdType::InvalidAdmin |
@@ -1518,15 +1558,12 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
             AdminCmdType::VerifyHash => {}
             AdminCmdType::Split => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::TransferLeader => {
+            // TODO: prevent compact log once pre-merge is applied.
+            AdminCmdType::PreMerge | AdminCmdType::Merge | AdminCmdType::TransferLeader => {
                 check_ver = true;
                 check_conf_ver = true;
             }
-            AdminCmdType::PreMerge | AdminCmdType::Merge => unimplemented!(),
         };
-    } else {
-        // for get/set/delete, we don't care conf_version.
-        check_ver = true;
     }
 
     if !check_ver && !check_conf_ver {

@@ -425,6 +425,13 @@ impl<T: PdClient> Runner<T> {
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     send_admin_request(&ch, region_id, epoch, peer, req, None)
+                } else if resp.has_merge() {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
+
+                    let merge = resp.take_merge();
+                    info!("[region {}] try to merge {:?}", region_id, merge);
+                    let req = new_merge_request(merge);
+                    send_admin_request(&ch, region_id, epoch, peer, req, None)
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
@@ -561,6 +568,13 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::TransferLeader);
     req.mut_transfer_leader().set_peer(peer);
+    req
+}
+
+fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::PreMerge);
+    req.mut_pre_merge().set_direction(merge.get_direction());
     req
 }
 
