@@ -17,9 +17,10 @@ use util::rocksdb::engine_metrics::*;
 use std::thread::{Builder, JoinHandle};
 use std::io;
 use std::sync::mpsc::{self, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-pub const DEFAULT_FLUSER_INTERVAL: u64 = 10000;
+pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
+pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;
 
 pub struct MetricsFlusher {
     engines: Engines,
@@ -47,9 +48,16 @@ impl MetricsFlusher {
         let h = Builder::new()
             .name(thd_name!("rocksb-metrics-flusher"))
             .spawn(move || {
+                let mut last_reset = Instant::now();
+                let reset_interval = Duration::from_millis(DEFAULT_FLUSHER_RESET_INTERVAL);
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     flush_metrics(&db, "kv");
                     flush_metrics(&raft_db, "raft");
+                    if last_reset.elapsed() >= reset_interval {
+                        db.reset_statistics();
+                        raft_db.reset_statistics();
+                        last_reset = Instant::now();
+                    }
                 }
             })?;
 
