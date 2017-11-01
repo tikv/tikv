@@ -656,9 +656,9 @@ impl Storage {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         for m in &mutations {
-            let (size, limit) = (m.key().encoded().len(), self.max_key_size);
-            if size > limit {
-                callback(Err(Error::KeyTooLarge { size, limit }));
+            let size = m.key().encoded().len();
+            if size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
                 return Ok(());
             }
         }
@@ -836,9 +836,8 @@ impl Storage {
         value: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let (size, limit) = (key.len(), self.max_key_size);
-        if size > limit {
-            callback(Err(Error::KeyTooLarge { size, limit }));
+        if key.len() > self.max_key_size {
+            callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
             return Ok(());
         }
         try!(self.engine
@@ -857,9 +856,8 @@ impl Storage {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let (size, limit) = (key.len(), self.max_key_size);
-        if size > limit {
-            callback(Err(Error::KeyTooLarge { size, limit }));
+        if key.len() > self.max_key_size {
+            callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
             return Ok(());
         }
         self.engine.async_write(
@@ -966,7 +964,7 @@ quick_error! {
         SchedTooBusy {
             description("scheduler is too busy")
         }
-        KeyTooLarge{size: usize, limit: usize} {
+        KeyTooLarge(size: usize, limit: usize) {
             description("max key size exceeded")
             display("max key size exceeded, size: {}, limit: {}", size, limit)
         }
