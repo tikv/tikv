@@ -210,7 +210,7 @@ impl Expression {
     ) -> Result<Option<Cow<'a, str>>> {
         let bytes = try_opt!(self.eval_string(ctx, row));
         let chrst = self.get_tp().get_charset();
-        if charset::compatible_with_utf8(chrst) {
+        if charset::UTF8_CHARSETS.contains(&chrst) {
             let s = match bytes {
                 Cow::Borrowed(bs) => str::from_utf8(bs).map_err(Error::from).map(Cow::Borrowed),
                 Cow::Owned(bs) => String::from_utf8(bs).map_err(Error::from).map(Cow::Owned),
