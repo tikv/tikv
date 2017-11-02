@@ -38,6 +38,9 @@
 # stack size of endpoint, complicated tasks may involve very deep recursion.
 # end-point-stack-size = "10MB"
 
+# size of thread pool for import service.
+# import-concurrency = 2
+
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
 

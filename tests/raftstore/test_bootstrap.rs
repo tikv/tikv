@@ -14,7 +14,7 @@
 use std::sync::{mpsc, Arc};
 use std::path::Path;
 use tikv::raftstore::store::{bootstrap_store, create_event_loop, keys, Engines, Peekable,
-                             SnapManager};
+                             SnapManager, UploadDir};
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::util::rocksdb;
@@ -61,6 +61,8 @@ fn test_node_bootstrap_with_prepared_data() {
     );
     let engines = Engines::new(engine.clone(), raft_engine.clone());
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
+    let upload_path = TempDir::new("test_upload").unwrap().into_path();
+    let upload_dir = Arc::new(UploadDir::new(upload_path).unwrap());
 
     let mut node = Node::new(
         &mut event_loop,
@@ -102,6 +104,7 @@ fn test_node_bootstrap_with_prepared_data() {
         snap_mgr,
         snapshot_status_receiver,
         pd_worker,
+        upload_dir,
     ).unwrap();
     assert!(
         engine

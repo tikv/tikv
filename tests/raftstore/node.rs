@@ -178,6 +178,9 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
+        let upload_path = TempDir::new("test_upload").unwrap();
+        let upload_dir = Arc::new(UploadDir::new(upload_path.path()).unwrap());
+
         node.start(
             event_loop,
             engines.clone(),
@@ -185,6 +188,7 @@ impl Simulator for NodeCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            upload_dir.clone(),
         ).unwrap();
         assert!(
             engines

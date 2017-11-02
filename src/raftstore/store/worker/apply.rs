@@ -17,7 +17,7 @@ use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::collections::VecDeque;
 
-use rocksdb::{Writable, WriteBatch, DB};
+use rocksdb::{IngestExternalFileOptions, Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
 
@@ -34,7 +34,7 @@ use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{cmd_resp, keys, util, Store};
+use raftstore::store::{cmd_resp, keys, util, Store, UploadDir};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use raftstore::store::peer_storage::{self, compact_raft_log, write_initial_apply_state,
@@ -263,10 +263,13 @@ fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
         return true;
     }
 
-    // When encounter DeleteRange command, we must flush current write batch to engine first,
-    // because current write batch may contains keys are covered by DeleteRange.
+    // Some commands may modify keys covered by the current write batch, so we
+    // must flush the current write batch to the engine first.
     for req in cmd.get_requests() {
         if req.has_delete_range() {
+            return true;
+        }
+        if req.has_ingest_sst() {
             return true;
         }
     }
@@ -294,6 +297,8 @@ pub struct ApplyDelegate {
     term: u64,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
+
+    upload_dir: Arc<UploadDir>,
 }
 
 impl ApplyDelegate {
@@ -305,12 +310,16 @@ impl ApplyDelegate {
         self.id
     }
 
-    fn from_peer(peer: &Peer) -> ApplyDelegate {
+    fn from_peer(peer: &Peer, upload_dir: Arc<UploadDir>) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), reg)
+        ApplyDelegate::from_registration(peer.kv_engine(), upload_dir, reg)
     }
 
-    fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
+    fn from_registration(
+        db: Arc<DB>,
+        upload_dir: Arc<UploadDir>,
+        reg: Registration,
+    ) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -322,6 +331,7 @@ impl ApplyDelegate {
             term: reg.term,
             pending_cmds: Default::default(),
             metrics: Default::default(),
+            upload_dir: upload_dir,
         }
     }
 
@@ -1013,6 +1023,7 @@ impl ApplyDelegate {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::DeleteRange => self.handle_delete_range(req, &mut ranges),
+                CmdType::IngestSST => self.handle_ingest_sst(req),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1173,6 +1184,70 @@ impl ApplyDelegate {
         });
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
+
+        Ok(resp)
+    }
+
+    fn handle_ingest_sst(&mut self, req: &Request) -> Result<Response> {
+        let mut cf_name = None;
+        let ingest = req.get_ingest_sst();
+        let region_id = self.region.get_id();
+        let region_epoch = self.region.get_region_epoch();
+
+        let mut ingest_paths = vec![];
+        for h in ingest.get_handles() {
+            if h.get_region_id() != region_id ||
+                h.get_region_epoch().get_conf_ver() != region_epoch.get_conf_ver() ||
+                h.get_region_epoch().get_version() != region_epoch.get_version()
+            {
+                let error = "ingest sst files".to_owned();
+                let new_regions = vec![self.region.clone()];
+                return Err(Error::StaleEpoch(error, new_regions));
+            }
+            match cf_name {
+                Some(cf) => if h.get_cf_name() != cf {
+                    return Err(box_err!(
+                        "can not ingest files of different column families"
+                    ));
+                },
+                None => {
+                    cf_name = Some(h.get_cf_name());
+                }
+            }
+            match self.upload_dir.join_handle(h) {
+                Ok(path) => ingest_paths.push(path),
+                Err(e) => {
+                    return Err(box_err!("invalid ingest handle {:?}: {:?}", h, e));
+                }
+            }
+
+            // TODO: Check SST file range to make sure it:
+            // 1. Is inside the region range
+            // 2. Is not overlapped with others (RocksDB doesn't support)
+        }
+
+        let resp = Response::new();
+        let cf = match cf_name {
+            Some(cf_name) => rocksdb::get_cf_handle(&self.engine, cf_name)?,
+            None => return Ok(resp),
+        };
+
+        let mut opt = IngestExternalFileOptions::new();
+        opt.move_files(true);
+        let files: Vec<_> = ingest_paths
+            .iter()
+            .map(|path| path.to_str().unwrap())
+            .collect();
+        self.engine
+            .ingest_external_file_cf(cf, &opt, &files)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to ingest sst files {:?}: {:?}",
+                    self.tag,
+                    files,
+                    e
+                );
+            });
 
         Ok(resp)
     }
@@ -1422,6 +1497,7 @@ pub struct Runner {
     notifier: Sender<TaskRes>,
     sync_log: bool,
     tag: String,
+    upload_dir: Arc<UploadDir>,
 }
 
 impl Runner {
@@ -1429,7 +1505,10 @@ impl Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
-            delegates.insert(region_id, ApplyDelegate::from_peer(p));
+            delegates.insert(
+                region_id,
+                ApplyDelegate::from_peer(p, store.upload_dir.clone()),
+            );
         }
         Runner {
             db: store.kv_engine(),
@@ -1438,6 +1517,7 @@ impl Runner {
             notifier: notifier,
             sync_log: sync_log,
             tag: format!("[store {}]", store.store_id()),
+            upload_dir: store.upload_dir.clone(),
         }
     }
 
@@ -1550,7 +1630,8 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
+        let delegate =
+            ApplyDelegate::from_registration(self.db.clone(), self.upload_dir.clone(), s);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag,
@@ -1617,6 +1698,11 @@ mod tests {
         (path, db)
     }
 
+    fn create_tmp_upload_dir(path: &str) -> Arc<UploadDir> {
+        let upload_dir = TempDir::new(path).unwrap();
+        Arc::new(UploadDir::new(upload_dir.path()).unwrap())
+    }
+
     fn new_runner(db: Arc<DB>, host: Arc<CoprocessorHost>, tx: Sender<TaskRes>) -> Runner {
         Runner {
             db: db,
@@ -1625,6 +1711,7 @@ mod tests {
             notifier: tx,
             sync_log: false,
             tag: "".to_owned(),
+            upload_dir: create_tmp_upload_dir("test"),
         }
     }
 
@@ -1895,10 +1982,11 @@ mod tests {
     #[test]
     fn test_handle_raft_committed_entries() {
         let (_path, db) = create_tmp_engine("test-delegate");
+        let upload_dir = create_tmp_upload_dir("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
+        let mut delegate = ApplyDelegate::from_registration(db.clone(), upload_dir.clone(), reg);
         let (tx, rx) = mpsc::channel();
 
         let put_entry = EntryBuilder::new(1, 1)

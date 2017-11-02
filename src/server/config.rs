@@ -35,6 +35,7 @@ const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 // Enpoints may occur very deep recursion,
 // so enlarge their stack size to 10 MB.
 const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
+const DEFAULT_IMPORT_CONCURRENCY: usize = 2;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
@@ -64,6 +65,7 @@ pub struct Config {
     pub end_point_concurrency: usize,
     pub end_point_max_tasks: usize,
     pub end_point_stack_size: ReadableSize,
+    pub import_concurrency: usize,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -91,6 +93,7 @@ impl Default for Config {
             end_point_concurrency: concurrency,
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
+            import_concurrency: DEFAULT_IMPORT_CONCURRENCY,
         }
     }
 }

@@ -11,6 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use std::sync::Arc;
 
 use tikv::util::HandyRwLock;
@@ -24,9 +28,15 @@ use kvproto::coprocessor::*;
 use kvproto::{debugpb, eraftpb, metapb, raft_serverpb};
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::debugpb_grpc::DebugClient;
-use rocksdb::Writable;
-use futures::{future, Future, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
+use kvproto::importpb::*;
+use kvproto::importpb_grpc::*;
+use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, Writable};
+use futures::{future, stream, Future, Sink, Stream};
+use grpc::{ChannelBuilder, Environment, Error, Result, RpcStatusCode, WriteFlags};
+use crc::crc32::{self, Hasher32};
+use uuid::Uuid;
+use tempdir::TempDir;
+use protobuf::RepeatedField;
 
 use super::server::*;
 use super::cluster::Cluster;
@@ -56,6 +66,21 @@ fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Cont
     let client = TikvClient::new(channel);
 
     (cluster, client, ctx)
+}
+
+fn must_new_cluster_and_kv_and_import_client()
+    -> (Cluster<ServerCluster>, TikvClient, ImportClient, Context)
+{
+    let (cluster, leader, ctx) = must_new_cluster();
+
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let env = Arc::new(Environment::new(1));
+    let ch = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
+    let kv = TikvClient::new(ch);
+    let ch = ChannelBuilder::new(env.clone()).connect(&format!("{}", addr));
+    let import = ImportClient::new(ch);
+
+    (cluster, kv, import, ctx)
 }
 
 #[test]
@@ -763,4 +788,168 @@ fn test_debug_scan_mvcc() {
     let keys = future.wait().unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
+}
+
+#[test]
+fn test_upload_sst() {
+    let (_cluster, _, client, _) = must_new_cluster_and_kv_and_import_client();
+
+    let data = vec![1; 1024];
+    let mut hash = crc32::Digest::new(crc32::IEEE);
+    hash.write(&data);
+    let crc32 = hash.sum32();
+
+    let mut upload = UploadSSTRequest::new();
+    upload.set_data(data.clone());
+
+    // Mismatch checksum
+    let meta = make_sst_meta(data.len(), 0);
+    upload.set_meta(meta);
+    assert!(send_upload_sst(&client, upload.clone()).is_err());
+
+    let meta = make_sst_meta(data.len(), crc32);
+    upload.set_meta(meta);
+    send_upload_sst(&client, upload.clone()).unwrap();
+}
+
+#[test]
+fn test_ingest_sst() {
+    let (_cluster, kv, import, ctx) = must_new_cluster_and_kv_and_import_client();
+
+    let temp_dir = TempDir::new("test_ingest_sst").unwrap();
+    let num_files = 3;
+    let num_keys_per_file = 10;
+    let mut sst_handles = vec![];
+    for i in 0..num_files {
+        let path = temp_dir.path().join(format!("{}.sst", i));
+        let start = i * num_keys_per_file;
+        let end = (i + 1) * num_keys_per_file;
+        make_sst_file(&path, start, end);
+        let handle = send_sst_file(&import, &ctx, &path);
+        sst_handles.push(handle);
+    }
+
+    let epoch = ctx.get_region_epoch();
+    let mut stale_epoch = epoch.clone();
+    stale_epoch.set_version(epoch.get_version() - 1);
+
+    // Stale epoch in context
+    let mut stale_ctx = ctx.clone();
+    stale_ctx.set_region_epoch(stale_epoch.clone());
+    let mut ingest = IngestSSTRequest::new();
+    ingest.set_context(stale_ctx);
+    let resp = import.ingest_sst(ingest).unwrap();
+    assert!(resp.get_error().has_stale_epoch());
+
+    // Stale epoch in sst handle
+    let mut handle = sst_handles[0].clone();
+    handle.set_region_epoch(stale_epoch.clone());
+    let mut ingest = IngestSSTRequest::new();
+    ingest.set_context(ctx.clone());
+    ingest.mut_handles().push(handle);
+    let resp = import.ingest_sst(ingest).unwrap();
+    assert!(resp.has_error());
+
+    // Different CFs in sst handle
+    let mut handle = sst_handles[0].clone();
+    handle.set_cf_name("testcf".to_owned());
+    let mut ingest = IngestSSTRequest::new();
+    ingest.set_context(ctx.clone());
+    ingest.mut_handles().push(handle);
+    let resp = import.ingest_sst(ingest).unwrap();
+    assert!(resp.has_error());
+
+    let mut ingest = IngestSSTRequest::new();
+    ingest.set_context(ctx.clone());
+    ingest.set_handles(RepeatedField::from_vec(sst_handles));
+    let resp = import.ingest_sst(ingest).unwrap();
+    assert!(!resp.has_error());
+
+    // Check ingested sst files
+    let num_keys = num_files * num_keys_per_file;
+    for i in 0..num_keys {
+        let (k, v) = make_kv(i, i);
+        let mut m = RawGetRequest::new();
+        m.set_context(ctx.clone());
+        m.set_key(k);
+        let resp = kv.raw_get(m).unwrap();
+        assert!(resp.get_error().is_empty());
+        assert!(!resp.has_region_error());
+        assert_eq!(resp.get_value().cmp(&v), Ordering::Equal);
+    }
+}
+
+fn make_sst_meta(len: usize, crc32: u32) -> SSTMeta {
+    let mut m = SSTMeta::new();
+    m.set_len(len as u64);
+    m.set_crc32(crc32);
+    m.set_handle(make_sst_handle());
+    m
+}
+
+fn make_sst_handle() -> SSTHandle {
+    let mut h = SSTHandle::new();
+    let uuid = Uuid::new_v4();
+    h.set_uuid(uuid.as_bytes().to_vec());
+    h.set_cf_name("default".to_owned());
+    h.set_region_id(1);
+    h.mut_region_epoch().set_conf_ver(2);
+    h.mut_region_epoch().set_version(3);
+    h
+}
+
+fn make_sst_handle_from_ctx(ctx: &Context) -> SSTHandle {
+    let mut h = SSTHandle::new();
+    h.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    h.set_cf_name("default".to_owned());
+    h.set_region_id(ctx.get_region_id());
+    h.set_region_epoch(ctx.get_region_epoch().clone());
+    h
+}
+
+fn make_kv(k: u64, v: u64) -> (Vec<u8>, Vec<u8>) {
+    let k = format!("k-{:08}", k);
+    let v = format!("v-{:08}", v);
+    (k.into_bytes(), v.into_bytes())
+}
+
+fn make_sst_file<P: AsRef<Path>>(path: P, start: u64, end: u64) {
+    let env_opt = EnvOptions::new();
+    let cf_opt = ColumnFamilyOptions::new();
+    let mut sst = SstFileWriter::new(env_opt, cf_opt);
+
+    sst.open(path.as_ref().to_str().unwrap()).unwrap();
+    for i in start..end {
+        let (k, v) = make_kv(i, i);
+        let k = keys::data_key(&k);
+        sst.put(&k, &v).unwrap();
+    }
+    sst.finish().unwrap();
+}
+
+fn send_sst_file<P: AsRef<Path>>(client: &ImportClient, ctx: &Context, path: P) -> SSTHandle {
+    let mut data = vec![];
+    File::open(path).unwrap().read_to_end(&mut data).unwrap();
+
+    let mut hash = crc32::Digest::new(crc32::IEEE);
+    hash.write(&data);
+
+    let handle = make_sst_handle_from_ctx(ctx);
+    let mut meta = SSTMeta::new();
+    meta.set_len(data.len() as u64);
+    meta.set_crc32(hash.sum32());
+    meta.set_handle(handle.clone());
+
+    let mut m = UploadSSTRequest::new();
+    m.set_meta(meta);
+    m.set_data(data);
+    send_upload_sst(client, m).unwrap();
+
+    handle
+}
+
+fn send_upload_sst(client: &ImportClient, m: UploadSSTRequest) -> Result<UploadSSTResponse> {
+    let (tx, rx) = client.upload_sst();
+    let stream = stream::once({ Ok((m, WriteFlags::default().buffer_hint(true))) });
+    stream.forward(tx).and_then(|_| rx).wait()
 }
