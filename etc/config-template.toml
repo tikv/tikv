@@ -95,11 +95,6 @@
 # Store heartbeat tick interval for reporting to pd.
 # pd-store-heartbeat-tick-interval = "10s"
 
-# When the region's size exceeds region-max-size, we will split the region
-# into two which the left region's size will be region-split-size or a little
-# bit smaller.
-# region-max-size = "144MB"
-# region-split-size = "96MB"
 # When region size changes exceeds region-split-check-diff, we should check
 # whether the region should be split or not.
 # region-split-check-diff = "6MB"
@@ -137,6 +132,13 @@
 
 # Interval (s) to check region whether the data are consistent.
 # consistency-check-interval = 0
+
+[coprocessor]
+# When the region's size exceeds region-max-size, we will split the region
+# into two which the left region's size will be region-split-size or a little
+# bit smaller.
+# region-max-size = "144MB"
+# region-split-size = "96MB"
 
 [rocksdb]
 # Maximum number of concurrent background jobs (compactions and flushes)
