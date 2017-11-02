@@ -43,6 +43,7 @@ use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
 use super::{Error, Result};
+use super::super::metrics::*;
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
@@ -577,6 +578,9 @@ fn err_resp(e: Error) -> Response {
         }
         Error::Full(allow) => {
             COPR_REQ_ERROR.with_label_values(&["full"]).inc();
+            SERVER_IS_BUSY_COUNTER_VEC
+                .with_label_values(&["coprocessor"])
+                .inc();
             let mut errorpb = errorpb::Error::new();
             errorpb.set_message(format!("running batches reach limit {}", allow));
             let mut server_is_busy_err = ServerIsBusy::new();

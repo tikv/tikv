@@ -80,6 +80,7 @@ extern crate fail;
 #[macro_use]
 pub mod util;
 pub mod config;
+pub mod metrics;
 pub mod raft;
 pub mod storage;
 pub mod raftstore;
