@@ -24,9 +24,13 @@ use kvproto::coprocessor::*;
 use kvproto::{debugpb, eraftpb, metapb, raft_serverpb};
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::debugpb_grpc::DebugClient;
+use kvproto::importpb::*;
+use kvproto::importpb_grpc::*;
 use rocksdb::Writable;
-use futures::{future, Future, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
+use futures::{future, stream, Future, Sink, Stream};
+use grpc::{ChannelBuilder, Environment, Error, Result, RpcStatusCode, WriteFlags};
+use crc::crc32::{self, Hasher32};
+use uuid::Uuid;
 
 use super::server::*;
 use super::cluster::Cluster;
@@ -54,6 +58,17 @@ fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Cont
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
     let client = TikvClient::new(channel);
+
+    (cluster, client, ctx)
+}
+
+fn must_new_cluster_and_import_client() -> (Cluster<ServerCluster>, ImportClient, Context) {
+    let (cluster, leader, ctx) = must_new_cluster();
+
+    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
+    let client = ImportClient::new(channel);
 
     (cluster, client, ctx)
 }
@@ -763,4 +778,51 @@ fn test_debug_scan_mvcc() {
     let keys = future.wait().unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
+}
+
+#[test]
+fn test_upload_sst() {
+    let (_cluster, client, _) = must_new_cluster_and_import_client();
+
+    let data = vec![1; 1024];
+    let mut hash = crc32::Digest::new(crc32::IEEE);
+    hash.write(&data);
+    let crc32 = hash.sum32();
+
+    let mut upload = UploadSSTRequest::new();
+    upload.set_data(data.clone());
+
+    // Mismatch checksum
+    let meta = make_sst_meta(data.len(), 0);
+    upload.set_meta(meta);
+    assert!(send_upload_sst(&client, upload.clone()).is_err());
+
+    let meta = make_sst_meta(data.len(), crc32);
+    upload.set_meta(meta);
+    send_upload_sst(&client, upload.clone()).unwrap();
+}
+
+fn make_sst_meta(len: usize, crc32: u32) -> SSTMeta {
+    let mut m = SSTMeta::new();
+    m.set_len(len as u64);
+    m.set_crc32(crc32);
+    m.set_handle(make_sst_handle());
+    m
+}
+
+fn make_sst_handle() -> SSTHandle {
+    let mut h = SSTHandle::new();
+    let uuid = Uuid::new_v4();
+    h.set_uuid(uuid.as_bytes().to_vec());
+    h.set_cf_name("default".to_owned());
+    h.set_region_id(1);
+    h.mut_region_epoch().set_conf_ver(2);
+    h.mut_region_epoch().set_version(3);
+    h
+}
+
+fn send_upload_sst(client: &ImportClient, m: UploadSSTRequest) -> Result<UploadSSTResponse> {
+    let (tx, rx) = client.upload_sst();
+    let stream = stream::once({ Ok((m, WriteFlags::default().buffer_hint(true))) });
+    stream.forward(tx).and_then(|_| rx).wait()
 }

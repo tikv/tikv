@@ -25,6 +25,7 @@ pub mod store;
 mod peer;
 mod peer_storage;
 mod snap;
+mod upload;
 mod worker;
 mod metrics;
 mod local_metrics;
@@ -41,3 +42,4 @@ pub use self::peer_storage::{do_snapshot, CacheQueryStats, PeerStorage, SnapStat
                              RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
 pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, SnapEntry, SnapKey, SnapManager,
                      Snapshot, SnapshotDeleter, SnapshotStatistics};
+pub use self::upload::{UploadDir, Uploader};

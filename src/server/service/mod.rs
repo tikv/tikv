@@ -13,6 +13,8 @@
 
 mod kv;
 mod debug;
+mod import;
 
 pub use self::kv::Service as KvService;
 pub use self::debug::Service as DebugService;
+pub use self::import::Service as ImportService;

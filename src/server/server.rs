@@ -18,10 +18,11 @@ use std::str::FromStr;
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
+use kvproto::importpb_grpc::create_import;
 
 use util::worker::{FutureScheduler, Worker};
 use storage::Storage;
-use raftstore::store::{Engines, SnapManager};
+use raftstore::store::{Engines, SnapManager, UploadDir};
 
 use super::{Config, Result};
 use coprocessor::{EndPointHost, EndPointTask};
@@ -64,6 +65,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snap_mgr: SnapManager,
         pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
+        upload_dir: Arc<UploadDir>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -81,6 +83,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
         );
+        let import_service = ImportService::new(cfg.import_concurrency, upload_dir);
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
@@ -94,7 +97,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             let mut sb = ServerBuilder::new(env.clone())
                 .bind(ip, addr.port())
                 .channel_args(channel_args)
-                .register_service(create_tikv(kv_service));
+                .register_service(create_tikv(kv_service))
+                .register_service(create_import(import_service));
             if let Some(engines) = debug_engines {
                 sb = sb.register_service(create_debug(DebugService::new(engines)));
             }
@@ -180,6 +184,8 @@ mod tests {
     use std::sync::mpsc::{self, Sender};
     use std::net::SocketAddr;
 
+    use tempdir::TempDir;
+
     use super::*;
     use super::super::{Config, Result};
     use super::super::transport::RaftStoreRouter;
@@ -236,6 +242,9 @@ mod tests {
         let mut storage = Storage::new(&storage_cfg).unwrap();
         storage.start(&storage_cfg).unwrap();
 
+        let upload_path = TempDir::new("test").unwrap();
+        let upload_dir = Arc::new(UploadDir::new(upload_path.path()).unwrap());
+
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter {
@@ -254,6 +263,7 @@ mod tests {
             SnapManager::new("", None),
             pd_worker.scheduler(),
             None,
+            upload_dir,
         ).unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 
