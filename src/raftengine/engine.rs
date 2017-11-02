@@ -130,16 +130,16 @@ impl MultiRaftEngine {
                 Some(file_num) => file_num,
                 None => continue,
             };
-            let count = entries.entry_cache.len();
+            let count = entries.entry_queue.len();
             if count > 0 && count <= 50 && max_file_num + 8 < active_file_num {
+                // Todo: zero copy
                 let mut ents = Vec::with_capacity(count);
                 entries.fetch_all(&mut ents);
-
                 let mut log_batch = LogBatch::default();
                 log_batch.add_entries(entries.region_id, ents.clone());
                 match self.pipe_log.append_log_batch(&log_batch, false) {
                     Ok(file_num) => if file_num > 0 {
-                        entries.append(&ents, file_num);
+                        entries.append(ents, file_num);
                     },
                     Err(e) => panic!("Rewrite inactive region entries failed. error {:?}", e),
                 }
@@ -179,15 +179,15 @@ impl MultiRaftEngine {
         self.apply_to_cache(log_batch, file_num);
     }
 
-    fn apply_to_cache(&mut self, log_batch: LogBatch, file_num: u64) {
-        for item in log_batch.items {
+    fn apply_to_cache(&mut self, mut log_batch: LogBatch, file_num: u64) {
+        for item in log_batch.items.drain(..) {
             match item.item_type {
                 LogItemType::Entries => {
                     let entries_to_add = item.entries.unwrap();
-                    let mem_cache = self.mem_entries
+                    let mem_queue = self.mem_entries
                         .entry(entries_to_add.region_id)
                         .or_insert_with(|| MemEntries::new(entries_to_add.region_id));
-                    mem_cache.append(&entries_to_add.entries, file_num);
+                    mem_queue.append(entries_to_add.entries, file_num);
                 }
                 LogItemType::CMD => {
                     let command = item.command.unwrap();
