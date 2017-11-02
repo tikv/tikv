@@ -11,6 +11,12 @@ use super::mem_entries::MemEntries;
 use super::pipe_log::{PipeLog, FILE_MAGIC_HEADER};
 use super::log_batch::{Command, LogBatch, LogItemType};
 
+#[derive(Clone, Copy)]
+enum RecoveryMode {
+    TolerateCorruptedTailRecords = 0,
+    AbsoluteConsistency = 1,
+}
+
 struct MultiRaftEngine {
     // Raft log directory.
     pub dir: String,
@@ -23,7 +29,7 @@ struct MultiRaftEngine {
 }
 
 impl MultiRaftEngine {
-    pub fn new(dir: String) -> MultiRaftEngine {
+    pub fn new(dir: String, recovery_mode: RecoveryMode) -> MultiRaftEngine {
         let pip_log =
             PipeLog::open(&dir).unwrap_or_else(|e| panic!("Open raft log failed, error: {:?}", e));
         let mut engine = MultiRaftEngine {
@@ -32,13 +38,13 @@ impl MultiRaftEngine {
             pipe_log: pip_log,
         };
         engine
-            .recover()
+            .recover(recovery_mode)
             .unwrap_or_else(|e| panic!("Recover raft log failed, error: {:?}", e));
         engine
     }
 
     // recover from disk.
-    fn recover(&mut self) -> Result<()> {
+    fn recover(&mut self, recovery_mode: RecoveryMode) -> Result<()> {
         let mut current_read_file = self.pipe_log.first_file_num();
         let active_file_num = self.pipe_log.active_file_num();
         loop {
@@ -76,21 +82,30 @@ impl MultiRaftEngine {
                         info!("Recovered raft log file {}.", current_read_file);
                         break;
                     }
-                    e @ Err(Error::TooShort) => {
-                        if current_read_file == active_file_num {
-                            // Truncate last incomplete batch.
-                            // Todo: support recover mode.
-                            error!(
-                                "Incomplete batch in last log file {}, offset {}",
-                                current_read_file,
-                                offset
-                            );
-                            self.pipe_log.truncate_active_log(offset);
-                            break;
-                        } else {
-                            panic!("Corruption occur in middle log file {}", current_read_file);
+                    e @ Err(Error::TooShort) => if current_read_file == active_file_num {
+                        match recovery_mode {
+                            RecoveryMode::TolerateCorruptedTailRecords => {
+                                warn!(
+                                    "Incomplete batch in last log file {}, offset {}, \
+                                     truncate it in TolerateCorruptedTailRecords recovery mode.",
+                                    current_read_file,
+                                    offset
+                                );
+                                self.pipe_log.truncate_active_log(offset).unwrap();
+                                break;
+                            }
+                            RecoveryMode::AbsoluteConsistency => {
+                                panic!(
+                                    "Incomplete batch in last log file {}, offset {}, \
+                                     panic in AbsoluteConsistency recovery mode.",
+                                    current_read_file,
+                                    offset
+                                );
+                            }
                         }
-                    }
+                    } else {
+                        panic!("Corruption occur in middle log file {}", current_read_file);
+                    },
                     Err(e) => {
                         panic!(
                             "Failed when recover log file {}, error {:?}",
@@ -133,7 +148,7 @@ impl MultiRaftEngine {
     }
 
     pub fn purge_expired_file(&mut self) -> Result<()> {
-        let min_file_num = self.mem_entries.values().fold(u64::MAX, |min, ref x| {
+        let min_file_num = self.mem_entries.values().fold(u64::MAX, |min, x| {
             cmp::min(min, x.min_file_num().map_or(u64::MAX, |num| num))
         });
 
