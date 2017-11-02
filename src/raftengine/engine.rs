@@ -31,6 +31,8 @@ struct MultiRaftEngine {
 
     // Persistent entries.
     pub pipe_log: PipeLog,
+
+    // Todo: threadsafe
 }
 
 impl MultiRaftEngine {
