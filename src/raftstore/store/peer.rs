@@ -23,13 +23,14 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType};
+use kvproto::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
 use kvproto::pdpb::PeerStats;
 
-use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX};
+use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
+           INVALID_INDEX, NO_LIMIT};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::Config;
@@ -231,6 +232,7 @@ pub struct Peer {
     apply_scheduler: Scheduler<ApplyTask>,
 
     pub pending_remove: bool,
+    read_only: bool,
 
     marked_to_be_checked: bool,
 
@@ -351,6 +353,7 @@ impl Peer {
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
+            read_only: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_applying_idx: applied_index,
@@ -378,6 +381,10 @@ impl Peer {
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
+    }
+
+    pub fn become_readonly(&mut self) {
+        self.read_only = true;
     }
 
     pub fn mark_to_be_checked(&mut self, pending_raft_groups: &mut HashSet<u64>) {
@@ -1374,6 +1381,17 @@ impl Peer {
         true
     }
 
+    pub fn get_min_progress(&self) -> u64 {
+        let mut min_index = self.raft_group.raft.raft_log.last_index();
+        let status = self.raft_group.status();
+        for pr in status.progress.values() {
+            if pr.matched < min_index {
+                min_index = pr.matched;
+            }
+        }
+        min_index
+    }
+
     fn pre_propose(&self, req: &mut RaftCmdRequest) -> Result<()> {
         self.coprocessor_host.pre_propose(self.region(), req)?;
 
@@ -1382,13 +1400,7 @@ impl Peer {
         }
 
         let last_index = self.raft_group.raft.raft_log.last_index();
-        let mut min_index = last_index;
-        let status = self.raft_group.status();
-        for pr in status.progress.values() {
-            if pr.matched < min_index {
-                min_index = pr.matched;
-            }
-        }
+        let min_index = self.get_min_progress();
         // It's OK that min_index < first_index, it will be filtered out reliably
         // when applied. Actually we can't ensure min_index >= first_index without
         // iterating all proposed logs.
@@ -1405,6 +1417,36 @@ impl Peer {
                 last_index
             ));
         }
+        for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
+            if entry.get_entry_type() == EntryType::EntryConfChange {
+                info!("{} log gap contains conf change, skip pre-merge", self.tag);
+                return Err(box_err!("log gap contains admin request, skip."));
+            }
+            if entry.get_data().is_empty() {
+                continue;
+            }
+            let cmd: RaftCmdRequest = parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
+            if !cmd.has_admin_request() {
+                continue;
+            }
+            let cmd_type = cmd.get_admin_request().get_cmd_type();
+            match cmd_type {
+                AdminCmdType::TransferLeader |
+                AdminCmdType::ComputeHash |
+                AdminCmdType::VerifyHash |
+                AdminCmdType::InvalidAdmin => continue,
+                _ => {}
+            }
+            info!(
+                "{} log gap contains admin request {:?}, skip pre-merge",
+                self.tag,
+                cmd_type
+            );
+            return Err(box_err!(
+                "log gap contains admin request {:?}, skip.",
+                cmd_type
+            ));
+        }
         req.mut_admin_request()
             .mut_pre_merge()
             .set_min_index(min_index);
@@ -1416,6 +1458,10 @@ impl Peer {
         mut req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
+        if self.read_only {
+            return Err(box_err!("peer in read only mode, can't do proposal."));
+        }
+
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
@@ -1478,6 +1524,9 @@ impl Peer {
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
+        if self.read_only {
+            return Err(box_err!("peer in read only mode, can't do proposal."));
+        }
         if self.raft_group.raft.pending_conf {
             info!("{} there is a pending conf change, try later", self.tag);
             return Err(box_err!(

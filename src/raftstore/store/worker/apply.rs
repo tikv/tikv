@@ -988,7 +988,8 @@ impl ApplyDelegate {
         let mut merging_state = MergeState::new();
         merging_state.set_min_index(index);
         merging_state.set_direction(pre_merge.get_direction());
-        merging_state.set_commit_index(ctx.index);
+        merging_state.set_commit(ctx.index);
+        merging_state.set_conf_version(pre_merge.get_conf_version());
         write_merge_state(
             &self.engine,
             ctx.wb,

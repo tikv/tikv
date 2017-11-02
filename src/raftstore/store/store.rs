@@ -18,13 +18,12 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
-use std::thread;
-use std::u64;
+use std::{cmp, thread, u64};
 
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
-use protobuf;
+use protobuf::{self, RepeatedField};
 use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{MergeState, PeerState, RaftMessage, RaftSnapshotData,
@@ -38,7 +37,7 @@ use pd::{PdClient, PdRunner, PdTask};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse,
                           StatusCmdType, StatusResponse};
 use protobuf::Message;
-use raft::{self, SnapshotStatus, INVALID_INDEX};
+use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raftstore::{Error, Result};
 use kvproto::metapb;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
@@ -136,6 +135,7 @@ pub struct Store<T, C: 'static> {
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
+    merge_states: Vec<(metapb::Region, MergeState)>,
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
@@ -216,6 +216,7 @@ impl<T, C> Store<T, C> {
             sendch: sendch,
             significant_msg_receiver: ch.significant_msg_receiver,
             region_peers: HashMap::default(),
+            merge_states: vec![],
             pending_raft_groups: HashSet::default(),
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
@@ -1440,8 +1441,54 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_pre_merge(&mut self, _: metapb::Region, _: MergeState) {
-        unimplemented!()
+    fn schedule_merge(&mut self, region: &metapb::Region, state: &MergeState) -> bool {
+        let req = {
+            let direction = state.get_direction();
+            let slibing_peer = match self.get_slibing_peer(region, direction) {
+                None => return false,
+                Some(p) => p,
+            };
+            if slibing_peer.region().get_region_epoch().get_conf_ver() > state.get_conf_version() {
+                return false;
+            }
+
+            let peer = &self.region_peers[&region.get_id()];
+            let min_index = peer.get_min_progress();
+            let low = cmp::max(min_index, state.get_min_index());
+            // TODO: move this into raft module.
+            let entries = self.region_peers[&region.get_id()]
+                .get_store()
+                .entries(low + 1, state.get_commit() - 1, NO_LIMIT)
+                .unwrap();
+
+            let mut request =
+                new_admin_request(slibing_peer.region().get_id(), slibing_peer.peer.clone());
+            request
+                .mut_header()
+                .set_region_epoch(slibing_peer.region().get_region_epoch().clone());
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(AdminCmdType::Merge);
+            admin.mut_merge().set_source_region_id(region.get_id());
+            admin
+                .mut_merge()
+                .set_entries(RepeatedField::from_vec(entries));
+            request.set_admin_request(admin);
+            request
+        };
+        self.propose_raft_command(req, Box::new(|_| {}));
+        true
+    }
+
+    fn on_ready_pre_merge(&mut self, region: metapb::Region, state: MergeState) {
+        self.region_peers
+            .get_mut(&region.get_id())
+            .unwrap()
+            .become_readonly();
+
+        if !self.schedule_merge(&region, &state) {
+            unimplemented!("rollback pre-merge");
+        }
+        self.merge_states.push((region, state));
     }
 
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
@@ -1534,21 +1581,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn get_slibing_region(
+    fn get_slibing_peer(
         &self,
         region: &metapb::Region,
         direction: MergeDirection,
-    ) -> Option<&metapb::Region> {
+    ) -> Option<&Peer> {
         let slibing_region_key = match direction {
             MergeDirection::Forward => enc_start_key(region),
             MergeDirection::Backward => enc_end_key(region),
         };
         self.region_ranges
             .get(&slibing_region_key)
-            .map(|region_id| self.region_peers[region_id].region())
+            .and_then(|region_id| self.region_peers.get(region_id))
     }
 
-    fn check_merge_proposal(&self, msg: &RaftCmdRequest) -> Result<()> {
+    fn check_merge_proposal(&self, msg: &mut RaftCmdRequest) -> Result<()> {
         if !msg.get_admin_request().has_pre_merge() && !msg.get_admin_request().has_merge() {
             return Ok(());
         }
@@ -1556,15 +1603,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_header().get_region_id();
         let region = self.region_peers[&region_id].region();
 
-        let slibing_region = if msg.get_admin_request().has_pre_merge() {
+        let slibing_peer = if msg.get_admin_request().has_pre_merge() {
             let direction = msg.get_admin_request().get_pre_merge().get_direction();
-            self.get_slibing_region(region, direction)
+            self.get_slibing_peer(region, direction)
         } else {
             let region_id = msg.get_admin_request().get_merge().get_source_region_id();
-            self.region_peers.get(&region_id).map(|p| p.region())
+            self.region_peers.get(&region_id)
         };
-        let slibing_region = match slibing_region {
-            Some(r) => r,
+        let slibing_region = match slibing_peer {
+            Some(r) => r.region(),
             None => {
                 error!("[region {}] slibing doesn't exist, reject merge", region_id);
                 return Err(box_err!("slibing doesn't exist"));
@@ -1582,6 +1629,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 region.get_peers(),
                 slibing_region.get_peers()
             ));
+        }
+        if msg.get_admin_request().has_pre_merge() {
+            msg.mut_admin_request()
+                .mut_pre_merge()
+                .set_conf_version(slibing_region.get_region_epoch().get_conf_ver());
         }
 
         Ok(())
@@ -1601,7 +1653,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(None)
     }
 
-    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.call_box((resp,));
@@ -1614,7 +1666,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             _ => (),
         }
 
-        if let Err(e) = self.check_merge_proposal(&msg) {
+        if let Err(e) = self.check_merge_proposal(&mut msg) {
             cb(new_error(e));
             return;
         }
