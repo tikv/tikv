@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{char, str, i64};
-use std::str::Chars;
+use std::{str, i64};
+use std::slice::Iter;
 use std::cmp::Ordering;
 use std::borrow::Cow;
 
@@ -206,15 +206,14 @@ impl FnCall {
         do_in(self, |v| v.eval_json(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
-    #[inline]
+    /// NOTE: LIKE compare target with pattern as bytes, even if they have different
+    /// charsets. This behaviour is for keeping compatible with TiDB. But MySQL
+    /// compare them as bytes only if any charset of pattern or target is binary,
+    /// otherwise MySQL will compare decoded string.
     pub fn like(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        let escape = {
-            let c = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
-            char::from_u32(c)
-                .ok_or::<Error>(box_err!("invalid escape char: {}", c))?
-        };
+        let target = try_opt!(self.children[0].eval_string(ctx, row));
+        let pattern = try_opt!(self.children[1].eval_string(ctx, row));
+        let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
         Ok(Some(like(&target, &pattern, escape, 0)? as i64))
     }
 }
@@ -314,22 +313,22 @@ where
 
 // Do match until '%' is found.
 #[inline]
-fn partial_like<'a>(tcs: &mut Chars<'a>, pcs: &mut Chars<'a>, escape: char) -> Option<bool> {
+fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: u32) -> Option<bool> {
     loop {
-        match pcs.next() {
+        match pcs.next().cloned() {
             None => return Some(tcs.next().is_none()),
-            Some('%') => return None,
+            Some(b'%') => return None,
             Some(c) => {
-                let (npc, escape) = if c == escape {
-                    pcs.next().map_or((c, false), |c| (c, true))
+                let (npc, escape) = if c as u32 == escape {
+                    pcs.next().map_or((c, false), |&c| (c, true))
                 } else {
                     (c, false)
                 };
                 let nsc = match tcs.next() {
                     None => return Some(false),
-                    Some(c) => c,
+                    Some(&c) => c,
                 };
-                if nsc != npc && (npc != '_' || escape) {
+                if nsc != npc && (npc != b'_' || escape) {
                     return Some(false);
                 }
             }
@@ -337,26 +336,26 @@ fn partial_like<'a>(tcs: &mut Chars<'a>, pcs: &mut Chars<'a>, escape: char) -> O
     }
 }
 
-fn like(target: &str, pattern: &str, escape: char, recurse_level: usize) -> Result<bool> {
-    let mut tcs = target.chars();
-    let mut pcs = pattern.chars();
+fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Result<bool> {
+    let mut tcs = target.iter();
+    let mut pcs = pattern.iter();
     loop {
         if let Some(res) = partial_like(&mut tcs, &mut pcs, escape) {
             return Ok(res);
         }
         let next_char = loop {
-            match pcs.next() {
-                Some('%') => {}
-                Some('_') => if tcs.next().is_none() {
+            match pcs.next().cloned() {
+                Some(b'%') => {}
+                Some(b'_') => if tcs.next().is_none() {
                     return Ok(false);
                 },
                 // So the pattern should be some thing like 'xxx%'
                 None => return Ok(true),
                 Some(c) => {
-                    break if c == escape {
-                        pcs.next().unwrap_or(escape)
+                    break if c as u32 == escape {
+                        pcs.next().map_or(escape, |&c| c as u32)
                     } else {
-                        c
+                        c as u32
                     };
                 }
             }
@@ -372,9 +371,9 @@ fn like(target: &str, pattern: &str, escape: char, recurse_level: usize) -> Resu
         loop {
             let s = match tcs.next() {
                 None => return Ok(false),
-                Some(s) => s,
+                Some(&s) => s as u32,
             };
-            if s == next_char && like(tcs.as_str(), pcs.as_str(), escape, recurse_level + 1)? {
+            if s == next_char && like(tcs.as_slice(), pcs.as_slice(), escape, recurse_level + 1)? {
                 return Ok(true);
             }
         }

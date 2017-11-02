@@ -90,7 +90,7 @@ macro_rules! build_cf_opt {
     ($opt:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
-        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize);
+        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
         block_base_opts.set_pin_l0_filter_and_index_blocks_in_cache(
             $opt.pin_l0_filter_and_index_blocks);
@@ -710,5 +710,38 @@ impl TiKvConfig {
         self.pd.validate()?;
         self.coprocessor.validate()?;
         Ok(())
+    }
+
+    pub fn compatible_adjust(&mut self) {
+        let default_raft_store = RaftstoreConfig::default();
+        let default_coprocessor = CopConfig::default();
+        if self.raft_store.region_max_size != default_raft_store.region_max_size {
+            warn!(
+                "deprecated configuration, \
+                 raftstore.region-max-size has been moved to coprocessor"
+            );
+            if self.coprocessor.region_max_size == default_coprocessor.region_max_size {
+                warn!(
+                    "override coprocessor.region-max-size with raftstore.region-max-size, {:?}",
+                    self.raft_store.region_max_size
+                );
+                self.coprocessor.region_max_size = self.raft_store.region_max_size;
+            }
+            self.raft_store.region_max_size = default_raft_store.region_max_size;
+        }
+        if self.raft_store.region_split_size != default_raft_store.region_split_size {
+            warn!(
+                "deprecated configuration, \
+                 raftstore.region-split-size has been moved to coprocessor",
+            );
+            if self.coprocessor.region_split_size == default_coprocessor.region_split_size {
+                warn!(
+                    "override coprocessor.region-split-size with raftstore.region-split-size, {:?}",
+                    self.raft_store.region_split_size
+                );
+                self.coprocessor.region_split_size = self.raft_store.region_split_size;
+            }
+            self.raft_store.region_split_size = default_raft_store.region_split_size;
+        }
     }
 }
