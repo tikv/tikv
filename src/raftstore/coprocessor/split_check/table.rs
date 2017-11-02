@@ -11,12 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
+use std::result::Result as StdResult;
 use std::cmp::Ordering;
+
 use rocksdb::{SeekKey, DB};
 use kvproto::metapb::Region;
 
 use storage::CF_WRITE;
+use storage::types::Key;
 use raftstore::store::keys;
 use raftstore::store::engine::{IterOption, Iterable};
 use coprocessor::codec::table as table_codec;
@@ -61,7 +63,7 @@ impl RegionObserver for TableCheckObserver {
 
 /// Do some quick checks, true for skipping `check_key`.
 fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool {
-    if is_same_table(region.get_start_key(), region.get_end_key()) {
+    if let Ok(true) = is_same_table(region.get_start_key(), region.get_end_key()) {
         // Region is inside a table, skip for saving IO.
         return true;
     }
@@ -110,13 +112,12 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
         (Ordering::Less, Ordering::Equal) => {
             // It starts from non-table area to table area,
             // try to extract a split key from `encoded_end_key`, and save it in status.
-            status.last_encoded_table_prefix =
-                extract_encoded_table_prefix(encoded_end_key).map(|k| k.to_vec());
+            status.last_encoded_table_prefix = to_encoded_table_prefix(encoded_end_key);
             false
         }
         // Region is in table area.
         (Ordering::Equal, Ordering::Equal) => {
-            if is_same_table(encoded_start_key, encoded_end_key) {
+            if let Ok(true) = is_same_table(encoded_start_key, encoded_end_key) {
                 // Same table.
                 true
             } else {
@@ -124,16 +125,14 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
                 // Note that table id does not grow by 1, so have to use
                 // `encoded_end_key` to extract a table prefix.
                 // See more: https://github.com/pingcap/tidb/issues/4727
-                status.last_encoded_table_prefix =
-                    extract_encoded_table_prefix(encoded_end_key).map(|k| k.to_vec());
+                status.last_encoded_table_prefix = to_encoded_table_prefix(encoded_end_key);
                 false
             }
         }
         // The region starts from tabel area to non-table area.
         (Ordering::Equal, Ordering::Greater) => {
             // As the comment above, outside needs scan for finding a split key.
-            status.first_encoded_table_prefix =
-                extract_encoded_table_prefix(encoded_start_key).map(|k| k.to_vec());
+            status.first_encoded_table_prefix = to_encoded_table_prefix(encoded_start_key);
             false
         }
         _ => panic!(
@@ -157,25 +156,28 @@ fn check_key(status: &mut TableStatus, current_data_key: &[u8]) -> Option<Vec<u8
         return None;
     }
     let current_encoded_key = keys::origin_key(current_data_key);
-    let current_table_prefix = extract_encoded_table_prefix(current_encoded_key);
-    if status.first_encoded_table_prefix.is_some() && current_table_prefix.is_some() {
-        if current_table_prefix ==
-            status
-                .first_encoded_table_prefix
-                .as_ref()
-                .map(|k| k.as_slice())
-        {
-            // Same table
-            None
+
+    let split_key = if status.first_encoded_table_prefix.is_some() {
+        if let Ok(false) = is_same_table(
+            status.first_encoded_table_prefix.as_ref().unwrap(),
+            current_encoded_key,
+        ) {
+            // Different tables.
+            Some(current_encoded_key)
         } else {
-            current_table_prefix
+            None
         }
-    } else if status.first_encoded_table_prefix.is_none() && current_table_prefix.is_some() {
+    } else if is_table_key(current_encoded_key) {
         // Now we meet the very first table key of this region.
-        current_table_prefix
+        Some(current_encoded_key)
     } else {
         None
-    }.map(keys::data_key)
+    };
+    if let Some(key) = split_key {
+        to_encoded_table_prefix(key).map(|k| keys::data_key(&k))
+    } else {
+        None
+    }
 }
 
 #[allow(collapsible_if)]
@@ -211,29 +213,32 @@ fn bound_keys(db: &DB, region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     }
 }
 
+fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
+    table_codec::decode_table_id(&Key::from_encoded(encoded_key.to_vec()).raw().unwrap())
+        .map(table_codec::gen_table_prefix)
+        .map(|k| Key::from_raw(&k).encoded().to_vec())
+        .ok()
+}
+
 // Encode a key like `t{i64}` will append some unecessary bytes to the output,
 // This function extracts the first 10 bytes, they are enough to find out which
 // table this key belongs to.
 const ENCODED_TABLE_TABLE_PREFIX: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
 
-fn extract_encoded_table_prefix(encode_key: &[u8]) -> Option<&[u8]> {
-    if encode_key.len() >= ENCODED_TABLE_TABLE_PREFIX &&
-        encode_key.starts_with(table_codec::TABLE_PREFIX)
-    {
-        Some(&encode_key[..ENCODED_TABLE_TABLE_PREFIX])
-    } else {
-        None
-    }
+fn is_table_key(encoded_key: &[u8]) -> bool {
+    encoded_key.starts_with(table_codec::TABLE_PREFIX) &&
+        encoded_key.len() >= ENCODED_TABLE_TABLE_PREFIX
 }
 
-fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
-    if left_key.starts_with(table_codec::TABLE_PREFIX) &&
-        left_key.len() >= ENCODED_TABLE_TABLE_PREFIX &&
-        right_key.len() >= ENCODED_TABLE_TABLE_PREFIX
-    {
-        left_key[..ENCODED_TABLE_TABLE_PREFIX] == right_key[..ENCODED_TABLE_TABLE_PREFIX]
+fn is_same_table<'a>(left_key: &'a [u8], right_key: &'a [u8]) -> StdResult<bool, &'a [u8]> {
+    if !is_table_key(left_key) {
+        Err(left_key)
+    } else if !is_table_key(right_key) {
+        Err(right_key)
     } else {
-        false
+        Ok(
+            left_key[..ENCODED_TABLE_TABLE_PREFIX] == right_key[..ENCODED_TABLE_TABLE_PREFIX],
+        )
     }
 }
 
@@ -241,7 +246,6 @@ fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
 mod test {
     use std::sync::Arc;
     use std::sync::mpsc;
-    use std::io::Write;
 
     use tempdir::TempDir;
     use rocksdb::Writable;
@@ -254,19 +258,10 @@ mod test {
     use util::worker::Runnable;
     use util::transport::RetryableSendCh;
     use util::config::ReadableSize;
-    use util::codec::number::NumberEncoder;
-    use coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
+    use coprocessor::codec::table::gen_table_prefix;
 
     use raftstore::coprocessor::{Config, CoprocessorHost};
     use super::*;
-
-    /// Composes table record and index prefix: `t[table_id]`.
-    fn gen_table_prefix(table_id: i64) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(TABLE_PREFIX_KEY_LEN);
-        buf.write_all(TABLE_PREFIX).unwrap();
-        buf.encode_i64(table_id).unwrap();
-        buf
-    }
 
     #[test]
     fn test_bound_keys() {
@@ -384,12 +379,9 @@ mod test {
                 let key = Key::from_raw(&gen_table_prefix(id));
                 match rx.try_recv() {
                     Ok(Msg::SplitRegion { split_key, .. }) => {
-                        assert_eq!(
-                            split_key.as_slice(),
-                            extract_encoded_table_prefix(key.encoded()).unwrap()
-                        );
+                        assert_eq!(&split_key, key.encoded());
                     }
-                    others => panic!("expect split check result, but got {:?}", others),
+                    others => panic!("expect {:?}, but got {:?}", key, others),
                 }
             } else {
                 match rx.try_recv() {
@@ -399,11 +391,9 @@ mod test {
             }
         };
 
-        let gen_data_table_prefix = |table_id| {
-            let key = Key::from_raw(&gen_table_prefix(table_id));
-            extract_encoded_table_prefix(key.encoded())
-                .unwrap()
-                .to_vec()
+        let gen_encoded_table_prefix = |table_id| {
+            let key = Key::from_raw(&table_codec::gen_table_prefix(table_id));
+            key.encoded().to_vec()
         };
 
         // arbitrary padding.
@@ -427,13 +417,13 @@ mod test {
         check(None, None, Some(3));
 
         // ["t1", "") => t3
-        check(Some(gen_data_table_prefix(1)), None, Some(3));
+        check(Some(gen_encoded_table_prefix(1)), None, Some(3));
 
 
         // ["t1", "t5") => t3
         check(
-            Some(gen_data_table_prefix(1)),
-            Some(gen_data_table_prefix(5)),
+            Some(gen_encoded_table_prefix(1)),
+            Some(gen_encoded_table_prefix(5)),
             Some(3),
         );
 
@@ -447,15 +437,15 @@ mod test {
         }
 
         // ["t1", "") => t3
-        check(Some(gen_data_table_prefix(1)), None, Some(3));
+        check(Some(gen_encoded_table_prefix(1)), None, Some(3));
 
         // ["t3", "") => skip
-        check(Some(gen_data_table_prefix(3)), None, None);
+        check(Some(gen_encoded_table_prefix(3)), None, None);
 
         // ["t3", "t5") => skip
         check(
-            Some(gen_data_table_prefix(3)),
-            Some(gen_data_table_prefix(5)),
+            Some(gen_encoded_table_prefix(3)),
+            Some(gen_encoded_table_prefix(5)),
             None,
         );
 
@@ -478,10 +468,10 @@ mod test {
         check(None, None, Some(1));
 
         // ["", "t1"] => skip
-        check(None, Some(gen_data_table_prefix(1)), None);
+        check(None, Some(gen_encoded_table_prefix(1)), None);
 
         // ["", "t3"] => t1
-        check(None, Some(gen_data_table_prefix(3)), Some(1));
+        check(None, Some(gen_encoded_table_prefix(3)), Some(1));
 
         // ["", "s"] => skip
         check(None, Some(b"s".to_vec()), None);
@@ -490,9 +480,9 @@ mod test {
         check(Some(b"u".to_vec()), None, None);
 
         // ["t3", ""] => None
-        check(Some(gen_data_table_prefix(3)), None, None);
+        check(Some(gen_encoded_table_prefix(3)), None, None);
 
         // ["t1", ""] => t3
-        check(Some(gen_data_table_prefix(1)), None, Some(3));
+        check(Some(gen_encoded_table_prefix(1)), None, Some(3));
     }
 }
