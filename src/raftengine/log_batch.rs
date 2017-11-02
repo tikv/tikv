@@ -17,6 +17,7 @@ const BATCH_MIN_SIZE: usize = 20; // 8 bytes total length + 8 bytes item count +
 
 const TYPE_ENTRIES: u8 = 0x01;
 const TYPE_COMMAND: u8 = 0x02;
+const TYPE_KV: u8 = 0x3;
 const CMD_CLEAN: u8 = 0x01;
 
 type SliceReader<'a> = &'a [u8];
@@ -25,14 +26,18 @@ type SliceReader<'a> = &'a [u8];
 pub enum LogItemType {
     Entries, // entries
     CMD,     // admin command, eg. clean a region
+    KV,      // key/value pair
 }
 
 impl LogItemType {
     pub fn from_byte(t: u8) -> LogItemType {
+        // likely
         if t == TYPE_ENTRIES {
             LogItemType::Entries
         } else if t == TYPE_COMMAND {
             LogItemType::CMD
+        } else if t == TYPE_KV {
+            LogItemType::KV
         } else {
             panic!("Invalid item type: {}", t)
         }
@@ -42,6 +47,7 @@ impl LogItemType {
         match *self {
             LogItemType::Entries => TYPE_ENTRIES,
             LogItemType::CMD => TYPE_COMMAND,
+            LogItemType::KV => TYPE_KV,
         }
     }
 
@@ -129,10 +135,44 @@ impl Command {
     }
 }
 
+pub struct KeyValue {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+impl KeyValue {
+    pub fn new(key: &[u8], value: &[u8]) -> KeyValue {
+        KeyValue {
+            key: key.to_vec(),
+            value: value.to_vec(),
+        }
+    }
+
+    pub fn from_bytes(buf: &mut SliceReader) -> Result<KeyValue> {
+        let k_len = buf.decode_u64()? as usize;
+        let key = &buf[..k_len];
+        buf.consume(k_len);
+        let v_len = buf.decode_u64()? as usize;
+        let value = &buf[..v_len];
+        buf.consume(v_len);
+        Ok(KeyValue::new(key, value))
+    }
+
+    pub fn encode_to(&self, vec: &mut Vec<u8>) -> Result<()> {
+        // layout = { 8 bytes k_len | key | 8 bytes v_len | value }
+        vec.encode_u64(self.key.len() as u64)?;
+        vec.extend_from_slice(self.key.as_slice());
+        vec.encode_u64(self.value.len() as u64)?;
+        vec.extend_from_slice(self.value.as_slice());
+        Ok(())
+    }
+}
+
 pub struct LogItem {
     pub item_type: LogItemType,
     pub entries: Option<Entries>,
     pub command: Option<Command>,
+    pub kv: Option<KeyValue>,
 }
 
 impl LogItem {
@@ -141,6 +181,7 @@ impl LogItem {
             item_type: item_type,
             entries: None,
             command: None,
+            kv: None,
         }
     }
 
@@ -149,6 +190,7 @@ impl LogItem {
             item_type: LogItemType::Entries,
             entries: Some(Entries::new(region_id, entries)),
             command: None,
+            kv: None,
         }
     }
 
@@ -157,6 +199,16 @@ impl LogItem {
             item_type: LogItemType::CMD,
             entries: None,
             command: Some(command),
+            kv: None,
+        }
+    }
+
+    pub fn from_kv(key: &[u8], value: &[u8]) -> LogItem {
+        LogItem {
+            item_type: LogItemType::KV,
+            entries: None,
+            command: None,
+            kv: Some(KeyValue::new(key, value)),
         }
     }
 
@@ -169,6 +221,9 @@ impl LogItem {
             }
             LogItemType::CMD => {
                 self.command.as_ref().unwrap().encode_to(vec);
+            }
+            LogItemType::KV => {
+                self.kv.as_ref().unwrap().encode_to(vec)?;
             }
         }
         Ok(())
@@ -185,6 +240,10 @@ impl LogItem {
             LogItemType::CMD => {
                 let command = Command::from_bytes(buf)?;
                 item.command = Some(command);
+            }
+            LogItemType::KV => {
+                let kv = KeyValue::from_bytes(buf)?;
+                item.kv = Some(kv);
             }
         }
         Ok(item)
@@ -254,6 +313,11 @@ impl LogBatch {
 
     pub fn add_command(&mut self, cmd: Command) {
         let item = LogItem::from_command(cmd);
+        self.items.push(item);
+    }
+
+    pub fn add_kv(&mut self, key: &[u8], value: &[u8]) {
+        let item = LogItem::from_kv(key, value);
         self.items.push(item);
     }
 
