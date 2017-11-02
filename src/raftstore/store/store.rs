@@ -194,6 +194,7 @@ impl<T, C> Store<T, C> {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
+        mut coprocessor_host: CoprocessorHost,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -201,7 +202,6 @@ impl<T, C> Store<T, C> {
         let sendch = SendCh::new(ch.sender, "raftstore");
         let tag = format!("[store {}]", meta.get_id());
 
-        let mut coprocessor_host = CoprocessorHost::new();
         // TODO load coprocessors from configuration
         coprocessor_host
             .registry
@@ -504,9 +504,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let split_check_runner = SplitCheckRunner::new(
             self.kv_engine.clone(),
             self.sendch.clone(),
-            self.cfg.region_max_size.0,
-            self.cfg.region_split_size.0,
+            self.coprocessor_host.clone(),
         );
+
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(

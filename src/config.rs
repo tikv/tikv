@@ -21,6 +21,7 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
 use sys_info;
 
 use server::Config as ServerConfig;
+use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_DATA_DIR,
@@ -649,6 +650,7 @@ pub struct TiKvConfig {
     pub metric: MetricConfig,
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
+    pub coprocessor: CopConfig,
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,
 }
@@ -661,6 +663,7 @@ impl Default for TiKvConfig {
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),
+            coprocessor: CopConfig::default(),
             pd: PdConfig::default(),
             rocksdb: DbConfig::default(),
             raftdb: RaftDbConfig::default(),
@@ -679,6 +682,7 @@ impl TiKvConfig {
             );
         }
 
+        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
         self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
             config::canonicalize_sub_path(&self.storage.data_dir, "raft")?
         } else {
@@ -704,6 +708,40 @@ impl TiKvConfig {
         self.server.validate()?;
         self.raft_store.validate()?;
         self.pd.validate()?;
+        self.coprocessor.validate()?;
         Ok(())
+    }
+
+    pub fn compatible_adjust(&mut self) {
+        let default_raft_store = RaftstoreConfig::default();
+        let default_coprocessor = CopConfig::default();
+        if self.raft_store.region_max_size != default_raft_store.region_max_size {
+            warn!(
+                "deprecated configuration, \
+                 raftstore.region-max-size has been moved to coprocessor"
+            );
+            if self.coprocessor.region_max_size == default_coprocessor.region_max_size {
+                warn!(
+                    "override coprocessor.region-max-size with raftstore.region-max-size, {:?}",
+                    self.raft_store.region_max_size
+                );
+                self.coprocessor.region_max_size = self.raft_store.region_max_size;
+            }
+            self.raft_store.region_max_size = default_raft_store.region_max_size;
+        }
+        if self.raft_store.region_split_size != default_raft_store.region_split_size {
+            warn!(
+                "deprecated configuration, \
+                 raftstore.region-split-size has been moved to coprocessor",
+            );
+            if self.coprocessor.region_split_size == default_coprocessor.region_split_size {
+                warn!(
+                    "override coprocessor.region-split-size with raftstore.region-split-size, {:?}",
+                    self.raft_store.region_split_size
+                );
+                self.coprocessor.region_split_size = self.raft_store.region_split_size;
+            }
+            self.raft_store.region_split_size = default_raft_store.region_split_size;
+        }
     }
 }
