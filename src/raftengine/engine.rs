@@ -26,6 +26,9 @@ struct MultiRaftEngine {
     // region_id -> MemEntries.
     pub mem_entries: HashMap<u64, MemEntries>,
 
+    // key/value pairs.
+    pub mem_kvs: HashMap<Vec<u8>, Vec<u8>>,
+
     // Persistent entries.
     pub pipe_log: PipeLog,
 }
@@ -37,6 +40,7 @@ impl MultiRaftEngine {
         let mut engine = MultiRaftEngine {
             dir: dir,
             mem_entries: HashMap::default(),
+            mem_kvs: HashMap::default(),
             pipe_log: pip_log,
         };
         engine
@@ -198,6 +202,10 @@ impl MultiRaftEngine {
                             self.mem_entries.remove(&region_id);
                         }
                     }
+                }
+                LogItemType::KV => {
+                    let kv = item.kv.unwrap();
+                    self.mem_kvs.insert(kv.key, kv.value);
                 }
             }
         }
