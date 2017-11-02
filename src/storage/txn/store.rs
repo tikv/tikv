@@ -16,16 +16,16 @@ use storage::mvcc::{Error as MvccError, MvccReader};
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
 
-pub struct SnapshotStore<'a> {
-    snapshot: &'a Snapshot,
+pub struct SnapshotStore {
+    snapshot: Box<Snapshot>,
     start_ts: u64,
     isolation_level: IsolationLevel,
     fill_cache: bool,
 }
 
-impl<'a> SnapshotStore<'a> {
+impl SnapshotStore {
     pub fn new(
-        snapshot: &'a Snapshot,
+        snapshot: Box<Snapshot>,
         start_ts: u64,
         isolation_level: IsolationLevel,
         fill_cache: bool,
@@ -38,28 +38,29 @@ impl<'a> SnapshotStore<'a> {
         }
     }
 
-    pub fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
+    pub fn get(&self, key: &Key, statistics: &mut Option<Statistics>) -> Result<Option<Value>> {
         let mut reader = MvccReader::new(
-            self.snapshot,
-            statistics,
+            self.snapshot.clone(),
+            statistics.take().unwrap_or_default(),
             None,
             self.fill_cache,
             None,
             self.isolation_level,
         );
-        let v = reader.get(key, self.start_ts)?;
-        Ok(v)
+        let v = reader.get(key, self.start_ts).map_err(Error::Mvcc);
+        *statistics = Some(reader.close());
+        v
     }
 
     pub fn batch_get(
         &self,
         keys: &[Key],
-        statistics: &mut Statistics,
+        statistics: &mut Option<Statistics>,
     ) -> Result<Vec<Result<Option<Value>>>> {
         // TODO: sort the keys and use ScanMode::Forward
         let mut reader = MvccReader::new(
-            self.snapshot,
-            statistics,
+            self.snapshot.clone(),
+            statistics.take().unwrap_or_default(),
             None,
             self.fill_cache,
             None,
@@ -69,6 +70,7 @@ impl<'a> SnapshotStore<'a> {
         for k in keys {
             results.push(reader.get(k, self.start_ts).map_err(Error::from));
         }
+        *statistics = Some(reader.close());
         Ok(results)
     }
 
@@ -79,10 +81,10 @@ impl<'a> SnapshotStore<'a> {
         mode: ScanMode,
         key_only: bool,
         upper_bound: Option<Vec<u8>>,
-        statistics: &'a mut Statistics,
-    ) -> Result<StoreScanner<'a>> {
+        statistics: Statistics,
+    ) -> Result<StoreScanner> {
         let mut reader = MvccReader::new(
-            self.snapshot,
+            self.snapshot.clone(),
             statistics,
             Some(mode),
             self.fill_cache,
@@ -97,34 +99,34 @@ impl<'a> SnapshotStore<'a> {
     }
 }
 
-pub struct StoreScanner<'a> {
-    reader: MvccReader<'a>,
+pub struct StoreScanner {
+    reader: MvccReader,
     start_ts: u64,
 }
 
-impl<'a> StoreScanner<'a> {
+#[inline]
+fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key> {
+    let key = if let MvccError::KeyIsLocked { key: ref k, .. } = e {
+        Some(Key::from_raw(k))
+    } else {
+        None
+    };
+    match key {
+        Some(k) => {
+            result.push(Err(e.into()));
+            Ok(k)
+        }
+        None => Err(e.into()),
+    }
+}
+
+impl StoreScanner {
     pub fn seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
         Ok(self.reader.seek(key, self.start_ts)?)
     }
 
     pub fn reverse_seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
         Ok(self.reader.reverse_seek(key, self.start_ts)?)
-    }
-
-    #[inline]
-    fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key> {
-        let key = if let MvccError::KeyIsLocked { key: ref k, .. } = e {
-            Some(Key::from_raw(k))
-        } else {
-            None
-        };
-        match key {
-            Some(k) => {
-                result.push(Err(e.into()));
-                Ok(k)
-            }
-            None => Err(e.into()),
-        }
     }
 
     pub fn scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
@@ -136,7 +138,7 @@ impl<'a> StoreScanner<'a> {
                     key = k;
                 }
                 Ok(None) => break,
-                Err(Error::Mvcc(e)) => key = StoreScanner::handle_mvcc_err(e, &mut results)?,
+                Err(Error::Mvcc(e)) => key = handle_mvcc_err(e, &mut results)?,
                 Err(e) => return Err(e),
             }
             key = key.append_ts(0);
@@ -153,14 +155,14 @@ impl<'a> StoreScanner<'a> {
                     key = k;
                 }
                 Ok(None) => break,
-                Err(Error::Mvcc(e)) => key = StoreScanner::handle_mvcc_err(e, &mut results)?,
+                Err(Error::Mvcc(e)) => key = handle_mvcc_err(e, &mut results)?,
                 Err(e) => return Err(e),
             }
         }
         Ok(results)
     }
 
-    pub fn close(self) -> &'a mut Statistics {
+    pub fn close(self) -> Statistics {
         self.reader.close()
     }
 }
@@ -207,12 +209,11 @@ mod test {
         fn init_data(&mut self) {
             let primary_key = format!("{}{}", KEY_PREFIX, START_ID);
             let pk = primary_key.as_bytes();
-            let mut statistics = Statistics::default();
             // do prewrite.
             {
                 let mut txn = MvccTxn::new(
-                    self.snapshot.as_ref(),
-                    &mut statistics,
+                    self.snapshot.clone(),
+                    Statistics::default(),
                     START_TS,
                     None,
                     IsolationLevel::SI,
@@ -226,14 +227,17 @@ mod test {
                         &Options::default(),
                     ).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.modifies()).unwrap();
+                let mut stat = Some(Statistics::default());
+                self.engine
+                    .write(&self.ctx, txn.modifies(&mut stat))
+                    .unwrap();
             }
             self.refresh_snapshot();
             // do commit
             {
                 let mut txn = MvccTxn::new(
-                    self.snapshot.as_ref(),
-                    &mut statistics,
+                    self.snapshot.clone(),
+                    Statistics::default(),
                     START_TS,
                     None,
                     IsolationLevel::SI,
@@ -243,8 +247,10 @@ mod test {
                     let key = key.as_bytes();
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.modifies()).unwrap();
-
+                let mut stat = Some(Statistics::default());
+                self.engine
+                    .write(&self.ctx, txn.modifies(&mut stat))
+                    .unwrap();
             }
             self.refresh_snapshot();
         }
@@ -256,7 +262,7 @@ mod test {
 
         fn store(&self) -> SnapshotStore {
             SnapshotStore::new(
-                self.snapshot.as_ref(),
+                self.snapshot.clone(),
                 COMMIT_TS + 1,
                 IsolationLevel::SI,
                 true,
@@ -270,7 +276,7 @@ mod test {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Statistics::default();
+        let mut statistics = Some(Statistics::default());
         for key in &store.keys {
             let key = key.as_bytes();
             let data = snapshot_store.get(&make_key(key), &mut statistics).unwrap();
@@ -283,7 +289,7 @@ mod test {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Statistics::default();
+        let mut statistics = Some(Statistics::default());
         let mut keys_list = Vec::new();
         for key in &store.keys {
             keys_list.push(make_key(key.as_bytes()));
@@ -301,9 +307,9 @@ mod test {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Statistics::default();
+        let statistics = Statistics::default();
         let mut scanner = snapshot_store
-            .scanner(ScanMode::Forward, false, None, &mut statistics)
+            .scanner(ScanMode::Forward, false, None, statistics)
             .unwrap();
 
         let key = format!("{}{}", KEY_PREFIX, START_ID);
@@ -325,9 +331,9 @@ mod test {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Statistics::default();
+        let statistics = Statistics::default();
         let mut scanner = snapshot_store
-            .scanner(ScanMode::Backward, false, None, &mut statistics)
+            .scanner(ScanMode::Backward, false, None, statistics)
             .unwrap();
 
         let half = (key_num / 2) as usize;
@@ -351,9 +357,9 @@ mod test {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Statistics::default();
+        let statistics = Statistics::default();
         let mut scanner = snapshot_store
-            .scanner(ScanMode::Forward, false, None, &mut statistics)
+            .scanner(ScanMode::Forward, false, None, statistics)
             .unwrap();
 
         let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
@@ -370,9 +376,9 @@ mod test {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Statistics::default();
+        let statistics = Statistics::default();
         let mut scanner = snapshot_store
-            .scanner(ScanMode::Backward, false, None, &mut statistics)
+            .scanner(ScanMode::Backward, false, None, statistics)
             .unwrap();
 
         let key = format!("{}{}aaa", KEY_PREFIX, START_ID);

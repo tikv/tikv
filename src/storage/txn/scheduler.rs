@@ -407,7 +407,7 @@ fn process_read(
         .inc();
     let tag = cmd.tag();
 
-    let mut statistics = Statistics::default();
+    let mut statistics: Option<Statistics> = None;
 
     let pr = match cmd {
         // Gets from the snapshot.
@@ -421,7 +421,7 @@ fn process_read(
                 .with_label_values(&[tag])
                 .observe(1f64);
             let snap_store = SnapshotStore::new(
-                snapshot.as_ref(),
+                snapshot,
                 start_ts,
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
@@ -445,12 +445,13 @@ fn process_read(
                 .with_label_values(&[tag])
                 .observe(keys.len() as f64);
             let snap_store = SnapshotStore::new(
-                snapshot.as_ref(),
+                snapshot,
                 start_ts,
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
-            match snap_store.batch_get(keys, &mut statistics) {
+            let res = snap_store.batch_get(keys, &mut statistics);
+            match res {
                 Ok(results) => {
                     let mut res = vec![];
                     for (k, v) in keys.into_iter().zip(results) {
@@ -477,14 +478,23 @@ fn process_read(
             ..
         } => {
             let snap_store = SnapshotStore::new(
-                snapshot.as_ref(),
+                snapshot,
                 start_ts,
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),
             );
             let res = snap_store
-                .scanner(ScanMode::Forward, options.key_only, None, &mut statistics)
-                .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
+                .scanner(
+                    ScanMode::Forward,
+                    options.key_only,
+                    None,
+                    Statistics::default(),
+                )
+                .and_then(|mut scanner| {
+                    let res = scanner.scan(start_key.clone(), limit);
+                    statistics = Some(scanner.close());
+                    res
+                })
                 .and_then(|mut results| {
                     KV_COMMAND_KEYREAD_HISTOGRAM_VEC
                         .with_label_values(&[tag])
@@ -504,14 +514,14 @@ fn process_read(
         }
         Command::MvccByKey { ref ctx, ref key } => {
             let mut reader = MvccReader::new(
-                snapshot.as_ref(),
-                &mut statistics,
+                snapshot,
+                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
-            match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
+            let res = match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
                 Ok((lock, writes, values)) => ProcessResult::MvccKey {
                     mvcc: MvccInfo {
                         lock: lock,
@@ -520,18 +530,21 @@ fn process_read(
                     },
                 },
                 Err(e) => ProcessResult::Failed { err: e.into() },
-            }
+            };
+
+            statistics = Some(reader.close());
+            res
         }
         Command::MvccByStartTs { ref ctx, start_ts } => {
             let mut reader = MvccReader::new(
-                snapshot.as_ref(),
-                &mut statistics,
+                snapshot,
+                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
                 ctx.get_isolation_level(),
             );
-            match reader.seek_ts(start_ts).map_err(StorageError::from) {
+            let res = match reader.seek_ts(start_ts).map_err(StorageError::from) {
                 Err(e) => ProcessResult::Failed { err: e.into() },
                 Ok(opt) => match opt {
                     Some(key) => match find_mvcc_infos_by_key(&mut reader, &key, u64::MAX) {
@@ -549,15 +562,17 @@ fn process_read(
                     },
                     None => ProcessResult::MvccStartTs { mvcc: None },
                 },
-            }
+            };
+            statistics = Some(reader.close());
+            res
         }
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock {
             ref ctx, max_ts, ..
         } => {
             let mut reader = MvccReader::new(
-                snapshot.as_ref(),
-                &mut statistics,
+                snapshot,
+                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
@@ -580,6 +595,7 @@ fn process_read(
                         .observe(locks.len() as f64);
                     Ok(locks)
                 });
+            statistics = Some(reader.close());
             match res {
                 Ok(locks) => ProcessResult::Locks { locks: locks },
                 Err(e) => ProcessResult::Failed { err: e.into() },
@@ -595,8 +611,8 @@ fn process_read(
             ..
         } => {
             let mut reader = MvccReader::new(
-                snapshot.as_ref(),
-                &mut statistics,
+                snapshot,
+                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
@@ -626,6 +642,7 @@ fn process_read(
                         }))
                     }
                 });
+            statistics = Some(reader.close());
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
@@ -641,8 +658,8 @@ fn process_read(
             ..
         } => {
             let mut reader = MvccReader::new(
-                snapshot.as_ref(),
-                &mut statistics,
+                snapshot,
+                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
@@ -684,6 +701,7 @@ fn process_read(
                         }
                     })
             };
+            statistics = Some(reader.close());
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
@@ -705,12 +723,18 @@ fn process_read(
             ref start_key,
             limit,
             ..
-        } => match process_rawscan(snapshot, start_key, limit, &mut statistics) {
-            Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
-            Err(e) => ProcessResult::Failed {
-                err: StorageError::from(e),
-            },
-        },
+        } => {
+            let mut s = Statistics::default();
+
+            let res = match process_rawscan(snapshot, start_key, limit, &mut s) {
+                Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
+                Err(e) => ProcessResult::Failed {
+                    err: StorageError::from(e),
+                },
+            };
+            statistics = Some(s);
+            res
+        }
         Command::Pause { duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
             ProcessResult::Res
@@ -722,7 +746,7 @@ fn process_read(
         // Todo: if this happens we need to clean up command's context
         panic!("send read finished failed, cid={}, err={:?}", cid, e);
     }
-    statistics
+    statistics.unwrap_or_default()
 }
 
 fn process_rawscan(
@@ -751,11 +775,11 @@ fn process_write(
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
 ) -> Statistics {
-    let mut statistics = Statistics::default();
+    let mut statistics = Some(Statistics::default());
     SCHED_WORKER_COUNTER_VEC
         .with_label_values(&[cmd.tag(), "write"])
         .inc();
-    if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref(), &mut statistics) {
+    if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot, &mut statistics) {
         if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
             // Todo: if this happens, lock will hold for ever
             panic!(
@@ -765,16 +789,17 @@ fn process_write(
             );
         }
     }
-    statistics
+    statistics.unwrap_or_default()
 }
 
 fn process_write_impl(
     cid: u64,
     mut cmd: Command,
     ch: SyncSendCh<Msg>,
-    snapshot: &Snapshot,
-    statistics: &mut Statistics,
+    snapshot: Box<Snapshot>,
+    st: &mut Option<Statistics>,
 ) -> Result<()> {
+    let statistics = st.take().unwrap_or_default();
     let (pr, modifies, rows) = match cmd {
         Command::Prewrite {
             ref ctx,
@@ -805,10 +830,11 @@ fn process_write_impl(
             }
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                (pr, txn.modifies(), rows)
+                (pr, txn.modifies(st), rows)
             } else {
                 // Skip write stage if some keys are locked.
                 let pr = ProcessResult::MultiRes { results: locks };
+                *st = Some(txn.close());
                 (pr, vec![], 0)
             }
         }
@@ -839,7 +865,7 @@ fn process_write_impl(
             }
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies(), rows)
+            (pr, txn.modifies(st), rows)
         }
         Command::Cleanup {
             ref ctx,
@@ -858,7 +884,7 @@ fn process_write_impl(
             txn.rollback(key)?;
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies(), 1)
+            (pr, txn.modifies(st), 1)
         }
         Command::Rollback {
             ref ctx,
@@ -880,7 +906,7 @@ fn process_write_impl(
             }
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies(), rows)
+            (pr, txn.modifies(st), rows)
         }
         Command::ResolveLock {
             ref ctx,
@@ -918,7 +944,7 @@ fn process_write_impl(
                 }
             }
             if scan_key.is_none() {
-                (ProcessResult::Res, txn.modifies(), rows)
+                (ProcessResult::Res, txn.modifies(st), rows)
             } else {
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
@@ -929,7 +955,7 @@ fn process_write_impl(
                         keys: vec![],
                     },
                 };
-                (pr, txn.modifies(), rows)
+                (pr, txn.modifies(st), rows)
             }
         }
         Command::Gc {
@@ -957,7 +983,7 @@ fn process_write_impl(
                 }
             }
             if scan_key.is_none() {
-                (ProcessResult::Res, txn.modifies(), rows)
+                (ProcessResult::Res, txn.modifies(st), rows)
             } else {
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::Gc {
@@ -968,7 +994,7 @@ fn process_write_impl(
                         keys: vec![],
                     },
                 };
-                (pr, txn.modifies(), rows)
+                (pr, txn.modifies(st), rows)
             }
         }
         _ => panic!("unsupported write command"),
@@ -1319,12 +1345,11 @@ impl Scheduler {
             cb_ctx
         );
         match snapshot {
-            Ok(ref snapshot) => for cid in cids {
+            Ok(snapshot) => for cid in cids {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
                     .inc();
-                let s = Snapshot::clone(snapshot.as_ref());
-                self.process_by_worker(cid, cb_ctx.clone(), s);
+                self.process_by_worker(cid, cb_ctx.clone(), snapshot.clone());
             },
             Err(ref e) => {
                 error!("get snapshot failed for cids={:?}, error {:?}", cids, e);

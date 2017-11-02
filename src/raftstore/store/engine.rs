@@ -81,6 +81,23 @@ impl Snapshot {
     pub fn get_db(&self) -> Arc<DB> {
         self.db.clone()
     }
+
+    pub fn new_arc_iter(&self, iter_opt: IterOption) -> DBIterator<Arc<DB>> {
+        let mut opt = iter_opt.build_read_opts();
+        unsafe {
+            opt.set_snapshot(&self.snap);
+        }
+        DBIterator::new(self.db.clone(), opt)
+    }
+
+    pub fn new_arc_iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
+        let handle = rocksdb::get_cf_handle(&self.db, cf)?;
+        let mut opt = iter_opt.build_read_opts();
+        unsafe {
+            opt.set_snapshot(&self.snap);
+        }
+        Ok(DBIterator::new_cf(self.db.clone(), handle, opt))
+    }
 }
 
 impl Debug for Snapshot {
@@ -238,7 +255,6 @@ impl Default for IterOption {
 pub trait Iterable {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB>;
     fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
-
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>

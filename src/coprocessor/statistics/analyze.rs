@@ -27,21 +27,19 @@ use super::fmsketch::FMSketch;
 use super::histogram::Histogram;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
-pub struct AnalyzeContext<'a> {
+pub struct AnalyzeContext {
     req: AnalyzeReq,
-    snap: SnapshotStore<'a>,
-    statistics: &'a mut Statistics,
+    snap: SnapshotStore,
     ranges: Vec<KeyRange>,
 }
 
-impl<'a> AnalyzeContext<'a> {
+impl AnalyzeContext {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
-        snap: &'a Snapshot,
-        statistics: &'a mut Statistics,
-        req_ctx: &'a ReqContext,
-    ) -> AnalyzeContext<'a> {
+        snap: Box<Snapshot>,
+        req_ctx: &ReqContext,
+    ) -> AnalyzeContext {
         let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
@@ -51,16 +49,30 @@ impl<'a> AnalyzeContext<'a> {
         AnalyzeContext {
             req: req,
             snap: snap,
-            statistics: statistics,
             ranges: ranges,
         }
     }
 
-    pub fn handle_request(self) -> Result<Response> {
-        let ret = match self.req.get_tp() {
-            AnalyzeType::TypeIndex => self.handle_index(),
-            AnalyzeType::TypeColumn => self.handle_column(),
+    pub fn handle_request(mut self, statistics: &mut Statistics) -> Result<Response> {
+        let (ret, st) = match self.req.get_tp() {
+            AnalyzeType::TypeIndex => {
+                let req = self.req.take_idx_req();
+                let mut scanner = IndexScanExecutor::new_with_cols_len(
+                    req.get_num_columns() as i64,
+                    self.ranges,
+                    self.snap,
+                );
+                let res = handle_index(&mut scanner, req.get_bucket_size() as usize);
+                (res, scanner.take_statistics())
+            }
+            AnalyzeType::TypeColumn => {
+                let col_req = self.req.take_col_req();
+                let mut builder = SampleBuilder::new(col_req, self.snap, self.ranges)?;
+                let res = handle_column(&mut builder);
+                (res, builder.data.take_statistics())
+            }
         };
+        statistics.add(&st);
         match ret {
             Ok(data) => {
                 let mut resp = Response::new();
@@ -75,52 +87,42 @@ impl<'a> AnalyzeContext<'a> {
             Err(e) => Err(e),
         }
     }
-
-    // handle_index is used to handle `AnalyzeIndexReq`,
-    // it would build a histogram of index values.
-    fn handle_index(mut self) -> Result<Vec<u8>> {
-        let req = self.req.take_idx_req();
-        let mut scanner = IndexScanExecutor::new_with_cols_len(
-            req.get_num_columns() as i64,
-            self.ranges,
-            self.snap,
-            self.statistics,
-        );
-        let mut hist = Histogram::new(req.get_bucket_size() as usize);
-        while let Some(row) = scanner.next()? {
-            let bytes = row.data.get_column_values();
-            hist.append(bytes);
-        }
-        let mut res = analyze::AnalyzeIndexResp::new();
-        res.set_hist(hist.into_proto());
-        let dt = box_try!(res.write_to_bytes());
-        Ok(dt)
-    }
-
-    // handle_column is used to process `AnalyzeColumnsReq`
-    // it would build a histogram for the primary key(if needed) and
-    // collectors for each column value.
-    fn handle_column(mut self) -> Result<Vec<u8>> {
-        let col_req = self.req.take_col_req();
-        let builder = SampleBuilder::new(col_req, self.snap, self.ranges, &mut self.statistics)?;
-
-        let (collectors, pk_builder) = builder.collect_samples_and_estimate_ndvs()?;
-        let pk_hist = pk_builder.into_proto();
-        let cols: Vec<analyze::SampleCollector> =
-            collectors.into_iter().map(|col| col.into_proto()).collect();
-
-        let res_data = {
-            let mut res = analyze::AnalyzeColumnsResp::new();
-            res.set_collectors(RepeatedField::from_vec(cols));
-            res.set_pk_hist(pk_hist);
-            box_try!(res.write_to_bytes())
-        };
-        Ok(res_data)
-    }
 }
 
-struct SampleBuilder<'a> {
-    data: TableScanExecutor<'a>,
+// handle_column is used to process `AnalyzeColumnsReq`
+// it would build a histogram for the primary key(if needed) and
+// collectors for each column value.
+fn handle_column(builder: &mut SampleBuilder) -> Result<Vec<u8>> {
+    let (collectors, pk_builder) = builder.collect_samples_and_estimate_ndvs()?;
+    let pk_hist = pk_builder.into_proto();
+    let cols: Vec<analyze::SampleCollector> =
+        collectors.into_iter().map(|col| col.into_proto()).collect();
+
+    let res_data = {
+        let mut res = analyze::AnalyzeColumnsResp::new();
+        res.set_collectors(RepeatedField::from_vec(cols));
+        res.set_pk_hist(pk_hist);
+        box_try!(res.write_to_bytes())
+    };
+    Ok(res_data)
+}
+
+// handle_index is used to handle `AnalyzeIndexReq`,
+// it would build a histogram of index values.
+fn handle_index(scanner: &mut IndexScanExecutor, bucket_size: usize) -> Result<Vec<u8>> {
+    let mut hist = Histogram::new(bucket_size);
+    while let Some(row) = scanner.next()? {
+        let bytes = row.data.get_column_values();
+        hist.append(bytes);
+    }
+    let mut res = analyze::AnalyzeIndexResp::new();
+    res.set_hist(hist.into_proto());
+    let dt = box_try!(res.write_to_bytes());
+    Ok(dt)
+}
+
+struct SampleBuilder {
+    data: TableScanExecutor,
     cols: Vec<ColumnInfo>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
@@ -133,13 +135,12 @@ struct SampleBuilder<'a> {
 /// `SampleBuilder` is used to analyze columns. It collects sample from
 /// the result set using Reservoir Sampling algorithm, and estimates NDVs
 /// using FM Sketch during the collecting process.
-impl<'a> SampleBuilder<'a> {
+impl SampleBuilder {
     fn new(
         mut req: AnalyzeColumnsReq,
-        snap: SnapshotStore<'a>,
+        snap: SnapshotStore,
         ranges: Vec<KeyRange>,
-        statistics: &'a mut Statistics,
-    ) -> Result<SampleBuilder<'a>> {
+    ) -> Result<SampleBuilder> {
         let cols_info = req.take_columns_info();
         if cols_info.is_empty() {
             return Err(box_err!("empty columns_info"));
@@ -152,7 +153,7 @@ impl<'a> SampleBuilder<'a> {
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
-        let table_scanner = TableScanExecutor::new(&meta, ranges, snap, statistics);
+        let table_scanner = TableScanExecutor::new(&meta, ranges, snap);
         Ok(SampleBuilder {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
@@ -166,7 +167,7 @@ impl<'a> SampleBuilder<'a> {
     // `collect_samples_and_estimate_ndvs` returns the sample collectors which contain total count,
     // null count and distinct values count. And it also returns the statistic builder for PK
     // which contains the histogram. See https://en.wikipedia.org/wiki/Reservoir_sampling
-    fn collect_samples_and_estimate_ndvs(mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
+    fn collect_samples_and_estimate_ndvs(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors =
             vec![SampleCollector::new(self.max_sample_size, self.max_sketch_size); self.col_len];

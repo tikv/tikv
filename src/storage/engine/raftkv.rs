@@ -477,19 +477,17 @@ impl Snapshot for RegionSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(RegionSnapshot::iter(self, iter_opt), mode))
+    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
+        Ok(Cursor::new(
+            Box::new(RegionSnapshot::iter(self, iter_opt)),
+            mode,
+        ))
     }
 
     #[allow(needless_lifetimes)]
-    fn iter_cf<'b>(
-        &'b self,
-        cf: CfName,
-        iter_opt: IterOption,
-        mode: ScanMode,
-    ) -> engine::Result<Cursor<'b>> {
+    fn iter_cf(&self, cf: CfName, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
         Ok(Cursor::new(
-            RegionSnapshot::iter_cf(self, cf, iter_opt)?,
+            Box::new(RegionSnapshot::iter_cf(self, cf, iter_opt)?),
             mode,
         ))
     }
@@ -503,7 +501,7 @@ impl Snapshot for RegionSnapshot {
     }
 }
 
-impl<'a> EngineIterator for RegionIterator<'a> {
+impl EngineIterator for RegionIterator {
     fn next(&mut self) -> bool {
         RegionIterator::next(self)
     }
