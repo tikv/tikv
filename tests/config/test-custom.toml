@@ -20,6 +20,7 @@ a = "b"
 [storage]
 data-dir = "/var"
 gc-ratio-threshold = 1.2
+max-key-size = 8192
 scheduler-notify-capacity = 123
 scheduler-messages-per-tick = 123
 scheduler-concurrency = 123
