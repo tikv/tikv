@@ -715,7 +715,7 @@ impl Snap {
                         key_count += 1;
                         let l = key.len() + value.len();
                         size += l;
-                        limiter.request(l as i64);
+                        limiter.request(l as i64, 0);
                         self.add_kv(key, value)?;
                         Ok(true)
                     },
