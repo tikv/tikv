@@ -24,7 +24,7 @@ use std::time;
 use std::thread;
 
 use protobuf::Message;
-use rocksdb::{CFHandle, Writable, WriteBatch, DB};
+use rocksdb::{CFHandle, Writable, WriteBatch, DB, RateLimiter};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -171,6 +171,7 @@ pub trait Snapshot: Read + Write + Send {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
+        limiter: &RateLimiter,
     ) -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
@@ -670,6 +671,7 @@ impl Snap {
         region: &Region,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
+        limiter: &RateLimiter,
     ) -> RaftStoreResult<()> {
         if self.exists() {
             match self.validate() {
@@ -711,7 +713,9 @@ impl Snap {
                     false,
                     &mut |key, value| {
                         key_count += 1;
-                        size += key.len() + value.len();
+                        let l = key.len() + value.len();
+                        size += l;
+                        limiter.request(l as i64);
                         self.add_kv(key, value)?;
                         Ok(true)
                     },
@@ -811,9 +815,10 @@ impl Snapshot for Snap {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
+        limiter: &RateLimiter,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build(snap, region, stat, deleter)?;
+        self.do_build(snap, region, stat, deleter, limiter)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -1082,6 +1087,7 @@ pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
     ch: Option<SendCh<Msg>>,
+    limiter: Arc<RateLimiter>,
 }
 
 impl SnapManager {
@@ -1093,6 +1099,10 @@ impl SnapManager {
                 snap_size: Arc::new(RwLock::new(0)),
             })),
             ch: ch,
+            limiter: Arc::new(RateLimiter::new(
+                10 * 1024 * 1024, // bytes_per_sec
+                100 * 1000,       // refill_period_us
+                10)),             // fairness
         }
     }
 
@@ -1315,6 +1325,10 @@ impl SnapManager {
             sending_count: sending_cnt,
             receiving_count: receiving_cnt,
         }
+    }
+
+    pub fn get_limiter(&self) -> &RateLimiter {
+        &self.limiter
     }
 }
 
