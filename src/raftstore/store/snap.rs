@@ -1087,7 +1087,7 @@ pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
     ch: Option<SendCh<Msg>>,
-    limiter: Arc<RateLimiter>,
+    limiter: RateLimiter,
 }
 
 impl SnapManager {
@@ -1099,10 +1099,10 @@ impl SnapManager {
                 snap_size: Arc::new(RwLock::new(0)),
             })),
             ch: ch,
-            limiter: Arc::new(RateLimiter::new(
+            limiter: RateLimiter::new(
                 10 * 1024 * 1024, // bytes_per_sec
                 100 * 1000,       // refill_period_us
-                10)),             // fairness
+                10),             // fairness
         }
     }
 
