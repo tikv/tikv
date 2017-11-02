@@ -18,11 +18,12 @@ const BATCH_MIN_SIZE: usize = 20; // 8 bytes total length + 8 bytes item count +
 const TYPE_ENTRIES: u8 = 0x01;
 const TYPE_COMMAND: u8 = 0x02;
 const TYPE_KV: u8 = 0x3;
+
 const CMD_CLEAN: u8 = 0x01;
 
 type SliceReader<'a> = &'a [u8];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum LogItemType {
     Entries, // entries
     CMD,     // admin command, eg. clean a region
@@ -339,5 +340,42 @@ impl LogBatch {
         vec.as_mut_slice().write_u64::<BigEndian>(len).unwrap();
 
         Some(vec)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use kvproto::eraftpb::Entry;
+
+    #[test]
+    fn test_log_item_type() {
+        let item_types = vec![LogItemType::Entries, LogItemType::CMD, LogItemType::KV];
+        let item_types_byte = vec![TYPE_ENTRIES, TYPE_COMMAND, TYPE_KV];
+
+        for (pos, item_type) in item_types.iter().enumerate() {
+            assert_eq!(item_type.to_byte(), item_types_byte[pos]);
+            assert_eq!(&LogItemType::from_byte(item_types_byte[pos]), item_type);
+
+            let mut vec = vec![];
+            item_type.encode_to(&mut vec);
+            assert_eq!(vec, vec![item_types_byte[pos]]);
+        }
+    }
+
+    #[test]
+    fn test_entries() {
+        let pb_entries = vec![Entry::new(); 10];
+        let region_id = 8;
+        let entries = Entries::new(region_id, pb_entries);
+
+        let mut bytes = vec![];
+        entries.encode_to(&mut bytes).unwrap();
+        let mut bytes_slice = bytes.as_slice();
+        let decode_entries = Entries::from_bytes(&mut bytes_slice).unwrap();
+        assert_eq!(entries.region_id, decode_entries.region_id);
+        assert_eq!(entries.entries, decode_entries.entries);
     }
 }
