@@ -89,7 +89,7 @@ macro_rules! build_cf_opt {
     ($opt:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
-        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, 6, 0, 0);
+        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
         block_base_opts.set_pin_l0_filter_and_index_blocks_in_cache(
             $opt.pin_l0_filter_and_index_blocks);
