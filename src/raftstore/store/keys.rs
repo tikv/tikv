@@ -195,7 +195,7 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
 }
 
 pub fn origin_key(key: &[u8]) -> &[u8] {
-    assert!(validate_data_key(key));
+    assert!(validate_data_key(key), "invalid data key {:?}", escape(key));
     &key[DATA_PREFIX_KEY.len()..]
 }
 
