@@ -4,6 +4,9 @@ use std::collections::VecDeque;
 
 use kvproto::eraftpb::Entry;
 
+use super::Result;
+use util;
+
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 pub struct FileIndex {
@@ -117,10 +120,51 @@ impl MemEntries {
         }
     }
 
-    pub fn fetch_all(&self, vec: &mut Vec<Entry>) {
-        for e in &self.entry_cache {
-            vec.push(e.clone());
+    pub fn fetch_entries(&self, begin: u64, end: u64, vec: &mut Vec<Entry>) -> Result<()> {
+        if begin < end {
+            return Err(box_err!(
+                "Range error when fetch entries for region {}.",
+                self.region_id
+            ));
         }
+
+        if self.entry_cache.is_empty() {
+            return Err(box_err!("There is no entry for region {}.", self.region_id));
+        }
+
+        let first_index = self.entry_cache.front().unwrap().get_index();
+        let last_index = self.entry_cache.back().unwrap().get_index();
+        if begin < first_index {
+            return Err(box_err!(
+                "First entry's index is larger than wanted index. \
+                 first index {}, wanted first index {}, region {}",
+                first_index,
+                begin,
+                self.region_id
+            ));
+        }
+        if begin > last_index {
+            return Err(box_err!(
+                "Wanted first index is larger than last index. \
+                 last index {}, wanted first index {}, region {}",
+                last_index,
+                begin,
+                self.region_id
+            ));
+        }
+
+        let start_idx = (begin - first_index) as usize;
+        let end_idx = cmp::min((end - begin) as usize + start_idx, self.entry_cache.len());
+        let (first, second) = util::slices_in_range(&self.entry_cache, start_idx, end_idx);
+        vec.extend_from_slice(first);
+        vec.extend_from_slice(second);
+        Ok(())
+    }
+
+    pub fn fetch_all(&self, vec: &mut Vec<Entry>) {
+        let (first, second) = util::slices_in_range(&self.entry_cache, 0, self.entry_cache.len());
+        vec.extend_from_slice(first);
+        vec.extend_from_slice(second);
     }
 
     pub fn min_file_num(&self) -> Option<u64> {
