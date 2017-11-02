@@ -27,12 +27,15 @@ pub struct PipeLog {
 
     dir: String,
 
+    bytes_per_sync: usize,
+    last_sync_size: usize,
+
     // Use to read.
     current_read_file_num: u64,
 }
 
 impl PipeLog {
-    pub fn new(dir: &str) -> PipeLog {
+    pub fn new(dir: &str, bytes_per_sync: usize) -> PipeLog {
         PipeLog {
             first_file_num: INIT_FILE_NUM,
             active_file_num: INIT_FILE_NUM,
@@ -40,11 +43,13 @@ impl PipeLog {
             active_log_size: 0,
             rotate_size: LOG_MAX_SIZE,
             dir: dir.to_string(),
+            bytes_per_sync: bytes_per_sync,
+            last_sync_size: 0,
             current_read_file_num: 0,
         }
     }
 
-    pub fn open(dir: &str) -> Result<PipeLog> {
+    pub fn open(dir: &str, bytes_per_sync: usize) -> Result<PipeLog> {
         let path = Path::new(dir);
         if !path.is_dir() {
             return Err(box_err!("Not directory."));
@@ -76,7 +81,7 @@ impl PipeLog {
         }
 
         // Initialize.
-        let mut pipe_log = PipeLog::new(dir);
+        let mut pipe_log = PipeLog::new(dir, bytes_per_sync);
         if log_files.is_empty() {
             let file = pipe_log.new_log_file(pipe_log.active_file_num);
             pipe_log.active_log = Some(file);
@@ -98,10 +103,14 @@ impl PipeLog {
         let file_num = self.active_file_num;
 
         self.active_log.as_mut().unwrap().write_all(content)?;
-        if sync {
-            self.active_log.as_mut().unwrap().sync_data()?;
-        }
         self.active_log_size += content.len();
+        if sync ||
+            self.bytes_per_sync > 0 &&
+                self.active_log_size - self.active_log_size >= self.bytes_per_sync
+        {
+            self.active_log.as_mut().unwrap().sync_data()?;
+            self.last_sync_size = self.active_log_size;
+        }
 
         // Rotate if needed.
         if self.active_log_size >= self.rotate_size {
@@ -141,7 +150,7 @@ impl PipeLog {
         Ok(())
     }
 
-    pub fn truncate_active_log(&self, offset: u64) -> Result<()> {
+    pub fn truncate_active_log(&mut self, offset: u64) -> Result<()> {
         if offset > self.active_log_size as u64 {
             return Err(box_err!(
                 "Offset {} is larger than file size {} when call truncate",
@@ -155,6 +164,9 @@ impl PipeLog {
         if let Err(e) = self.active_log.as_ref().unwrap().sync_all() {
             return Err(e.into());
         }
+        self.active_log_size = offset as usize;
+        self.last_sync_size = self.active_log_size;
+
         Ok(())
     }
 
@@ -171,6 +183,7 @@ impl PipeLog {
         let new_log_file = self.new_log_file(next_file_num);
         self.active_log = Some(new_log_file);
         self.active_log_size = FILE_MAGIC_HEADER.len();
+        self.last_sync_size = self.active_log_size;
         self.active_file_num = next_file_num;
     }
 
@@ -181,6 +194,7 @@ impl PipeLog {
         // Get active log size.
         let meta = fs::metadata(&path)?;
         self.active_log_size = meta.len() as usize;
+        self.last_sync_size = self.active_log_size;
 
         // Open file in append mode.
         let file = OpenOptions::new()

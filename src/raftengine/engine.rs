@@ -11,6 +11,8 @@ use super::mem_entries::MemEntries;
 use super::pipe_log::{PipeLog, FILE_MAGIC_HEADER};
 use super::log_batch::{Command, LogBatch, LogItemType};
 
+const DEFAULT_BYTES_PER_SYNC: usize = 32 * 1024;
+
 #[derive(Clone, Copy)]
 enum RecoveryMode {
     TolerateCorruptedTailRecords = 0,
@@ -29,9 +31,9 @@ struct MultiRaftEngine {
 }
 
 impl MultiRaftEngine {
-    pub fn new(dir: String, recovery_mode: RecoveryMode) -> MultiRaftEngine {
-        let pip_log =
-            PipeLog::open(&dir).unwrap_or_else(|e| panic!("Open raft log failed, error: {:?}", e));
+    pub fn new(dir: String, recovery_mode: RecoveryMode, bytes_per_sync: usize) -> MultiRaftEngine {
+        let pip_log = PipeLog::open(&dir, bytes_per_sync)
+            .unwrap_or_else(|e| panic!("Open raft log failed, error: {:?}", e));
         let mut engine = MultiRaftEngine {
             dir: dir,
             mem_entries: HashMap::default(),
