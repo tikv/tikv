@@ -223,12 +223,12 @@ fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine, b"k4", b"v4");
 
     // Stale gc message should be ignored.
-    let region = pd_client.get_region_epoch(r1);
+    let epoch = pd_client.get_region_epoch(r1);
     let mut gc_msg = RaftMessage::new();
     gc_msg.set_region_id(r1);
     gc_msg.set_from_peer(new_peer(1, 1));
     gc_msg.set_to_peer(new_peer(2, 2));
-    gc_msg.set_region_epoch(region);
+    gc_msg.set_region_epoch(epoch);
     gc_msg.set_is_tombstone(true);
     cluster.send_raft_msg(gc_msg).unwrap();
     // Fixme: find a better way to check if the message is ignored.
