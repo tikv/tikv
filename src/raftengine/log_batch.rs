@@ -255,6 +255,7 @@ impl LogItem {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct LogBatch {
     pub items: Vec<LogItem>,
 }
@@ -422,5 +423,19 @@ mod tests {
             assert_eq!(s.len(), 0);
             assert_eq!(item, decoded_item);
         }
+    }
+
+    #[test]
+    fn test_log_batch_enc_dec() {
+        let mut batch = LogBatch::default();
+        batch.add_entries(8, vec![Entry::new(); 10]);
+        batch.add_command(Command::Clean { region_id: 8 });
+        batch.add_kv(b"key", b"value");
+
+        let encoded = batch.to_vec().unwrap();
+        let mut s = encoded.as_slice();
+        let (decoded_batch, _) = LogBatch::from_bytes(&mut s).unwrap().unwrap();
+        assert_eq!(s.len(), 0);
+        assert_eq!(batch, decoded_batch);
     }
 }
