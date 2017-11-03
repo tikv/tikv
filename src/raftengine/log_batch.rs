@@ -57,6 +57,7 @@ impl LogItemType {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct Entries {
     pub region_id: u64,
     pub entries: Vec<Entry>,
@@ -109,6 +110,7 @@ impl Entries {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Command {
     Clean { region_id: u64 },
 }
@@ -136,6 +138,7 @@ impl Command {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct KeyValue {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
@@ -169,6 +172,7 @@ impl KeyValue {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct LogItem {
     pub item_type: LogItemType,
     pub entries: Option<Entries>,
@@ -366,16 +370,57 @@ mod tests {
     }
 
     #[test]
-    fn test_entries() {
+    fn test_entries_enc_dec() {
         let pb_entries = vec![Entry::new(); 10];
         let region_id = 8;
         let entries = Entries::new(region_id, pb_entries);
 
-        let mut bytes = vec![];
-        entries.encode_to(&mut bytes).unwrap();
-        let mut bytes_slice = bytes.as_slice();
-        let decode_entries = Entries::from_bytes(&mut bytes_slice).unwrap();
+        let mut encoded = vec![];
+        entries.encode_to(&mut encoded).unwrap();
+        let mut s = encoded.as_slice();
+        let decode_entries = Entries::from_bytes(&mut s).unwrap();
+        assert_eq!(s.len(), 0);
         assert_eq!(entries.region_id, decode_entries.region_id);
         assert_eq!(entries.entries, decode_entries.entries);
+    }
+
+    #[test]
+    fn test_command_enc_dec() {
+        let cmd = Command::Clean { region_id: 8 };
+        let mut encoded = vec![];
+        cmd.encode_to(&mut encoded);
+        let mut bytes_slice = encoded.as_slice();
+        let decoded_cmd = Command::from_bytes(&mut bytes_slice).unwrap();
+        assert_eq!(bytes_slice.len(), 0);
+        assert_eq!(cmd, decoded_cmd);
+    }
+
+    #[test]
+    fn test_kv_enc_dec() {
+        let (key, value) = (b"key", b"value");
+        let kv = KeyValue::new(key, value);
+        let mut encoded = vec![];
+        kv.encode_to(&mut encoded).unwrap();
+        let mut bytes_slice = encoded.as_slice();
+        let decoded_kv = KeyValue::from_bytes(&mut bytes_slice).unwrap();
+        assert_eq!(bytes_slice.len(), 0);
+        assert_eq!(kv, decoded_kv);
+    }
+
+    #[test]
+    fn test_log_item_enc_dec() {
+        let (key, value) = (b"key", b"value");
+        let items = vec![LogItem::from_entries(8, vec![Entry::new(); 10]),
+        LogItem::from_command(Command::Clean { region_id: 8 }),
+        LogItem::from_kv(key, value)];
+
+        for item in items {
+            let mut encoded = vec![];
+            item.encode_to(&mut encoded).unwrap();
+            let mut s = encoded.as_slice();
+            let decoded_item = LogItem::from_bytes(&mut s).unwrap();
+            assert_eq!(s.len(), 0);
+            assert_eq!(item, decoded_item);
+        }
     }
 }
