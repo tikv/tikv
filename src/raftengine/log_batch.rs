@@ -411,9 +411,11 @@ mod tests {
     #[test]
     fn test_log_item_enc_dec() {
         let (key, value) = (b"key", b"value");
-        let items = vec![LogItem::from_entries(8, vec![Entry::new(); 10]),
-        LogItem::from_command(Command::Clean { region_id: 8 }),
-        LogItem::from_kv(key, value)];
+        let items = vec![
+            LogItem::from_entries(8, vec![Entry::new(); 10]),
+            LogItem::from_command(Command::Clean { region_id: 8 }),
+            LogItem::from_kv(key, value),
+        ];
 
         for item in items {
             let mut encoded = vec![];

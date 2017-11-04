@@ -9,6 +9,7 @@ use util;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
+#[derive(Debug, PartialEq)]
 pub struct FileIndex {
     pub file_num: u64,
 
@@ -89,7 +90,7 @@ impl MemEntries {
             Some(e) => e.get_index(),
         };
 
-        if cache_first_idx > idx {
+        if cache_first_idx >= idx {
             return;
         }
         let cache_last_idx = self.entry_queue.back().unwrap().get_index();
@@ -119,7 +120,7 @@ impl MemEntries {
     }
 
     pub fn fetch_entries(&self, begin: u64, end: u64, vec: &mut Vec<Entry>) -> Result<()> {
-        if begin < end {
+        if end <= begin {
             return Err(box_err!(
                 "Range error when fetch entries for region {}.",
                 self.region_id
@@ -191,5 +192,125 @@ impl MemEntries {
         });
         self.file_index[pos].last_index = cache_last_index;
         self.file_index.drain(pos + 1..);
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::*;
+
+    use kvproto::eraftpb::Entry;
+
+    #[test]
+    fn test_mem_entries() {
+        let mut mem_entries = MemEntries::new(8 /* region_id */);
+
+        // append entries [0, 10) file_num = 1
+        // append entries [10, 20) file_num = 1
+        // append entries [20, 30) file_num = 2
+        mem_entries.append(generate_ents(0, 10), 1);
+        mem_entries.append(generate_ents(10, 20), 1);
+        mem_entries.append(generate_ents(20, 30), 2);
+        assert_eq!(
+            mem_entries.file_index,
+            VecDeque::from(vec![FileIndex::new(1, 19), FileIndex::new(2, 29)])
+        );
+        assert_eq!(mem_entries.entry_queue.len(), 30);
+        assert_eq!(mem_entries.entry_queue[0].get_index(), 0);
+        assert_eq!(mem_entries.entry_queue[29].get_index(), 29);
+        assert_eq!(mem_entries.min_file_num().unwrap(), 1);
+        assert_eq!(mem_entries.max_file_num().unwrap(), 2);
+
+        mem_entries.compact_to(15);
+        assert_eq!(
+            mem_entries.file_index,
+            VecDeque::from(vec![FileIndex::new(1, 19), FileIndex::new(2, 29)])
+        );
+        assert_eq!(mem_entries.entry_queue.len(), 15);
+        assert_eq!(mem_entries.entry_queue[0].get_index(), 15);
+        assert_eq!(mem_entries.entry_queue[14].get_index(), 29);
+        assert_eq!(mem_entries.min_file_num().unwrap(), 1);
+        assert_eq!(mem_entries.max_file_num().unwrap(), 2);
+
+        mem_entries.compact_to(25);
+        assert_eq!(
+            mem_entries.file_index,
+            VecDeque::from(vec![FileIndex::new(2, 29)])
+        );
+        assert_eq!(mem_entries.entry_queue.len(), 5);
+        assert_eq!(mem_entries.entry_queue[0].get_index(), 25);
+        assert_eq!(mem_entries.entry_queue[4].get_index(), 29);
+        assert_eq!(mem_entries.min_file_num().unwrap(), 2);
+        assert_eq!(mem_entries.max_file_num().unwrap(), 2);
+
+        mem_entries.compact_to(24);
+        assert_eq!(
+            mem_entries.file_index,
+            VecDeque::from(vec![FileIndex::new(2, 29)])
+        );
+        assert_eq!(mem_entries.entry_queue.len(), 5);
+        assert_eq!(mem_entries.entry_queue[0].get_index(), 25);
+        assert_eq!(mem_entries.entry_queue[4].get_index(), 29);
+        assert_eq!(mem_entries.min_file_num().unwrap(), 2);
+        assert_eq!(mem_entries.max_file_num().unwrap(), 2);
+
+        // append entries [28, 38) file_num = 3
+        mem_entries.append(generate_ents(28, 38), 3);
+        assert_eq!(
+            mem_entries.file_index,
+            VecDeque::from(vec![FileIndex::new(2, 27), FileIndex::new(3, 37)])
+        );
+        assert_eq!(mem_entries.entry_queue.len(), 13);
+        assert_eq!(mem_entries.entry_queue[0].get_index(), 25);
+        assert_eq!(mem_entries.entry_queue[12].get_index(), 37);
+        assert_eq!(mem_entries.min_file_num().unwrap(), 2);
+        assert_eq!(mem_entries.max_file_num().unwrap(), 3);
+
+        // has entries [25, 38)
+        let mut ents = vec![];
+        mem_entries.fetch_all(&mut ents);
+        assert_eq!(ents.len(), 13);
+        assert_eq!(ents[0].get_index(), 25);
+        assert_eq!(ents[12].get_index(), 37);
+
+        ents.clear();
+        assert!(mem_entries.fetch_entries(24, 37, &mut ents).is_err());
+        assert!(mem_entries.fetch_entries(40, 45, &mut ents).is_err());
+        mem_entries.fetch_entries(25, 38, &mut ents).unwrap();
+        assert_eq!(ents.len(), 13);
+        assert_eq!(ents[0].get_index(), 25);
+        assert_eq!(ents[12].get_index(), 37);
+
+        ents.clear();
+        mem_entries.fetch_entries(30, 40, &mut ents).unwrap();
+        assert_eq!(ents.len(), 8);
+        assert_eq!(ents[0].get_index(), 30);
+        assert_eq!(ents[7].get_index(), 37);
+
+        // append entries [20, 40) file_num = 3
+        mem_entries.append(generate_ents(20, 40), 3);
+        assert_eq!(
+            mem_entries.file_index,
+            VecDeque::from(vec![FileIndex::new(3, 39)])
+        );
+        assert_eq!(mem_entries.entry_queue.len(), 20);
+        assert_eq!(mem_entries.entry_queue[0].get_index(), 20);
+        assert_eq!(mem_entries.entry_queue[19].get_index(), 39);
+        assert_eq!(mem_entries.min_file_num().unwrap(), 3);
+        assert_eq!(mem_entries.max_file_num().unwrap(), 3);
+    }
+
+    fn generate_ents(begin_idx: u64, end_idx: u64) -> Vec<Entry> {
+        assert!(end_idx >= begin_idx);
+        let mut ents = vec![];
+        for idx in begin_idx..end_idx {
+            let mut ent = Entry::new();
+            ent.set_index(idx);
+            ents.push(ent);
+        }
+        ents
     }
 }
