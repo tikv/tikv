@@ -26,9 +26,6 @@ struct MultiRaftEngine {
     // region_id -> MemEntries.
     pub mem_entries: HashMap<u64, MemEntries>,
 
-    // key/value pairs.
-    pub mem_kvs: HashMap<Vec<u8>, Vec<u8>>,
-
     // Persistent entries.
     pub pipe_log: PipeLog,
 
@@ -42,7 +39,6 @@ impl MultiRaftEngine {
         let mut engine = MultiRaftEngine {
             dir: dir,
             mem_entries: HashMap::default(),
-            mem_kvs: HashMap::default(),
             pipe_log: pip_log,
         };
         engine
@@ -130,7 +126,7 @@ impl MultiRaftEngine {
         Ok(())
     }
 
-    // Rewrite inactive region's entries, so the old log can be dropped.
+    // Rewrite inactive region's entries and key/value pairs, so the old log can be dropped.
     pub fn rewrite_inactive(&mut self) {
         let active_file_num = self.pipe_log.active_file_num();
         for entries in self.mem_entries.values_mut() {
@@ -141,13 +137,23 @@ impl MultiRaftEngine {
             let count = entries.entry_queue.len();
             if count > 0 && count <= 50 && max_file_num + 8 < active_file_num {
                 // Todo: zero copy
+                // Rewrite entries
                 let mut ents = Vec::with_capacity(count);
                 entries.fetch_all(&mut ents);
                 let mut log_batch = LogBatch::default();
                 log_batch.add_entries(entries.region_id, ents.clone());
+
+                let mut kvs = vec![];
+                entries.fetch_all_kvs(&mut kvs);
+                for kv in &kvs {
+                    log_batch.add_kv(entries.region_id, &kv.0, &kv.1);
+                }
                 match self.pipe_log.append_log_batch(&log_batch, false) {
                     Ok(file_num) => if file_num > 0 {
                         entries.append(ents, file_num);
+                        for kv in kvs.drain(..) {
+                            entries.add_kv(kv.0, kv.1, file_num);
+                        }
                     },
                     Err(e) => panic!("Rewrite inactive region entries failed. error {:?}", e),
                 }
@@ -207,7 +213,10 @@ impl MultiRaftEngine {
                 }
                 LogItemType::KV => {
                     let kv = item.kv.unwrap();
-                    self.mem_kvs.insert(kv.key, kv.value);
+                    let mem_queue = self.mem_entries
+                        .entry(kv.region_id)
+                        .or_insert_with(|| MemEntries::new(kv.region_id));
+                    mem_queue.add_kv(kv.key, kv.value, file_num);
                 }
             }
         }
