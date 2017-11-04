@@ -706,16 +706,31 @@ impl Snap {
             } else {
                 let mut key_count = 0;
                 let mut size = 0;
+                let base: i64 = 128 * 1024;
+                let mut left: i64 = 0;
                 snap.scan_cf(
                     cf,
                     &begin_key,
                     &end_key,
                     false,
                     &mut |key, value| {
-                        key_count += 1;
-                        let l = key.len() + value.len();
+                        let l: i64 = key.len() + value.len();
+                        let mut scale: i64 = 1;
+                        // we first request 128KB, if left < l,
+                        // the request size will be multiplied by 2.
+                        // this loop can't handle the situation where
+                        // l > bytes_per_sec(etc. 10MB), it will block forever.
+                        // also it can't handle the situation where there is another thread
+                        // request l2, and l + l2 > bytes_per_sec
+                        while left < l {
+                            let size = batch * scale;
+                            limiter.request(size, 0);
+                            left = left + size;
+                            scale = scale * 2;
+                        }
+                        left -= l;
                         size += l;
-                        limiter.request(l as i64, 0);
+                        key_count += 1;
                         self.add_kv(key, value)?;
                         Ok(true)
                     },
@@ -1087,7 +1102,7 @@ pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
     ch: Option<SendCh<Msg>>,
-    limiter: RateLimiter,
+    limiter: Arc<RateLimiter>,
 }
 
 impl SnapManager {
@@ -1099,10 +1114,10 @@ impl SnapManager {
                 snap_size: Arc::new(RwLock::new(0)),
             })),
             ch: ch,
-            limiter: RateLimiter::new(
+            limiter: Arc::new(RateLimiter::new(
                 10 * 1024 * 1024, // bytes_per_sec
                 100 * 1000,       // refill_period_us
-                10),             // fairness
+                10)),             // fairness
         }
     }
 
