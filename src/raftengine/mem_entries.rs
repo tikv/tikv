@@ -1,9 +1,11 @@
 
+use std::u64;
 use std::cmp;
 use std::collections::VecDeque;
 
 use kvproto::eraftpb::Entry;
 
+use util::collections::HashMap;
 use super::Result;
 use util;
 
@@ -30,6 +32,10 @@ pub struct MemEntries {
     pub region_id: u64,
     pub entry_queue: VecDeque<Entry>,
     pub file_index: VecDeque<FileIndex>,
+
+    // Region scope key/value pairs
+    // key -> (value, file_num)
+    pub kvs: HashMap<Vec<u8>, (Vec<u8>, u64)>,
 }
 
 impl MemEntries {
@@ -38,6 +44,7 @@ impl MemEntries {
             region_id: region_id,
             entry_queue: VecDeque::with_capacity(SHRINK_CACHE_CAPACITY),
             file_index: VecDeque::new(),
+            kvs: HashMap::default(),
         }
     }
 
@@ -82,6 +89,10 @@ impl MemEntries {
             self.file_index
                 .push_back(FileIndex::new(file_num, cache_last_index));
         }
+    }
+
+    pub fn add_kv(&mut self, key: Vec<u8>, value: Vec<u8>, file_num: u64) {
+        self.kvs.insert(key, (value, file_num));
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -166,12 +177,46 @@ impl MemEntries {
         vec.extend_from_slice(second);
     }
 
+    pub fn fetch_all_kvs(&self, vec: &mut Vec<(Vec<u8>, Vec<u8>)>) {
+        for (key, value) in &self.kvs {
+            vec.push((key.clone(), value.0.clone()));
+        }
+    }
+
     pub fn min_file_num(&self) -> Option<u64> {
-        self.file_index.front().map(|index| index.file_num)
+        let ents_min = self.file_index.front().map(|index| index.file_num);
+        let kvs_min = self.kvs_min_file_num();
+        match (ents_min, kvs_min) {
+            (Some(ents_min), Some(kvs_min)) => Some(cmp::min(ents_min, kvs_min)),
+            (Some(ents_min), None) => Some(ents_min),
+            (None, Some(kvs_min)) => Some(kvs_min),
+            (None, None) => None,
+        }
     }
 
     pub fn max_file_num(&self) -> Option<u64> {
-        self.file_index.back().map(|index| index.file_num)
+        let ents_max = self.file_index.back().map(|index| index.file_num);
+        let kvs_max = self.kvs_max_file_num();
+        match (ents_max, kvs_max) {
+            (Some(ents_max), Some(kvs_max)) => Some(cmp::max(ents_max, kvs_max)),
+            (Some(ents_max), None) => Some(ents_max),
+            (None, Some(kvs_max)) => Some(kvs_max),
+            (None, None) => None,
+        }
+    }
+
+    fn kvs_min_file_num(&self) -> Option<u64> {
+        if self.kvs.is_empty() {
+            return None;
+        }
+        Some(self.kvs.values().fold(0, |max, v| cmp::max(max, v.1)))
+    }
+
+    fn kvs_max_file_num(&self) -> Option<u64> {
+        if self.kvs.is_empty() {
+            return None;
+        }
+        Some(self.kvs.values().fold(0, |max, v| cmp::max(max, v.1)))
     }
 
     fn file_index_pos(&self, entry_index: u64) -> Option<usize> {

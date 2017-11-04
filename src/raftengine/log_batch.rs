@@ -140,30 +140,34 @@ impl Command {
 
 #[derive(Debug, PartialEq)]
 pub struct KeyValue {
+    pub region_id: u64,
     pub key: Vec<u8>,
     pub value: Vec<u8>,
 }
 
 impl KeyValue {
-    pub fn new(key: &[u8], value: &[u8]) -> KeyValue {
+    pub fn new(region_id: u64, key: &[u8], value: &[u8]) -> KeyValue {
         KeyValue {
+            region_id: region_id,
             key: key.to_vec(),
             value: value.to_vec(),
         }
     }
 
     pub fn from_bytes(buf: &mut SliceReader) -> Result<KeyValue> {
+        let region_id = buf.decode_u64()?;
         let k_len = buf.decode_u64()? as usize;
         let key = &buf[..k_len];
         buf.consume(k_len);
         let v_len = buf.decode_u64()? as usize;
         let value = &buf[..v_len];
         buf.consume(v_len);
-        Ok(KeyValue::new(key, value))
+        Ok(KeyValue::new(region_id, key, value))
     }
 
     pub fn encode_to(&self, vec: &mut Vec<u8>) -> Result<()> {
-        // layout = { 8 bytes k_len | key | 8 bytes v_len | value }
+        // layout = { 8 bytes region_id | 8 bytes k_len | key | 8 bytes v_len | value }
+        vec.encode_u64(self.region_id)?;
         vec.encode_u64(self.key.len() as u64)?;
         vec.extend_from_slice(self.key.as_slice());
         vec.encode_u64(self.value.len() as u64)?;
@@ -208,12 +212,12 @@ impl LogItem {
         }
     }
 
-    pub fn from_kv(key: &[u8], value: &[u8]) -> LogItem {
+    pub fn from_kv(region_id: u64, key: &[u8], value: &[u8]) -> LogItem {
         LogItem {
             item_type: LogItemType::KV,
             entries: None,
             command: None,
-            kv: Some(KeyValue::new(key, value)),
+            kv: Some(KeyValue::new(region_id, key, value)),
         }
     }
 
@@ -322,8 +326,8 @@ impl LogBatch {
         self.items.push(item);
     }
 
-    pub fn add_kv(&mut self, key: &[u8], value: &[u8]) {
-        let item = LogItem::from_kv(key, value);
+    pub fn add_kv(&mut self, region_id: u64, key: &[u8], value: &[u8]) {
+        let item = LogItem::from_kv(region_id, key, value);
         self.items.push(item);
     }
 
@@ -398,8 +402,7 @@ mod tests {
 
     #[test]
     fn test_kv_enc_dec() {
-        let (key, value) = (b"key", b"value");
-        let kv = KeyValue::new(key, value);
+        let kv = KeyValue::new(8, b"key", b"value");
         let mut encoded = vec![];
         kv.encode_to(&mut encoded).unwrap();
         let mut bytes_slice = encoded.as_slice();
@@ -410,11 +413,10 @@ mod tests {
 
     #[test]
     fn test_log_item_enc_dec() {
-        let (key, value) = (b"key", b"value");
         let items = vec![
             LogItem::from_entries(8, vec![Entry::new(); 10]),
             LogItem::from_command(Command::Clean { region_id: 8 }),
-            LogItem::from_kv(key, value),
+            LogItem::from_kv(8, b"key", b"value"),
         ];
 
         for item in items {
@@ -432,7 +434,7 @@ mod tests {
         let mut batch = LogBatch::default();
         batch.add_entries(8, vec![Entry::new(); 10]);
         batch.add_command(Command::Clean { region_id: 8 });
-        batch.add_kv(b"key", b"value");
+        batch.add_kv(8, b"key", b"value");
 
         let encoded = batch.to_vec().unwrap();
         let mut s = encoded.as_slice();
