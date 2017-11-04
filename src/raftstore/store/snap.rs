@@ -715,18 +715,10 @@ impl Snap {
                     false,
                     &mut |key, value| {
                         let l: i64 = key.len() + value.len();
-                        let mut scale: i64 = 1;
-                        // we first request 128KB, if left < l,
-                        // the request size will be multiplied by 2.
-                        // this loop can't handle the situation where
-                        // l > bytes_per_sec(etc. 10MB), it will block forever.
-                        // also it can't handle the situation where there is another thread
-                        // request l2, and l + l2 > bytes_per_sec
-                        while left < l {
-                            let size = batch * scale;
-                            limiter.request(size, 0);
-                            left = left + size;
-                            scale = scale * 2;
+                        if left < l {
+                            let req = ((l + base - 1) % base) * base;
+                            limiter.request(req as i64, 0);
+                            left += req;
                         }
                         left -= l;
                         size += l;
