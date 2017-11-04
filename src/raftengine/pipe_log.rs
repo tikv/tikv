@@ -13,6 +13,7 @@ const LOG_SUFFIX_LEN: usize = 4;
 const FILE_NUM_LEN: usize = 10;
 const FILE_NAME_LEN: usize = FILE_NUM_LEN + LOG_SUFFIX_LEN;
 pub const FILE_MAGIC_HEADER: &'static [u8] = b"RAFT-LOG-FILE-HEADER";
+pub const VERSION: &'static [u8] = b"v1.0.0";
 const INIT_FILE_NUM: u64 = 1;
 const MB: usize = 1024 * 1024;
 const LOG_MAX_SIZE: usize = 128 * MB;
@@ -85,7 +86,7 @@ impl PipeLog {
         if log_files.is_empty() {
             let file = pipe_log.new_log_file(pipe_log.active_file_num);
             pipe_log.active_log = Some(file);
-            pipe_log.active_log_size = FILE_MAGIC_HEADER.len();
+            pipe_log.active_log_size = FILE_MAGIC_HEADER.len() + VERSION.len();
             return Ok(pipe_log);
         }
 
@@ -182,7 +183,7 @@ impl PipeLog {
         let next_file_num = self.active_file_num + 1;
         let new_log_file = self.new_log_file(next_file_num);
         self.active_log = Some(new_log_file);
-        self.active_log_size = FILE_MAGIC_HEADER.len();
+        self.active_log_size = FILE_MAGIC_HEADER.len() + VERSION.len();
         self.last_sync_size = self.active_log_size;
         self.active_file_num = next_file_num;
     }
@@ -219,6 +220,8 @@ impl PipeLog {
         // Write HEADER.
         file.write_all(FILE_MAGIC_HEADER)
             .unwrap_or_else(|e| panic!("Write file_magic_header failed, error: {:?}", e));
+        file.write_all(VERSION)
+            .unwrap_or_else(|e| panic!("Write version failed, error: {:?}", e));
         file.sync_all().unwrap();
         file
     }

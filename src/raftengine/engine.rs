@@ -9,7 +9,7 @@ use util::collections::HashMap;
 use super::Result;
 use super::Error;
 use super::mem_entries::MemEntries;
-use super::pipe_log::{PipeLog, FILE_MAGIC_HEADER};
+use super::pipe_log::{PipeLog, FILE_MAGIC_HEADER, VERSION};
 use super::log_batch::{Command, LogBatch, LogItemType};
 
 const DEFAULT_BYTES_PER_SYNC: usize = 32 * 1024;
@@ -30,6 +30,8 @@ struct MultiRaftEngine {
     // region_id -> MemEntries.
     pub mem_entries: Vec<RwLock<HashMap<u64, MemEntries>>>,
 
+    // Rewrite inactive region's entries to new pipe log file,
+    // so the old log file can be dropped.
     // Rewrite one slot for each time.
     next_rewrite_slot: usize,
 
@@ -90,7 +92,7 @@ impl MultiRaftEngine {
             if buf.len() < FILE_MAGIC_HEADER.len() || !buf.starts_with(FILE_MAGIC_HEADER) {
                 panic!("Raft log file {} is corrupted.", current_read_file);
             }
-            buf.consume(FILE_MAGIC_HEADER.len());
+            buf.consume(FILE_MAGIC_HEADER.len() + VERSION.len());
 
             // Iterate all LogBatch in one file
             let mut offset = FILE_MAGIC_HEADER.len() as u64;
@@ -160,7 +162,6 @@ impl MultiRaftEngine {
             };
             let count = entries.entry_queue.len();
             if count > 0 && count <= 50 && max_file_num + 8 < active_file_num {
-                // Todo: zero copy
                 // Rewrite entries
                 let mut ents = Vec::with_capacity(count);
                 entries.fetch_all(&mut ents);
