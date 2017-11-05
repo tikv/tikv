@@ -240,7 +240,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 match self.files.entry(token) {
                     Entry::Occupied(mut e) => {
                         let mut copy = self.snap_mgr.clone();
-                        let mut limiter = copy.get_limiter();
+                        let limiter = copy.get_limiter();
                         limiter.request(data.len() as i64, 0);
                         if let Err(err) = data.write_all_to(&mut e.get_mut().0) {
                             error!(
