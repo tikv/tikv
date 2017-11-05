@@ -707,21 +707,20 @@ impl Snap {
                 let mut key_count = 0;
                 let mut size = 0;
                 let base: i64 = 128 * 1024;
-                let mut left: i64 = 0;
+                let mut bytes: i64 = 0;
                 snap.scan_cf(
                     cf,
                     &begin_key,
                     &end_key,
                     false,
                     &mut |key, value| {
-                        let l = (key.len() + value.len()) as i64;
-                        if left < l {
-                            let req = ((l + base - 1) % base) * base;
-                            limiter.request(req as i64, 0);
-                            left += req;
+                        let l = key.len() + value.len();
+                        if bytes >= base {
+                            bytes = 0;
+                            limiter.request(base, 0);
                         }
-                        left -= l;
-                        size += l as usize;
+                        bytes += l;
+                        size += l;
                         key_count += 1;
                         self.add_kv(key, value)?;
                         Ok(true)
