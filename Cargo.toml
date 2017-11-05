@@ -97,6 +97,9 @@ optional = true
 [dependencies.fail]
 git = "https://github.com/pingcap/fail-rs.git"
 
+[replace]
+"protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
