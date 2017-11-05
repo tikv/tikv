@@ -1226,7 +1226,7 @@ pub fn clear_meta(
 }
 
 pub fn do_snapshot(
-    mgr: SnapManager,
+    mgr: mut SnapManager,
     raft_db: &DB,
     snap: &DbSnapshot,
     region_id: u64,
@@ -1295,7 +1295,7 @@ pub fn do_snapshot(
         &mut snap_data,
         &mut stat,
         Box::new(mgr.clone()),
-        mgr.get_limiter(),
+        &mut mgr.get_limiter(),
     )?;
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));

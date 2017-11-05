@@ -171,7 +171,7 @@ pub trait Snapshot: Read + Write + Send {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: &RateLimiter,
+        limiter: &mut RateLimiter,
     ) -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
@@ -671,7 +671,7 @@ impl Snap {
         region: &Region,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: &RateLimiter,
+        limiter: &mut RateLimiter,
     ) -> RaftStoreResult<()> {
         if self.exists() {
             match self.validate() {
@@ -714,14 +714,14 @@ impl Snap {
                     &end_key,
                     false,
                     &mut |key, value| {
-                        let l: i64 = key.len() + value.len();
+                        let l = (key.len() + value.len()) as i64;
                         if left < l {
                             let req = ((l + base - 1) % base) * base;
                             limiter.request(req as i64, 0);
                             left += req;
                         }
                         left -= l;
-                        size += l;
+                        size += l as usize;
                         key_count += 1;
                         self.add_kv(key, value)?;
                         Ok(true)
@@ -822,7 +822,7 @@ impl Snapshot for Snap {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: &RateLimiter,
+        limiter: &mut RateLimiter,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
         self.do_build(snap, region, stat, deleter, limiter)?;
@@ -1334,8 +1334,8 @@ impl SnapManager {
         }
     }
 
-    pub fn get_limiter(&self) -> &RateLimiter {
-        &self.limiter
+    pub fn get_limiter(&mut self) -> &mut RateLimiter {
+        &mut self.limiter
     }
 }
 
