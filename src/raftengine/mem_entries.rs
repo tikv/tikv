@@ -95,6 +95,10 @@ impl MemEntries {
         self.kvs.insert(key, (value, file_num));
     }
 
+    pub fn get_kv(&self, key: &[u8]) -> Option<&[u8]> {
+        self.kvs.get(key).map(|ref v| v.0.as_slice())
+    }
+
     pub fn compact_to(&mut self, idx: u64) {
         let cache_first_idx = match self.entry_queue.front() {
             None => return,
@@ -209,7 +213,7 @@ impl MemEntries {
         if self.kvs.is_empty() {
             return None;
         }
-        Some(self.kvs.values().fold(0, |max, v| cmp::max(max, v.1)))
+        Some(self.kvs.values().fold(u64::MAX, |min, v| cmp::min(min, v.1)))
     }
 
     fn kvs_max_file_num(&self) -> Option<u64> {
@@ -346,6 +350,16 @@ mod tests {
         assert_eq!(mem_entries.entry_queue[19].get_index(), 39);
         assert_eq!(mem_entries.min_file_num().unwrap(), 3);
         assert_eq!(mem_entries.max_file_num().unwrap(), 3);
+
+        // add kvs
+        let (k1, v1) = (b"key1", b"value1");
+        let (k5, v5) = (b"key5", b"value5");
+        mem_entries.add_kv(k1.to_vec(), v1.to_vec(), 1);
+        mem_entries.add_kv(k5.to_vec(), v5.to_vec(), 5);
+        assert_eq!(mem_entries.min_file_num().unwrap(), 1);
+        assert_eq!(mem_entries.max_file_num().unwrap(), 5);
+        assert_eq!(mem_entries.get_kv(k1.as_ref()), Some(v1.as_ref()));
+        assert_eq!(mem_entries.get_kv(k5.as_ref()), Some(v5.as_ref()));
     }
 
     fn generate_ents(begin_idx: u64, end_idx: u64) -> Vec<Entry> {
