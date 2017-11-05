@@ -13,7 +13,7 @@ use super::Result;
 use super::Error;
 use super::util::calc_crc32;
 
-const BATCH_MIN_SIZE: usize = 20; // 8 bytes total length + 8 bytes item count + 4 checksum
+const BATCH_MIN_SIZE: usize = 12; // 8 bytes total length + 4 checksum
 
 const TYPE_ENTRIES: u8 = 0x01;
 const TYPE_COMMAND: u8 = 0x02;
@@ -72,15 +72,15 @@ impl Entries {
     }
 
     pub fn from_bytes(buf: &mut SliceReader) -> Result<Entries> {
-        let region_id = buf.decode_u64()?;
-        let mut count = buf.decode_u64()? as usize;
+        let region_id = buf.decode_var_u64()?;
+        let mut count = buf.decode_var_u64()? as usize;
         let mut entries = Vec::with_capacity(count);
         loop {
             if count == 0 {
                 break;
             }
 
-            let len = buf.decode_u64()? as usize;
+            let len = buf.decode_var_u64()? as usize;
             let mut e = Entry::new();
             e.merge_from_bytes(&buf[..len])?;
             buf.consume(len);
@@ -96,14 +96,14 @@ impl Entries {
             return Ok(());
         }
 
-        // layout = { 8 bytes region_id | 8 bytes entries count | multiple entries }
+        // layout = { region_id | entries count | multiple entries }
         // entries layout = { entry layout | ... | entry layout }
-        // entry layout = { 8 bytes len | entry content }
-        vec.encode_u64(self.region_id)?;
-        vec.encode_u64(self.entries.len() as u64)?;
+        // entry layout = { len | entry content }
+        vec.encode_var_u64(self.region_id)?;
+        vec.encode_var_u64(self.entries.len() as u64)?;
         for e in &self.entries {
             let content = e.write_to_bytes()?;
-            vec.encode_u64(content.len() as u64)?;
+            vec.encode_var_u64(content.len() as u64)?;
             vec.extend_from_slice(&content);
         }
         Ok(())
@@ -120,7 +120,7 @@ impl Command {
         match *self {
             Command::Clean { region_id } => {
                 vec.push(CMD_CLEAN);
-                vec.encode_u64(region_id).unwrap();
+                vec.encode_var_u64(region_id).unwrap();
             }
         }
     }
@@ -128,7 +128,7 @@ impl Command {
     pub fn from_bytes(buf: &mut SliceReader) -> Result<Command> {
         let command_type = buf.read_u8()?;
         if command_type == CMD_CLEAN {
-            let region_id = buf.decode_u64()?;
+            let region_id = buf.decode_var_u64()?;
             Ok(Command::Clean {
                 region_id: region_id,
             })
@@ -155,22 +155,22 @@ impl KeyValue {
     }
 
     pub fn from_bytes(buf: &mut SliceReader) -> Result<KeyValue> {
-        let region_id = buf.decode_u64()?;
-        let k_len = buf.decode_u64()? as usize;
+        let region_id = buf.decode_var_u64()?;
+        let k_len = buf.decode_var_u64()? as usize;
         let key = &buf[..k_len];
         buf.consume(k_len);
-        let v_len = buf.decode_u64()? as usize;
+        let v_len = buf.decode_var_u64()? as usize;
         let value = &buf[..v_len];
         buf.consume(v_len);
         Ok(KeyValue::new(region_id, key, value))
     }
 
     pub fn encode_to(&self, vec: &mut Vec<u8>) -> Result<()> {
-        // layout = { 8 bytes region_id | 8 bytes k_len | key | 8 bytes v_len | value }
-        vec.encode_u64(self.region_id)?;
-        vec.encode_u64(self.key.len() as u64)?;
+        // layout = { region_id | k_len | key | v_len | value }
+        vec.encode_var_u64(self.region_id)?;
+        vec.encode_var_u64(self.key.len() as u64)?;
         vec.extend_from_slice(self.key.as_slice());
-        vec.encode_u64(self.value.len() as u64)?;
+        vec.encode_var_u64(self.value.len() as u64)?;
         vec.extend_from_slice(self.value.as_slice());
         Ok(())
     }
@@ -295,7 +295,7 @@ impl LogBatch {
             return Err(Error::CheckSumError);
         }
 
-        let mut items_count = buf.decode_u64()? as usize;
+        let mut items_count = buf.decode_var_u64()? as usize;
         if items_count == 0 || buf.is_empty() {
             panic!("Empty log event is not supported");
         }
@@ -303,7 +303,7 @@ impl LogBatch {
         let mut log_batch = LogBatch::default();
         loop {
             if items_count == 0 {
-                // checksum
+                // 4 bytes checksum
                 buf.consume(4);
                 break;
             }
@@ -336,10 +336,10 @@ impl LogBatch {
             return None;
         }
 
-        // layout = { 8 bytes len | 8 bytes item count | multiple items | 4 bytes checksum }
+        // layout = { 8 bytes len | item count | multiple items | 4 bytes checksum }
         let mut vec = Vec::with_capacity(4096);
         vec.encode_u64(0).unwrap();
-        vec.encode_u64(self.items.len() as u64).unwrap();
+        vec.encode_var_u64(self.items.len() as u64).unwrap();
         for item in &self.items {
             item.encode_to(&mut vec).unwrap();
         }
