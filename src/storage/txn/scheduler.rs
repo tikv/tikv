@@ -37,7 +37,6 @@ use std::time::Duration;
 use std::thread;
 use std::hash::{Hash, Hasher};
 use std::u64;
-use std::mem;
 
 use prometheus::HistogramTimer;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};

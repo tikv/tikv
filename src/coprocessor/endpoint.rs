@@ -404,6 +404,7 @@ impl RequestTask {
             .with_label_values(&[type_str])
             .observe(handle_time - wait_time);
 
+
         COPR_SCAN_KEYS
             .with_label_values(&[type_str])
             .observe(self.statistics.total_op_count() as f64);
@@ -793,6 +794,7 @@ mod tests {
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
     }
+
     #[test]
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");
