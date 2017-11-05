@@ -36,13 +36,13 @@ pub struct PipeLog {
 }
 
 impl PipeLog {
-    pub fn new(dir: &str, bytes_per_sync: usize) -> PipeLog {
+    pub fn new(dir: &str, bytes_per_sync: usize, rotate_size: usize) -> PipeLog {
         PipeLog {
             first_file_num: INIT_FILE_NUM,
             active_file_num: INIT_FILE_NUM,
             active_log: None,
             active_log_size: 0,
-            rotate_size: LOG_MAX_SIZE,
+            rotate_size: rotate_size,
             dir: dir.to_string(),
             bytes_per_sync: bytes_per_sync,
             last_sync_size: 0,
@@ -50,7 +50,7 @@ impl PipeLog {
         }
     }
 
-    pub fn open(dir: &str, bytes_per_sync: usize) -> Result<PipeLog> {
+    pub fn open(dir: &str, bytes_per_sync: usize, rotate_size: usize) -> Result<PipeLog> {
         let path = Path::new(dir);
         if !path.is_dir() {
             return Err(box_err!("Not directory."));
@@ -82,7 +82,7 @@ impl PipeLog {
         }
 
         // Initialize.
-        let mut pipe_log = PipeLog::new(dir, bytes_per_sync);
+        let mut pipe_log = PipeLog::new(dir, bytes_per_sync, rotate_size);
         if log_files.is_empty() {
             let file = pipe_log.new_log_file(pipe_log.active_file_num);
             pipe_log.active_log = Some(file);
@@ -98,6 +98,12 @@ impl PipeLog {
 
         pipe_log.open_active_log()?;
         Ok(pipe_log)
+    }
+
+    pub fn close(&mut self) -> Result<()> {
+        self.active_log.as_mut().unwrap().sync_all()?;
+        self.active_log.take();
+        Ok(())
     }
 
     pub fn append(&mut self, content: &[u8], sync: bool) -> Result<u64> {
@@ -247,6 +253,10 @@ impl PipeLog {
         Ok(Some(vec))
     }
 
+    pub fn active_log_size(&self) -> usize {
+        self.active_log_size
+    }
+
     pub fn active_file_num(&self) -> u64 {
         self.active_file_num
     }
@@ -264,5 +274,83 @@ fn extract_file_num(file_name: &str) -> Result<u64> {
     match file_name[..FILE_NUM_LEN].parse::<u64>() {
         Ok(num) => Ok(num),
         Err(e) => Err(e.into()),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use tempdir::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn test_file_name() {
+        let file_name = "0000000123.log";
+        assert_eq!(extract_file_num(&file_name).unwrap(), 123);
+        assert_eq!(generate_file_name(123), file_name);
+
+        let invalid_file_name = "0000abc123.log";
+        assert!(extract_file_num(&invalid_file_name).is_err());
+    }
+
+    #[test]
+    fn test_pipe_log() {
+        let dir = TempDir::new("test_pipe_log").unwrap();
+        let path = dir.path().to_str().unwrap();
+
+        let rotate_size = 1024;
+        let bytes_per_sync = 32 * 1024;
+        let mut pipe_log = PipeLog::open(path, bytes_per_sync, rotate_size).unwrap();
+        assert_eq!(pipe_log.first_file_num(), INIT_FILE_NUM);
+        assert_eq!(pipe_log.active_file_num(), INIT_FILE_NUM);
+
+        // generate file 1, 2, 3
+        let content: Vec<u8> = vec![b'a'; 1024];
+        assert_eq!(pipe_log.append(content.as_slice(), false).unwrap(), 1);
+        assert_eq!(pipe_log.active_file_num(), 2);
+        assert_eq!(pipe_log.append(content.as_slice(), false).unwrap(), 2);
+        assert_eq!(pipe_log.active_file_num(), 3);
+
+        // purge file 1
+        pipe_log.purge_to(2).unwrap();
+        assert_eq!(pipe_log.first_file_num(), 2);
+
+        // purge file 2
+        pipe_log.purge_to(3).unwrap();
+        assert_eq!(pipe_log.first_file_num(), 3);
+
+        // cannot purge active file
+        assert!(pipe_log.purge_to(4).is_err());
+
+        // truncate file
+        let s_content = b"short content";
+        assert_eq!(pipe_log.append(s_content.as_ref(), false).unwrap(), 3);
+        assert_eq!(
+        pipe_log.active_log_size(),
+        FILE_MAGIC_HEADER.len() + VERSION.len() + s_content.len()
+        );
+        pipe_log
+        .truncate_active_log((FILE_MAGIC_HEADER.len() + VERSION.len()) as u64)
+        .unwrap();
+        assert_eq!(
+        pipe_log.active_log_size(),
+        FILE_MAGIC_HEADER.len() + VERSION.len()
+        );
+        assert!(
+        pipe_log
+            .truncate_active_log((FILE_MAGIC_HEADER.len() + VERSION.len() + s_content.len()) as u64)
+            .is_err()
+        );
+
+        // read next file
+        let mut header: Vec<u8> = vec![];
+        header.extend(FILE_MAGIC_HEADER);
+        header.extend(VERSION);
+        let content = pipe_log.read_next_file().unwrap().unwrap();
+        assert_eq!(header, content);
+        assert!(pipe_log.read_next_file().unwrap().is_none());
+
+        pipe_log.close().unwrap();
     }
 }
