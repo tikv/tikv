@@ -213,7 +213,11 @@ impl MemEntries {
         if self.kvs.is_empty() {
             return None;
         }
-        Some(self.kvs.values().fold(u64::MAX, |min, v| cmp::min(min, v.1)))
+        Some(
+            self.kvs
+                .values()
+                .fold(u64::MAX, |min, v| cmp::min(min, v.1)),
+        )
     }
 
     fn kvs_max_file_num(&self) -> Option<u64> {

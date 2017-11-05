@@ -40,8 +40,13 @@ struct MultiRaftEngine {
 }
 
 impl MultiRaftEngine {
-    pub fn new(dir: String, recovery_mode: RecoveryMode, bytes_per_sync: usize) -> MultiRaftEngine {
-        let pip_log = PipeLog::open(&dir, bytes_per_sync)
+    pub fn new(
+        dir: String,
+        recovery_mode: RecoveryMode,
+        bytes_per_sync: usize,
+        log_rotate_size: usize,
+    ) -> MultiRaftEngine {
+        let pip_log = PipeLog::open(&dir, bytes_per_sync, log_rotate_size)
             .unwrap_or_else(|e| panic!("Open raft log failed, error: {:?}", e));
         let mut mem_entries = Vec::with_capacity(SLOTS_COUNT);
         for _ in 0..SLOTS_COUNT {
