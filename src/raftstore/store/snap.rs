@@ -1335,7 +1335,7 @@ impl SnapManager {
     }
 
     pub fn get_limiter(&mut self) -> &mut RateLimiter {
-        *Arc::get_mut(&mut self.limiter).unrap()
+        *Arc::get_mut(&mut self.limiter).unwrap()
     }
 }
 
