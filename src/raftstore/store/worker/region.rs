@@ -105,7 +105,7 @@ impl SnapContext {
 
         let mut mgr = self.mgr.clone();
         let snap = box_try!(store::do_snapshot(
-            mut mgr,
+            &mut mgr,
             &raft_db,
             &raw_snap,
             region_id

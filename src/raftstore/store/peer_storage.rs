@@ -1226,7 +1226,7 @@ pub fn clear_meta(
 }
 
 pub fn do_snapshot(
-    mgr: mut SnapManager,
+    mgr: &mut SnapManager,
     raft_db: &DB,
     snap: &DbSnapshot,
     region_id: u64,
