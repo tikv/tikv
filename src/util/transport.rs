@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 use std::sync::mpsc;
 use std::time::Duration;
 use super::metrics::*;
-
+use super::super::metrics::*;
 use mio;
 
 const MAX_SEND_RETRY_CNT: usize = 5;
@@ -125,6 +125,9 @@ impl<T: Debug, C: Sender<T>> RetryableSendCh<T, C> {
                     if try_times <= 1 {
                         CHANNEL_FULL_COUNTER_VEC
                             .with_label_values(&[self.name])
+                            .inc();
+                        SERVER_IS_BUSY_COUNTER_VEC
+                            .with_label_values(&["channel-full"])
                             .inc();
                         return Err(NotifyError::Full(m).into());
                     }

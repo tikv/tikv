@@ -59,6 +59,7 @@ use super::Error;
 use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 use super::super::metrics::*;
+use super::super::super::metrics::*;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
@@ -1153,6 +1154,9 @@ impl Scheduler {
         if cmd.need_flow_control() && self.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC
                 .with_label_values(&[cmd.tag()])
+                .inc();
+            SERVER_IS_BUSY_COUNTER_VEC
+                .with_label_values(&["scheduler"])
                 .inc();
             execute_callback(
                 callback,
