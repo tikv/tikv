@@ -103,9 +103,8 @@ impl SnapContext {
         let raft_db = self.raft_db.clone();
         let raw_snap = Snapshot::new(self.kv_db.clone());
 
-        let mut mgr = self.mgr.clone();
         let snap = box_try!(store::do_snapshot(
-            &mut mgr,
+            self.mgr.clone(),
             &raft_db,
             &raw_snap,
             region_id
