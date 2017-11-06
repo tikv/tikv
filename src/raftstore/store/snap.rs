@@ -24,7 +24,7 @@ use std::time;
 use std::thread;
 
 use protobuf::Message;
-use rocksdb::{CFHandle, Writable, WriteBatch, DB, RateLimiter};
+use rocksdb::{CFHandle, RateLimiter, Writable, WriteBatch, DB};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -1108,7 +1108,8 @@ impl SnapManager {
             limiter: Arc::new(RateLimiter::new(
                 10 * 1024 * 1024, // bytes_per_sec
                 100 * 1000,       // refill_period_us
-                10)),             // fairness
+                10,
+            )), // fairness
         }
     }
 
