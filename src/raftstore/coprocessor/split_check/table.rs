@@ -240,6 +240,7 @@ fn is_same_table<'a>(left_key: &'a [u8], right_key: &'a [u8]) -> StdResult<bool,
 
 #[cfg(test)]
 mod test {
+    use std::io::Write;
     use std::sync::Arc;
     use std::sync::mpsc;
 
@@ -254,10 +255,20 @@ mod test {
     use util::worker::Runnable;
     use util::transport::RetryableSendCh;
     use util::config::ReadableSize;
-    use coprocessor::codec::table::gen_table_prefix;
+    use util::codec::number::NumberEncoder;
+    use coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
 
     use raftstore::coprocessor::{Config, CoprocessorHost};
     use super::*;
+
+    /// Composes table record and index prefix: `t[table_id]`.
+    // Port from TiDB
+    fn gen_table_prefix(table_id: i64) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(TABLE_PREFIX_KEY_LEN);
+        buf.write_all(TABLE_PREFIX).unwrap();
+        buf.encode_i64(table_id).unwrap();
+        buf
+    }
 
     #[test]
     fn test_bound_keys() {

@@ -54,14 +54,6 @@ trait TableEncoder: NumberEncoder {
 
 impl<T: Write> TableEncoder for T {}
 
-/// Composes table record and index prefix: `t[table_id]`.
-pub fn gen_table_prefix(table_id: i64) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(TABLE_PREFIX_KEY_LEN);
-    buf.write_all(TABLE_PREFIX).unwrap();
-    buf.encode_i64(table_id).unwrap();
-    buf
-}
-
 /// Extract table prefix from table record or index.
 // It is useful in tests.
 pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
@@ -596,25 +588,11 @@ mod test {
     #[test]
     fn test_extract_table_prefix() {
         extract_table_prefix(&[]).unwrap_err();
-        let table_prefix = gen_table_prefix(999);
+        extract_table_prefix(b"a\x80\x00\x00\x00\x00\x00\x00\x01").unwrap_err();
+        extract_table_prefix(b"t\x80\x00\x00\x00\x00\x00\x01").unwrap_err();
         assert_eq!(
-            extract_table_prefix(&table_prefix).unwrap(),
-            table_prefix.as_slice()
+            extract_table_prefix(b"t\x80\x00\x00\x00\x00\x00\x00\x01").unwrap(),
+            extract_table_prefix(b"t\x80\x00\x00\x00\x00\x00\x00\x01_r\xff\xff").unwrap()
         );
-
-        let mut table_prefix1 = table_prefix.clone();
-        table_prefix1.extend(b"something");
-        assert_eq!(
-            extract_table_prefix(&table_prefix1).unwrap(),
-            table_prefix.as_slice()
-        );
-
-        let mut table_prefix2 = table_prefix.clone();
-        table_prefix2[0] = b'a';
-        extract_table_prefix(&table_prefix2).unwrap_err();
-
-        let mut table_prefix3 = table_prefix.clone();
-        table_prefix3.pop();
-        extract_table_prefix(&table_prefix3).unwrap_err();
     }
 }
