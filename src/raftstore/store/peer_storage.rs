@@ -1289,14 +1289,13 @@ pub fn do_snapshot(
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
-    let mut copy = mgr.clone();
     s.build(
         snap,
         state.get_region(),
         &mut snap_data,
         &mut stat,
         Box::new(mgr.clone()),
-        &mut copy.get_limiter(),
+        mgr.get_limiter(),
     )?;
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));

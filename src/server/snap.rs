@@ -239,9 +239,10 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 SNAP_TASK_COUNTER.with_label_values(&["write"]).inc();
                 match self.files.entry(token) {
                     Entry::Occupied(mut e) => {
-                        let mut copy = self.snap_mgr.clone();
-                        let limiter = copy.get_limiter();
+
+                        let mut limiter = self.snap_mgr.get_limiter().clone();
                         limiter.request(data.len() as i64, 0);
+
                         if let Err(err) = data.write_all_to(&mut e.get_mut().0) {
                             error!(
                                 "failed to write data to snapshot file {} for token {:?}: {:?}",
