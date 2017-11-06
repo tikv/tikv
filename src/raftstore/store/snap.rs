@@ -171,7 +171,7 @@ pub trait Snapshot: Read + Write + Send {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: &Arc<RateLimiter>,
+        limiter: Arc<RateLimiter>,
     ) -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
@@ -671,7 +671,7 @@ impl Snap {
         region: &Region,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: &Arc<RateLimiter>,
+        limiter: Arc<RateLimiter>,
     ) -> RaftStoreResult<()> {
         if self.exists() {
             match self.validate() {
@@ -708,7 +708,6 @@ impl Snap {
                 let mut size = 0;
                 let base: i64 = 128 * 1024;
                 let mut bytes: i64 = 0;
-                let mut copy = limiter.clone();
                 snap.scan_cf(
                     cf,
                     &begin_key,
@@ -718,7 +717,7 @@ impl Snap {
                         let l = key.len() + value.len();
                         if bytes >= base {
                             bytes = 0;
-                            copy.request(base, 0);
+                            limiter.request(base, 0);
                         }
                         bytes += l as i64;
                         size += l;
@@ -822,7 +821,7 @@ impl Snapshot for Snap {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: &Arc<RateLimiter>,
+        limiter: Arc<RateLimiter>,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
         self.do_build(snap, region, stat, deleter, limiter)?;
@@ -1334,8 +1333,8 @@ impl SnapManager {
         }
     }
 
-    pub fn get_limiter(&self) -> &Arc<RateLimiter> {
-        &self.limiter
+    pub fn get_limiter(&self) -> Arc<RateLimiter> {
+        self.limiter.clone()
     }
 }
 
