@@ -201,9 +201,7 @@ mod test {
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         // Split at table prefix.
-        expect_key = encode_bytes(
-            b"t\x80\x00\x00\x00\x00\x00\x00\xea",
-        );
+        expect_key = encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea");
         req = new_split_request(&expect_key);
         observer.pre_admin(&mut ctx, &mut req).unwrap();
         assert_eq!(req.get_split().get_split_key(), &*expect_key);

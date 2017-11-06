@@ -22,6 +22,7 @@ use storage::types::Key;
 use raftstore::store::keys;
 use raftstore::store::engine::{IterOption, Iterable};
 use coprocessor::codec::table as table_codec;
+use util::escape;
 
 use super::super::{Coprocessor, ObserverContext, RegionObserver, Result};
 use super::Status;
@@ -68,12 +69,12 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
         return true;
     }
 
-    let (start_key, end_key) = match bound_keys(engine, region) {
-        Ok(Some((start_key, end_key))) => (start_key, end_key),
+    let end_key = match last_key_of_region(engine, region) {
+        Ok(Some(end_key)) => end_key,
         Ok(None) => return true,
         Err(err) => {
             error!(
-                "[region {}] failed to get region bound: {}",
+                "[region {}] failed to get region last key: {}",
                 region.get_id(),
                 err
             );
@@ -81,7 +82,7 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
         }
     };
 
-    let encoded_start_key = keys::origin_key(&start_key);
+    let encoded_start_key = region.get_start_key();
     let encoded_end_key = keys::origin_key(&end_key);
 
     if encoded_start_key.len() < table_codec::TABLE_PREFIX_KEY_LEN ||
@@ -133,8 +134,8 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
         }
         _ => panic!(
             "start_key {:?} and end_key {:?} out of order",
-            start_key,
-            end_key
+            escape(encoded_start_key),
+            escape(encoded_end_key)
         ),
     }
 }
@@ -173,21 +174,12 @@ fn check_key(status: &mut TableStatus, current_data_key: &[u8]) -> Option<Vec<u8
     }
 }
 
-#[allow(collapsible_if)]
-fn bound_keys(db: &DB, region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-    let start_key = keys::enc_start_key(region);
+fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
     let end_key = keys::enc_end_key(region);
-    let mut first_key = None;
     let mut last_key = None;
 
     let iter_opt = IterOption::new(Some(end_key), false);
     let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
-
-    // the first key
-    if iter.seek(start_key.as_slice().into()) {
-        let key = iter.key().to_vec();
-        first_key = Some(key);
-    } // else { No data in this CF }
 
     // the last key
     if iter.seek(SeekKey::End) {
@@ -195,14 +187,9 @@ fn bound_keys(db: &DB, region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         last_key = Some(key);
     } // else { No data in this CF }
 
-    match (first_key, last_key) {
-        (Some(fk), Some(lk)) => Ok(Some((fk, lk))),
-        (None, None) => Ok(None),
-        (first_key, last_key) => unreachable!(
-            "invalid bound, first key: {:?}, last key: {:?}",
-            first_key,
-            last_key
-        ),
+    match last_key {
+        Some(lk) => Ok(Some(lk)),
+        None => Ok(None),
     }
 }
 
@@ -271,7 +258,7 @@ mod test {
     }
 
     #[test]
-    fn test_bound_keys() {
+    fn test_last_key_of_region() {
         let path = TempDir::new("test-split-table").unwrap();
         let engine = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
@@ -282,7 +269,7 @@ mod test {
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
-        assert_eq!(bound_keys(&engine, &region).unwrap(), None);
+        assert_eq!(last_key_of_region(&engine, &region).unwrap(), None);
 
         // arbitrary padding.
         let padding = b"_r00000005";
@@ -303,20 +290,20 @@ mod test {
                     .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
                     .unwrap_or_else(Vec::new),
             );
-            assert_eq!(bound_keys(&engine, &region).unwrap(), result);
+            assert_eq!(last_key_of_region(&engine, &region).unwrap(), result);
         };
 
-        // ["", "") => {t1_xx, t1_xx}
-        check(None, None, Some((s1.clone(), s1.clone())));
+        // ["", "") => t1_xx
+        check(None, None, Some(s1.clone()));
 
         // ["", "t1") => None
         check(None, Some(1), None);
 
-        // ["t1", "") => {t1_xx, t1_xx}
-        check(Some(1), None, Some((s1.clone(), s1.clone())));
+        // ["t1", "") => t1_xx
+        check(Some(1), None, Some(s1.clone()));
 
-        // ["t1", "t2") => {t1_xx, t1_xx}
-        check(Some(1), Some(2), Some((s1.clone(), s1.clone())));
+        // ["t1", "t2") => t1_xx
+        check(Some(1), Some(2), Some(s1.clone()));
 
         // Put t2_xx
         let mut key = gen_table_prefix(2);
@@ -324,14 +311,14 @@ mod test {
         let s2 = keys::data_key(Key::from_raw(&key).encoded());
         engine.put_cf(write_cf, &s2, &s2).unwrap();
 
-        // ["t1", "") => {t1_xx, t2_xx}
-        check(Some(1), None, Some((s1.clone(), s2.clone())));
+        // ["t1", "") => t2_xx
+        check(Some(1), None, Some(s2.clone()));
 
-        // ["", "t2") => {t1_xx, t1_xx}
-        check(None, Some(2), Some((s1.clone(), s1.clone())));
+        // ["", "t2") => t1_xx
+        check(None, Some(2), Some(s1.clone()));
 
-        // ["t1", "t2") => {t1_xx, t1_xx}
-        check(Some(1), Some(2), Some((s1.clone(), s1.clone())));
+        // ["t1", "t2") => t1_xx
+        check(Some(1), Some(2), Some(s1.clone()));
 
         // Put t3_xx
         let mut key = gen_table_prefix(3);
@@ -339,11 +326,11 @@ mod test {
         let s3 = keys::data_key(Key::from_raw(&key).encoded());
         engine.put_cf(write_cf, &s3, &s3).unwrap();
 
-        // ["", "t3") => {t1_xx, t2_xx}
-        check(None, Some(3), Some((s1.clone(), s2.clone())));
+        // ["", "t3") => t2_xx
+        check(None, Some(3), Some(s2.clone()));
 
-        // ["t1", "t3") => {t1_xx, t2_xx}
-        check(Some(1), Some(3), Some((s1.clone(), s2.clone())));
+        // ["t1", "t3") => t2_xx
+        check(Some(1), Some(3), Some(s2.clone()));
     }
 
     #[test]
@@ -421,7 +408,7 @@ mod test {
         }
 
         // ["", "") => t3
-        check(None, None, Some(3));
+        check(None, None, Some(1));
 
         // ["t1", "") => t3
         check(Some(gen_encoded_table_prefix(1)), None, Some(3));
@@ -434,6 +421,12 @@ mod test {
             Some(3),
         );
 
+        // ["t2", "t4") => t3
+        check(
+            Some(gen_encoded_table_prefix(2)),
+            Some(gen_encoded_table_prefix(4)),
+            Some(3),
+        );
 
         // Put some data to t3
         for i in 1..4 {
