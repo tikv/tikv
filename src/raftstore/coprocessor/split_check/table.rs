@@ -207,10 +207,13 @@ fn bound_keys(db: &DB, region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
 }
 
 fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
-    table_codec::decode_table_id(&Key::from_encoded(encoded_key.to_vec()).raw().unwrap())
-        .map(table_codec::gen_table_prefix)
-        .map(|k| Key::from_raw(&k).encoded().to_vec())
-        .ok()
+    if let Ok(raw_key) = Key::from_encoded(encoded_key.to_vec()).raw() {
+        table_codec::extract_table_prefix(&raw_key)
+            .map(|k| Key::from_raw(k).encoded().to_vec())
+            .ok()
+    } else {
+        None
+    }
 }
 
 // Encode a key like `t{i64}` will append some unecessary bytes to the output,
@@ -385,7 +388,7 @@ mod test {
         };
 
         let gen_encoded_table_prefix = |table_id| {
-            let key = Key::from_raw(&table_codec::gen_table_prefix(table_id));
+            let key = Key::from_raw(&gen_table_prefix(table_id));
             key.encoded().to_vec()
         };
 

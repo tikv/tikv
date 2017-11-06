@@ -62,13 +62,16 @@ pub fn gen_table_prefix(table_id: i64) -> Vec<u8> {
     buf
 }
 
-/// Decodes the table ID of the key.
-pub fn decode_table_id(key: &[u8]) -> Result<i64> {
-    if key.len() < TABLE_PREFIX_KEY_LEN || !key.starts_with(TABLE_PREFIX) {
-        Err(box_err!("table key expected, but got {}", escape(key)))
+/// Extract table prefix from table record or index.
+// It is useful in tests.
+pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
+    if !key.starts_with(TABLE_PREFIX) || key.len() < TABLE_PREFIX_KEY_LEN {
+        Err(invalid_type!(
+            "record key or index key expected, but got {:?}",
+            key
+        ))
     } else {
-        let mut key = &key[TABLE_PREFIX_LEN..TABLE_PREFIX_KEY_LEN];
-        key.decode_i64()
+        Ok(&key[..TABLE_PREFIX_KEY_LEN])
     }
 }
 
@@ -591,15 +594,27 @@ mod test {
     }
 
     #[test]
-    fn test_encode_and_decode_table_perfix() {
-        let good = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
-        for t in good {
-            let key = gen_table_prefix(t);
-            assert_eq!(decode_table_id(&key).unwrap(), t);
-        }
+    fn test_extract_table_prefix() {
+        extract_table_prefix(&[]).unwrap_err();
+        let table_prefix = gen_table_prefix(999);
+        assert_eq!(
+            extract_table_prefix(&table_prefix).unwrap(),
+            table_prefix.as_slice()
+        );
 
-        assert!(decode_table_id(&[]).is_err());
-        assert!(decode_table_id(TABLE_PREFIX).is_err());
-        assert!(decode_table_id(b"t123").is_err());
+        let mut table_prefix1 = table_prefix.clone();
+        table_prefix1.extend(b"something");
+        assert_eq!(
+            extract_table_prefix(&table_prefix1).unwrap(),
+            table_prefix.as_slice()
+        );
+
+        let mut table_prefix2 = table_prefix.clone();
+        table_prefix2[0] = b'a';
+        extract_table_prefix(&table_prefix2).unwrap_err();
+
+        let mut table_prefix3 = table_prefix.clone();
+        table_prefix3.pop();
+        extract_table_prefix(&table_prefix3).unwrap_err();
     }
 }
