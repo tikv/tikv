@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::result::Result as StdResult;
 use std::cmp::Ordering;
 
 use rocksdb::{SeekKey, DB};
@@ -64,7 +63,7 @@ impl RegionObserver for TableCheckObserver {
 
 /// Do some quick checks, true for skipping `check_key`.
 fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool {
-    if let Ok(true) = is_same_table(region.get_start_key(), region.get_end_key()) {
+    if is_same_table(region.get_start_key(), region.get_end_key()) {
         // Region is inside a table, skip for saving IO.
         return true;
     }
@@ -114,7 +113,7 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
         }
         // Region is in table area.
         (Ordering::Equal, Ordering::Equal) => {
-            if let Ok(true) = is_same_table(encoded_start_key, encoded_end_key) {
+            if is_same_table(encoded_start_key, encoded_end_key) {
                 // Same table.
                 true
             } else {
@@ -152,7 +151,7 @@ fn check_key(status: &mut TableStatus, current_data_key: &[u8]) -> Option<Vec<u8
     let current_encoded_key = keys::origin_key(current_data_key);
 
     let split_key = if status.first_encoded_table_prefix.is_some() {
-        if let Ok(false) = is_same_table(
+        if !is_same_table(
             status.first_encoded_table_prefix.as_ref().unwrap(),
             current_encoded_key,
         ) {
@@ -213,16 +212,9 @@ fn is_table_key(encoded_key: &[u8]) -> bool {
         encoded_key.len() >= ENCODED_TABLE_TABLE_PREFIX
 }
 
-fn is_same_table<'a>(left_key: &'a [u8], right_key: &'a [u8]) -> StdResult<bool, &'a [u8]> {
-    if !is_table_key(left_key) {
-        Err(left_key)
-    } else if !is_table_key(right_key) {
-        Err(right_key)
-    } else {
-        Ok(
-            left_key[..ENCODED_TABLE_TABLE_PREFIX] == right_key[..ENCODED_TABLE_TABLE_PREFIX],
-        )
-    }
+fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
+    is_table_key(left_key) && is_table_key(right_key) &&
+        left_key[..ENCODED_TABLE_TABLE_PREFIX] == right_key[..ENCODED_TABLE_TABLE_PREFIX]
 }
 
 #[cfg(test)]
