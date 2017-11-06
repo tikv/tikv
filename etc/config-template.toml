@@ -134,6 +134,9 @@
 # consistency-check-interval = 0
 
 [coprocessor]
+# When it is true, it will try to split a region with table prefix if
+# that region crosses tables.
+# split-region-on-table = false
 # When the region's size exceeds region-max-size, we will split the region
 # into two which the left region's size will be region-split-size or a little
 # bit smaller.
