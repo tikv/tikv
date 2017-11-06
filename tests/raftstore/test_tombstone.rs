@@ -12,11 +12,12 @@
 // limitations under the License.
 
 use std::time::Duration;
+use std::thread;
 
 use rocksdb::Writable;
 use protobuf::Message;
 
-use kvproto::raft_serverpb::{self, PeerState, RegionLocalState, StoreIdent};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::transport_simulate::*;
@@ -92,7 +93,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(conf_ver == 4 || conf_ver == 3);
 
     // Send a stale raft message to peer (2, 2)
-    let mut raft_msg = raft_serverpb::RaftMessage::new();
+    let mut raft_msg = RaftMessage::new();
 
     raft_msg.set_region_id(r1);
     // Use an invalid from peer to ignore gc peer message.
@@ -219,6 +220,19 @@ fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.clear_send_filters();
     cluster.must_put(b"k4", b"v4");
     let engine = cluster.get_engine(2);
+    must_get_equal(&engine, b"k4", b"v4");
+
+    // Stale gc message should be ignored.
+    let epoch = pd_client.get_region_epoch(r1);
+    let mut gc_msg = RaftMessage::new();
+    gc_msg.set_region_id(r1);
+    gc_msg.set_from_peer(new_peer(1, 1));
+    gc_msg.set_to_peer(new_peer(2, 2));
+    gc_msg.set_region_epoch(epoch);
+    gc_msg.set_is_tombstone(true);
+    cluster.send_raft_msg(gc_msg).unwrap();
+    // Fixme: find a better way to check if the message is ignored.
+    thread::sleep(Duration::from_secs(1));
     must_get_equal(&engine, b"k4", b"v4");
 }
 
