@@ -67,6 +67,7 @@ pub struct Config {
     pub enable_distsql_cache: bool,
     pub distsql_cache_size: ReadableSize,
     pub end_point_stack_size: ReadableSize,
+    pub end_point_recursion_limit: u32,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -96,6 +97,7 @@ impl Default for Config {
             enable_distsql_cache: false,
             distsql_cache_size: ReadableSize(DEFAULT_DISTSQL_CACHE_SIZE as u64),
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
+            end_point_recursion_limit: 1000,
         }
     }
 }
@@ -130,6 +132,10 @@ impl Config {
         // See more: https://doc.rust-lang.org/std/thread/struct.Builder.html#method.stack_size
         if self.end_point_stack_size.0 < ReadableSize::mb(2).0 {
             return Err(box_err!("server.end-point-stack-size is too small."));
+        }
+
+        if self.end_point_recursion_limit < 100 {
+            return Err(box_err!("server.end-point-recursion-limit is too small"));
         }
 
         for (k, v) in &self.labels {
@@ -193,6 +199,10 @@ mod tests {
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_max_tasks = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.end_point_recursion_limit = 0;
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();

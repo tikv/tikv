@@ -19,6 +19,7 @@ use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
 use tikv::server::Config as ServerConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
+use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
@@ -66,6 +67,7 @@ fn test_serde_custom_tikv_config() {
         enable_distsql_cache: false,
         distsql_cache_size: ReadableSize(256 * 1024 * 1024),
         end_point_stack_size: ReadableSize::mb(12),
+        end_point_recursion_limit: 100,
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -87,8 +89,6 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_count_limit: 12,
         raft_log_gc_size_limit: ReadableSize::kb(1),
         split_region_check_tick_interval: ReadableDuration::secs(12),
-        region_max_size: ReadableSize::mb(12),
-        region_split_size: ReadableSize::mb(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
         region_compact_delete_keys_count: 1_234,
@@ -109,6 +109,8 @@ fn test_serde_custom_tikv_config() {
         right_derive_when_split: false,
         allow_remove_leader: true,
         enable_distsql_cache: false,
+        region_max_size: ReadableSize(0),
+        region_split_size: ReadableSize(0),
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],
@@ -312,6 +314,7 @@ fn test_serde_custom_tikv_config() {
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
+        max_key_size: 8192,
         scheduler_notify_capacity: 123,
 
         scheduler_messages_per_tick: 123,
@@ -319,6 +322,10 @@ fn test_serde_custom_tikv_config() {
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         enable_distsql_cache: false,
+    };
+    value.coprocessor = CopConfig {
+        region_max_size: ReadableSize::mb(12),
+        region_split_size: ReadableSize::mb(12),
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");

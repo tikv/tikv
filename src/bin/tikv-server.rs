@@ -68,9 +68,10 @@ use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
 use tikv::raftstore::store::{self, Engines, SnapManager};
+use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
-use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSER_INTERVAL};
+use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::coprocessor::cache::DISTSQL_CACHE;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -203,7 +204,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     // Create server
     let mut server = Server::new(
         &cfg.server,
-        cfg.raft_store.region_split_size.0 as usize,
+        cfg.coprocessor.region_split_size.0 as usize,
         storage.clone(),
         raft_router,
         resolver,
@@ -215,6 +216,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg.server, &cfg.raft_store, pd_client);
+
+    // Create CoprocessorHost.
+    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_sendch());
+
     node.start(
         event_loop,
         engines.clone(),
@@ -222,6 +227,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         snap_mgr,
         significant_msg_receiver,
         pd_worker,
+        coprocessor_host,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
@@ -233,7 +239,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     let mut metrics_flusher = MetricsFlusher::new(
         engines.clone(),
-        Duration::from_millis(DEFAULT_FLUSER_INTERVAL),
+        Duration::from_millis(DEFAULT_FLUSHER_INTERVAL),
     );
 
     // Start metrics flusher
@@ -455,10 +461,9 @@ fn main() {
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {:?}", e);
-    }
-
+    // Sets the global logger ASAP.
+    // It is okay to use the config w/o `validata()`,
+    // because `init_log()` handles various conditions.
     init_log(&config);
 
     // Print version information.
@@ -482,6 +487,10 @@ fn main() {
         );
     }
 
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {:?}", e);
+    }
     info!(
         "using config: {}",
         serde_json::to_string_pretty(&config).unwrap()

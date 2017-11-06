@@ -20,6 +20,7 @@ use util::config::{self, ReadableSize};
 pub const DEFAULT_DATA_DIR: &'static str = "";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &'static str = "db";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
+const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 102400;
@@ -36,6 +37,7 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 pub struct Config {
     pub data_dir: String,
     pub gc_ratio_threshold: f64,
+    pub max_key_size: usize,
     pub scheduler_notify_capacity: usize,
     pub scheduler_messages_per_tick: usize,
     pub scheduler_concurrency: usize,
@@ -50,6 +52,7 @@ impl Default for Config {
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
+            max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_notify_capacity: DEFAULT_SCHED_CAPACITY,
             scheduler_messages_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,

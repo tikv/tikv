@@ -15,6 +15,7 @@ end-point-max-tasks = 12
 enable-distsql-cache = false
 distsql-cache-size = "256MB"
 end-point-stack-size = "12MB"
+end-point-recursion-limit = 100
 
 [server.labels]
 a = "b"
@@ -22,6 +23,7 @@ a = "b"
 [storage]
 data-dir = "/var"
 gc-ratio-threshold = 1.2
+max-key-size = 8192
 scheduler-notify-capacity = 123
 scheduler-messages-per-tick = 123
 scheduler-concurrency = 123
@@ -54,8 +56,6 @@ raft-log-gc-threshold = 12
 raft-log-gc-count-limit = 12
 raft-log-gc-size-limit = "1KB"
 split-region-check-tick-interval = "12s"
-region-max-size = "12MB"
-region-split-size = "12MB"
 region-split-check-diff = "6MB"
 region-compact-check-interval = "12s"
 region-compact-delete-keys-count = 1234
@@ -76,6 +76,10 @@ raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
 enable-distsql-cache = false
+
+[coprocessor]
+region-max-size = "12MB"
+region-split-size = "12MB"
 
 [rocksdb]
 wal-recovery-mode = 1
