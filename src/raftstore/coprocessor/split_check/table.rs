@@ -81,10 +81,6 @@ fn before_check(status: &mut TableStatus, engine: &DB, region: &Region) -> bool 
         }
     };
 
-    if !keys::validate_data_key(&start_key) || !keys::validate_data_key(&end_key) {
-        return true;
-    }
-
     let encoded_start_key = keys::origin_key(&start_key);
     let encoded_end_key = keys::origin_key(&end_key);
 
@@ -152,9 +148,6 @@ fn check_key(status: &mut TableStatus, current_data_key: &[u8]) -> Option<Vec<u8
         return Some(keys::data_key(&last_encoded_table_prefix));
     }
 
-    if !keys::validate_data_key(current_data_key) {
-        return None;
-    }
     let current_encoded_key = keys::origin_key(current_data_key);
 
     let split_key = if status.first_encoded_table_prefix.is_some() {
@@ -205,11 +198,11 @@ fn bound_keys(db: &DB, region: &Region) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     match (first_key, last_key) {
         (Some(fk), Some(lk)) => Ok(Some((fk, lk))),
         (None, None) => Ok(None),
-        (first_key, last_key) => Err(box_err!(
+        (first_key, last_key) => unreachable!(
             "invalid bound, first key: {:?}, last key: {:?}",
             first_key,
             last_key
-        )),
+        ),
     }
 }
 
