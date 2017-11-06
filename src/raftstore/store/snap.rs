@@ -1108,8 +1108,8 @@ impl SnapManager {
             limiter: Arc::new(RateLimiter::new(
                 10 * 1024 * 1024, // bytes_per_sec
                 100 * 1000,       // refill_period_us
-                10,
-            )), // fairness
+                10,               // fairness
+            )),
         }
     }
 
