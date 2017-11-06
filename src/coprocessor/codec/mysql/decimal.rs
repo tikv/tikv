@@ -591,7 +591,7 @@ fn do_div_mod(
     let mut buf = vec![0; l_len];
     (&mut buf[0..i]).copy_from_slice(&lhs.word_buf[l_idx..l_idx + i]);
     let mut l_idx = 0;
-    let (r_start, mut r_stop) = (r_idx, word_cnt!(r_idx + r_prec as usize, usize) - 1);
+    let (r_start, mut r_stop) = (r_idx, r_idx + word_cnt!(r_prec as usize, usize) - 1);
     while rhs.word_buf[r_stop] == 0 && r_stop >= r_start {
         r_stop -= 1;
     }
