@@ -226,7 +226,6 @@ pub mod test {
         }
 
         fn init_data(&mut self, kv_data: &[(Vec<u8>, Vec<u8>)]) {
-            let mut rstat: Option<Statistics> = None;
             // do prewrite.
             let txn_motifies = {
                 let mut txn = MvccTxn::new(
@@ -248,15 +247,15 @@ pub mod test {
                         &Options::default(),
                     ).unwrap();
                 }
-                txn.modifies(&mut rstat)
+                txn.modifies().0
             };
             self.write_modifies(txn_motifies);
-            let statistics = Statistics::default();
+
             // do commit
             let txn_modifies = {
                 let mut txn = MvccTxn::new(
                     self.snapshot.clone(),
-                    statistics,
+                    Statistics::default(),
                     START_TS,
                     None,
                     IsolationLevel::SI,
@@ -265,7 +264,7 @@ pub mod test {
                 for &(ref key, _) in kv_data {
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
-                txn.modifies(&mut rstat)
+                txn.modifies().0
             };
             self.write_modifies(txn_modifies);
         }

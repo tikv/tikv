@@ -830,7 +830,9 @@ fn process_write_impl(
             }
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                (pr, txn.modifies(st), rows)
+                let (modifies, statistics) = txn.modifies();
+                *st = Some(statistics);
+                (pr, modifies, rows)
             } else {
                 // Skip write stage if some keys are locked.
                 let pr = ProcessResult::MultiRes { results: locks };
@@ -865,7 +867,9 @@ fn process_write_impl(
             }
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies(st), rows)
+            let (modifies, statistics) = txn.modifies();
+            *st = Some(statistics);
+            (pr, modifies, rows)
         }
         Command::Cleanup {
             ref ctx,
@@ -884,7 +888,9 @@ fn process_write_impl(
             txn.rollback(key)?;
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies(st), 1)
+            let (modifies, statistics) = txn.modifies();
+            *st = Some(statistics);
+            (pr, modifies, 1)
         }
         Command::Rollback {
             ref ctx,
@@ -906,7 +912,9 @@ fn process_write_impl(
             }
 
             let pr = ProcessResult::Res;
-            (pr, txn.modifies(st), rows)
+            let (modifies, statistics) = txn.modifies();
+            *st = Some(statistics);
+            (pr, modifies, rows)
         }
         Command::ResolveLock {
             ref ctx,
@@ -944,7 +952,9 @@ fn process_write_impl(
                 }
             }
             if scan_key.is_none() {
-                (ProcessResult::Res, txn.modifies(st), rows)
+                let (modifies, statistics) = txn.modifies();
+                *st = Some(statistics);
+                (ProcessResult::Res, modifies, rows)
             } else {
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
@@ -955,7 +965,9 @@ fn process_write_impl(
                         keys: vec![],
                     },
                 };
-                (pr, txn.modifies(st), rows)
+                let (modifies, statistics) = txn.modifies();
+                *st = Some(statistics);
+                (pr, modifies, rows)
             }
         }
         Command::Gc {
@@ -983,7 +995,9 @@ fn process_write_impl(
                 }
             }
             if scan_key.is_none() {
-                (ProcessResult::Res, txn.modifies(st), rows)
+                let (modifies, statistics) = txn.modifies();
+                *st = Some(statistics);
+                (ProcessResult::Res, modifies, rows)
             } else {
                 let pr = ProcessResult::NextCommand {
                     cmd: Command::Gc {
@@ -994,7 +1008,9 @@ fn process_write_impl(
                         keys: vec![],
                     },
                 };
-                (pr, txn.modifies(st), rows)
+                let (modifies, statistics) = txn.modifies();
+                *st = Some(statistics);
+                (pr, modifies, rows)
             }
         }
         _ => panic!("unsupported write command"),

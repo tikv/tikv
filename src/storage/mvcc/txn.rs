@@ -62,9 +62,8 @@ impl MvccTxn {
         }
     }
 
-    pub fn modifies(self, statistics: &mut Option<Statistics>) -> Vec<Modify> {
-        *statistics = Some(self.reader.close());
-        self.writes
+    pub fn modifies(self) -> (Vec<Modify>, Statistics) {
+        (self.writes, self.reader.close())
     }
 
     pub fn close(self) -> Statistics {
@@ -764,16 +763,14 @@ mod tests {
             &Options::default(),
         ).unwrap();
         assert!(txn.write_size() > 0);
-        let mut stat = Some(Statistics::default());
-        engine.write(&ctx, txn.modifies(&mut stat)).unwrap();
+        engine.write(&ctx, txn.modifies().0).unwrap();
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot, statistics, 10, None, IsolationLevel::SI, true);
         txn.commit(&key, 15).unwrap();
         assert!(txn.write_size() > 0);
-        let mut stat = Some(Statistics::default());
-        engine.write(&ctx, txn.modifies(&mut stat)).unwrap();
+        engine.write(&ctx, txn.modifies().0).unwrap();
     }
 
     #[test]
@@ -871,8 +868,7 @@ mod tests {
             pk,
             &Options::default(),
         ).unwrap();
-        let mut stat = Some(Statistics::default());
-        engine.write(&ctx, txn.modifies(&mut stat)).unwrap();
+        engine.write(&ctx, txn.modifies().0).unwrap();
     }
 
     fn must_prewrite_delete(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
@@ -882,8 +878,7 @@ mod tests {
         let mut txn = MvccTxn::new(snapshot, statistics, ts, None, IsolationLevel::SI, true);
         txn.prewrite(Mutation::Delete(make_key(key)), pk, &Options::default())
             .unwrap();
-        let mut stat = Some(Statistics::default());
-        engine.write(&ctx, txn.modifies(&mut stat)).unwrap();
+        engine.write(&ctx, txn.modifies().0).unwrap();
     }
 
     fn must_prewrite_lock(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
@@ -893,8 +888,7 @@ mod tests {
         let mut txn = MvccTxn::new(snapshot, statistics, ts, None, IsolationLevel::SI, true);
         txn.prewrite(Mutation::Lock(make_key(key)), pk, &Options::default())
             .unwrap();
-        let mut stat = Some(Statistics::default());
-        engine.write(&ctx, txn.modifies(&mut stat)).unwrap();
+        engine.write(&ctx, txn.modifies().0).unwrap();
     }
 
     fn must_prewrite_lock_err(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
@@ -921,8 +915,7 @@ mod tests {
             true,
         );
         txn.commit(&make_key(key), commit_ts).unwrap();
-        let mut stat = Some(Statistics::default());
-        engine.write(&ctx, txn.modifies(&mut stat)).unwrap();
+        engine.write(&ctx, txn.modifies().0).unwrap();
     }
 
     fn must_commit_err(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -953,8 +946,7 @@ mod tests {
             true,
         );
         txn.rollback(&make_key(key)).unwrap();
-        let mut stat = Some(Statistics::default());
-        engine.write(&ctx, txn.modifies(&mut stat)).unwrap();
+        engine.write(&ctx, txn.modifies().0).unwrap();
     }
 
     fn must_rollback_err(engine: &Engine, key: &[u8], start_ts: u64) {
@@ -978,8 +970,7 @@ mod tests {
         let statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot, statistics, 0, None, IsolationLevel::SI, true);
         txn.gc(&make_key(key), safe_point).unwrap();
-        let mut stat = Some(Statistics::default());
-        engine.write(&ctx, txn.modifies(&mut stat)).unwrap();
+        engine.write(&ctx, txn.modifies().0).unwrap();
     }
 
     fn must_locked(engine: &Engine, key: &[u8], start_ts: u64) {

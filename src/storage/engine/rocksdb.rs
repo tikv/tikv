@@ -210,7 +210,6 @@ impl Snapshot for RocksSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    // #[allow(needless_lifetimes)]
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor> {
         trace!("RocksSnapshot: create iterator");
         let iter = self.new_arc_iter(iter_opt);

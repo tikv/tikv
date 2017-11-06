@@ -227,10 +227,7 @@ mod test {
                         &Options::default(),
                     ).unwrap();
                 }
-                let mut stat = Some(Statistics::default());
-                self.engine
-                    .write(&self.ctx, txn.modifies(&mut stat))
-                    .unwrap();
+                self.engine.write(&self.ctx, txn.modifies().0).unwrap();
             }
             self.refresh_snapshot();
             // do commit
@@ -247,10 +244,7 @@ mod test {
                     let key = key.as_bytes();
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
-                let mut stat = Some(Statistics::default());
-                self.engine
-                    .write(&self.ctx, txn.modifies(&mut stat))
-                    .unwrap();
+                self.engine.write(&self.ctx, txn.modifies().0).unwrap();
             }
             self.refresh_snapshot();
         }

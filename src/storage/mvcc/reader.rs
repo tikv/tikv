@@ -591,51 +591,47 @@ mod tests {
         }
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
-            let mut stat = Some(Statistics::default());
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
             let mut txn = MvccTxn::new(
                 Box::new(snap),
-                stat.take().unwrap(),
+                Statistics::default(),
                 start_ts,
                 None,
                 IsolationLevel::SI,
                 true,
             );
             txn.prewrite(m, pk, &Options::default()).unwrap();
-            self.write(txn.modifies(&mut stat));
+            self.write(txn.modifies().0);
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let k = make_key(pk);
-            let mut stat = Some(Statistics::default());
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
             let mut txn = MvccTxn::new(
                 Box::new(snap),
-                stat.take().unwrap(),
+                Statistics::default(),
                 start_ts,
                 None,
                 IsolationLevel::SI,
                 true,
             );
             txn.commit(&k, commit_ts).unwrap();
-            self.write(txn.modifies(&mut stat));
+            self.write(txn.modifies().0);
         }
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
             let k = make_key(pk);
-            let stat = Statistics::default();
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
             let mut txn = MvccTxn::new(
                 Box::new(snap),
-                stat,
+                Statistics::default(),
                 safe_point,
                 None,
                 IsolationLevel::SI,
                 true,
             );
             txn.gc(&k, safe_point).unwrap();
-            let mut stat = Some(Statistics::default());
-            self.write(txn.modifies(&mut stat));
+            self.write(txn.modifies().0);
         }
 
         fn write(&mut self, modifies: Vec<Modify>) {
