@@ -62,7 +62,7 @@ impl MvccReader {
         }
     }
 
-    pub fn close(self) -> Statistics {
+    pub fn close(&self) -> Statistics {
         self.statistics
     }
 

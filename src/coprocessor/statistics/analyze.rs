@@ -62,13 +62,14 @@ impl AnalyzeContext {
                     self.ranges,
                     self.snap,
                 );
-                let res = handle_index(&mut scanner, req.get_bucket_size() as usize);
+                let bucket_size = req.get_bucket_size() as usize;
+                let res = AnalyzeContext::handle_index(&mut scanner, bucket_size);
                 (res, scanner.take_statistics())
             }
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
                 let mut builder = SampleBuilder::new(col_req, self.snap, self.ranges)?;
-                let res = handle_column(&mut builder);
+                let res = AnalyzeContext::handle_column(&mut builder);
                 (res, builder.data.take_statistics())
             }
         };
@@ -87,39 +88,40 @@ impl AnalyzeContext {
             Err(e) => Err(e),
         }
     }
-}
 
-// handle_column is used to process `AnalyzeColumnsReq`
-// it would build a histogram for the primary key(if needed) and
-// collectors for each column value.
-fn handle_column(builder: &mut SampleBuilder) -> Result<Vec<u8>> {
-    let (collectors, pk_builder) = builder.collect_samples_and_estimate_ndvs()?;
-    let pk_hist = pk_builder.into_proto();
-    let cols: Vec<analyze::SampleCollector> =
-        collectors.into_iter().map(|col| col.into_proto()).collect();
+    // handle_column is used to process `AnalyzeColumnsReq`
+    // it would build a histogram for the primary key(if needed) and
+    // collectors for each column value.
+    fn handle_column(builder: &mut SampleBuilder) -> Result<Vec<u8>> {
+        let (collectors, pk_builder) = builder.collect_samples_and_estimate_ndvs()?;
+        let pk_hist = pk_builder.into_proto();
+        let cols: Vec<analyze::SampleCollector> =
+            collectors.into_iter().map(|col| col.into_proto()).collect();
 
-    let res_data = {
-        let mut res = analyze::AnalyzeColumnsResp::new();
-        res.set_collectors(RepeatedField::from_vec(cols));
-        res.set_pk_hist(pk_hist);
-        box_try!(res.write_to_bytes())
-    };
-    Ok(res_data)
-}
-
-// handle_index is used to handle `AnalyzeIndexReq`,
-// it would build a histogram of index values.
-fn handle_index(scanner: &mut IndexScanExecutor, bucket_size: usize) -> Result<Vec<u8>> {
-    let mut hist = Histogram::new(bucket_size);
-    while let Some(row) = scanner.next()? {
-        let bytes = row.data.get_column_values();
-        hist.append(bytes);
+        let res_data = {
+            let mut res = analyze::AnalyzeColumnsResp::new();
+            res.set_collectors(RepeatedField::from_vec(cols));
+            res.set_pk_hist(pk_hist);
+            box_try!(res.write_to_bytes())
+        };
+        Ok(res_data)
     }
-    let mut res = analyze::AnalyzeIndexResp::new();
-    res.set_hist(hist.into_proto());
-    let dt = box_try!(res.write_to_bytes());
-    Ok(dt)
+
+    // handle_index is used to handle `AnalyzeIndexReq`,
+    // it would build a histogram of index values.
+    fn handle_index(scanner: &mut IndexScanExecutor, bucket_size: usize) -> Result<Vec<u8>> {
+        let mut hist = Histogram::new(bucket_size);
+        while let Some(row) = scanner.next()? {
+            let bytes = row.data.get_column_values();
+            hist.append(bytes);
+        }
+        let mut res = analyze::AnalyzeIndexResp::new();
+        res.set_hist(hist.into_proto());
+        let dt = box_try!(res.write_to_bytes());
+        Ok(dt)
+    }
 }
+
 
 struct SampleBuilder {
     data: TableScanExecutor,

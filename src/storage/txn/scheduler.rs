@@ -407,7 +407,7 @@ fn process_read(
         .inc();
     let tag = cmd.tag();
 
-    let mut statistics: Option<Statistics> = None;
+    let mut statistics = Statistics::default();
 
     let pr = match cmd {
         // Gets from the snapshot.
@@ -492,7 +492,7 @@ fn process_read(
                 )
                 .and_then(|mut scanner| {
                     let res = scanner.scan(start_key.clone(), limit);
-                    statistics = Some(scanner.close());
+                    statistics = scanner.close();
                     res
                 })
                 .and_then(|mut results| {
@@ -532,7 +532,7 @@ fn process_read(
                 Err(e) => ProcessResult::Failed { err: e.into() },
             };
 
-            statistics = Some(reader.close());
+            statistics = reader.close();
             res
         }
         Command::MvccByStartTs { ref ctx, start_ts } => {
@@ -563,7 +563,7 @@ fn process_read(
                     None => ProcessResult::MvccStartTs { mvcc: None },
                 },
             };
-            statistics = Some(reader.close());
+            statistics = reader.close();
             res
         }
         // Scans locks with timestamp <= `max_ts`
@@ -595,7 +595,7 @@ fn process_read(
                         .observe(locks.len() as f64);
                     Ok(locks)
                 });
-            statistics = Some(reader.close());
+            statistics = reader.close();
             match res {
                 Ok(locks) => ProcessResult::Locks { locks: locks },
                 Err(e) => ProcessResult::Failed { err: e.into() },
@@ -642,7 +642,7 @@ fn process_read(
                         }))
                     }
                 });
-            statistics = Some(reader.close());
+            statistics = reader.close();
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
@@ -701,7 +701,7 @@ fn process_read(
                         }
                     })
             };
-            statistics = Some(reader.close());
+            statistics = reader.close();
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
@@ -724,15 +724,12 @@ fn process_read(
             limit,
             ..
         } => {
-            let mut s = Statistics::default();
-
-            let res = match process_rawscan(snapshot, start_key, limit, &mut s) {
+            let res = match process_rawscan(snapshot, start_key, limit, &mut statistics) {
                 Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
                 Err(e) => ProcessResult::Failed {
                     err: StorageError::from(e),
                 },
             };
-            statistics = Some(s);
             res
         }
         Command::Pause { duration, .. } => {
@@ -746,7 +743,7 @@ fn process_read(
         // Todo: if this happens we need to clean up command's context
         panic!("send read finished failed, cid={}, err={:?}", cid, e);
     }
-    statistics.unwrap_or_default()
+    statistics
 }
 
 fn process_rawscan(

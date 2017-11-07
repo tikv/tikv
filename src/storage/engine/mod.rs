@@ -171,7 +171,7 @@ pub enum ScanMode {
 }
 
 /// Statistics collects the ops taken when fetching data.
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 pub struct CFStatistics {
     // How many keys that's effective to user. This counter should be increased
     // by the caller.
@@ -185,7 +185,7 @@ pub struct CFStatistics {
     pub flow_stats: FlowStatistics,
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Copy)]
 pub struct FlowStatistics {
     pub read_keys: usize,
     pub read_bytes: usize,
@@ -229,7 +229,7 @@ impl CFStatistics {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 pub struct Statistics {
     pub lock: CFStatistics,
     pub write: CFStatistics,

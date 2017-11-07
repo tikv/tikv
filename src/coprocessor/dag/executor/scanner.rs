@@ -11,18 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
+
 use kvproto::coprocessor::KeyRange;
 
 use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
 use storage::txn::Result;
 use util::escape;
+
 // `Scanner` is a helper struct to wrap all common scan operations
 // for `TableScanExecutor` and `IndexScanExecutor`
 pub struct Scanner {
     store: SnapshotStore,
     scan_mode: ScanMode,
     key_only: bool,
-    statistics: Option<Statistics>,
+    statistics: Statistics,
     seek_key: Option<Vec<u8>>,
     scanner: Option<StoreScanner>,
 }
@@ -38,7 +41,7 @@ impl Scanner {
             store: store,
             scan_mode: scan_mode,
             key_only: key_only,
-            statistics: Some(Statistics::default()),
+            statistics: Statistics::default(),
             seek_key: None,
             scanner: None,
         }
@@ -77,7 +80,6 @@ impl Scanner {
     }
 
     pub fn get_row(&mut self, key: &[u8]) -> Result<Option<Value>> {
-        self.statistics = Some(self.take_statistics());
         self.store.get(&Key::from_raw(key), &mut self.statistics)
     }
 
@@ -102,11 +104,10 @@ impl Scanner {
     }
 
     pub fn take_statistics(&mut self) -> Statistics {
-        self.scanner
-            .take()
-            .map(|scanner| scanner.close())
-            .or_else(|| self.statistics.take())
-            .unwrap()
+        match self.scanner {
+            Some(ref scanner) => scanner.close(),
+            None => mem::replace(&mut self.statistics, Statistics::default()),
+        }
     }
 }
 

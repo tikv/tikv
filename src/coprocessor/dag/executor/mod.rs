@@ -187,6 +187,7 @@ pub fn build_exec(
 }
 
 type FirstExecutor = (Box<Executor>, Arc<Vec<ColumnInfo>>);
+
 fn build_first_executor(
     mut first: executor::Executor,
     store: SnapshotStore,

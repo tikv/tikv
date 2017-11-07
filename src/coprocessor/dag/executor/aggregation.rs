@@ -99,8 +99,8 @@ impl AggregationExecutor {
             .with_label_values(&["aggregation"])
             .inc();
         Ok(AggregationExecutor {
-            group_by: box_try!(Expression::batch_build(ctx.as_ref(), group_by)),
-            aggr_func: AggrFuncExpr::batch_build(ctx.as_ref(), aggr_func)?,
+            group_by: box_try!(Expression::batch_build(&ctx, group_by)),
+            aggr_func: AggrFuncExpr::batch_build(&ctx, aggr_func)?,
             group_key_aggrs: OrderMap::new(),
             cursor: 0,
             executed: false,
@@ -130,7 +130,7 @@ impl AggregationExecutor {
             let cols = inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
-                self.cols.as_ref(),
+                &self.cols,
                 &self.related_cols_offset,
                 row.handle,
             )?;

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
+use std::{mem, usize};
 use std::sync::Arc;
 use tipb::select::{Chunk, RowMeta, SelectRequest, SelectResponse};
 use tipb::schema::ColumnInfo;
@@ -40,7 +40,7 @@ const REQUEST_CHECKPOINT: usize = 255;
 
 pub struct SelectContext {
     snap: SnapshotStore,
-    statistics: Option<Statistics>,
+    statistics: Statistics,
     core: SelectContextCore,
     req_ctx: Arc<ReqContext>,
 }
@@ -60,7 +60,7 @@ impl SelectContext {
         Ok(SelectContext {
             core: SelectContextCore::new(sel)?,
             snap: snap,
-            statistics: None,
+            statistics: Statistics::default(),
             req_ctx: req_ctx,
         })
     }
@@ -74,10 +74,12 @@ impl SelectContext {
             ranges.reverse();
         }
         let res = self.get_rows_from_ranges(ranges);
-        statistics.add(&self.statistics.take().unwrap_or_default());
+
+        let stat = mem::replace(&mut self.statistics, Statistics::default());
+        statistics.add(&stat);
+
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
-
         match res {
             Ok(()) => {
                 sel_resp.set_chunks(RepeatedField::from_vec(self.core.chunks));
@@ -124,14 +126,11 @@ impl SelectContext {
     fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
         if self.req_ctx.table_scan && is_point(&range) {
             CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
-            let value = self.snap
-                .get(&Key::from_raw(range.get_start()), &mut self.statistics);
-            let value = match value {
-                Ok(value) => match value {
-                    None => return Ok(0),
-                    Some(v) => v,
-                },
-                Err(e) => return Err(Error::from(e)),
+            let value = match self.snap
+                .get(&Key::from_raw(range.get_start()), &mut self.statistics)?
+            {
+                None => return Ok(0),
+                Some(v) => v,
             };
 
             let values = {
@@ -157,7 +156,7 @@ impl SelectContext {
             },
             self.key_only(),
             upper_bound,
-            self.statistics.take().unwrap_or_default(),
+            mem::replace(&mut self.statistics, Statistics::default()),
         )?;
 
         let seek_key = if self.core.desc_scan {
@@ -171,7 +170,7 @@ impl SelectContext {
             self.get_idx_row_with_scanner(&mut scanner, range, seek_key)
         };
 
-        self.statistics = Some(scanner.close());
+        self.statistics = scanner.close();
         res
     }
 

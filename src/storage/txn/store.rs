@@ -38,29 +38,29 @@ impl SnapshotStore {
         }
     }
 
-    pub fn get(&self, key: &Key, statistics: &mut Option<Statistics>) -> Result<Option<Value>> {
+    pub fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
-            statistics.take().unwrap_or_default(),
+            *statistics,
             None,
             self.fill_cache,
             None,
             self.isolation_level,
         );
-        let v = reader.get(key, self.start_ts).map_err(Error::Mvcc);
-        *statistics = Some(reader.close());
-        v
+        let v = reader.get(key, self.start_ts)?;
+        *statistics = reader.close();
+        Ok(v)
     }
 
     pub fn batch_get(
         &self,
         keys: &[Key],
-        statistics: &mut Option<Statistics>,
+        statistics: &mut Statistics,
     ) -> Result<Vec<Result<Option<Value>>>> {
         // TODO: sort the keys and use ScanMode::Forward
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
-            statistics.take().unwrap_or_default(),
+            *statistics,
             None,
             self.fill_cache,
             None,
@@ -70,7 +70,7 @@ impl SnapshotStore {
         for k in keys {
             results.push(reader.get(k, self.start_ts).map_err(Error::from));
         }
-        *statistics = Some(reader.close());
+        *statistics = reader.close();
         Ok(results)
     }
 
@@ -162,7 +162,7 @@ impl StoreScanner {
         Ok(results)
     }
 
-    pub fn close(self) -> Statistics {
+    pub fn close(&self) -> Statistics {
         self.reader.close()
     }
 }
@@ -270,7 +270,7 @@ mod test {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Some(Statistics::default());
+        let mut statistics = Statistics::default();
         for key in &store.keys {
             let key = key.as_bytes();
             let data = snapshot_store.get(&make_key(key), &mut statistics).unwrap();
@@ -283,7 +283,7 @@ mod test {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Some(Statistics::default());
+        let mut statistics = Statistics::default();
         let mut keys_list = Vec::new();
         for key in &store.keys {
             keys_list.push(make_key(key.as_bytes()));
