@@ -251,25 +251,25 @@ mod test {
 
     #[test]
     fn test_last_key_of_region() {
-        let path = TempDir::new("test-split-table").unwrap();
+        let path = TempDir::new("test_last_key_of_region").unwrap();
         let engine = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
 
         let mut region = Region::new();
         region.set_id(1);
         region.mut_peers().push(Peer::new());
-        region.mut_region_epoch().set_version(2);
-        region.mut_region_epoch().set_conf_ver(5);
-
-        assert_eq!(last_key_of_region(&engine, &region).unwrap(), None);
 
         // arbitrary padding.
         let padding = b"_r00000005";
-        // Put t1_xxx
-        let mut key = gen_table_prefix(1);
-        key.extend_from_slice(padding);
-        let s1 = keys::data_key(Key::from_raw(&key).encoded());
-        engine.put_cf(write_cf, &s1, &s1).unwrap();
+        // Put keys, t1_xxx, t2_xxx
+        let mut data_keys = vec![];
+        for i in 1..3 {
+            let mut key = gen_table_prefix(i);
+            key.extend_from_slice(padding);
+            let k = keys::data_key(Key::from_raw(&key).encoded());
+            engine.put_cf(write_cf, &k, &k).unwrap();
+            data_keys.push(k)
+        }
 
         let mut check = |start_id: Option<i64>, end_id: Option<i64>, result| {
             region.set_start_key(
@@ -285,49 +285,22 @@ mod test {
             assert_eq!(last_key_of_region(&engine, &region).unwrap(), result);
         };
 
-        // ["", "") => t1_xx
-        check(None, None, Some(s1.clone()));
+        // ["", "") => t2_xx
+        check(None, None, data_keys.get(1).cloned());
 
         // ["", "t1") => None
         check(None, Some(1), None);
 
-        // ["t1", "") => t1_xx
-        check(Some(1), None, Some(s1.clone()));
-
-        // ["t1", "t2") => t1_xx
-        check(Some(1), Some(2), Some(s1.clone()));
-
-        // Put t2_xx
-        let mut key = gen_table_prefix(2);
-        key.extend_from_slice(padding);
-        let s2 = keys::data_key(Key::from_raw(&key).encoded());
-        engine.put_cf(write_cf, &s2, &s2).unwrap();
-
         // ["t1", "") => t2_xx
-        check(Some(1), None, Some(s2.clone()));
-
-        // ["", "t2") => t1_xx
-        check(None, Some(2), Some(s1.clone()));
+        check(Some(1), None, data_keys.get(1).cloned());
 
         // ["t1", "t2") => t1_xx
-        check(Some(1), Some(2), Some(s1.clone()));
-
-        // Put t3_xx
-        let mut key = gen_table_prefix(3);
-        key.extend_from_slice(padding);
-        let s3 = keys::data_key(Key::from_raw(&key).encoded());
-        engine.put_cf(write_cf, &s3, &s3).unwrap();
-
-        // ["", "t3") => t2_xx
-        check(None, Some(3), Some(s2.clone()));
-
-        // ["t1", "t3") => t2_xx
-        check(Some(1), Some(3), Some(s2.clone()));
+        check(Some(1), Some(2), data_keys.get(0).cloned());
     }
 
     #[test]
     fn test_table_check_observer() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = TempDir::new("test_table_check_observer").unwrap();
         let engine = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
 
@@ -399,7 +372,7 @@ mod test {
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 
-        // ["", "") => t3
+        // ["", "") => t1
         check(None, None, Some(1));
 
         // ["t1", "") => t3
@@ -443,17 +416,13 @@ mod test {
 
         // Put some data before t and after t.
         for i in 0..3 {
-            {
-                // m is less than t and is the prefix of meta keys.
-                let key = format!("m{:?}{}", padding, i);
-                let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
-                engine.put_cf(write_cf, &s, &s).unwrap();
-            }
-            {
-                let key = format!("u{:?}{}", padding, i);
-                let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
-                engine.put_cf(write_cf, &s, &s).unwrap();
-            }
+            // m is less than t and is the prefix of meta keys.
+            let key = format!("m{:?}{}", padding, i);
+            let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
+            engine.put_cf(write_cf, &s, &s).unwrap();
+            let key = format!("u{:?}{}", padding, i);
+            let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
+            engine.put_cf(write_cf, &s, &s).unwrap();
         }
 
         // ["", "") => t1
