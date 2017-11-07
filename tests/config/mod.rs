@@ -65,6 +65,7 @@ fn test_serde_custom_tikv_config() {
         end_point_concurrency: 12,
         end_point_max_tasks: 12,
         end_point_stack_size: ReadableSize::mb(12),
+        end_point_recursion_limit: 100,
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -310,6 +311,7 @@ fn test_serde_custom_tikv_config() {
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
+        max_key_size: 8192,
         scheduler_notify_capacity: 123,
 
         scheduler_messages_per_tick: 123,

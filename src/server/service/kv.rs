@@ -53,6 +53,7 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
     token: Arc<AtomicUsize>, // TODO: remove it.
+    recursion_limit: u32,
 }
 
 impl<T: RaftStoreRouter + 'static> Service<T> {
@@ -61,6 +62,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         end_point_scheduler: Scheduler<EndPointTask>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
+        recursion_limit: u32,
     ) -> Service<T> {
         Service {
             storage: storage,
@@ -68,6 +70,7 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
             ch: ch,
             snap_scheduler: snap_scheduler,
             token: Arc::new(AtomicUsize::new(1)),
+            recursion_limit: recursion_limit,
         }
     }
 
@@ -748,8 +751,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .start_coarse_timer();
 
         let (cb, future) = make_callback();
-        let res = self.end_point_scheduler
-            .schedule(EndPointTask::Request(RequestTask::new(req, cb)));
+        let res = self.end_point_scheduler.schedule(EndPointTask::Request(
+            RequestTask::new(req, cb, self.recursion_limit),
+        ));
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
