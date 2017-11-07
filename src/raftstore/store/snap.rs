@@ -1701,8 +1701,14 @@ mod test {
         ).unwrap();
         assert!(s2.exists());
 
-        s2.build(&snapshot, &region, &mut snap_data, &mut stat, deleter, limiter)
-            .unwrap();
+        s2.build(
+            &snapshot,
+            &region,
+            &mut snap_data,
+            &mut stat,
+            deleter,
+            limiter,
+        ).unwrap();
         assert!(s2.exists());
     }
 
