@@ -73,7 +73,7 @@ impl PipeBuffer {
     }
 
     /// Get the written buf.
-    fn slice(&self) -> (&[u8], &[u8]) {
+    pub fn slice(&self) -> (&[u8], &[u8]) {
         unsafe {
             let buf = self.buf_as_slice();
             if self.end >= self.start {
