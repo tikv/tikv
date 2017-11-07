@@ -587,12 +587,21 @@ mod test {
 
     #[test]
     fn test_extract_table_prefix() {
-        extract_table_prefix(&[]).unwrap_err();
-        extract_table_prefix(b"a\x80\x00\x00\x00\x00\x00\x00\x01").unwrap_err();
-        extract_table_prefix(b"t\x80\x00\x00\x00\x00\x00\x01").unwrap_err();
-        assert_eq!(
-            extract_table_prefix(b"t\x80\x00\x00\x00\x00\x00\x00\x01").unwrap(),
-            extract_table_prefix(b"t\x80\x00\x00\x00\x00\x00\x00\x01_r\xff\xff").unwrap()
-        );
+        let cases = vec![
+            (vec![], None),
+            (b"a\x80\x00\x00\x00\x00\x00\x00\x01".to_vec(), None),
+            (b"t\x80\x00\x00\x00\x00\x00\x01".to_vec(), None),
+            (
+                b"t\x80\x00\x00\x00\x00\x00\x00\x01".to_vec(),
+                Some(b"t\x80\x00\x00\x00\x00\x00\x00\x01".to_vec()),
+            ),
+            (
+                b"t\x80\x00\x00\x00\x00\x00\x00\x01_r\xff\xff".to_vec(),
+                Some(b"t\x80\x00\x00\x00\x00\x00\x00\x01".to_vec()),
+            ),
+        ];
+        for (input, output) in cases {
+            assert_eq!(extract_table_prefix(&input).ok().map(From::from), output);
+        }
     }
 }

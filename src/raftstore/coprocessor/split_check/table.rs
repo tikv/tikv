@@ -203,8 +203,7 @@ fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
 }
 
 // Encode a key like `t{i64}` will append some unecessary bytes to the output,
-// This function extracts the first 10 bytes, they are enough to find out which
-// table this key belongs to.
+// The first 10 bytes are enough to find out which table this key belongs to.
 const ENCODED_TABLE_TABLE_PREFIX: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
 
 fn is_table_key(encoded_key: &[u8]) -> bool {
@@ -271,7 +270,8 @@ mod test {
             data_keys.push(k)
         }
 
-        let mut check = |start_id: Option<i64>, end_id: Option<i64>, result| {
+        type Case = (Option<i64>, Option<i64>, Option<Vec<u8>>);
+        let mut check_cases = |cases: Vec<Case>| for (start_id, end_id, want) in cases {
             region.set_start_key(
                 start_id
                     .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
@@ -282,20 +282,19 @@ mod test {
                     .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
                     .unwrap_or_else(Vec::new),
             );
-            assert_eq!(last_key_of_region(&engine, &region).unwrap(), result);
+            assert_eq!(last_key_of_region(&engine, &region).unwrap(), want);
         };
 
-        // ["", "") => t2_xx
-        check(None, None, data_keys.get(1).cloned());
-
-        // ["", "t1") => None
-        check(None, Some(1), None);
-
-        // ["t1", "") => t2_xx
-        check(Some(1), None, data_keys.get(1).cloned());
-
-        // ["t1", "t2") => t1_xx
-        check(Some(1), Some(2), data_keys.get(0).cloned());
+        check_cases(vec![
+            // ["", "") => t2_xx
+            (None, None, data_keys.get(1).cloned()),
+            // ["", "t1") => None
+            (None, Some(1), None),
+            // ["t1", "") => t2_xx
+            (Some(1), None, data_keys.get(1).cloned()),
+            // ["t1", "t2") => t1_xx
+            (Some(1), Some(2), data_keys.get(0).cloned()),
+        ]);
     }
 
     #[test]
@@ -327,28 +326,28 @@ mod test {
         let coprocessor = CoprocessorHost::new(cfg, sch);
         let mut runnable = SplitCheckRunner::new(engine.clone(), ch.clone(), Arc::new(coprocessor));
 
-        let mut check = |encoded_start_key: Option<Vec<u8>>,
-                         encoded_end_key: Option<Vec<u8>>,
-                         table_id: Option<i64>| {
-            region.set_start_key(encoded_start_key.unwrap_or_else(Vec::new));
-            region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
-            runnable.run(SplitCheckTask::new(&region));
+        type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
+        let mut check_cases =
+            |cases: Vec<Case>| for (encoded_start_key, encoded_end_key, table_id) in cases {
+                region.set_start_key(encoded_start_key.unwrap_or_else(Vec::new));
+                region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
+                runnable.run(SplitCheckTask::new(&region));
 
-            if let Some(id) = table_id {
-                let key = Key::from_raw(&gen_table_prefix(id));
-                match rx.try_recv() {
-                    Ok(Msg::SplitRegion { split_key, .. }) => {
-                        assert_eq!(&split_key, key.encoded());
+                if let Some(id) = table_id {
+                    let key = Key::from_raw(&gen_table_prefix(id));
+                    match rx.try_recv() {
+                        Ok(Msg::SplitRegion { split_key, .. }) => {
+                            assert_eq!(&split_key, key.encoded());
+                        }
+                        others => panic!("expect {:?}, but got {:?}", key, others),
                     }
-                    others => panic!("expect {:?}, but got {:?}", key, others),
+                } else {
+                    match rx.try_recv() {
+                        Err(mpsc::TryRecvError::Empty) => (),
+                        others => panic!("expect empty, but got {:?}", others),
+                    }
                 }
-            } else {
-                match rx.try_recv() {
-                    Err(mpsc::TryRecvError::Empty) => (),
-                    others => panic!("expect empty, but got {:?}", others),
-                }
-            }
-        };
+            };
 
         let gen_encoded_table_prefix = |table_id| {
             let key = Key::from_raw(&gen_table_prefix(table_id));
@@ -372,26 +371,24 @@ mod test {
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 
-        // ["", "") => t1
-        check(None, None, Some(1));
-
-        // ["t1", "") => t3
-        check(Some(gen_encoded_table_prefix(1)), None, Some(3));
-
-
-        // ["t1", "t5") => t3
-        check(
-            Some(gen_encoded_table_prefix(1)),
-            Some(gen_encoded_table_prefix(5)),
-            Some(3),
-        );
-
-        // ["t2", "t4") => t3
-        check(
-            Some(gen_encoded_table_prefix(2)),
-            Some(gen_encoded_table_prefix(4)),
-            Some(3),
-        );
+        check_cases(vec![
+            // ["", "") => t1
+            (None, None, Some(1)),
+            // ["t1", "") => t3
+            (Some(gen_encoded_table_prefix(1)), None, Some(3)),
+            // ["t1", "t5") => t3
+            (
+                Some(gen_encoded_table_prefix(1)),
+                Some(gen_encoded_table_prefix(5)),
+                Some(3),
+            ),
+            // ["t2", "t4") => t3
+            (
+                Some(gen_encoded_table_prefix(2)),
+                Some(gen_encoded_table_prefix(4)),
+                Some(3),
+            ),
+        ]);
 
         // Put some data to t3
         for i in 1..4 {
@@ -401,18 +398,18 @@ mod test {
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 
-        // ["t1", "") => t3
-        check(Some(gen_encoded_table_prefix(1)), None, Some(3));
-
-        // ["t3", "") => skip
-        check(Some(gen_encoded_table_prefix(3)), None, None);
-
-        // ["t3", "t5") => skip
-        check(
-            Some(gen_encoded_table_prefix(3)),
-            Some(gen_encoded_table_prefix(5)),
-            None,
-        );
+        check_cases(vec![
+            // ["t1", "") => t3
+            (Some(gen_encoded_table_prefix(1)), None, Some(3)),
+            // ["t3", "") => skip
+            (Some(gen_encoded_table_prefix(3)), None, None),
+            // ["t3", "t5") => skip
+            (
+                Some(gen_encoded_table_prefix(3)),
+                Some(gen_encoded_table_prefix(5)),
+                None,
+            ),
+        ]);
 
         // Put some data before t and after t.
         for i in 0..3 {
@@ -425,25 +422,21 @@ mod test {
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 
-        // ["", "") => t1
-        check(None, None, Some(1));
-
-        // ["", "t1"] => skip
-        check(None, Some(gen_encoded_table_prefix(1)), None);
-
-        // ["", "t3"] => t1
-        check(None, Some(gen_encoded_table_prefix(3)), Some(1));
-
-        // ["", "s"] => skip
-        check(None, Some(b"s".to_vec()), None);
-
-        // ["u", ""] => skip
-        check(Some(b"u".to_vec()), None, None);
-
-        // ["t3", ""] => None
-        check(Some(gen_encoded_table_prefix(3)), None, None);
-
-        // ["t1", ""] => t3
-        check(Some(gen_encoded_table_prefix(1)), None, Some(3));
+        check_cases(vec![
+            // ["", "") => t1
+            (None, None, Some(1)),
+            // ["", "t1"] => skip
+            (None, Some(gen_encoded_table_prefix(1)), None),
+            // ["", "t3"] => t1
+            (None, Some(gen_encoded_table_prefix(3)), Some(1)),
+            // ["", "s"] => skip
+            (None, Some(b"s".to_vec()), None),
+            // ["u", ""] => skip
+            (Some(b"u".to_vec()), None, None),
+            // ["t3", ""] => None
+            (Some(gen_encoded_table_prefix(3)), None, None),
+            // ["t1", ""] => t3
+            (Some(gen_encoded_table_prefix(1)), None, Some(3)),
+        ]);
     }
 }
