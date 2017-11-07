@@ -1369,8 +1369,10 @@ mod test {
     use std::fs::{self, File, OpenOptions};
     use std::sync::*;
     use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
     use tempdir::TempDir;
     use protobuf::Message;
+    use rocksdb::RateLimiter;
 
     use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, Snapshot, SnapshotDeleter,
                 SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX};
