@@ -1573,7 +1573,7 @@ mod test {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-            limiter,
+            limiter.clone(),
         ).unwrap();
 
         // Ensure that this snapshot file does exist after being built.
@@ -1690,7 +1690,7 @@ mod test {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-            limiter,
+            limiter.clone(),
         ).unwrap();
         assert!(s1.exists());
 
@@ -1709,7 +1709,7 @@ mod test {
             &mut snap_data,
             &mut stat,
             deleter,
-            limiter,
+            limiter.clone(),
         ).unwrap();
         assert!(s2.exists());
     }
@@ -1871,7 +1871,7 @@ mod test {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-            limiter,
+            limiter.clone(),
         ).unwrap();
         assert!(s1.exists());
 
@@ -1895,7 +1895,7 @@ mod test {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-            limiter,
+            limiter.clone(),
         ).unwrap();
         assert!(s2.exists());
 
@@ -1975,7 +1975,7 @@ mod test {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-            limiter,
+            limiter.clone(),
         ).unwrap();
         assert!(s1.exists());
 
@@ -1999,7 +1999,7 @@ mod test {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-            limiter,
+            limiter.clone(),
         ).unwrap();
         assert!(s2.exists());
 
@@ -2076,7 +2076,7 @@ mod test {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-            limiter,
+            limiter.clone(),
         ).unwrap();
         let mut s =
             Snap::new_for_sending(&path, &key1, size_track.clone(), deleter.clone()).unwrap();
@@ -2165,7 +2165,7 @@ mod test {
             &mut snap_data,
             &mut stat,
             Box::new(src_mgr.clone()),
-            limiter,
+            limiter.clone(),
         ).unwrap();
         let mut v = vec![];
         snap_data.write_to_vec(&mut v).unwrap();
