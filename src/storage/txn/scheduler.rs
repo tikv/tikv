@@ -723,15 +723,12 @@ fn process_read(
             ref start_key,
             limit,
             ..
-        } => {
-            let res = match process_rawscan(snapshot, start_key, limit, &mut statistics) {
-                Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            };
-            res
-        }
+        } => match process_rawscan(snapshot, start_key, limit, &mut statistics) {
+            Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
+            Err(e) => ProcessResult::Failed {
+                err: StorageError::from(e),
+            },
+        },
         Command::Pause { duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
             ProcessResult::Res
