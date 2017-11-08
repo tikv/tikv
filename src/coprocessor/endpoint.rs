@@ -646,14 +646,16 @@ impl TiDbEndPoint {
     fn handle_select(self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
         let ctx = SelectContext::new(sel, self.snap, t.ctx.clone())?;
         let range = t.req.get_ranges().to_vec();
-        ctx.handle_request(range, &mut t.statistics)
+        let (res, stats) = ctx.handle_request(range)?;
+        t.statistics.add(&stats);
+        Ok(res)
     }
 
     pub fn handle_dag(self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
         let ranges = t.req.get_ranges().to_vec();
         let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone())?;
         let res = ctx.handle_request();
-        t.statistics.add(&ctx.take_statistics());
+        t.statistics.add(&ctx.get_statistics());
         res
     }
 

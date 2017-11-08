@@ -138,8 +138,8 @@ impl Executor for IndexScanExecutor {
         Ok(None)
     }
 
-    fn take_statistics(&mut self) -> Statistics {
-        self.scanner.take_statistics()
+    fn get_statistics(&self) -> Statistics {
+        self.scanner.get_statistics()
     }
 }
 

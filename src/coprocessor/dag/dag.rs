@@ -99,8 +99,8 @@ impl DAGContext {
         }
     }
 
-    pub fn take_statistics(&mut self) -> Statistics {
-        self.exec.take_statistics()
+    pub fn get_statistics(&self) -> Statistics {
+        self.exec.get_statistics()
     }
 }
 

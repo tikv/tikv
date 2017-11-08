@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
-
 use kvproto::coprocessor::KeyRange;
 
 use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
@@ -96,17 +94,17 @@ impl Scanner {
             self.seek_key = Some(range.get_start().to_vec());
             Some(Key::from_raw(range.get_end()).encoded().to_vec())
         };
-        let statistics = self.take_statistics();
+        let statistics = self.get_statistics();
         let scanner = self.store
             .scanner(self.scan_mode, self.key_only, upper_bound, statistics)?;
         self.scanner = Some(scanner);
         Ok(())
     }
 
-    pub fn take_statistics(&mut self) -> Statistics {
+    pub fn get_statistics(&self) -> Statistics {
         match self.scanner {
             Some(ref scanner) => scanner.close(),
-            None => mem::replace(&mut self.statistics, Statistics::default()),
+            None => self.statistics,
         }
     }
 }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{mem, usize};
+use std::usize;
 use std::sync::Arc;
 use tipb::select::{Chunk, RowMeta, SelectRequest, SelectResponse};
 use tipb::schema::ColumnInfo;
@@ -30,7 +30,7 @@ use coprocessor::endpoint::{get_chunk, get_pk, is_point, prefix_next, to_pb_erro
 use util::{escape, Either};
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::codec::number::NumberDecoder;
-use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner};
+use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics};
 
 use super::xeval::{EvalContext, Evaluator};
 use super::aggregate::{self, AggrFunc};
@@ -65,18 +65,17 @@ impl SelectContext {
         })
     }
 
-    pub fn handle_request(
-        mut self,
-        mut ranges: Vec<KeyRange>,
-        statistics: &mut Statistics,
-    ) -> Result<Response> {
+    pub fn handle_request(mut self, mut ranges: Vec<KeyRange>) -> Result<(Response, Statistics)> {
         if self.core.desc_scan {
             ranges.reverse();
         }
-        let res = self.get_rows_from_ranges(ranges);
 
-        let stat = mem::replace(&mut self.statistics, Statistics::default());
-        statistics.add(&stat);
+        let res = if self.req_ctx.table_scan {
+            self.get_rows_from_sel(ranges)
+        } else {
+            self.get_rows_from_idx(ranges)
+        };
+        let stats = self.get_statistics();
 
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
@@ -95,10 +94,10 @@ impl SelectContext {
                 return Err(e);
             },
         }
-        Ok(resp)
+        Ok((resp, stats))
     }
 
-    fn get_rows_from_ranges(&mut self, ranges: Vec<KeyRange>) -> Result<()> {
+    fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>) -> Result<()> {
         let mut collected = 0;
         for ran in ranges {
             if collected >= self.core.limit {
@@ -124,7 +123,8 @@ impl SelectContext {
     }
 
     fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
-        if self.req_ctx.table_scan && is_point(&range) {
+        let mut row_count = 0;
+        if is_point(&range) {
             CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
             let value = match self.snap
                 .get(&Key::from_raw(range.get_start()), &mut self.statistics)?
@@ -132,19 +132,101 @@ impl SelectContext {
                 None => return Ok(0),
                 Some(v) => v,
             };
-
             let values = {
                 let ids = self.core.cols.as_ref().left().unwrap();
                 box_try!(table::cut_row(value, ids))
             };
             let h = box_try!(table::decode_handle(range.get_start()));
-            let row_count = self.core.handle_row(h, values)?;
-            return Ok(row_count);
+            row_count += self.core.handle_row(h, values)?;
+        } else {
+            CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+            let mut seek_key = if self.core.desc_scan {
+                range.get_end().to_vec()
+            } else {
+                range.get_start().to_vec()
+            };
+            let upper_bound = if !self.core.desc_scan && !range.get_end().is_empty() {
+                Some(Key::from_raw(range.get_end()).encoded().clone())
+            } else {
+                None
+            };
+            let mut scanner = self.snap.scanner(
+                if self.core.desc_scan {
+                    ScanMode::Backward
+                } else {
+                    ScanMode::Forward
+                },
+                self.key_only(),
+                upper_bound,
+                self.statistics,
+            )?;
+            while self.core.limit > row_count {
+                if row_count & REQUEST_CHECKPOINT == 0 {
+                    self.req_ctx.check_if_outdated()?;
+                }
+                let kv = if self.core.desc_scan {
+                    scanner.reverse_seek(Key::from_raw(&seek_key))?
+                } else {
+                    scanner.seek(Key::from_raw(&seek_key))?
+                };
+                let (key, value) = match kv {
+                    Some((key, value)) => (box_try!(key.raw()), value),
+                    None => break,
+                };
+                if range.get_start() > key.as_slice() || range.get_end() <= key.as_slice() {
+                    debug!(
+                        "key: {} out of range [{}, {})",
+                        escape(&key),
+                        escape(range.get_start()),
+                        escape(range.get_end())
+                    );
+                    break;
+                }
+                let h = box_try!(table::decode_handle(&key));
+                let row_data = {
+                    let ids = self.core.cols.as_ref().left().unwrap();
+                    box_try!(table::cut_row(value, ids))
+                };
+                row_count += self.core.handle_row(h, row_data)?;
+                seek_key = if self.core.desc_scan {
+                    box_try!(table::truncate_as_row_key(&key)).to_vec()
+                } else {
+                    prefix_next(&key)
+                };
+            }
+            self.statistics = scanner.close();
         }
+        Ok(row_count)
+    }
 
+    fn get_rows_from_idx(&mut self, ranges: Vec<KeyRange>) -> Result<()> {
+        let mut collected = 0;
+        for r in ranges {
+            if collected >= self.core.limit {
+                break;
+            }
+            collected += self.get_idx_row_from_range(r)?;
+            self.req_ctx.check_if_outdated()?;
+        }
+        if self.core.topn {
+            self.core.collect_topn_rows()
+        } else if self.core.aggr {
+            self.core.aggr_rows()
+        } else {
+            Ok(())
+        }
+    }
+
+    fn get_idx_row_from_range(&mut self, r: KeyRange) -> Result<usize> {
+        let mut row_cnt = 0;
+        let mut seek_key = if self.core.desc_scan {
+            r.get_end().to_vec()
+        } else {
+            r.get_start().to_vec()
+        };
         CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-        let upper_bound = if !self.core.desc_scan && !range.get_end().is_empty() {
-            Some(Key::from_raw(range.get_end()).encoded().clone())
+        let upper_bound = if !self.core.desc_scan && !r.get_end().is_empty() {
+            Some(Key::from_raw(r.get_end()).encoded().clone())
         } else {
             None
         };
@@ -156,75 +238,8 @@ impl SelectContext {
             },
             self.key_only(),
             upper_bound,
-            mem::replace(&mut self.statistics, Statistics::default()),
+            self.statistics,
         )?;
-
-        let seek_key = if self.core.desc_scan {
-            range.get_end().to_vec()
-        } else {
-            range.get_start().to_vec()
-        };
-        let res = if self.req_ctx.table_scan {
-            self.get_col_with_scanner(&mut scanner, range, seek_key)
-        } else {
-            self.get_idx_row_with_scanner(&mut scanner, range, seek_key)
-        };
-
-        self.statistics = scanner.close();
-        res
-    }
-
-    fn get_col_with_scanner(
-        &mut self,
-        scanner: &mut StoreScanner,
-        range: KeyRange,
-        mut seek_key: Vec<u8>,
-    ) -> Result<usize> {
-        let mut row_count = 0;
-        while self.core.limit > row_count {
-            if row_count & REQUEST_CHECKPOINT == 0 {
-                self.req_ctx.check_if_outdated()?;
-            }
-            let kv = if self.core.desc_scan {
-                scanner.reverse_seek(Key::from_raw(&seek_key))?
-            } else {
-                scanner.seek(Key::from_raw(&seek_key))?
-            };
-            let (key, value) = match kv {
-                Some((key, value)) => (box_try!(key.raw()), value),
-                None => break,
-            };
-            if range.get_start() > key.as_slice() || range.get_end() <= key.as_slice() {
-                debug!(
-                    "key: {} out of range [{}, {})",
-                    escape(&key),
-                    escape(range.get_start()),
-                    escape(range.get_end())
-                );
-                break;
-            }
-            let h = box_try!(table::decode_handle(&key));
-            let row_data = {
-                let ids = self.core.cols.as_ref().left().unwrap();
-                box_try!(table::cut_row(value, ids))
-            };
-            row_count += self.core.handle_row(h, row_data)?;
-            seek_key = if self.core.desc_scan {
-                box_try!(table::truncate_as_row_key(&key)).to_vec()
-            } else {
-                prefix_next(&key)
-            };
-        }
-        Ok(row_count)
-    }
-
-    fn get_idx_row_with_scanner(
-        &mut self,
-        scanner: &mut StoreScanner,
-        r: KeyRange,
-        mut seek_key: Vec<u8>,
-    ) -> Result<usize> {
-        let mut row_cnt = 0;
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
                 self.req_ctx.check_if_outdated()?;
@@ -278,8 +293,11 @@ impl SelectContext {
                 row_cnt += self.core.handle_row(handle, values)?;
             }
         }
-
         Ok(row_cnt)
+    }
+
+    pub fn get_statistics(&self) -> Statistics {
+        self.statistics
     }
 }
 
