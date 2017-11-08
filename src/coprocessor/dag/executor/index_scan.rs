@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use byteorder::{BigEndian, ReadBytesExt};
 
 use kvproto::coprocessor::KeyRange;
@@ -91,7 +92,7 @@ impl IndexScanExecutor {
     }
 
     pub fn get_row_from_range(&mut self) -> Result<Option<Row>> {
-        let range = &self.key_ranges[self.cursor];
+        let range = mem::replace(&mut self.key_ranges[self.cursor], KeyRange::default());
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
@@ -102,7 +103,7 @@ impl IndexScanExecutor {
         }
         let scanner = self.scanner.as_mut().unwrap();
 
-        let (key, value) = match scanner.next_row(range)? {
+        let (key, value) = match scanner.next_row()? {
             Some((key, value)) => (key, value),
             None => return Ok(None),
         };
