@@ -128,7 +128,7 @@ impl Row {
 
 pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
-    fn get_statistics(&self) -> Statistics;
+    fn get_statistics(&self) -> &Statistics;
 }
 
 pub struct DAGExecutor {

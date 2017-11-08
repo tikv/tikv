@@ -28,12 +28,15 @@ use super::scanner::Scanner;
 
 
 pub struct IndexScanExecutor {
+    store: SnapshotStore,
+    statistics: Statistics,
     desc: bool,
     col_ids: Vec<i64>,
-    cursor: usize,
-    key_ranges: Vec<KeyRange>,
-    scanner: Scanner,
     pk_col: Option<ColumnInfo>,
+    key_ranges: Vec<KeyRange>,
+    cursor: usize,
+    scanner: Option<Scanner>,
+    scan_key_only: bool,
 }
 
 impl IndexScanExecutor {
@@ -52,16 +55,18 @@ impl IndexScanExecutor {
             pk_col = Some(cols.pop().unwrap());
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
-        let scanner = Scanner::new(store, desc, false);
 
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
+            store: store,
+            statistics: Statistics::default(),
             desc: desc,
             col_ids: col_ids,
-            scanner: scanner,
-            key_ranges: key_ranges,
-            cursor: Default::default(),
             pk_col: pk_col,
+            key_ranges: key_ranges,
+            cursor: 0,
+            scanner: None,
+            scan_key_only: false,
         }
     }
 
@@ -72,14 +77,16 @@ impl IndexScanExecutor {
     ) -> IndexScanExecutor {
         let col_ids: Vec<i64> = (0..cols).collect();
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
-        let scanner = Scanner::new(store, false, false);
         IndexScanExecutor {
+            store: store,
+            statistics: Statistics::default(),
             desc: false,
             col_ids: col_ids,
-            scanner: scanner,
-            key_ranges: key_ranges,
-            cursor: Default::default(),
             pk_col: None,
+            key_ranges: key_ranges,
+            cursor: 0,
+            scanner: None,
+            scan_key_only: false,
         }
     }
 
@@ -88,8 +95,14 @@ impl IndexScanExecutor {
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
-        let kv = self.scanner.next_row(range)?;
-        let (key, value) = match kv {
+
+        if self.scanner.is_none() {
+            let scanner = Scanner::new(&self.store, self.desc, self.scan_key_only, range)?;
+            self.scanner = Some(scanner);
+        }
+        let scanner = self.scanner.as_mut().unwrap();
+
+        let (key, value) = match scanner.next_row(range)? {
             Some((key, value)) => (key, value),
             None => return Ok(None),
         };
@@ -99,14 +112,13 @@ impl IndexScanExecutor {
         } else {
             prefix_next(&key)
         };
-        self.scanner.set_seek_key(Some(seek_key));
+        scanner.set_seek_key(seek_key);
 
-        let (mut values, handle) = { box_try!(table::cut_idx_key(key, &self.col_ids)) };
+        let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
 
-        let handle = if handle.is_none() {
-            box_try!(value.as_slice().read_i64::<BigEndian>())
-        } else {
-            handle.unwrap()
+        let handle = match handle {
+            None => box_try!(value.as_slice().read_i64::<BigEndian>()),
+            Some(h) => h,
         };
 
         if let Some(ref pk_col) = self.pk_col {
@@ -121,6 +133,13 @@ impl IndexScanExecutor {
         }
         Ok(Some(Row::new(handle, values)))
     }
+
+    fn advance_cursor(&mut self) {
+        self.cursor += 1;
+        if let Some(scanner) = self.scanner.take() {
+            self.statistics.add(scanner.get_statistics());
+        }
+    }
 }
 
 impl Executor for IndexScanExecutor {
@@ -129,8 +148,7 @@ impl Executor for IndexScanExecutor {
             let data = self.get_row_from_range()?;
             if data.is_none() {
                 CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-                self.scanner.set_seek_key(None);
-                self.cursor += 1;
+                self.advance_cursor();
                 continue;
             }
             return Ok(data);
@@ -138,8 +156,8 @@ impl Executor for IndexScanExecutor {
         Ok(None)
     }
 
-    fn get_statistics(&self) -> Statistics {
-        self.scanner.get_statistics()
+    fn get_statistics(&self) -> &Statistics {
+        &self.statistics
     }
 }
 

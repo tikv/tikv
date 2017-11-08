@@ -75,7 +75,7 @@ impl Executor for SelectionExecutor {
         Ok(None)
     }
 
-    fn get_statistics(&self) -> Statistics {
+    fn get_statistics(&self) -> &Statistics {
         self.src.get_statistics()
     }
 }

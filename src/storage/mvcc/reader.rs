@@ -42,7 +42,6 @@ pub struct MvccReader {
 impl MvccReader {
     pub fn new(
         snapshot: Box<Snapshot>,
-        statistics: Statistics,
         scan_mode: Option<ScanMode>,
         fill_cache: bool,
         upper_bound: Option<Vec<u8>>,
@@ -50,7 +49,7 @@ impl MvccReader {
     ) -> MvccReader {
         MvccReader {
             snapshot: snapshot,
-            statistics: statistics,
+            statistics: Statistics::default(),
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
@@ -62,8 +61,8 @@ impl MvccReader {
         }
     }
 
-    pub fn close(&self) -> Statistics {
-        self.statistics
+    pub fn get_statistics(&self) -> &Statistics {
+        &self.statistics
     }
 
     pub fn set_key_only(&mut self, key_only: bool) {
@@ -549,8 +548,7 @@ mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
-    use storage::{make_key, Mutation, Options, Statistics, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
-                  CF_WRITE};
+    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use storage::engine::Modify;
     use storage::mvcc::{MvccReader, MvccTxn};
     use tempdir::TempDir;
@@ -592,46 +590,26 @@ mod tests {
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(
-                Box::new(snap),
-                Statistics::default(),
-                start_ts,
-                None,
-                IsolationLevel::SI,
-                true,
-            );
+            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
             txn.prewrite(m, pk, &Options::default()).unwrap();
-            self.write(txn.modifies().0);
+
+            self.write(txn.take_modifies());
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(
-                Box::new(snap),
-                Statistics::default(),
-                start_ts,
-                None,
-                IsolationLevel::SI,
-                true,
-            );
+            let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
             txn.commit(&k, commit_ts).unwrap();
-            self.write(txn.modifies().0);
+            self.write(txn.take_modifies());
         }
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
-            let mut txn = MvccTxn::new(
-                Box::new(snap),
-                Statistics::default(),
-                safe_point,
-                None,
-                IsolationLevel::SI,
-                true,
-            );
+            let mut txn = MvccTxn::new(Box::new(snap), safe_point, None, IsolationLevel::SI, true);
             txn.gc(&k, safe_point).unwrap();
-            self.write(txn.modifies().0);
+            self.write(txn.take_modifies());
         }
 
         fn write(&mut self, modifies: Vec<Modify>) {
@@ -712,8 +690,7 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
-        let stat = Statistics::default();
-        let reader = MvccReader::new(Box::new(snap), stat, None, false, None, IsolationLevel::SI);
+        let reader = MvccReader::new(Box::new(snap), None, false, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }

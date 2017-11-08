@@ -140,26 +140,21 @@ impl SelectContext {
             row_count += self.core.handle_row(h, values)?;
         } else {
             CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-            let mut seek_key = if self.core.desc_scan {
-                range.get_end().to_vec()
+
+            let (mut seek_key, scan_mode) = if self.core.desc_scan {
+                (range.get_end().to_vec(), ScanMode::Backward)
             } else {
-                range.get_start().to_vec()
+                (range.get_start().to_vec(), ScanMode::Forward)
             };
+
             let upper_bound = if !self.core.desc_scan && !range.get_end().is_empty() {
                 Some(Key::from_raw(range.get_end()).encoded().clone())
             } else {
                 None
             };
-            let mut scanner = self.snap.scanner(
-                if self.core.desc_scan {
-                    ScanMode::Backward
-                } else {
-                    ScanMode::Forward
-                },
-                self.key_only(),
-                upper_bound,
-                self.statistics,
-            )?;
+
+            let mut scanner = self.snap.scanner(scan_mode, self.key_only(), upper_bound)?;
+
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     self.req_ctx.check_if_outdated()?;
@@ -194,7 +189,7 @@ impl SelectContext {
                     prefix_next(&key)
                 };
             }
-            self.statistics = scanner.close();
+            self.statistics.add(scanner.get_statistics());
         }
         Ok(row_count)
     }
@@ -218,28 +213,22 @@ impl SelectContext {
     }
 
     fn get_idx_row_from_range(&mut self, r: KeyRange) -> Result<usize> {
-        let mut row_cnt = 0;
-        let mut seek_key = if self.core.desc_scan {
-            r.get_end().to_vec()
-        } else {
-            r.get_start().to_vec()
-        };
         CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+        let mut row_cnt = 0;
+
+        let (mut seek_key, scan_mode) = if self.core.desc_scan {
+            (r.get_end().to_vec(), ScanMode::Backward)
+        } else {
+            (r.get_start().to_vec(), ScanMode::Forward)
+        };
+
         let upper_bound = if !self.core.desc_scan && !r.get_end().is_empty() {
             Some(Key::from_raw(r.get_end()).encoded().clone())
         } else {
             None
         };
-        let mut scanner = self.snap.scanner(
-            if self.core.desc_scan {
-                ScanMode::Backward
-            } else {
-                ScanMode::Forward
-            },
-            self.key_only(),
-            upper_bound,
-            self.statistics,
-        )?;
+
+        let mut scanner = self.snap.scanner(scan_mode, self.key_only(), upper_bound)?;
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
                 self.req_ctx.check_if_outdated()?;
@@ -293,6 +282,7 @@ impl SelectContext {
                 row_cnt += self.core.handle_row(handle, values)?;
             }
         }
+        self.statistics.add(scanner.get_statistics());
         Ok(row_cnt)
     }
 

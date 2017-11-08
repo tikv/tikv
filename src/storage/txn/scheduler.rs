@@ -484,15 +484,10 @@ fn process_read(
                 !ctx.get_not_fill_cache(),
             );
             let res = snap_store
-                .scanner(
-                    ScanMode::Forward,
-                    options.key_only,
-                    None,
-                    Statistics::default(),
-                )
+                .scanner(ScanMode::Forward, options.key_only, None)
                 .and_then(|mut scanner| {
                     let res = scanner.scan(start_key.clone(), limit);
-                    statistics = scanner.close();
+                    statistics.add(scanner.get_statistics());
                     res
                 })
                 .and_then(|mut results| {
@@ -515,7 +510,6 @@ fn process_read(
         Command::MvccByKey { ref ctx, ref key } => {
             let mut reader = MvccReader::new(
                 snapshot,
-                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
@@ -531,14 +525,12 @@ fn process_read(
                 },
                 Err(e) => ProcessResult::Failed { err: e.into() },
             };
-
-            statistics = reader.close();
+            statistics.add(reader.get_statistics());
             res
         }
         Command::MvccByStartTs { ref ctx, start_ts } => {
             let mut reader = MvccReader::new(
                 snapshot,
-                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
@@ -563,7 +555,7 @@ fn process_read(
                     None => ProcessResult::MvccStartTs { mvcc: None },
                 },
             };
-            statistics = reader.close();
+            statistics.add(reader.get_statistics());
             res
         }
         // Scans locks with timestamp <= `max_ts`
@@ -572,7 +564,6 @@ fn process_read(
         } => {
             let mut reader = MvccReader::new(
                 snapshot,
-                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
@@ -595,7 +586,7 @@ fn process_read(
                         .observe(locks.len() as f64);
                     Ok(locks)
                 });
-            statistics = reader.close();
+            statistics.add(reader.get_statistics());
             match res {
                 Ok(locks) => ProcessResult::Locks { locks: locks },
                 Err(e) => ProcessResult::Failed { err: e.into() },
@@ -612,7 +603,6 @@ fn process_read(
         } => {
             let mut reader = MvccReader::new(
                 snapshot,
-                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
@@ -642,7 +632,7 @@ fn process_read(
                         }))
                     }
                 });
-            statistics = reader.close();
+            statistics.add(reader.get_statistics());
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
@@ -659,7 +649,6 @@ fn process_read(
         } => {
             let mut reader = MvccReader::new(
                 snapshot,
-                Statistics::default(),
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
@@ -701,7 +690,7 @@ fn process_read(
                         }
                     })
             };
-            statistics = reader.close();
+            statistics.add(reader.get_statistics());
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
@@ -769,10 +758,11 @@ fn process_write(
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
 ) -> Statistics {
-    let mut statistics = Some(Statistics::default());
     SCHED_WORKER_COUNTER_VEC
         .with_label_values(&[cmd.tag(), "write"])
         .inc();
+
+    let mut statistics = Statistics::default();
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot, &mut statistics) {
         if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
             // Todo: if this happens, lock will hold for ever
@@ -783,7 +773,7 @@ fn process_write(
             );
         }
     }
-    statistics.unwrap_or_default()
+    statistics
 }
 
 fn process_write_impl(
@@ -791,9 +781,8 @@ fn process_write_impl(
     mut cmd: Command,
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
-    st: &mut Option<Statistics>,
+    statistics: &mut Statistics,
 ) -> Result<()> {
-    let statistics = st.take().unwrap_or_default();
     let (pr, modifies, rows) = match cmd {
         Command::Prewrite {
             ref ctx,
@@ -805,7 +794,6 @@ fn process_write_impl(
         } => {
             let mut txn = MvccTxn::new(
                 snapshot,
-                statistics,
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
@@ -822,15 +810,15 @@ fn process_write_impl(
                     Err(e) => return Err(Error::from(e)),
                 }
             }
+
+            statistics.add(txn.get_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                let (modifies, statistics) = txn.modifies();
-                *st = Some(statistics);
+                let modifies = txn.take_modifies();
                 (pr, modifies, rows)
             } else {
                 // Skip write stage if some keys are locked.
                 let pr = ProcessResult::MultiRes { results: locks };
-                *st = Some(txn.close());
                 (pr, vec![], 0)
             }
         }
@@ -849,7 +837,6 @@ fn process_write_impl(
             }
             let mut txn = MvccTxn::new(
                 snapshot,
-                statistics,
                 lock_ts,
                 None,
                 ctx.get_isolation_level(),
@@ -860,10 +847,8 @@ fn process_write_impl(
                 txn.commit(k, commit_ts)?;
             }
 
-            let pr = ProcessResult::Res;
-            let (modifies, statistics) = txn.modifies();
-            *st = Some(statistics);
-            (pr, modifies, rows)
+            statistics.add(txn.get_statistics());
+            (ProcessResult::Res, txn.take_modifies(), rows)
         }
         Command::Cleanup {
             ref ctx,
@@ -873,7 +858,6 @@ fn process_write_impl(
         } => {
             let mut txn = MvccTxn::new(
                 snapshot,
-                statistics,
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
@@ -881,10 +865,8 @@ fn process_write_impl(
             );
             txn.rollback(key)?;
 
-            let pr = ProcessResult::Res;
-            let (modifies, statistics) = txn.modifies();
-            *st = Some(statistics);
-            (pr, modifies, 1)
+            statistics.add(txn.get_statistics());
+            (ProcessResult::Res, txn.take_modifies(), 1)
         }
         Command::Rollback {
             ref ctx,
@@ -894,7 +876,6 @@ fn process_write_impl(
         } => {
             let mut txn = MvccTxn::new(
                 snapshot,
-                statistics,
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
@@ -905,10 +886,8 @@ fn process_write_impl(
                 txn.rollback(k)?;
             }
 
-            let pr = ProcessResult::Res;
-            let (modifies, statistics) = txn.modifies();
-            *st = Some(statistics);
-            (pr, modifies, rows)
+            statistics.add(txn.get_statistics());
+            (ProcessResult::Res, txn.take_modifies(), rows)
         }
         Command::ResolveLock {
             ref ctx,
@@ -928,7 +907,6 @@ fn process_write_impl(
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(
                 snapshot,
-                statistics,
                 start_ts,
                 None,
                 ctx.get_isolation_level(),
@@ -945,12 +923,12 @@ fn process_write_impl(
                     break;
                 }
             }
-            if scan_key.is_none() {
-                let (modifies, statistics) = txn.modifies();
-                *st = Some(statistics);
-                (ProcessResult::Res, modifies, rows)
+
+            statistics.add(txn.get_statistics());
+            let pr = if scan_key.is_none() {
+                ProcessResult::Res
             } else {
-                let pr = ProcessResult::NextCommand {
+                ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
                         ctx: ctx.clone(),
                         start_ts: start_ts,
@@ -958,11 +936,9 @@ fn process_write_impl(
                         scan_key: scan_key.take(),
                         keys: vec![],
                     },
-                };
-                let (modifies, statistics) = txn.modifies();
-                *st = Some(statistics);
-                (pr, modifies, rows)
-            }
+                }
+            };
+            (pr, txn.take_modifies(), rows)
         }
         Command::Gc {
             ref ctx,
@@ -974,7 +950,6 @@ fn process_write_impl(
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(
                 snapshot,
-                statistics,
                 0,
                 Some(ScanMode::Forward),
                 ctx.get_isolation_level(),
@@ -988,12 +963,12 @@ fn process_write_impl(
                     break;
                 }
             }
-            if scan_key.is_none() {
-                let (modifies, statistics) = txn.modifies();
-                *st = Some(statistics);
-                (ProcessResult::Res, modifies, rows)
+
+            statistics.add(txn.get_statistics());
+            let pr = if scan_key.is_none() {
+                ProcessResult::Res
             } else {
-                let pr = ProcessResult::NextCommand {
+                ProcessResult::NextCommand {
                     cmd: Command::Gc {
                         ctx: ctx.clone(),
                         safe_point: safe_point,
@@ -1001,11 +976,9 @@ fn process_write_impl(
                         scan_key: scan_key.take(),
                         keys: vec![],
                     },
-                };
-                let (modifies, statistics) = txn.modifies();
-                *st = Some(statistics);
-                (pr, modifies, rows)
-            }
+                }
+            };
+            (pr, txn.take_modifies(), rows)
         }
         _ => panic!("unsupported write command"),
     };

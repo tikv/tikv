@@ -655,7 +655,7 @@ impl TiDbEndPoint {
         let ranges = t.req.get_ranges().to_vec();
         let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone())?;
         let res = ctx.handle_request();
-        t.statistics.add(&ctx.get_statistics());
+        t.statistics.add(ctx.get_statistics());
         res
     }
 

@@ -53,7 +53,7 @@ impl<'a> Executor for LimitExecutor<'a> {
         }
     }
 
-    fn get_statistics(&self) -> Statistics {
+    fn get_statistics(&self) -> &Statistics {
         self.src.get_statistics()
     }
 }

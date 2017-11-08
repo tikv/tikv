@@ -18,8 +18,7 @@ use coprocessor::codec::table;
 use coprocessor::endpoint::{is_point, prefix_next};
 use coprocessor::Result;
 use coprocessor::metrics::*;
-use storage::Statistics;
-use storage::SnapshotStore;
+use storage::{Key, SnapshotStore, Statistics};
 use util::collections::HashSet;
 
 use super::{Executor, Row};
@@ -27,11 +26,14 @@ use super::scanner::Scanner;
 
 
 pub struct TableScanExecutor {
+    store: SnapshotStore,
+    statistics: Statistics,
     desc: bool,
     col_ids: HashSet<i64>,
-    cursor: usize,
     key_ranges: Vec<KeyRange>,
-    scanner: Scanner,
+    cursor: usize,
+    scanner: Option<Scanner>,
+    scan_key_only: bool,
 }
 
 impl TableScanExecutor {
@@ -49,44 +51,65 @@ impl TableScanExecutor {
         if desc {
             key_ranges.reverse();
         }
-        let scanner = Scanner::new(store, desc, false);
+
         COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
         TableScanExecutor {
+            store: store,
+            statistics: Statistics::default(),
             desc: desc,
             col_ids: col_ids,
-            scanner: scanner,
             key_ranges: key_ranges,
-            cursor: Default::default(),
+            cursor: 0,
+            scanner: None,
+            scan_key_only: false,
         }
     }
 
     fn get_row_from_range(&mut self) -> Result<Option<Row>> {
         let range = &self.key_ranges[self.cursor];
-        let kv = self.scanner.next_row(range)?;
-        let (key, value) = match kv {
+        if range.get_start() > range.get_end() {
+            return Ok(None);
+        }
+
+        if self.scanner.is_none() {
+            let scanner = Scanner::new(&self.store, self.desc, self.scan_key_only, range)?;
+            self.scanner = Some(scanner);
+        }
+        let scanner = self.scanner.as_mut().unwrap();
+
+        let (key, value) = match scanner.next_row(range)? {
             Some((key, value)) => (key, value),
             None => return Ok(None),
         };
-        let h = box_try!(table::decode_handle(&key));
-        let row_data = box_try!(table::cut_row(value, &self.col_ids));
+
         let seek_key = if self.desc {
             box_try!(table::truncate_as_row_key(&key)).to_vec()
         } else {
             prefix_next(&key)
         };
-        self.scanner.set_seek_key(Some(seek_key));
+        scanner.set_seek_key(seek_key);
+
+        let row_data = box_try!(table::cut_row(value, &self.col_ids));
+        let h = box_try!(table::decode_handle(&key));
         Ok(Some(Row::new(h, row_data)))
     }
 
     fn get_row_from_point(&mut self) -> Result<Option<Row>> {
         let key = self.key_ranges[self.cursor].get_start();
-        let value = self.scanner.get_row(key)?;
+        let value = self.store.get(&Key::from_raw(key), &mut self.statistics)?;
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(key));
             return Ok(Some(Row::new(h, values)));
         }
         Ok(None)
+    }
+
+    fn advance_cursor(&mut self) {
+        self.cursor += 1;
+        if let Some(scanner) = self.scanner.take() {
+            self.statistics.add(scanner.get_statistics());
+        }
     }
 }
 
@@ -96,8 +119,7 @@ impl Executor for TableScanExecutor {
             if is_point(&self.key_ranges[self.cursor]) {
                 CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
                 let data = self.get_row_from_point()?;
-                self.scanner.set_seek_key(None);
-                self.cursor += 1;
+                self.advance_cursor();
                 if data.is_some() {
                     return Ok(data);
                 }
@@ -107,8 +129,7 @@ impl Executor for TableScanExecutor {
             let data = self.get_row_from_range()?;
             if data.is_none() {
                 CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-                self.scanner.set_seek_key(None);
-                self.cursor += 1;
+                self.advance_cursor();
                 continue;
             }
             return Ok(data);
@@ -116,8 +137,8 @@ impl Executor for TableScanExecutor {
         Ok(None)
     }
 
-    fn get_statistics(&self) -> Statistics {
-        self.scanner.get_statistics()
+    fn get_statistics(&self) -> &Statistics {
+        &self.statistics
     }
 }
 
