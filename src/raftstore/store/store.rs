@@ -205,7 +205,7 @@ impl<T, C> Store<T, C> {
         // TODO load coprocessors from configuration
         coprocessor_host
             .registry
-            .register_observer(100, box SplitObserver);
+            .register_admin_observer(100, box SplitObserver);
 
         let mut s = Store {
             cfg: Rc::new(cfg),
