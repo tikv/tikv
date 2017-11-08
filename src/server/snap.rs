@@ -174,7 +174,7 @@ fn send_snap(
     res
 }
 
-/// Write binary snapshot to local disk, use RateLimiter to control the speed
+/// Write binary snapshot to local disk, use rate limiter to control the speed
 fn write_snap<W: Write>(w: &mut W, limiter: Arc<RateLimiter>, data: &[u8]) -> IOResult<()> {
     let total = data.len();
     let single = limiter.get_singleburst_bytes() as usize;
