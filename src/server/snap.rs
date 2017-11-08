@@ -188,7 +188,7 @@ fn write_snap<W: Write>(w: &mut W, limiter: Arc<RateLimiter>, data: &[u8]) -> IO
             end = curr + single;
             limiter.request(single as i64, 0);
         }
-        w.write(&data[curr..end])?;
+        w.write_all(&data[curr..end])?;
         curr = end;
     }
     Ok(())
