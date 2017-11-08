@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{self, Write};
+use std::io::{Write, Result as IOResult};
 use std::fmt::{self, Display, Formatter};
 use std::net::SocketAddr;
 use std::boxed::FnBox;
@@ -175,12 +175,12 @@ fn send_snap(
 }
 
 /// Write binary snapshot to local disk, use RateLimiter to control the speed
-fn write_snapshot<W: Write>(w: &mut W, limiter: Arc<RateLimiter>, data: &[u8]) -> io::Result<()> {
+fn write_snap<W: Write>(w: &mut W, limiter: Arc<RateLimiter>, data: &[u8]) -> IOResult<()> {
     let total = data.len();
     let single = limiter.get_singleburst_bytes() as usize;
     let mut curr = 0;
     while curr < total {
-        let mut end;
+        let end;
         if curr + single >= total {
             end = total;
             limiter.request((total - curr) as i64, 0);
@@ -188,9 +188,7 @@ fn write_snapshot<W: Write>(w: &mut W, limiter: Arc<RateLimiter>, data: &[u8]) -
             end = curr + single;
             limiter.request(single as i64, 0);
         }
-        if let Err(err) = w.write(&data[curr..end]) {
-            return err;
-        }
+        w.write(&data[curr..end])?;
         curr = end;
     }
     Ok(())
@@ -264,31 +262,39 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 SNAP_TASK_COUNTER.with_label_values(&["write"]).inc();
                 match self.files.entry(token) {
                     Entry::Occupied(mut e) => {
-                        let (left, right) = data.slice();
-                        if let Err(err) =
-                            write_snapshot(&mut e.get_mut().0, self.snap_mgr.get_limiter(), left)
+                        let mut finish = true;
                         {
-                            error!(
-                                "failed to write data to snapshot file {} for token {:?}: {:?}",
-                                e.get_mut().0.path(),
-                                token,
-                                err
-                            );
-                            let (_, msg) = e.remove();
-                            let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
-                            self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
-                        } else if let Err(err) =
-                            write_snapshot(&mut e.get_mut().0, self.snap_mgr.get_limiter(), right)
-                        {
-                            error!(
-                                "failed to write data to snapshot file {} for token {:?}: {:?}",
-                                e.get_mut().0.path(),
-                                token,
-                                err
-                            );
-                            let (_, msg) = e.remove();
-                            let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
-                            self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
+                            let (left, right) = data.slice();
+                            if let Err(err) =
+                                write_snap(&mut e.get_mut().0, self.snap_mgr.get_limiter(), left)
+                            {
+                                error!(
+                                    "failed to write data to snapshot file {} for token {:?}: {:?}",
+                                    e.get_mut().0.path(),
+                                    token,
+                                    err
+                                );
+                                let (_, msg) = e.remove();
+                                let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
+                                self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
+                                finish = false;
+                            } else if let Err(err) =
+                                write_snap(&mut e.get_mut().0, self.snap_mgr.get_limiter(), right)
+                            {
+                                error!(
+                                    "failed to write data to snapshot file {} for token {:?}: {:?}",
+                                    e.get_mut().0.path(),
+                                    token,
+                                    err
+                                );
+                                let (_, msg) = e.remove();
+                                let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
+                                self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
+                                finish = false;
+                            }
+                        }
+                        if finish {
+                            data.set_empty();
                         }
                     }
                     Entry::Vacant(_) => error!("invalid snap token {:?}", token),

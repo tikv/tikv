@@ -72,6 +72,11 @@ impl PipeBuffer {
         self.len() == 0
     }
 
+    #[inline]
+    pub fn set_empty(&mut self) {
+        self.end = self.start;
+    }
+
     /// Get the written buf.
     pub fn slice(&self) -> (&[u8], &[u8]) {
         unsafe {
