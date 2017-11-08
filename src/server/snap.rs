@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{Write, Result as IOResult};
+use std::io::{Result as IOResult, Write};
 use std::fmt::{self, Display, Formatter};
 use std::net::SocketAddr;
 use std::boxed::FnBox;
@@ -275,7 +275,8 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                                     err
                                 );
                                 let (_, msg) = e.remove();
-                                let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
+                                let key =
+                                    SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
                                 self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
                                 finish = false;
                             } else if let Err(err) =
@@ -288,7 +289,8 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                                     err
                                 );
                                 let (_, msg) = e.remove();
-                                let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
+                                let key =
+                                    SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
                                 self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
                                 finish = false;
                             }
