@@ -443,12 +443,48 @@ pub fn is_even(n: usize) -> bool {
     n & 1 == 0
 }
 
+pub struct MustConsumeVec<T> {
+    tag: &'static str,
+    v: Vec<T>,
+}
+
+impl<T> MustConsumeVec<T> {
+    pub fn new(tag: &'static str) -> MustConsumeVec<T> {
+        MustConsumeVec {
+            tag: tag,
+            v: vec![],
+        }
+    }
+}
+
+impl<T> Deref for MustConsumeVec<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Vec<T> {
+        &self.v
+    }
+}
+
+impl<T> DerefMut for MustConsumeVec<T> {
+    fn deref_mut(&mut self) -> &mut Vec<T> {
+        &mut self.v
+    }
+}
+
+impl<T> Drop for MustConsumeVec<T> {
+    fn drop(&mut self) {
+        if !self.is_empty() {
+            panic!("resource leak detected: {}.", self.tag);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::*;
     use std::net::{AddrParseError, SocketAddr};
     use std::rc::Rc;
-    use std::cmp;
+    use std::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     use kvproto::eraftpb::Entry;
     use protobuf::Message;
@@ -607,5 +643,23 @@ mod tests {
         let a_diff_d = cfs_diff(&a, &d);
         assert!(a_diff_d.is_empty());
         assert_eq!(vec!["4"], cfs_diff(&d, &a));
+    }
+
+    #[test]
+    fn test_must_consume_vec() {
+        let mut v = MustConsumeVec::new("test");
+        v.push(2);
+        v.push(3);
+        assert_eq!(v.len(), 2);
+        v.drain(..);
+    }
+
+    #[test]
+    fn test_resource_leak() {
+        let res = panic::catch_unwind(|| {
+            let mut v = MustConsumeVec::new("test");
+            v.push(2);
+        });
+        res.unwrap_err();
     }
 }
