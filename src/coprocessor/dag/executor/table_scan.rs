@@ -112,7 +112,7 @@ impl Executor for TableScanExecutor {
                 }
                 self.scanner = match self.scanner.take() {
                     Some(mut scanner) => {
-                        scanner.reset_range(range);
+                        box_try!(scanner.reset_range(range, &self.store));
                         Some(scanner)
                     }
                     None => Some(self.new_scanner(range)?),

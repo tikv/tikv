@@ -165,12 +165,12 @@ impl Executor for AggregationExecutor {
         }
 
         match self.group_key_aggrs.get_index_mut(self.cursor) {
-            Some((ref group_key, ref mut aggrs)) => {
+            Some((group_key, aggrs)) => {
                 self.cursor += 1;
                 let mut aggr_cols = Vec::with_capacity(2 * self.aggr_func.len());
 
                 // calc all aggr func
-                for aggr in aggrs.iter_mut() {
+                for aggr in aggrs {
                     aggr.calc(&mut aggr_cols)?;
                 }
 

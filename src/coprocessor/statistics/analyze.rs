@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
+
 use rand::{thread_rng, Rng, ThreadRng};
 use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Response};
@@ -28,8 +30,9 @@ use super::histogram::Histogram;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext {
+    statistics: Statistics,
     req: AnalyzeReq,
-    snap: SnapshotStore,
+    snap: Option<SnapshotStore>,
     ranges: Vec<KeyRange>,
 }
 
@@ -48,32 +51,16 @@ impl AnalyzeContext {
         );
         AnalyzeContext {
             req: req,
-            snap: snap,
+            snap: Some(snap),
             ranges: ranges,
+            statistics: Statistics::default(),
         }
     }
 
-    pub fn handle_request(mut self, statistics: &mut Statistics) -> Result<Response> {
+    pub fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
-            AnalyzeType::TypeIndex => {
-                let req = self.req.take_idx_req();
-                let mut scanner = IndexScanExecutor::new_with_cols_len(
-                    req.get_num_columns() as i64,
-                    self.ranges,
-                    self.snap,
-                );
-                let bucket_size = req.get_bucket_size() as usize;
-                let res = AnalyzeContext::handle_index(&mut scanner, bucket_size);
-                scanner.collect_statistics_into(statistics);
-                res
-            }
-            AnalyzeType::TypeColumn => {
-                let col_req = self.req.take_col_req();
-                let mut builder = SampleBuilder::new(col_req, self.snap, self.ranges)?;
-                let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_statistics_into(statistics);
-                res
-            }
+            AnalyzeType::TypeIndex => self.handle_index(),
+            AnalyzeType::TypeColumn => self.handle_column(),
         };
         match ret {
             Ok(data) => {
@@ -93,8 +80,15 @@ impl AnalyzeContext {
     // handle_column is used to process `AnalyzeColumnsReq`
     // it would build a histogram for the primary key(if needed) and
     // collectors for each column value.
-    fn handle_column(builder: &mut SampleBuilder) -> Result<Vec<u8>> {
+    fn handle_column(&mut self) -> Result<Vec<u8>> {
+        let col_req = self.req.take_col_req();
+        let snap = self.snap.take().unwrap();
+        let ranges = mem::replace(&mut self.ranges, Vec::new());
+        let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
+
         let (collectors, pk_builder) = builder.collect_samples_and_estimate_ndvs()?;
+        builder.data.collect_statistics_into(&mut self.statistics);
+
         let pk_hist = pk_builder.into_proto();
         let cols: Vec<analyze::SampleCollector> =
             collectors.into_iter().map(|col| col.into_proto()).collect();
@@ -110,16 +104,28 @@ impl AnalyzeContext {
 
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram of index values.
-    fn handle_index(scanner: &mut IndexScanExecutor, bucket_size: usize) -> Result<Vec<u8>> {
-        let mut hist = Histogram::new(bucket_size);
+    fn handle_index(&mut self) -> Result<Vec<u8>> {
+        let req = self.req.take_idx_req();
+        let mut scanner = IndexScanExecutor::new_with_cols_len(
+            req.get_num_columns() as i64,
+            mem::replace(&mut self.ranges, Vec::new()),
+            self.snap.take().unwrap(),
+        );
+        let mut hist = Histogram::new(req.get_bucket_size() as usize);
         while let Some(row) = scanner.next()? {
             let bytes = row.data.get_column_values();
             hist.append(bytes);
         }
+        scanner.collect_statistics_into(&mut self.statistics);
+
         let mut res = analyze::AnalyzeIndexResp::new();
         res.set_hist(hist.into_proto());
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
+    }
+
+    pub fn collect_statistics_into(self, stats: &mut Statistics) {
+        stats.add(&self.statistics);
     }
 }
 

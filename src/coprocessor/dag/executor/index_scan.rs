@@ -85,32 +85,32 @@ impl IndexScanExecutor {
     }
 
     pub fn get_row_from_range_sanner(&mut self) -> Result<Option<Row>> {
-        if let Some(scanner) = self.scanner.as_mut() {
-            let (key, value) = match scanner.next_row()? {
-                Some((key, value)) => (key, value),
-                None => return Ok(None),
-            };
-
-            let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
-
-            let handle = match handle {
-                None => box_try!(value.as_slice().read_i64::<BigEndian>()),
-                Some(h) => h,
-            };
-
-            if let Some(ref pk_col) = self.pk_col {
-                let handle_datum = if mysql::has_unsigned_flag(pk_col.get_flag() as u64) {
-                    // PK column is unsigned
-                    datum::Datum::U64(handle as u64)
-                } else {
-                    datum::Datum::I64(handle)
-                };
-                let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
-                values.append(pk_col.get_column_id(), &mut bytes);
-            }
-            return Ok(Some(Row::new(handle, values)));
+        if self.scanner.is_none() {
+            return Ok(None);
         }
-        Ok(None)
+        let scanner = self.scanner.as_mut().unwrap();
+        let (key, value) = match scanner.next_row()? {
+            Some((key, value)) => (key, value),
+            None => return Ok(None),
+        };
+
+        let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
+        let handle = match handle {
+            None => box_try!(value.as_slice().read_i64::<BigEndian>()),
+            Some(h) => h,
+        };
+
+        if let Some(ref pk_col) = self.pk_col {
+            let handle_datum = if mysql::has_unsigned_flag(pk_col.get_flag() as u64) {
+                // PK column is unsigned
+                datum::Datum::U64(handle as u64)
+            } else {
+                datum::Datum::I64(handle)
+            };
+            let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
+            values.append(pk_col.get_column_id(), &mut bytes);
+        }
+        Ok(Some(Row::new(handle, values)))
     }
 
     fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
@@ -128,7 +128,7 @@ impl Executor for IndexScanExecutor {
             if let Some(range) = self.key_ranges.next() {
                 self.scanner = match self.scanner.take() {
                     Some(mut scanner) => {
-                        scanner.reset_range(range);
+                        box_try!(scanner.reset_range(range, &self.store));
                         Some(scanner)
                     }
                     None => Some(self.new_scanner(range)?),

@@ -30,6 +30,7 @@ pub enum ScanOn {
 pub struct Scanner {
     scan_mode: ScanMode,
     scan_on: ScanOn,
+    key_only: bool,
     seek_key: Vec<u8>,
     scanner: StoreScanner,
     range: KeyRange,
@@ -44,30 +45,41 @@ impl Scanner {
         key_only: bool,
         range: KeyRange,
     ) -> Result<Scanner> {
-        let (scan_mode, seek_key) = if desc {
-            (ScanMode::Backward, range.get_end().to_vec())
+        let (scan_mode, seek_key, upper_bound) = if desc {
+            (ScanMode::Backward, range.get_end().to_vec(), None)
         } else {
-            (ScanMode::Forward, range.get_start().to_vec())
+            (
+                ScanMode::Forward,
+                range.get_start().to_vec(),
+                Some(Key::from_raw(range.get_end()).encoded().to_vec()),
+            )
         };
 
         Ok(Scanner {
             scan_mode: scan_mode,
             scan_on: scan_on,
+            key_only: key_only,
             seek_key: seek_key,
-            scanner: store.scanner(scan_mode, key_only, None)?,
+            scanner: store.scanner(scan_mode, key_only, upper_bound)?,
             range: range,
             no_more: false,
         })
     }
 
-    pub fn reset_range(&mut self, range: KeyRange) {
+    pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore) -> Result<()> {
         self.range = range;
         self.no_more = false;
-        self.seek_key = match self.scan_mode {
-            ScanMode::Backward => self.range.get_end().to_vec(),
-            ScanMode::Forward => self.range.get_start().to_vec(),
+        match self.scan_mode {
+            ScanMode::Backward => self.seek_key = self.range.get_end().to_vec(),
+            ScanMode::Forward => {
+                // For forward scan, we need to re-initialize the scanner.
+                self.seek_key = self.range.get_start().to_vec();
+                let upper_bound = Some(Key::from_raw(&self.range.end).encoded().to_vec());
+                self.scanner = store.scanner(self.scan_mode, self.key_only, upper_bound)?;
+            }
             _ => unreachable!(),
         };
+        Ok(())
     }
 
     pub fn next_row(&mut self) -> Result<Option<(Vec<u8>, Value)>> {
