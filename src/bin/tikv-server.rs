@@ -198,6 +198,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
+        cfg.raft_store.snap_max_write_bytes_per_time,
+        cfg.raft_store.snap_max_write_bytes_per_sec,
     );
 
     // Create server

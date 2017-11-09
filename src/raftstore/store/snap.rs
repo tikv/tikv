@@ -1094,10 +1094,16 @@ pub struct SnapManager {
     core: Arc<RwLock<SnapManagerCore>>,
     ch: Option<SendCh<Msg>>,
     limiter: Arc<RateLimiter>,
+    pub write_bytes_per_time: usize,
 }
 
 impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+    pub fn new<T: Into<String>>(
+        path: T,
+        ch: Option<SendCh<Msg>>,
+        bytes_per_time: usize,
+        bytes_per_sec: usize,
+    ) -> SnapManager {
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
                 base: path.into(),
@@ -1106,10 +1112,11 @@ impl SnapManager {
             })),
             ch: ch,
             limiter: Arc::new(RateLimiter::new(
-                10 * 1024 * 1024, // bytes_per_sec
-                100 * 1000,       // refill_period_us
-                10,               // fairness
+                bytes_per_sec,
+                100 * 1000, // refill_period_us
+                10,         // fairness
             )),
+            write_bytes_per_time: bytes_per_time,
         }
     }
 

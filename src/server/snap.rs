@@ -175,9 +175,18 @@ fn send_snap(
 }
 
 /// Write binary snapshot to local disk, use rate limiter to control the speed
-fn write_snap<W: Write>(w: &mut W, limiter: Arc<RateLimiter>, data: &[u8]) -> IOResult<()> {
+fn write_snap<W: Write>(
+    w: &mut W,
+    limiter: Arc<RateLimiter>,
+    max_bytes_per_time: usize,
+    data: &[u8],
+) -> IOResult<()> {
     let total = data.len();
-    let single = limiter.get_singleburst_bytes() as usize;
+    let single = if max_bytes_per_time > (limiter.get_singleburst_bytes() as usize) {
+        limiter.get_singleburst_bytes() as usize
+    } else {
+        max_bytes_per_time
+    };
     let mut curr = 0;
     while curr < total {
         let end;
@@ -265,9 +274,12 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         let mut finish = true;
                         {
                             let (left, right) = data.slice();
-                            if let Err(err) =
-                                write_snap(&mut e.get_mut().0, self.snap_mgr.get_limiter(), left)
-                            {
+                            if let Err(err) = write_snap(
+                                &mut e.get_mut().0,
+                                self.snap_mgr.get_limiter(),
+                                self.snap_mgr.write_bytes_per_time,
+                                left,
+                            ) {
                                 error!(
                                     "failed to write data to snapshot file {} for token {:?}: {:?}",
                                     e.get_mut().0.path(),
@@ -279,9 +291,12 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                                     SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
                                 self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
                                 finish = false;
-                            } else if let Err(err) =
-                                write_snap(&mut e.get_mut().0, self.snap_mgr.get_limiter(), right)
-                            {
+                            } else if let Err(err) = write_snap(
+                                &mut e.get_mut().0,
+                                self.snap_mgr.get_limiter(),
+                                self.snap_mgr.write_bytes_per_time,
+                                right,
+                            ) {
                                 error!(
                                     "failed to write data to snapshot file {} for token {:?}: {:?}",
                                     e.get_mut().0.path(),

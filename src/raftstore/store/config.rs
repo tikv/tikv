@@ -92,6 +92,10 @@ pub struct Config {
 
     pub allow_remove_leader: bool,
 
+    pub snap_max_write_bytes_per_time: usize,
+
+    pub snap_max_write_bytes_per_sec: usize,
+
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -143,6 +147,8 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             allow_remove_leader: false,
+            snap_max_write_bytes_per_time: ReadableSize::mb(1),
+            snap_max_write_bytes_per_sec: ReadableSize::mb(10),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -200,6 +206,15 @@ impl Config {
             ));
         }
 
+        if self.snap_max_write_bytes_per_time > self.snap_max_write_bytes_per_sec / 10 {
+            return Err(box_err!(
+                "snap_max_write_bytes_per_time {} should be much smaller than \
+                 snap_max_write_bytes_per_sec {}",
+                self.snap_max_write_bytes_per_time,
+                self.snap_max_write_bytes_per_sec
+            ));
+        }
+
         Ok(())
     }
 }
@@ -238,6 +253,11 @@ mod tests {
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(20);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.snap_max_write_bytes_per_time = ReadableSize::mb(1);
+        cfg.snap_max_write_bytes_per_sec = ReadableSize::mb(1);
         assert!(cfg.validate().is_err());
     }
 }
