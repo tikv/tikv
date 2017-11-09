@@ -1112,7 +1112,7 @@ impl SnapManager {
             })),
             ch: ch,
             limiter: Arc::new(RateLimiter::new(
-                bytes_per_sec,
+                bytes_per_sec as i64,
                 100 * 1000, // refill_period_us
                 10,         // fairness
             )),

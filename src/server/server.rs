@@ -252,7 +252,7 @@ mod tests {
             storage,
             router,
             MockResolver { addr: addr.clone() },
-            SnapManager::new("", None),
+            SnapManager::new("", None, 1024 * 1024, 10 * 1024 * 1024),
             pd_worker.scheduler(),
             None,
         ).unwrap();
