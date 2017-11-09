@@ -128,8 +128,8 @@ impl Executor for TopNExecutor {
         }
     }
 
-    fn get_statistics(&self) -> &Statistics {
-        self.src.get_statistics()
+    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        self.src.collect_statistics_into(statistics);
     }
 }
 

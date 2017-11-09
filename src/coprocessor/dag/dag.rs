@@ -53,7 +53,7 @@ impl DAGContext {
             req_ctx.fill_cache,
         );
 
-        let dag_executor = build_exec(req.take_executors().to_vec(), store, ranges, eval_ctx)?;
+        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
@@ -99,8 +99,8 @@ impl DAGContext {
         }
     }
 
-    pub fn get_statistics(&self) -> &Statistics {
-        self.exec.get_statistics()
+    pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        self.exec.collect_statistics_into(statistics);
     }
 }
 

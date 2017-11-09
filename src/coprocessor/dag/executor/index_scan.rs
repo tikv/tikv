@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
+use std::vec::IntoIter;
 use byteorder::{BigEndian, ReadBytesExt};
 
 use kvproto::coprocessor::KeyRange;
@@ -19,13 +19,12 @@ use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::{datum, mysql, table};
-use coprocessor::endpoint::prefix_next;
 use coprocessor::metrics::*;
-use coprocessor::Result;
+use coprocessor::{Error, Result};
 use storage::{SnapshotStore, Statistics};
 
 use super::{Executor, Row};
-use super::scanner::Scanner;
+use super::scanner::{ScanOn, Scanner};
 
 
 pub struct IndexScanExecutor {
@@ -34,10 +33,8 @@ pub struct IndexScanExecutor {
     desc: bool,
     col_ids: Vec<i64>,
     pk_col: Option<ColumnInfo>,
-    key_ranges: Vec<KeyRange>,
-    cursor: usize,
+    key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
-    scan_key_only: bool,
 }
 
 impl IndexScanExecutor {
@@ -64,10 +61,8 @@ impl IndexScanExecutor {
             desc: desc,
             col_ids: col_ids,
             pk_col: pk_col,
-            key_ranges: key_ranges,
-            cursor: 0,
+            key_ranges: key_ranges.into_iter(),
             scanner: None,
-            scan_key_only: false,
         }
     }
 
@@ -84,81 +79,72 @@ impl IndexScanExecutor {
             desc: false,
             col_ids: col_ids,
             pk_col: None,
-            key_ranges: key_ranges,
-            cursor: 0,
+            key_ranges: key_ranges.into_iter(),
             scanner: None,
-            scan_key_only: false,
         }
     }
 
-    pub fn get_row_from_range(&mut self) -> Result<Option<Row>> {
-        let range = mem::replace(&mut self.key_ranges[self.cursor], KeyRange::default());
-        if range.get_start() > range.get_end() {
-            return Ok(None);
-        }
-
-        if self.scanner.is_none() {
-            let scanner = Scanner::new(&self.store, self.desc, self.scan_key_only, range)?;
-            self.scanner = Some(scanner);
-        }
-        let scanner = self.scanner.as_mut().unwrap();
-
-        let (key, value) = match scanner.next_row()? {
-            Some((key, value)) => (key, value),
-            None => return Ok(None),
-        };
-
-        let seek_key = if self.desc {
-            key.clone()
-        } else {
-            prefix_next(&key)
-        };
-        scanner.set_seek_key(seek_key);
-
-        let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
-
-        let handle = match handle {
-            None => box_try!(value.as_slice().read_i64::<BigEndian>()),
-            Some(h) => h,
-        };
-
-        if let Some(ref pk_col) = self.pk_col {
-            let handle_datum = if mysql::has_unsigned_flag(pk_col.get_flag() as u64) {
-                // PK column is unsigned
-                datum::Datum::U64(handle as u64)
-            } else {
-                datum::Datum::I64(handle)
+    pub fn get_row_from_range_sanner(&mut self) -> Result<Option<Row>> {
+        if let Some(scanner) = self.scanner.as_mut() {
+            let (key, value) = match scanner.next_row()? {
+                Some((key, value)) => (key, value),
+                None => return Ok(None),
             };
-            let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
-            values.append(pk_col.get_column_id(), &mut bytes);
+
+            let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
+
+            let handle = match handle {
+                None => box_try!(value.as_slice().read_i64::<BigEndian>()),
+                Some(h) => h,
+            };
+
+            if let Some(ref pk_col) = self.pk_col {
+                let handle_datum = if mysql::has_unsigned_flag(pk_col.get_flag() as u64) {
+                    // PK column is unsigned
+                    datum::Datum::U64(handle as u64)
+                } else {
+                    datum::Datum::I64(handle)
+                };
+                let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
+                values.append(pk_col.get_column_id(), &mut bytes);
+            }
+            return Ok(Some(Row::new(handle, values)));
         }
-        Ok(Some(Row::new(handle, values)))
+        Ok(None)
     }
 
-    fn advance_cursor(&mut self) {
-        self.cursor += 1;
-        if let Some(scanner) = self.scanner.take() {
-            self.statistics.add(scanner.get_statistics());
-        }
+    fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
+        Scanner::new(&self.store, ScanOn::Index, self.desc, false, range).map_err(Error::from)
     }
 }
 
 impl Executor for IndexScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        while self.cursor < self.key_ranges.len() {
-            let data = self.get_row_from_range()?;
-            if data.is_none() {
+        loop {
+            if let Some(row) = self.get_row_from_range_sanner()? {
                 CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-                self.advance_cursor();
+                return Ok(Some(row));
+            }
+            if let Some(range) = self.key_ranges.next() {
+                self.scanner = match self.scanner.take() {
+                    Some(mut scanner) => {
+                        scanner.reset_range(range);
+                        Some(scanner)
+                    }
+                    None => Some(self.new_scanner(range)?),
+                };
                 continue;
             }
-            return Ok(data);
+            return Ok(None);
         }
-        Ok(None)
     }
 
-    fn get_statistics(&self) -> &Statistics {
-        &self.statistics
+    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        statistics.add(&self.statistics);
+        self.statistics = Statistics::default();
+        if let Some(scanner) = self.scanner.take() {
+            scanner.collect_statistics_into(statistics);
+        }
     }
 }
 

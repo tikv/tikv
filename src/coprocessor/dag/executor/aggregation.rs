@@ -164,10 +164,10 @@ impl Executor for AggregationExecutor {
             self.executed = true;
         }
 
-        let mut aggr_cols = Vec::with_capacity(2 * self.aggr_func.len());
         match self.group_key_aggrs.get_index_mut(self.cursor) {
             Some((ref group_key, ref mut aggrs)) => {
                 self.cursor += 1;
+                let mut aggr_cols = Vec::with_capacity(2 * self.aggr_func.len());
 
                 // calc all aggr func
                 for aggr in aggrs.iter_mut() {
@@ -190,8 +190,8 @@ impl Executor for AggregationExecutor {
         }
     }
 
-    fn get_statistics(&self) -> &Statistics {
-        self.src.get_statistics()
+    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        self.src.collect_statistics_into(statistics);
     }
 }
 

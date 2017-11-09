@@ -64,14 +64,14 @@ impl AnalyzeContext {
                 );
                 let bucket_size = req.get_bucket_size() as usize;
                 let res = AnalyzeContext::handle_index(&mut scanner, bucket_size);
-                statistics.add(scanner.get_statistics());
+                scanner.collect_statistics_into(statistics);
                 res
             }
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
                 let mut builder = SampleBuilder::new(col_req, self.snap, self.ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder);
-                statistics.add(builder.data.get_statistics());
+                builder.data.collect_statistics_into(statistics);
                 res
             }
         };

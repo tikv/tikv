@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
+use std::{mem, usize};
 use std::sync::Arc;
 use tipb::select::{Chunk, RowMeta, SelectRequest, SelectResponse};
 use tipb::schema::ColumnInfo;
@@ -65,7 +65,7 @@ impl SelectContext {
         })
     }
 
-    pub fn handle_request(mut self, mut ranges: Vec<KeyRange>) -> Result<(Response, Statistics)> {
+    pub fn handle_request(&mut self, mut ranges: Vec<KeyRange>) -> Result<Response> {
         if self.core.desc_scan {
             ranges.reverse();
         }
@@ -75,13 +75,13 @@ impl SelectContext {
         } else {
             self.get_rows_from_idx(ranges)
         };
-        let stats = self.get_statistics();
 
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
         match res {
             Ok(()) => {
-                sel_resp.set_chunks(RepeatedField::from_vec(self.core.chunks));
+                let chunks = mem::replace(&mut self.core.chunks, Vec::new());
+                sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                 let data = box_try!(sel_resp.write_to_bytes());
                 resp.set_data(data);
             }
@@ -94,7 +94,7 @@ impl SelectContext {
                 return Err(e);
             },
         }
-        Ok((resp, stats))
+        Ok(resp)
     }
 
     fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>) -> Result<()> {
@@ -286,8 +286,8 @@ impl SelectContext {
         Ok(row_cnt)
     }
 
-    pub fn get_statistics(&self) -> Statistics {
-        self.statistics
+    pub fn collect_statistics_into(self, stats: &mut Statistics) {
+        stats.add(&self.statistics);
     }
 }
 

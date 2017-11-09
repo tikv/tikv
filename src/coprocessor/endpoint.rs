@@ -644,23 +644,23 @@ impl TiDbEndPoint {
     }
 
     fn handle_select(self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let ctx = SelectContext::new(sel, self.snap, t.ctx.clone())?;
-        let range = t.req.get_ranges().to_vec();
-        let (res, stats) = ctx.handle_request(range)?;
-        t.statistics.add(&stats);
+        let mut ctx = SelectContext::new(sel, self.snap, t.ctx.clone())?;
+        let ranges = t.req.take_ranges().into_vec();
+        let res = ctx.handle_request(ranges)?;
+        ctx.collect_statistics_into(&mut t.statistics);
         Ok(res)
     }
 
     pub fn handle_dag(self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
-        let ranges = t.req.get_ranges().to_vec();
+        let ranges = t.req.take_ranges().into_vec();
         let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone())?;
         let res = ctx.handle_request();
-        t.statistics.add(ctx.get_statistics());
+        ctx.collect_statistics_into(&mut t.statistics);
         res
     }
 
     pub fn handle_analyze(self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
-        let ranges = t.req.get_ranges().to_vec();
+        let ranges = t.req.take_ranges().into_vec();
         let ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
         ctx.handle_request(&mut t.statistics)
     }

@@ -11,20 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
+use std::vec::IntoIter;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 
 use coprocessor::codec::table;
-use coprocessor::endpoint::{is_point, prefix_next};
-use coprocessor::Result;
+use coprocessor::endpoint::is_point;
+use coprocessor::{Error, Result};
 use coprocessor::metrics::*;
 use storage::{Key, SnapshotStore, Statistics};
 use util::collections::HashSet;
 
 use super::{Executor, Row};
-use super::scanner::Scanner;
+use super::scanner::{ScanOn, Scanner};
 
 
 pub struct TableScanExecutor {
@@ -32,10 +32,8 @@ pub struct TableScanExecutor {
     statistics: Statistics,
     desc: bool,
     col_ids: HashSet<i64>,
-    key_ranges: Vec<KeyRange>,
-    cursor: usize,
+    key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
-    scan_key_only: bool,
 }
 
 impl TableScanExecutor {
@@ -44,103 +42,93 @@ impl TableScanExecutor {
         mut key_ranges: Vec<KeyRange>,
         store: SnapshotStore,
     ) -> TableScanExecutor {
+        COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
+
         let col_ids = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
             .collect();
+
         let desc = meta.get_desc();
         if desc {
             key_ranges.reverse();
         }
 
-        COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
         TableScanExecutor {
             store: store,
             statistics: Statistics::default(),
             desc: desc,
             col_ids: col_ids,
-            key_ranges: key_ranges,
-            cursor: 0,
+            key_ranges: key_ranges.into_iter(),
             scanner: None,
-            scan_key_only: false,
         }
     }
 
-    fn get_row_from_range(&mut self) -> Result<Option<Row>> {
-        let range = mem::replace(&mut self.key_ranges[self.cursor], KeyRange::default());
-        if range.get_start() > range.get_end() {
-            return Ok(None);
+    fn get_row_from_range_scanner(&mut self) -> Result<Option<Row>> {
+        if let Some(scanner) = self.scanner.as_mut() {
+            let (key, value) = match scanner.next_row()? {
+                Some((key, value)) => (key, value),
+                None => return Ok(None),
+            };
+            let row_data = box_try!(table::cut_row(value, &self.col_ids));
+            let h = box_try!(table::decode_handle(&key));
+            return Ok(Some(Row::new(h, row_data)));
         }
-
-        if self.scanner.is_none() {
-            let scanner = Scanner::new(&self.store, self.desc, self.scan_key_only, range)?;
-            self.scanner = Some(scanner);
-        }
-        let scanner = self.scanner.as_mut().unwrap();
-
-        let (key, value) = match scanner.next_row()? {
-            Some((key, value)) => (key, value),
-            None => return Ok(None),
-        };
-
-        let seek_key = if self.desc {
-            box_try!(table::truncate_as_row_key(&key)).to_vec()
-        } else {
-            prefix_next(&key)
-        };
-        scanner.set_seek_key(seek_key);
-
-        let row_data = box_try!(table::cut_row(value, &self.col_ids));
-        let h = box_try!(table::decode_handle(&key));
-        Ok(Some(Row::new(h, row_data)))
+        Ok(None)
     }
 
-    fn get_row_from_point(&mut self) -> Result<Option<Row>> {
-        let key = self.key_ranges[self.cursor].get_start();
-        let value = self.store.get(&Key::from_raw(key), &mut self.statistics)?;
+    fn get_row_from_point(&mut self, mut range: KeyRange) -> Result<Option<Row>> {
+        let key = range.take_start();
+        let value = self.store.get(&Key::from_raw(&key), &mut self.statistics)?;
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
-            let h = box_try!(table::decode_handle(key));
+            let h = box_try!(table::decode_handle(&key));
             return Ok(Some(Row::new(h, values)));
         }
         Ok(None)
     }
 
-    fn advance_cursor(&mut self) {
-        self.cursor += 1;
-        if let Some(scanner) = self.scanner.take() {
-            self.statistics.add(scanner.get_statistics());
-        }
+    fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
+        Scanner::new(&self.store, ScanOn::Table, self.desc, false, range).map_err(Error::from)
     }
 }
 
 impl Executor for TableScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        while self.cursor < self.key_ranges.len() {
-            if is_point(&self.key_ranges[self.cursor]) {
-                CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
-                let data = self.get_row_from_point()?;
-                self.advance_cursor();
-                if data.is_some() {
-                    return Ok(data);
-                }
-                continue;
+        loop {
+            if let Some(row) = self.get_row_from_range_scanner()? {
+                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+                return Ok(Some(row));
             }
 
-            let data = self.get_row_from_range()?;
-            if data.is_none() {
-                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-                self.advance_cursor();
+            if let Some(range) = self.key_ranges.next() {
+                if is_point(&range) {
+                    CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
+                    if let Some(row) = self.get_row_from_point(range)? {
+                        return Ok(Some(row));
+                    }
+                    continue;
+                }
+                self.scanner = match self.scanner.take() {
+                    Some(mut scanner) => {
+                        scanner.reset_range(range);
+                        Some(scanner)
+                    }
+                    None => Some(self.new_scanner(range)?),
+                };
                 continue;
             }
-            return Ok(data);
+            return Ok(None);
         }
-        Ok(None)
     }
 
-    fn get_statistics(&self) -> &Statistics {
-        &self.statistics
+    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        statistics.add(&self.statistics);
+        self.statistics = Statistics::default();
+        if let Some(scanner) = self.scanner.take() {
+            scanner.collect_statistics_into(statistics);
+        }
     }
 }
 
