@@ -19,6 +19,8 @@ use std::cmp::Ordering;
 
 use time::{Duration as TimeDuration, Timespec};
 
+use util::Either;
+
 /// Convert Duration to milliseconds.
 #[inline]
 pub fn duration_to_ms(d: Duration) -> u64 {
@@ -365,6 +367,66 @@ impl Sub<Instant> for Instant {
 
     fn sub(self, other: Instant) -> Duration {
         self.duration_since(other)
+    }
+}
+
+/// Lease records a expired time, for examining the current moment is in lease or not.
+/// A lease may be safe or be unsafe.
+pub struct Lease {
+    lease_expired_time: Option<Either<Timespec, Timespec>>,
+}
+
+impl Lease {
+    pub fn new() -> Lease {
+        Lease {
+            lease_expired_time: None,
+        }
+    }
+
+    pub fn update_safe(&mut self, lease_expired_time: Timespec) {
+        self.lease_expired_time = Some(Either::Left(lease_expired_time));
+    }
+
+    pub fn update_unsafe(&mut self, lease_expired_time: Timespec) {
+        self.lease_expired_time = Some(Either::Right(lease_expired_time));
+    }
+
+    pub fn has_lease(&self) -> bool {
+        self.lease_expired_time.is_some()
+    }
+
+    pub fn has_safe_lease(&self) -> bool {
+        match self.lease_expired_time {
+            Some(Either::Left(_)) => true,
+            _ => false,
+        }
+    }
+
+    pub fn has_unsafe_lease(&self) -> bool {
+        match self.lease_expired_time {
+            Some(Either::Right(_)) => true,
+            _ => false,
+        }
+    }
+
+    pub fn expired_time(&self) -> Option<Timespec> {
+        match self.lease_expired_time {
+            Some(Either::Left(expired_time)) | Some(Either::Right(expired_time)) => {
+                Some(expired_time)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn in_safe_lease(&mut self) -> bool {
+        match self.lease_expired_time {
+            Some(Either::Left(safe_expired_time)) => monotonic_raw_now() <= safe_expired_time,
+            _ => false,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.lease_expired_time = None;
     }
 }
 
