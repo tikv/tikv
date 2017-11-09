@@ -106,8 +106,8 @@ fn test_serde_custom_tikv_config() {
         raft_store_max_leader_lease: ReadableDuration::secs(12),
         right_derive_when_split: false,
         allow_remove_leader: true,
-        snap_max_write_bytes_per_time: ReadableSize::mb(1),
-        snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+        snap_max_write_bytes_per_time: 1024 * 1024,
+        snap_max_write_bytes_per_sec: 10 * 1024 * 1024,
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
     };
