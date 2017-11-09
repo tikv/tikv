@@ -72,8 +72,8 @@ report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
-snap-max-write-bytes-per-time = "1MB"
-snap-max-write-bytes-per-sec = "10MB"
+snap-max-write-bytes-per-time = 1048576
+snap-max-write-bytes-per-sec = 10485760
 
 [coprocessor]
 region-max-size = "12MB"

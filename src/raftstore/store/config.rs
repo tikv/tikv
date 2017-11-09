@@ -147,8 +147,8 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             allow_remove_leader: false,
-            snap_max_write_bytes_per_time: ReadableSize::mb(1),
-            snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+            snap_max_write_bytes_per_time: 1024 * 1024,
+            snap_max_write_bytes_per_sec: 10 * 1024 * 1024,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -256,8 +256,8 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.snap_max_write_bytes_per_time = ReadableSize::mb(1);
-        cfg.snap_max_write_bytes_per_sec = ReadableSize::mb(1);
+        cfg.snap_max_write_bytes_per_time = 1024 * 1024;
+        cfg.snap_max_write_bytes_per_sec = 1024 * 1024;
         assert!(cfg.validate().is_err());
     }
 }
