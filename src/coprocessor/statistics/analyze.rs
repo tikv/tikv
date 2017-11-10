@@ -100,7 +100,7 @@ impl<'a> AnalyzeContext<'a> {
             let bytes = row.data.get_column_values();
             hist.append(bytes);
             if let Some(c) = cms.as_mut() {
-                c.insert(&bytes);
+                c.insert(bytes);
             }
         }
         let mut res = analyze::AnalyzeIndexResp::new();

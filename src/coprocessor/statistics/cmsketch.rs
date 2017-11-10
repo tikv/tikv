@@ -16,8 +16,8 @@ use byteorder::{ByteOrder, LittleEndian};
 use protobuf::RepeatedField;
 use murmur3::murmur3_x64_128;
 
-/// CMSketch is used to estimate point queries.
-/// Refer: https://en.wikipedia.org/wiki/Count-min_sketch
+/// `CMSketch` is used to estimate point queries.
+/// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
 #[derive(Clone)]
 pub struct CMSketch {
     depth: usize,
@@ -48,17 +48,17 @@ impl CMSketch {
     pub fn insert(&mut self, bytes: &[u8]) {
         self.count = self.count.wrapping_add(1);
         let (h1, h2) = CMSketch::hash(bytes);
-        for i in 0..self.depth {
+        for (i, row) in self.table.iter_mut().enumerate() {
             let j = (h1.wrapping_add(h2.wrapping_mul(i as u64)) % self.width as u64) as usize;
-            self.table[i][j] = self.table[i][j].saturating_add(1);
+            row[j] = row[j].saturating_add(1);
         }
     }
 
-    pub fn into_proto(&self) -> analyze::CMSketch {
+    pub fn into_proto(self) -> analyze::CMSketch {
         let mut proto = analyze::CMSketch::new();
         let mut rows = vec![analyze::CMSketchRow::default(); self.depth];
-        for i in 0..self.depth {
-            rows[i].set_counters(self.table[i].to_owned());
+        for (i, row) in self.table.iter().enumerate() {
+            rows[i].set_counters(row.to_vec());
         }
         proto.set_rows(RepeatedField::from_vec(rows));
         proto
@@ -81,11 +81,11 @@ mod test {
             let (h1, h2) = CMSketch::hash(bytes);
             let mut vals = vec![0u32; self.depth];
             let mut min_counter = u32::max_value();
-            for i in 0..self.depth {
+            for (i, row) in self.table.iter().enumerate() {
                 let j = (h1.wrapping_add(h2.wrapping_mul(i as u64)) % self.width as u64) as usize;
-                let noise = (self.count - self.table[i][j]) / (self.width as u32 - 1);
-                vals[i] = self.table[i][j].saturating_sub(noise);
-                min_counter = min(min_counter, self.table[i][j])
+                let noise = (self.count - row[j]) / (self.width as u32 - 1);
+                vals[i] = row[j].saturating_sub(noise);
+                min_counter = min(min_counter, row[j])
             }
             vals.sort();
             min(
