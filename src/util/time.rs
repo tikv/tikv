@@ -418,7 +418,7 @@ impl Lease {
         }
     }
 
-    pub fn in_safe_lease(&mut self) -> bool {
+    pub fn in_safe_lease(&self) -> bool {
         match self.lease_expired_time {
             Some(Either::Left(safe_expired_time)) => monotonic_raw_now() <= safe_expired_time,
             _ => false,
