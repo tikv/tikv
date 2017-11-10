@@ -1110,18 +1110,15 @@ mod test {
             ),
             (Datum::Null, Datum::I64(2), Ordering::Less),
             (Datum::Null, Datum::Null, Ordering::Equal),
-
             (false.into(), Datum::Null, Ordering::Greater),
             (false.into(), true.into(), Ordering::Less),
             (true.into(), true.into(), Ordering::Equal),
             (false.into(), false.into(), Ordering::Equal),
             (true.into(), Datum::I64(2), Ordering::Less),
-
             (Datum::F64(1.23), Datum::Null, Ordering::Greater),
             (Datum::F64(0.0), Datum::F64(3.45), Ordering::Less),
             (Datum::F64(354.23), Datum::F64(3.45), Ordering::Greater),
             (Datum::F64(3.452), Datum::F64(3.452), Ordering::Equal),
-
             (Datum::I64(432), Datum::Null, Ordering::Greater),
             (Datum::I64(-4), Datum::I64(32), Ordering::Less),
             (Datum::I64(4), Datum::I64(-32), Ordering::Greater),
@@ -1130,11 +1127,9 @@ mod test {
             (Datum::I64(123), Datum::I64(123), Ordering::Equal),
             (Datum::I64(23), Datum::I64(123), Ordering::Less),
             (Datum::I64(133), Datum::I64(183), Ordering::Less),
-
             (Datum::U64(123), Datum::U64(183), Ordering::Less),
             (Datum::U64(2), Datum::I64(-2), Ordering::Greater),
             (Datum::U64(2), Datum::I64(1), Ordering::Greater),
-
             (b"".as_ref().into(), Datum::Null, Ordering::Greater),
             (b"".as_ref().into(), b"24".as_ref().into(), Ordering::Less),
             (
@@ -1143,7 +1138,6 @@ mod test {
                 Ordering::Greater,
             ),
             (b"".as_ref().into(), b"".as_ref().into(), Ordering::Equal),
-
             (
                 Duration::new(StdDuration::from_millis(34), false, 2)
                     .unwrap()
@@ -1226,7 +1220,6 @@ mod test {
                 b"-00.34".as_ref().into(),
                 Ordering::Greater,
             ),
-
             (
                 Time::parse_utc_datetime("2011-10-10 00:00:00", 0)
                     .unwrap()
@@ -1282,7 +1275,6 @@ mod test {
                     .into(),
                 Ordering::Less,
             ),
-
             (
                 Datum::Dec("1234".parse().unwrap()),
                 Datum::Dec("123400".parse().unwrap()),
@@ -1437,7 +1429,6 @@ mod test {
             (Datum::Dec((-100).into()), Datum::I64(-1), Ordering::Less),
             (Datum::Dec((-100).into()), Datum::I64(-100), Ordering::Equal),
             (Datum::Dec(100.into()), Datum::I64(100), Ordering::Equal),
-
             // Test for int type decimal.
             (
                 Datum::Dec((-1i64).into()),
@@ -1504,7 +1495,6 @@ mod test {
                 Datum::Dec(i16::MAX.into()),
                 Ordering::Equal,
             ),
-
             // Test for uint type decimal.
             (
                 Datum::Dec(0u64.into()),
@@ -1561,7 +1551,6 @@ mod test {
                 Datum::Dec(u64::MAX.into()),
                 Ordering::Less,
             ),
-
             (
                 b"abc".as_ref().into(),
                 b"ab".as_ref().into(),
@@ -1570,12 +1559,10 @@ mod test {
             (b"123".as_ref().into(), Datum::I64(1234), Ordering::Less),
             (b"1".as_ref().into(), Datum::Max, Ordering::Less),
             (b"".as_ref().into(), Datum::Null, Ordering::Greater),
-
             (Datum::Max, Datum::Max, Ordering::Equal),
             (Datum::Max, Datum::Min, Ordering::Greater),
             (Datum::Null, Datum::Min, Ordering::Less),
             (Datum::Min, Datum::Min, Ordering::Equal),
-
             (
                 Datum::Json(Json::from_str(r#"{"key":"value"}"#).unwrap()),
                 Datum::Json(Json::from_str(r#"{"key":"value"}"#).unwrap()),

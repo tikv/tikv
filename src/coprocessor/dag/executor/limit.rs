@@ -18,10 +18,8 @@ use tipb::executor::Limit;
 
 use coprocessor::Result;
 use coprocessor::metrics::*;
-
+use coprocessor::dag::executor::{Executor, Row};
 use storage::Statistics;
-
-use super::{Executor, Row};
 
 pub struct LimitExecutor<'a> {
     limit: u64,

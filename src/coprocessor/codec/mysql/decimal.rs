@@ -267,8 +267,8 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
         }
         l_frac_word_cnt = (l_end + 1 - l_stop as isize) as u8;
         r_frac_word_cnt = (r_end + 1 - r_stop as isize) as u8;
-        while l_idx as isize <= l_end && r_idx as isize <= r_end &&
-            lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
+        while l_idx as isize <= l_end && r_idx as isize <= r_end
+            && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
         {
             l_idx += 1;
             r_idx += 1;
@@ -620,13 +620,13 @@ fn do_div_mod(
                 guess = WORD_BASE as i64 - 1;
             }
             if r_len > 0 {
-                if rhs.word_buf[r_start + 1] as i64 * guess >
-                    (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y
+                if rhs.word_buf[r_start + 1] as i64 * guess
+                    > (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y
                 {
                     guess -= 1;
                 }
-                if rhs.word_buf[r_start + 1] as i64 * guess >
-                    (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y
+                if rhs.word_buf[r_start + 1] as i64 * guess
+                    > (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y
                 {
                     guess -= 1;
                 }
@@ -1042,9 +1042,8 @@ impl Decimal {
             self.word_buf[buf_from - 1] = self.word_buf[buf_from] / TEN_POW[c_shift];
         }
         while buf_from < buf_end {
-            self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) *
-                TEN_POW[shift] +
-                self.word_buf[buf_from + 1] / TEN_POW[c_shift];
+            self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) * TEN_POW[shift]
+                + self.word_buf[buf_from + 1] / TEN_POW[c_shift];
             buf_from += 1;
         }
         self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) * TEN_POW[shift];
@@ -1064,8 +1063,8 @@ impl Decimal {
                 (self.word_buf[buf_from] % TEN_POW[shift]) * TEN_POW[c_shift];
         }
         while buf_from > buf_end {
-            self.word_buf[buf_from] = self.word_buf[buf_from] / TEN_POW[shift] +
-                (self.word_buf[buf_from - 1] % TEN_POW[shift]) * TEN_POW[c_shift];
+            self.word_buf[buf_from] = self.word_buf[buf_from] / TEN_POW[shift]
+                + (self.word_buf[buf_from - 1] % TEN_POW[shift]) * TEN_POW[c_shift];
             buf_from -= 1;
         }
         self.word_buf[buf_from] /= TEN_POW[shift];
@@ -1374,8 +1373,7 @@ impl Decimal {
                 mini_shift = r_mini_shift as i8;
             }
             new_point += mini_shift as isize;
-            if shift + mini_shift as isize == 0 &&
-                (new_point - int_cnt) < DIGITS_PER_WORD as isize
+            if shift + mini_shift as isize == 0 && (new_point - int_cnt) < DIGITS_PER_WORD as isize
             {
                 res.int_cnt = int_cnt as u8;
                 res.frac_cnt = frac_cnt as u8;
@@ -1875,8 +1873,9 @@ pub trait DecimalEncoder: Write {
             while src_trailing_digits < lim && DIG_2_BYTES[src_trailing_digits] == i {
                 src_trailing_digits += 1;
             }
-            let x = (d.word_buf[src_word_start_idx] /
-                TEN_POW[DIGITS_PER_WORD as usize - src_trailing_digits]) ^ mask;
+            let x = (d.word_buf[src_word_start_idx]
+                / TEN_POW[DIGITS_PER_WORD as usize - src_trailing_digits])
+                ^ mask;
             write_word!(self, x, i as usize, written);
         }
 
@@ -2000,10 +1999,12 @@ impl Ord for Decimal {
     fn cmp(&self, right: &Decimal) -> Ordering {
         if self.negative == right.negative {
             let (carry, _, _, _) = calc_sub_carry(self, right);
-            carry.map_or(Ordering::Equal, |carry| if (carry > 0) == self.negative {
-                Ordering::Greater
-            } else {
-                Ordering::Less
+            carry.map_or(Ordering::Equal, |carry| {
+                if (carry > 0) == self.negative {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
             })
         } else if self.negative {
             Ordering::Less

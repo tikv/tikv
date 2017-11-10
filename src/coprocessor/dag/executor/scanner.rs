@@ -15,6 +15,7 @@ use kvproto::coprocessor::KeyRange;
 
 use coprocessor::endpoint::prefix_next;
 use coprocessor::codec::table::truncate_as_row_key;
+use coprocessor::metrics::*;
 use storage::{Key, ScanMode, SnapshotStore, Statistics, StoreScanner, Value};
 use storage::txn::Result;
 use util::escape;
@@ -124,6 +125,7 @@ impl Scanner {
             _ => unreachable!(),
         };
 
+        CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
         Ok(Some((key, value)))
     }
 

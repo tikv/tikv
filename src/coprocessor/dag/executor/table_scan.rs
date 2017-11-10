@@ -98,7 +98,6 @@ impl Executor for TableScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
-                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 return Ok(Some(row));
             }
 

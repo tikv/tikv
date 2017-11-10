@@ -29,7 +29,6 @@ use super::scanner::{ScanOn, Scanner};
 
 pub struct IndexScanExecutor {
     store: SnapshotStore,
-    statistics: Statistics,
     desc: bool,
     col_ids: Vec<i64>,
     pk_col: Option<ColumnInfo>,
@@ -57,7 +56,6 @@ impl IndexScanExecutor {
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
             store: store,
-            statistics: Statistics::default(),
             desc: desc,
             col_ids: col_ids,
             pk_col: pk_col,
@@ -75,7 +73,6 @@ impl IndexScanExecutor {
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
             store: store,
-            statistics: Statistics::default(),
             desc: false,
             col_ids: col_ids,
             pk_col: None,
@@ -122,7 +119,6 @@ impl Executor for IndexScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_sanner()? {
-                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
@@ -140,8 +136,6 @@ impl Executor for IndexScanExecutor {
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        statistics.add(&self.statistics);
-        self.statistics = Statistics::default();
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(statistics);
         }

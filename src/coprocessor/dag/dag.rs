@@ -14,15 +14,15 @@
 use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
-use tipb::select::{DAGRequest, SelectResponse};
+use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::{Message as PbMsg, RepeatedField};
+use protobuf::Message as PbMsg;
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqContext};
+use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{build_exec, Executor, Row};
@@ -64,12 +64,11 @@ impl DAGContext {
     }
 
     pub fn handle_request(&mut self) -> Result<Response> {
-        let mut chunks = vec![];
+        let mut chunk = Chunk::default();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    let chunk = get_chunk(&mut chunks);
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
@@ -80,7 +79,7 @@ impl DAGContext {
                 Ok(None) => {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
-                    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    sel_resp.mut_chunks().push(chunk);
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
