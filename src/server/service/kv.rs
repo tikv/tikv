@@ -14,6 +14,7 @@
 use std::boxed::FnBox;
 use std::fmt::Debug;
 use std::io::Write;
+use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use mio::Token;
@@ -476,17 +477,17 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let mut txn_status = HashMap::default();
-
-        let start_ts = req.get_start_version();
-        if start_ts > 0 {
-            let commit_ts = req.get_commit_version();
-            txn_status.insert(start_ts, commit_ts);
+        let txn_status = if req.get_start_version() > 0 {
+            HashMap::from_iter(iter::once(
+                (req.get_start_version(), req.get_commit_version()),
+            ))
         } else {
-            for info in req.take_txn_infos().into_iter() {
-                txn_status.insert(info.txn, info.status);
-            }
-        }
+            HashMap::from_iter(
+                req.take_txn_infos()
+                    .into_iter()
+                    .map(|info| (info.txn, info.status)),
+            )
+        };
 
         let (cb, future) = make_callback();
         let res = self.storage
