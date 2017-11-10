@@ -63,6 +63,12 @@ impl CoprocessorHost {
             SIZE_CHECK_OBSERVER_PRIORITY,
             Box::new(split_size_check_observer),
         );
+        if cfg.split_region_on_table {
+            registry.register_observer(
+                TABLE_CHECK_OBSERVER_PRIORITY,
+                Box::new(TableCheckObserver::default()),
+            );
+        }
         CoprocessorHost { registry: registry }
     }
 
