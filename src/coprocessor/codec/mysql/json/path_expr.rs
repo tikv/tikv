@@ -78,9 +78,9 @@ pub struct PathExpression {
 
 impl PathExpression {
     pub fn contains_any_asterisk(&self) -> bool {
-        (self.flags
-            & (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK))
-            != 0
+        (self.flags &
+            (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK)) !=
+            0
     }
 }
 

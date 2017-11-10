@@ -528,8 +528,9 @@ impl SelectContextCore {
     /// Rows: groupKey1, count1, value2, count3, value3
     ///       groupKey2, count1, value2, count3, value3
     fn aggr_rows(&mut self) -> Result<()> {
-        self.chunks =
-            Vec::with_capacity((self.gk_aggrs.len() + BATCH_ROW_COUNT - 1) / BATCH_ROW_COUNT);
+        self.chunks = Vec::with_capacity(
+            (self.gk_aggrs.len() + BATCH_ROW_COUNT - 1) / BATCH_ROW_COUNT,
+        );
         // Each aggregate partial result will be converted to two datum.
         let mut row_data = Vec::with_capacity(1 + 2 * self.sel.get_aggregates().len());
         for gk in self.gks.drain(..) {

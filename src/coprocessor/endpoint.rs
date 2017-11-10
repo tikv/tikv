@@ -191,8 +191,8 @@ impl Host {
     }
 
     fn running_task_count(&self) -> usize {
-        self.pool.get_task_count() + self.low_priority_pool.get_task_count()
-            + self.high_priority_pool.get_task_count()
+        self.pool.get_task_count() + self.low_priority_pool.get_task_count() +
+            self.high_priority_pool.get_task_count()
     }
 
     fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
@@ -474,10 +474,10 @@ impl BatchRunnable<Task> for Host {
                 Task::RetryRequests(retry) => for id in retry {
                     let reqs = self.reqs.remove(&id).unwrap();
                     let sched = self.sched.clone();
-                    if let Err(e) = self.engine
-                        .async_snapshot(reqs[0].req.get_context(), box move |(_, res)| {
-                            sched.schedule(Task::SnapRes(id, res)).unwrap()
-                        }) {
+                    if let Err(e) = self.engine.async_snapshot(
+                        reqs[0].req.get_context(),
+                        box move |(_, res)| sched.schedule(Task::SnapRes(id, res)).unwrap(),
+                    ) {
                         notify_batch_failed(e, reqs);
                     } else {
                         self.reqs.insert(id, reqs);
@@ -780,9 +780,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(
             Request::new(),
-            box move |msg| {
-                tx.send(msg).unwrap();
-            },
+            box move |msg| { tx.send(msg).unwrap(); },
             1000,
         );
         let ctx = ReqContext {
