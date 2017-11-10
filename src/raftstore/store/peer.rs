@@ -23,7 +23,7 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType};
+use kvproto::eraftpb::{self, ConfChange, ConfChangeType, EntryType, MessageType};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
@@ -255,6 +255,7 @@ pub struct Peer {
     leader_lease_expired_time: Option<Either<Timespec, Timespec>>,
 
     pub peer_stat: PeerStat,
+    is_appending_log: bool,
 }
 
 impl Peer {
@@ -365,6 +366,7 @@ impl Peer {
             cfg: cfg,
             leader_lease_expired_time: None,
             peer_stat: PeerStat::default(),
+            is_appending_log: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -717,11 +719,12 @@ impl Peer {
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut ReadyContext<T>,
+        ready_res: &mut Vec<(Ready, InvokeContext)>,
         worker: &FutureWorker<PdTask>,
-    ) {
+    ) -> bool {
         self.marked_to_be_checked = false;
         if self.pending_remove {
-            return;
+            return true;
         }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -731,7 +734,7 @@ impl Peer {
                 "{} still applying snapshot, skip further handling.",
                 self.tag
             );
-            return;
+            return true;
         }
 
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
@@ -741,14 +744,23 @@ impl Peer {
                 self.get_store().applied_index(),
                 self.last_applying_idx
             );
-            return;
+            return true;
         }
 
         if !self.raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
-            return;
+            return true;
         }
+
+        if self.is_appending_log {
+            debug!(
+                "region [{}] is async appending log, will handled next time",
+                self.region_id
+            );
+            return false;
+        }
+        self.is_appending_log = true;
 
         debug!("{} handle raft ready", self.tag);
 
@@ -770,6 +782,8 @@ impl Peer {
                 });
         }
 
+        let kv_wb_old_size = ctx.kv_wb.data_size();
+        let raft_wb_old_size = ctx.raft_wb.data_size();
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
             Ok(r) => r,
             Err(e) => {
@@ -779,7 +793,14 @@ impl Peer {
             }
         };
 
-        ctx.ready_res.push((ready, invoke_ctx));
+        // this ready write something.
+        if ctx.kv_wb.data_size() > kv_wb_old_size || ctx.raft_wb.data_size() > raft_wb_old_size {
+            ctx.ready_res.push((ready, invoke_ctx));
+        } else {
+            ready_res.push((ready, invoke_ctx));
+        }
+
+        true
     }
 
     pub fn post_raft_ready_append<T: Transport>(
@@ -789,6 +810,9 @@ impl Peer {
         ready: &mut Ready,
         invoke_ctx: InvokeContext,
     ) -> Option<ApplySnapResult> {
+        assert!(self.is_appending_log, "is_appending_log should be true");
+        self.is_appending_log = false;
+
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
@@ -838,6 +862,23 @@ impl Peer {
                 self.raft_log_size_hint += entry.get_data().len() as u64;
                 if to_be_updated {
                     to_be_updated = !self.maybe_update_lease(entry);
+                }
+                // if apply entry has RemoveNode and remove peer itself, mark it as pending_remove.
+                // so that async append thread will not append new entries.
+                if entry.get_entry_type() == EntryType::EntryConfChange {
+                    let index = entry.get_index();
+                    let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
+                    let cmd: RaftCmdRequest =
+                        parse_data_at(conf_change.get_context(), index, &self.tag);
+                    let admin_request = cmd.get_admin_request();
+                    if admin_request.get_cmd_type() == AdminCmdType::ChangePeer {
+                        let request = admin_request.get_change_peer();
+                        if request.get_change_type() == ConfChangeType::RemoveNode &&
+                            request.get_peer().get_id() == self.peer_id()
+                        {
+                            self.pending_remove = true;
+                        }
+                    }
                 }
             }
             if !committed_entries.is_empty() {
