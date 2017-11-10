@@ -170,21 +170,16 @@ impl<'a> SampleBuilder<'a> {
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
         let table_scanner = TableScanExecutor::new(&meta, ranges, snap, statistics);
-        let mut builder = SampleBuilder {
+        Ok(SampleBuilder {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
             col_len: col_len,
             max_bucket_size: req.get_bucket_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             max_sample_size: req.get_sample_size() as usize,
-            cm_sketch_depth: 0,
-            cm_sketch_width: 0,
-        };
-        if req.has_cmsketch_width() && req.has_cmsketch_depth() {
-            builder.cm_sketch_width = req.get_cmsketch_width() as usize;
-            builder.cm_sketch_depth = req.get_cmsketch_depth() as usize;
-        }
-        Ok(builder)
+            cm_sketch_depth: req.get_cmsketch_depth() as usize,
+            cm_sketch_width: req.get_cmsketch_width() as usize,
+        })
     }
 
     // `collect_columns_stats` returns the sample collectors which contain total count,
