@@ -21,7 +21,7 @@ use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
-use protobuf::Message as PbMsg;
+use protobuf::{CodedInputStream, Message as PbMsg};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
@@ -304,7 +304,7 @@ pub struct RequestTask {
 }
 
 impl RequestTask {
-    pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
+    pub fn new(req: Request, on_resp: OnResponse, recursion_limit: u32) -> RequestTask {
         let timer = Instant::now_coarse();
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;
@@ -315,8 +315,10 @@ impl RequestTask {
                 if tp == REQ_TYPE_SELECT {
                     table_scan = true;
                 }
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
                 let mut sel = SelectRequest::new();
-                if let Err(e) = sel.merge_from_bytes(req.get_data()) {
+                if let Err(e) = sel.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(sel.get_start_ts());
@@ -324,8 +326,10 @@ impl RequestTask {
                 }
             }
             REQ_TYPE_DAG => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
                 let mut dag = DAGRequest::new();
-                if let Err(e) = dag.merge_from_bytes(req.get_data()) {
+                if let Err(e) = dag.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(dag.get_start_ts());
@@ -338,8 +342,10 @@ impl RequestTask {
                 }
             }
             REQ_TYPE_ANALYZE => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
                 let mut analyze = AnalyzeReq::new();
-                if let Err(e) = analyze.merge_from_bytes(req.get_data()) {
+                if let Err(e) = analyze.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(analyze.get_start_ts());
@@ -749,6 +755,9 @@ mod tests {
     use std::time::Duration;
 
     use kvproto::coprocessor::Request;
+    use tipb::select::DAGRequest;
+    use tipb::expression::Expr;
+    use tipb::executor::Executor;
 
     use util::worker::{FutureWorker, Worker};
     use util::time::Instant;
@@ -776,7 +785,11 @@ mod tests {
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
+        let mut task = RequestTask::new(
+            Request::new(),
+            box move |msg| { tx.send(msg).unwrap(); },
+            1000,
+        );
         task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -805,10 +818,14 @@ mod tests {
             } else {
                 req.mut_context().set_priority(CommandPri::High);
             }
-            let task = RequestTask::new(req, box move |msg| {
-                thread::sleep(Duration::from_millis(100));
-                let _ = tx.send(msg);
-            });
+            let task = RequestTask::new(
+                req,
+                box move |msg| {
+                    thread::sleep(Duration::from_millis(100));
+                    let _ = tx.send(msg);
+                },
+                1000,
+            );
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {
@@ -820,5 +837,35 @@ mod tests {
             return;
         }
         panic!("suppose to get ServerIsBusy error.");
+    }
+
+    #[test]
+    fn test_stack_guard() {
+        let mut expr = Expr::new();
+        for _ in 0..10 {
+            let mut e = Expr::new();
+            e.mut_children().push(expr);
+            expr = e;
+        }
+        let mut e = Executor::new();
+        e.mut_selection().mut_conditions().push(expr);
+        let mut dag = DAGRequest::new();
+        dag.mut_executors().push(e);
+        let mut req = Request::new();
+        req.set_tp(REQ_TYPE_DAG);
+        req.set_data(dag.write_to_bytes().unwrap());
+        RequestTask::new(req.clone(), box move |_| unreachable!(), 100);
+        RequestTask::new(
+            req,
+            box move |res| {
+                let s = format!("{:?}", res);
+                assert!(
+                    s.contains("Recursion"),
+                    "parse should fail due to recursion limit {}",
+                    s
+                );
+            },
+            5,
+        );
     }
 }

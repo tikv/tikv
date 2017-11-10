@@ -11,10 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ObserverContext, RegionObserver, Result};
+use rocksdb::DB;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
+
+use util::transport::{RetryableSendCh, Sender};
+use raftstore::store::msg::Msg;
+
+use super::*;
 
 struct ObserverEntry {
     priority: u32,
@@ -47,10 +52,24 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    // TODO load from configuration.
-
-    pub fn new() -> CoprocessorHost {
-        CoprocessorHost::default()
+    pub fn new<C: Sender<Msg> + Send + Sync + 'static>(
+        cfg: Config,
+        ch: RetryableSendCh<Msg, C>,
+    ) -> CoprocessorHost {
+        let mut registry = Registry::default();
+        let split_size_check_observer =
+            SizeCheckObserver::new(cfg.region_max_size.0, cfg.region_split_size.0, ch);
+        registry.register_observer(
+            SIZE_CHECK_OBSERVER_PRIORITY,
+            Box::new(split_size_check_observer),
+        );
+        if cfg.split_region_on_table {
+            registry.register_observer(
+                TABLE_CHECK_OBSERVER_PRIORITY,
+                Box::new(TableCheckObserver::default()),
+            );
+        }
+        CoprocessorHost { registry: registry }
     }
 
     /// Call all prepose hook until bypass is set to true.
@@ -96,6 +115,37 @@ impl CoprocessorHost {
                 }
             }
         }
+    }
+
+    pub fn new_split_check_status(&self, region: &Region, engine: &DB) -> SplitCheckStatus {
+        let mut ob_ctx = ObserverContext::new(region);
+        let mut split_status = SplitCheckStatus::default();
+        for entry in &self.registry.observers {
+            entry
+                .observer
+                .new_split_check_status(&mut ob_ctx, &mut split_status, engine);
+        }
+        split_status
+    }
+
+    /// Hook to call for every check during split.
+    pub fn on_split_check(
+        &self,
+        region: &Region,
+        split_status: &mut SplitCheckStatus,
+        key: &[u8],
+        value_size: u64,
+    ) -> Option<Vec<u8>> {
+        let mut ob_ctx = ObserverContext::new(region);
+        for entry in &self.registry.observers {
+            if let Some(split_key) = entry
+                .observer
+                .on_split_check(&mut ob_ctx, split_status, key, value_size)
+            {
+                return Some(split_key);
+            }
+        }
+        None
     }
 
     pub fn shutdown(&self) {

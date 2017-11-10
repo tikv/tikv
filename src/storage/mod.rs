@@ -486,6 +486,7 @@ pub struct Storage {
 
     // Storage configurations.
     gc_ratio_threshold: f64,
+    max_key_size: usize,
 }
 
 impl Storage {
@@ -502,6 +503,7 @@ impl Storage {
                 receiver: Some(rx),
             })),
             gc_ratio_threshold: config.gc_ratio_threshold,
+            max_key_size: config.max_key_size,
         })
     }
 
@@ -646,6 +648,13 @@ impl Storage {
         options: Options,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
+        for m in &mutations {
+            let size = m.key().encoded().len();
+            if size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
+                return Ok(());
+            }
+        }
         let cmd = Command::Prewrite {
             ctx: ctx,
             mutations: mutations,
@@ -818,6 +827,10 @@ impl Storage {
         value: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
+        if key.len() > self.max_key_size {
+            callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+            return Ok(());
+        }
         try!(self.engine
             .async_write(&ctx,
                          vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
@@ -834,6 +847,10 @@ impl Storage {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
+        if key.len() > self.max_key_size {
+            callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+            return Ok(());
+        }
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
@@ -899,6 +916,7 @@ impl Clone for Storage {
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
             gc_ratio_threshold: self.gc_ratio_threshold,
+            max_key_size: self.max_key_size,
         }
     }
 }
@@ -936,6 +954,10 @@ quick_error! {
         }
         SchedTooBusy {
             description("scheduler is too busy")
+        }
+        KeyTooLarge(size: usize, limit: usize) {
+            description("max key size exceeded")
+            display("max key size exceeded, size: {}, limit: {}", size, limit)
         }
     }
 }
