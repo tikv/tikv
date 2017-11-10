@@ -35,6 +35,9 @@ pub struct Scanner {
     scanner: StoreScanner,
     range: KeyRange,
     no_more: bool,
+    // statistics_cache caches Statistics because
+    // reset_range may re-initialize a StoreScanner.
+    statistics_cache: Statistics,
 }
 
 impl Scanner {
@@ -63,6 +66,7 @@ impl Scanner {
             scanner: store.scanner(scan_mode, key_only, upper_bound)?,
             range: range,
             no_more: false,
+            statistics_cache: Statistics::default(),
         })
     }
 
@@ -74,6 +78,7 @@ impl Scanner {
             ScanMode::Forward => {
                 // For forward scan, we need to re-initialize the scanner.
                 self.seek_key = self.range.get_start().to_vec();
+                self.statistics_cache.add(self.scanner.get_statistics());
                 let upper_bound = Some(Key::from_raw(&self.range.end).encoded().to_vec());
                 self.scanner = store.scanner(self.scan_mode, self.key_only, upper_bound)?;
             }
@@ -123,6 +128,7 @@ impl Scanner {
     }
 
     pub fn collect_statistics_into(self, stats: &mut Statistics) {
+        stats.add(&self.statistics_cache);
         stats.add(self.scanner.get_statistics());
     }
 }

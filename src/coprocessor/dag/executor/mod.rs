@@ -42,6 +42,7 @@ pub use self::selection::SelectionExecutor;
 pub use self::topn::TopNExecutor;
 pub use self::limit::LimitExecutor;
 pub use self::aggregation::AggregationExecutor;
+pub use self::scanner::{ScanOn, Scanner};
 
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,

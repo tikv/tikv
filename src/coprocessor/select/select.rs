@@ -20,17 +20,18 @@ use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::{KeyRange, Response};
 
+use coprocessor::dag::executor::{ScanOn, Scanner};
 use coprocessor::codec::{datum, mysql, table};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::codec::datum::Datum;
 use coprocessor::metrics::*;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_chunk, get_pk, is_point, prefix_next, to_pb_error, ReqContext,
-                            BATCH_ROW_COUNT, SINGLE_GROUP};
-use util::{escape, Either};
+use coprocessor::endpoint::{get_chunk, get_pk, is_point, to_pb_error, ReqContext, BATCH_ROW_COUNT,
+                            SINGLE_GROUP};
+use util::Either;
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::codec::number::NumberDecoder;
-use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics};
+use storage::{Key, Snapshot, SnapshotStore, Statistics};
 
 use super::xeval::{EvalContext, Evaluator};
 use super::aggregate::{self, AggrFunc};
@@ -43,6 +44,7 @@ pub struct SelectContext {
     statistics: Statistics,
     core: SelectContextCore,
     req_ctx: Arc<ReqContext>,
+    scanner: Option<Scanner>,
 }
 
 impl SelectContext {
@@ -62,6 +64,7 @@ impl SelectContext {
             snap: snap,
             statistics: Statistics::default(),
             req_ctx: req_ctx,
+            scanner: None,
         })
     }
 
@@ -95,6 +98,19 @@ impl SelectContext {
             },
         }
         Ok(resp)
+    }
+
+    fn set_scanner_on(&mut self, range: KeyRange, scan_on: ScanOn) -> Result<()> {
+        if self.scanner.is_none() {
+            let desc = self.core.desc_scan;
+            let key_only = self.key_only();
+            let s = Scanner::new(&self.snap, scan_on, desc, key_only, range)?;
+            self.scanner = Some(s);
+            return Ok(());
+        }
+        let s = self.scanner.as_mut().unwrap();
+        s.reset_range(range, &self.snap)?;
+        Ok(())
     }
 
     fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>) -> Result<()> {
@@ -141,55 +157,23 @@ impl SelectContext {
         } else {
             CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
 
-            let (mut seek_key, scan_mode) = if self.core.desc_scan {
-                (range.get_end().to_vec(), ScanMode::Backward)
-            } else {
-                (range.get_start().to_vec(), ScanMode::Forward)
-            };
-
-            let upper_bound = if !self.core.desc_scan && !range.get_end().is_empty() {
-                Some(Key::from_raw(range.get_end()).encoded().clone())
-            } else {
-                None
-            };
-
-            let mut scanner = self.snap.scanner(scan_mode, self.key_only(), upper_bound)?;
-
+            self.set_scanner_on(range, ScanOn::Table)?;
+            let scanner = self.scanner.as_mut().unwrap();
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     self.req_ctx.check_if_outdated()?;
                 }
-                let kv = if self.core.desc_scan {
-                    scanner.reverse_seek(Key::from_raw(&seek_key))?
-                } else {
-                    scanner.seek(Key::from_raw(&seek_key))?
-                };
-                let (key, value) = match kv {
-                    Some((key, value)) => (box_try!(key.raw()), value),
-                    None => break,
-                };
-                if range.get_start() > key.as_slice() || range.get_end() <= key.as_slice() {
-                    debug!(
-                        "key: {} out of range [{}, {})",
-                        escape(&key),
-                        escape(range.get_start()),
-                        escape(range.get_end())
-                    );
-                    break;
+                if let Some((key, value)) = scanner.next_row()? {
+                    let h = box_try!(table::decode_handle(&key));
+                    let row_data = {
+                        let ids = self.core.cols.as_ref().left().unwrap();
+                        box_try!(table::cut_row(value, ids))
+                    };
+                    row_count += self.core.handle_row(h, row_data)?;
+                    continue;
                 }
-                let h = box_try!(table::decode_handle(&key));
-                let row_data = {
-                    let ids = self.core.cols.as_ref().left().unwrap();
-                    box_try!(table::cut_row(value, ids))
-                };
-                row_count += self.core.handle_row(h, row_data)?;
-                seek_key = if self.core.desc_scan {
-                    box_try!(table::truncate_as_row_key(&key)).to_vec()
-                } else {
-                    prefix_next(&key)
-                };
+                break;
             }
-            self.statistics.add(scanner.get_statistics());
         }
         Ok(row_count)
     }
@@ -216,47 +200,13 @@ impl SelectContext {
         CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
         let mut row_cnt = 0;
 
-        let (mut seek_key, scan_mode) = if self.core.desc_scan {
-            (r.get_end().to_vec(), ScanMode::Backward)
-        } else {
-            (r.get_start().to_vec(), ScanMode::Forward)
-        };
-
-        let upper_bound = if !self.core.desc_scan && !r.get_end().is_empty() {
-            Some(Key::from_raw(r.get_end()).encoded().clone())
-        } else {
-            None
-        };
-
-        let mut scanner = self.snap.scanner(scan_mode, self.key_only(), upper_bound)?;
+        self.set_scanner_on(r, ScanOn::Index)?;
+        let scanner = self.scanner.as_mut().unwrap();
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
                 self.req_ctx.check_if_outdated()?;
             }
-            let nk = if self.core.desc_scan {
-                scanner.reverse_seek(Key::from_raw(&seek_key))?
-            } else {
-                scanner.seek(Key::from_raw(&seek_key))?
-            };
-            let (key, val) = match nk {
-                Some((key, val)) => (box_try!(key.raw()), val),
-                None => break,
-            };
-            if r.get_start() > key.as_slice() || r.get_end() <= key.as_slice() {
-                debug!(
-                    "key: {} out of range [{}, {})",
-                    escape(&key),
-                    escape(r.get_start()),
-                    escape(r.get_end())
-                );
-                break;
-            }
-            seek_key = if self.core.desc_scan {
-                key.clone()
-            } else {
-                prefix_next(&key)
-            };
-            {
+            if let Some((key, val)) = scanner.next_row()? {
                 let (mut values, handle) = {
                     let mut ids = self.core.cols.as_ref().right().unwrap().clone();
                     if self.core.pk_col.is_some() {
@@ -280,14 +230,18 @@ impl SelectContext {
                     values.append(pk_col.get_column_id(), &mut bytes);
                 }
                 row_cnt += self.core.handle_row(handle, values)?;
+                continue;
             }
+            break;
         }
-        self.statistics.add(scanner.get_statistics());
         Ok(row_cnt)
     }
 
     pub fn collect_statistics_into(self, stats: &mut Statistics) {
         stats.add(&self.statistics);
+        if let Some(scanner) = self.scanner {
+            scanner.collect_statistics_into(stats);
+        }
     }
 }
 
