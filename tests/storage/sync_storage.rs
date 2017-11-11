@@ -14,6 +14,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use tikv::util::collections::HashMap;
 use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::{Context, LockInfo};
@@ -150,10 +151,17 @@ impl SyncStorage {
     }
 
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {
+        let mut txn_status = HashMap::default();
+        txn_status.insert(start_ts, commit_ts.unwrap_or(0));
         wait_op!(|cb| {
-            self.store
-                .async_resolve_lock(ctx, start_ts, commit_ts, cb)
-                .unwrap()
+            self.store.async_resolve_lock(ctx, txn_status, cb).unwrap()
+        }).unwrap()
+    }
+
+    pub fn resolve_lock_batch(&self, ctx: Context, txns: Vec<(u64, u64)>) -> Result<()> {
+        let txn_status: HashMap<u64, u64> = txns.into_iter().collect();
+        wait_op!(|cb| {
+            self.store.async_resolve_lock(ctx, txn_status, cb).unwrap()
         }).unwrap()
     }
 
