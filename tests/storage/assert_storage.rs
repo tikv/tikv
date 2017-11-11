@@ -395,6 +395,21 @@ impl AssertionStorage {
             .unwrap();
     }
 
+    pub fn resolve_lock_batch_ok(
+        &self,
+        start_ts_1: u64,
+        commit_ts_1: u64,
+        start_ts_2: u64,
+        commit_ts_2: u64,
+    ) {
+        self.store
+            .resolve_lock_batch(
+                self.ctx.clone(),
+                vec![(start_ts_1, commit_ts_1), (start_ts_2, commit_ts_2)],
+            )
+            .unwrap();
+    }
+
     pub fn resolve_lock_with_illegal_tso(&self, start_ts: u64, commit_ts: Option<u64>) {
         let resp = self.store
             .resolve_lock(self.ctx.clone(), start_ts, commit_ts);
