@@ -35,6 +35,7 @@ use raftstore::store::Msg;
 use raftstore::store::SnapshotIOLimiter;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use util::io_limiter::IOLimiter;
 use util::transport::SendCh;
 use util::HandyRwLock;
 use util::collections::{HashMap, HashMapEntry as Entry};
@@ -718,7 +719,7 @@ impl Snap {
                         let l = key.len() + value.len();
                         if bytes >= base {
                             bytes = 0;
-                            limiter.request(base, 0);
+                            limiter.request(base);
                         }
                         bytes += l as i64;
                         size += l;

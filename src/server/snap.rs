@@ -27,6 +27,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot, SnapshotIOLimiter};
+use util::io_limiter::IOLimiter;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::worker::Runnable;
 use util::buf::PipeBuffer;
@@ -181,10 +182,10 @@ fn write_snap<W: Write>(w: &mut W, limiter: Arc<SnapshotIOLimiter>, data: &[u8])
         let end;
         if curr + single >= total {
             end = total;
-            limiter.request((total - curr) as i64, 0);
+            limiter.request((total - curr) as i64);
         } else {
             end = curr + single;
-            limiter.request(single as i64, 0);
+            limiter.request(single as i64);
         }
         w.write_all(&data[curr..end])?;
         curr = end;
