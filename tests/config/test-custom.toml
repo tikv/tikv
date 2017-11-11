@@ -76,6 +76,7 @@ snap-max-write-bytes-per-time = 1048576
 snap-max-write-bytes-per-sec = 10485760
 
 [coprocessor]
+split-region-on-table = true
 region-max-size = "12MB"
 region-split-size = "12MB"
 
