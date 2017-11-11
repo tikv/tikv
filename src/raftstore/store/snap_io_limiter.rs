@@ -65,8 +65,8 @@ mod test {
 
     #[test]
     fn test_snapshot_io_limiter() {
-        let limiter = SnapshotIOLimiter::new(10 * 1024 * 1024, 1024 * 1024);
-        assert_eq!(limiter.get_singleburst_bytes(), 1024 * 1024);
+        let limiter = SnapshotIOLimiter::new(1024 * 1024, 10 * 1024 * 1024);
+        assert!(limiter.get_singleburst_bytes() <= 1024 * 1024);
 
         limiter.set_bytes_per_second(20 * 1024 * 1024);
         assert_eq!(limiter.get_bytes_per_second(), 20 * 1024 * 1024);
