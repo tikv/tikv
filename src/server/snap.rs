@@ -18,8 +18,6 @@ use std::boxed::FnBox;
 use std::time::Instant;
 use std::sync::{Arc, RwLock};
 
-use rocksdb::RateLimiter;
-
 use mio::Token;
 use futures::{Async, Future, Poll, Stream};
 use futures::stream::{self, Once};
@@ -28,7 +26,7 @@ use kvproto::raft_serverpb::SnapshotChunk;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
-use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot, SnapshotIOLimiter};
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::worker::Runnable;
 use util::buf::PipeBuffer;
@@ -177,16 +175,11 @@ fn send_snap(
 /// Write binary snapshot to local disk, use rate limiter to control the speed
 fn write_snap<W: Write>(
     w: &mut W,
-    limiter: Arc<RateLimiter>,
-    max_bytes_per_time: usize,
+    limiter: Arc<SnapshotIOLimiter>,
     data: &[u8],
 ) -> IOResult<()> {
     let total = data.len();
-    let single = if max_bytes_per_time > (limiter.get_singleburst_bytes() as usize) {
-        limiter.get_singleburst_bytes() as usize
-    } else {
-        max_bytes_per_time
-    };
+    let single = limiter.get_singleburst_bytes() as usize;
     let mut curr = 0;
     while curr < total {
         let end;
@@ -277,7 +270,6 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             if let Err(err) = write_snap(
                                 &mut e.get_mut().0,
                                 self.snap_mgr.get_limiter(),
-                                self.snap_mgr.write_bytes_per_time,
                                 left,
                             ) {
                                 error!(
@@ -294,7 +286,6 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             } else if let Err(err) = write_snap(
                                 &mut e.get_mut().0,
                                 self.snap_mgr.get_limiter(),
-                                self.snap_mgr.write_bytes_per_time,
                                 right,
                             ) {
                                 error!(

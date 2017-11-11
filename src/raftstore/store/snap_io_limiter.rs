@@ -22,7 +22,7 @@ pub struct SnapshotIOLimiter
 }
 
 impl IOLimiter for SnapshotIOLimiter {
-    fn new(bytes_per_sec: i64, bytes_per_time: i64) -> SnapshotIOLimiter {
+    fn new(bytes_per_time: i64, bytes_per_sec: i64) -> SnapshotIOLimiter {
         SnapshotIOLimiter {
             inner: RateLimiter::new(bytes_per_sec, 100 * 1000, 10),
             max_bytes_per_time: bytes_per_time,

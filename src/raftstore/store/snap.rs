@@ -24,7 +24,7 @@ use std::time;
 use std::thread;
 
 use protobuf::Message;
-use rocksdb::{CFHandle, RateLimiter, Writable, WriteBatch, DB};
+use rocksdb::{CFHandle, Writable, WriteBatch, DB};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -32,6 +32,7 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 use raftstore::Result as RaftStoreResult;
 use raftstore::errors::Error as RaftStoreError;
 use raftstore::store::Msg;
+use raftstore::store::SnapshotIOLimiter;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::transport::SendCh;
@@ -171,7 +172,7 @@ pub trait Snapshot: Read + Write + Send {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: Arc<RateLimiter>,
+        limiter: Arc<SnapshotIOLimiter>,
     ) -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
@@ -671,7 +672,7 @@ impl Snap {
         region: &Region,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: Arc<RateLimiter>,
+        limiter: Arc<SnapshotIOLimiter>,
     ) -> RaftStoreResult<()> {
         if self.exists() {
             match self.validate() {
@@ -821,7 +822,7 @@ impl Snapshot for Snap {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<SnapshotDeleter>,
-        limiter: Arc<RateLimiter>,
+        limiter: Arc<SnapshotIOLimiter>,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
         self.do_build(snap, region, stat, deleter, limiter)?;
@@ -1093,8 +1094,7 @@ pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
     ch: Option<SendCh<Msg>>,
-    limiter: Arc<RateLimiter>,
-    pub write_bytes_per_time: usize,
+    limiter: Arc<SnapshotIOLimiter>,
 }
 
 impl SnapManager {
@@ -1111,12 +1111,10 @@ impl SnapManager {
                 snap_size: Arc::new(RwLock::new(0)),
             })),
             ch: ch,
-            limiter: Arc::new(RateLimiter::new(
+            limiter: Arc::new(SnapshotIOLimiter::new(
+                bytes_per_time as i64,
                 bytes_per_sec as i64,
-                100 * 1000, // refill_period_us
-                10,         // fairness
             )),
-            write_bytes_per_time: bytes_per_time,
         }
     }
 
@@ -1341,7 +1339,7 @@ impl SnapManager {
         }
     }
 
-    pub fn get_limiter(&self) -> Arc<RateLimiter> {
+    pub fn get_limiter(&self) -> Arc<SnapshotIOLimiter> {
         self.limiter.clone()
     }
 }
@@ -1379,7 +1377,6 @@ mod test {
     use std::sync::Arc;
     use tempdir::TempDir;
     use protobuf::Message;
-    use rocksdb::RateLimiter;
 
     use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, Snapshot, SnapshotDeleter,
                 SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX};
@@ -1393,6 +1390,7 @@ mod test {
     use util::{rocksdb, HandyRwLock};
     use raftstore::Result;
     use raftstore::store::keys;
+    use raftstore::store::SnapshotIOLimiter;
     use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
     use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
 
@@ -1573,7 +1571,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(RateLimiter::new(10 * 1024 * 1024, 100 * 1000, 10));
+        let limiter = Arc::new(SnapshotIOLimiter::new(1024 * 1024, 10 * 1024 * 1024));
         s1.build(
             &snapshot,
             &region,
@@ -1690,7 +1688,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(RateLimiter::new(10 * 1024 * 1024, 100 * 1000, 10));
+        let limiter = Arc::new(SnapshotIOLimiter::new(1024 * 1024, 10 * 1024 * 1024));
         s1.build(
             &snapshot,
             &region,
@@ -1871,7 +1869,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(RateLimiter::new(10 * 1024 * 1024, 100 * 1000, 10));
+        let limiter = Arc::new(SnapshotIOLimiter::new(1024 * 1024, 10 * 1024 * 1024));
         s1.build(
             &snapshot,
             &region,
@@ -1975,7 +1973,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(RateLimiter::new(10 * 1024 * 1024, 100 * 1000, 10));
+        let limiter = Arc::new(SnapshotIOLimiter::new(1024 * 1024, 10 * 1024 * 1024));
         s1.build(
             &snapshot,
             &region,
@@ -2076,7 +2074,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(RateLimiter::new(10 * 1024 * 1024, 100 * 1000, 10));
+        let limiter = Arc::new(SnapshotIOLimiter::new(1024 * 1024, 10 * 1024 * 1024));
         s1.build(
             &snapshot,
             &region,
@@ -2165,7 +2163,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(RateLimiter::new(10 * 1024 * 1024, 100 * 1000, 10));
+        let limiter = Arc::new(SnapshotIOLimiter::new(1024 * 1024, 10 * 1024 * 1024));
         s1.build(
             &snapshot,
             &region,

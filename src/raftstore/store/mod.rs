@@ -28,6 +28,7 @@ mod snap;
 mod worker;
 mod metrics;
 mod local_metrics;
+mod snap_io_limiter;
 
 pub use self::msg::{BatchCallback, Callback, Msg, SignificantMsg, Tick};
 pub use self::store::{create_event_loop, Engines, Store, StoreChannel, StoreStat};

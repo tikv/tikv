@@ -12,7 +12,7 @@
 // limitations under the License.
 
 pub trait IOLimiter {
-    fn new(bytes_per_sec: i64, bytes_per_time: i64) -> Self;
+    fn new(bytes_per_time: i64, bytes_per_sec: i64) -> Self;
 
     fn set_bytes_per_second(&self, bytes_per_sec: i64);
 
