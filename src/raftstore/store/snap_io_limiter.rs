@@ -15,8 +15,7 @@ use util::io_limiter::IOLimiter;
 
 use rocksdb::RateLimiter;
 
-pub struct SnapshotIOLimiter
-{
+pub struct SnapshotIOLimiter {
     inner: RateLimiter,
     max_bytes_per_time: i64,
 }
