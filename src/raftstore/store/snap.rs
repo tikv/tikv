@@ -1389,6 +1389,7 @@ mod test {
 
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::{rocksdb, HandyRwLock};
+    use util::io_limiter::IOLimiter;
     use raftstore::Result;
     use raftstore::store::keys;
     use raftstore::store::SnapshotIOLimiter;

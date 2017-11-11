@@ -60,6 +60,7 @@ impl IOLimiter for SnapshotIOLimiter {
 
 #[cfg(test)]
 mod test {
+    use util::io_limiter::IOLimiter;
     use super::SnapshotIOLimiter;
 
     #[test]
