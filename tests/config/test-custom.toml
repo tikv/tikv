@@ -72,6 +72,7 @@ report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
+snap-min-write-bytes-per-time = 65536
 snap-max-write-bytes-per-time = 1048576
 snap-max-write-bytes-per-sec = 10485760
 

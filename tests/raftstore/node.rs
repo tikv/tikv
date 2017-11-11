@@ -173,6 +173,7 @@ impl Simulator for NodeCluster {
                 let snap_mgr = SnapManager::new(
                     tmp.path().to_str().unwrap(),
                     Some(node.get_sendch()),
+                    64 * 1024,
                     1024 * 1024,
                     10 * 1024 * 1024,
                 );

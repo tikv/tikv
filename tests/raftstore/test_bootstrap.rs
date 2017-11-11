@@ -72,6 +72,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let snap_mgr = SnapManager::new(
         tmp_mgr.path().to_str().unwrap(),
         Some(node.get_sendch()),
+        64 * 1024,
         1024 * 1024,
         10 * 1024 * 1024,
     );

@@ -17,14 +17,20 @@ use rocksdb::RateLimiter;
 
 pub struct SnapshotIOLimiter {
     inner: RateLimiter,
+    min_bytes_per_time: i64,
     max_bytes_per_time: i64,
 }
 
 impl IOLimiter for SnapshotIOLimiter {
-    fn new(bytes_per_time: i64, bytes_per_sec: i64) -> SnapshotIOLimiter {
+    fn new(
+        min_bytes_per_time: i64,
+        max_bytes_per_time: i64,
+        bytes_per_sec: i64,
+    ) -> SnapshotIOLimiter {
         SnapshotIOLimiter {
             inner: RateLimiter::new(bytes_per_sec, 100 * 1000, 10),
-            max_bytes_per_time: bytes_per_time,
+            min_bytes_per_time: min_bytes_per_time,
+            max_bytes_per_time: max_bytes_per_time,
         }
     }
 
@@ -36,7 +42,11 @@ impl IOLimiter for SnapshotIOLimiter {
         self.inner.request(bytes, 1);
     }
 
-    fn get_singleburst_bytes(&self) -> i64 {
+    fn get_min_bytes_per_time(&self) -> i64 {
+        self.min_bytes_per_time
+    }
+
+    fn get_max_bytes_per_time(&self) -> i64 {
         let single = self.inner.get_singleburst_bytes();
         if single > self.max_bytes_per_time {
             self.max_bytes_per_time
@@ -65,8 +75,9 @@ mod test {
 
     #[test]
     fn test_snapshot_io_limiter() {
-        let limiter = SnapshotIOLimiter::new(1024 * 1024, 10 * 1024 * 1024);
-        assert!(limiter.get_singleburst_bytes() <= 1024 * 1024);
+        let limiter = SnapshotIOLimiter::new(64 * 1024, 1024 * 1024, 10 * 1024 * 1024);
+        assert_eq!(limiter.get_min_bytes_per_time(), 64 * 1024);
+        assert!(limiter.get_max_bytes_per_time() <= 1024 * 1024);
 
         limiter.set_bytes_per_second(20 * 1024 * 1024);
         assert_eq!(limiter.get_bytes_per_second(), 20 * 1024 * 1024);

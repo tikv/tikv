@@ -1682,6 +1682,7 @@ mod test {
         let mgr = SnapManager::new(
             snap_dir.path().to_str().unwrap(),
             None,
+            64 * 1024,
             1024 * 1024,
             10 * 1024 * 1024,
         );
@@ -1970,6 +1971,7 @@ mod test {
         let mgr = SnapManager::new(
             snap_dir.path().to_str().unwrap(),
             None,
+            64 * 1024,
             1024 * 1024,
             10 * 1024 * 1024,
         );
