@@ -332,6 +332,8 @@ fn test_mvcc_rollback_and_cleanup() {
 
 #[test]
 fn test_mvcc_resolve_lock_gc_and_delete() {
+    use kvproto::kvrpcpb::*;
+    use protobuf;
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
@@ -388,9 +390,12 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     ts += 1;
     let resolve_lock_commit_version = ts;
     let mut resolve_lock_req = ResolveLockRequest::new();
+    let mut temp_txninfo = TxnInfo::new();
+    temp_txninfo.txn = prewrite_start_version2;
+    temp_txninfo.status = resolve_lock_commit_version;
+    let vec_txninfo = vec![temp_txninfo];
     resolve_lock_req.set_context(ctx.clone());
-    resolve_lock_req.start_version = prewrite_start_version2;
-    resolve_lock_req.commit_version = resolve_lock_commit_version;
+    resolve_lock_req.set_txn_infos(protobuf::RepeatedField::from_vec(vec_txninfo));
     let resolve_lock_resp = client.kv_resolve_lock(resolve_lock_req).unwrap();
     assert!(!resolve_lock_resp.has_region_error());
     assert!(!resolve_lock_resp.has_error());
