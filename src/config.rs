@@ -24,6 +24,7 @@ use server::Config as ServerConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
+use raftengine::Config as RaftEngineCfg;
 use storage::{Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_DATA_DIR,
               DEFAULT_ROCKSDB_SUB_DIR};
 use util::config::{self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB};
@@ -478,115 +479,6 @@ impl RaftDefaultCfConfig {
     }
 }
 
-// RocksDB Env associate thread pools of multiple instances from the same process.
-// When construct Options, options.env is set to same singleton Env::Default() object.
-// If we set same env parameter in different instance, we may overwrite other instance's config.
-// So we only set max_background_jobs in default rocksdb.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct RaftDbConfig {
-    #[serde(with = "config::recovery_mode_serde")]
-    pub wal_recovery_mode: DBRecoveryMode,
-    pub wal_dir: String,
-    pub wal_ttl_seconds: u64,
-    pub wal_size_limit: ReadableSize,
-    pub max_total_wal_size: ReadableSize,
-    pub max_manifest_file_size: ReadableSize,
-    pub create_if_missing: bool,
-    pub max_open_files: i32,
-    pub enable_statistics: bool,
-    pub stats_dump_period: ReadableDuration,
-    pub compaction_readahead_size: ReadableSize,
-    pub info_log_max_size: ReadableSize,
-    pub info_log_roll_time: ReadableDuration,
-    pub info_log_dir: String,
-    pub max_sub_compactions: u32,
-    pub writable_file_max_buffer_size: ReadableSize,
-    pub use_direct_io_for_flush_and_compaction: bool,
-    pub enable_pipelined_write: bool,
-    pub allow_concurrent_memtable_write: bool,
-    pub wal_bytes_per_sync: ReadableSize,
-    pub defaultcf: RaftDefaultCfConfig,
-}
-
-impl Default for RaftDbConfig {
-    fn default() -> RaftDbConfig {
-        RaftDbConfig {
-            wal_recovery_mode: DBRecoveryMode::PointInTime,
-            wal_dir: "".to_owned(),
-            wal_ttl_seconds: 0,
-            wal_size_limit: ReadableSize::kb(0),
-            max_total_wal_size: ReadableSize::gb(4),
-            max_manifest_file_size: ReadableSize::mb(20),
-            create_if_missing: true,
-            max_open_files: 40960,
-            enable_statistics: true,
-            stats_dump_period: ReadableDuration::minutes(10),
-            compaction_readahead_size: ReadableSize::kb(0),
-            info_log_max_size: ReadableSize::kb(0),
-            info_log_roll_time: ReadableDuration::secs(0),
-            info_log_dir: "".to_owned(),
-            max_sub_compactions: 1,
-            writable_file_max_buffer_size: ReadableSize::mb(1),
-            use_direct_io_for_flush_and_compaction: false,
-            enable_pipelined_write: true,
-            allow_concurrent_memtable_write: false,
-            wal_bytes_per_sync: ReadableSize::kb(0),
-            defaultcf: RaftDefaultCfConfig::default(),
-        }
-    }
-}
-
-impl RaftDbConfig {
-    pub fn build_opt(&self) -> DBOptions {
-        let mut opts = DBOptions::new();
-        opts.set_wal_recovery_mode(self.wal_recovery_mode);
-        if !self.wal_dir.is_empty() {
-            opts.set_wal_dir(&self.wal_dir);
-        }
-        opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
-        opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
-        opts.set_max_total_wal_size(self.max_total_wal_size.0);
-        opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
-        opts.create_if_missing(self.create_if_missing);
-        opts.set_max_open_files(self.max_open_files);
-        if self.enable_statistics {
-            opts.enable_statistics();
-            opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
-        }
-        opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
-        opts.set_max_log_file_size(self.info_log_max_size.0);
-        opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
-        if !self.info_log_dir.is_empty() {
-            opts.create_info_log(&self.info_log_dir).unwrap_or_else(
-                |e| {
-                    panic!(
-                        "create RocksDB info log {} error: {:?}",
-                        self.info_log_dir,
-                        e
-                    );
-                },
-            )
-        }
-        opts.set_max_subcompactions(self.max_sub_compactions);
-        opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
-        opts.set_use_direct_io_for_flush_and_compaction(
-            self.use_direct_io_for_flush_and_compaction,
-        );
-        opts.enable_pipelined_write(self.enable_pipelined_write);
-        opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
-        opts.add_event_listener(EventListener::new("raft"));
-        opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
-
-        opts
-    }
-
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
-        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
-    }
-}
-
 #[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -652,7 +544,7 @@ pub struct TiKvConfig {
     pub raft_store: RaftstoreConfig,
     pub coprocessor: CopConfig,
     pub rocksdb: DbConfig,
-    pub raftdb: RaftDbConfig,
+    pub raftdb: RaftEngineCfg,
 }
 
 impl Default for TiKvConfig {
@@ -666,7 +558,7 @@ impl Default for TiKvConfig {
             coprocessor: CopConfig::default(),
             pd: PdConfig::default(),
             rocksdb: DbConfig::default(),
-            raftdb: RaftDbConfig::default(),
+            raftdb: RaftEngineCfg::default(),
             storage: StorageConfig::default(),
         }
     }
@@ -703,6 +595,9 @@ impl TiKvConfig {
         if !db_exist(&kv_db_path) && db_exist(&self.raft_store.raftdb_path) {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
+
+        self.raftdb.dir = self.raft_store.raftdb_path.clone();
+        self.raftdb.compact_threshold = self.raft_store.raft_log_gc_threshold as usize;
 
         self.rocksdb.validate()?;
         self.server.validate()?;

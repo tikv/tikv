@@ -14,7 +14,6 @@
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
@@ -47,16 +46,17 @@ use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+use raftengine::{LogBatch, RaftEngine};
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
+                    RaftlogGcTaskRes, RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
-use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
+use super::peer_storage::{self, ApplySnapResult};
 use super::msg::{BatchCallback, Callback};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
@@ -71,11 +71,11 @@ const PENDING_VOTES_CAP: usize = 20;
 #[derive(Clone)]
 pub struct Engines {
     pub kv_engine: Arc<DB>,
-    pub raft_engine: Arc<DB>,
+    pub raft_engine: Arc<RaftEngine>,
 }
 
 impl Engines {
-    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
+    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<RaftEngine>) -> Engines {
         Engines {
             kv_engine: kv_engine,
             raft_engine: raft_engine,
@@ -127,7 +127,7 @@ pub struct StoreInfo {
 pub struct Store<T, C: 'static> {
     cfg: Rc<Config>,
     kv_engine: Arc<DB>,
-    raft_engine: Arc<DB>,
+    raft_engine: Arc<RaftEngine>,
     store: metapb::Store,
     sendch: SendCh<Msg>,
 
@@ -143,6 +143,7 @@ pub struct Store<T, C: 'static> {
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
+    raftlog_gc_receiver: Option<StdReceiver<RaftlogGcTaskRes>>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
@@ -157,7 +158,6 @@ pub struct Store<T, C: 'static> {
     snap_mgr: SnapManager,
 
     raft_metrics: RaftMetrics,
-    pub entry_cache_metries: Rc<RefCell<CacheQueryStats>>,
 
     tag: String,
 
@@ -167,6 +167,9 @@ pub struct Store<T, C: 'static> {
     pending_votes: RingQueue<RaftMessage>,
 
     store_stat: StoreStat,
+
+    // Regions need to be compacted
+    regions_need_compact: HashSet<u64>,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -219,6 +222,7 @@ impl<T, C> Store<T, C> {
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
             raftlog_gc_worker: Worker::new("raft gc worker"),
+            raftlog_gc_receiver: None,
             compact_worker: Worker::new("compact worker"),
             pd_worker: pd_worker,
             consistency_check_worker: Worker::new("consistency check worker"),
@@ -231,12 +235,12 @@ impl<T, C> Store<T, C> {
             coprocessor_host: Arc::new(coprocessor_host),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
-            entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
             pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
             store_stat: StoreStat::default(),
+            regions_need_compact: HashSet::default(),
         };
         s.init()?;
         Ok(s)
@@ -256,7 +260,7 @@ impl<T, C> Store<T, C> {
 
         let t = Instant::now();
         let mut kv_wb = WriteBatch::new();
-        let mut raft_wb = WriteBatch::new();
+        let mut raft_wb = LogBatch::default();
         let mut applying_regions = vec![];
         kv_engine.scan_cf(
             CF_RAFT,
@@ -289,7 +293,7 @@ impl<T, C> Store<T, C> {
                     peer_storage::recover_from_applying_state(
                         &self.kv_engine,
                         &self.raft_engine,
-                        &raft_wb,
+                        &mut raft_wb,
                         region_id,
                     )?;
                     applying_count += 1;
@@ -311,8 +315,7 @@ impl<T, C> Store<T, C> {
             self.kv_engine.sync_wal().unwrap();
         }
         if !raft_wb.is_empty() {
-            self.raft_engine.write(raft_wb).unwrap();
-            self.raft_engine.sync_wal().unwrap();
+            self.raft_engine.write(raft_wb, true).unwrap();
         }
 
         // schedule applying snapshot after raft writebatch were written.
@@ -327,6 +330,12 @@ impl<T, C> Store<T, C> {
             self.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
             self.region_peers.insert(region.get_id(), peer);
+        }
+
+        // make raft engine's first_index consistent with kv engine.
+        for (&region_id, peer) in &self.region_peers {
+            let first_idx = peer.get_store().first_index();
+            self.raft_engine.compact_to(region_id, first_idx);
         }
 
         info!(
@@ -347,24 +356,10 @@ impl<T, C> Store<T, C> {
     fn clear_stale_meta(
         &mut self,
         kv_wb: &mut WriteBatch,
-        raft_wb: &mut WriteBatch,
+        raft_wb: &mut LogBatch,
         region: &metapb::Region,
     ) {
-        let raft_key = keys::raft_state_key(region.get_id());
-        let raft_state = match self.raft_engine.get_msg(&raft_key).unwrap() {
-            // it has been cleaned up.
-            None => return,
-            Some(value) => value,
-        };
-
-        peer_storage::clear_meta(
-            &self.kv_engine,
-            &self.raft_engine,
-            kv_wb,
-            raft_wb,
-            region.get_id(),
-            &raft_state,
-        ).unwrap();
+        peer_storage::clear_meta(&self.kv_engine, kv_wb, raft_wb, region.get_id()).unwrap();
         peer_storage::write_peer_state(&self.kv_engine, kv_wb, region, PeerState::Tombstone)
             .unwrap();
     }
@@ -411,7 +406,7 @@ impl<T, C> Store<T, C> {
         self.kv_engine.clone()
     }
 
-    pub fn raft_engine(&self) -> Arc<DB> {
+    pub fn raft_engine(&self) -> Arc<RaftEngine> {
         self.raft_engine.clone()
     }
 
@@ -493,6 +488,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
+        self.register_raft_gc_expried_files_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
         self.register_compact_check_tick(event_loop);
         self.register_pd_store_heartbeat_tick(event_loop);
@@ -517,7 +513,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
         box_try!(self.region_worker.start(runner));
 
-        let raftlog_gc_runner = RaftlogGcRunner::new(None);
+        let (tx, rx) = mpsc::channel();
+        let raftlog_gc_runner = RaftlogGcRunner::new(Some(tx));
+        self.raftlog_gc_receiver = Some(rx);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
         let compact_runner = CompactRunner::new(self.kv_engine.clone());
@@ -644,7 +642,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         timer.observe_duration();
 
         self.raft_metrics.flush();
-        self.entry_cache_metries.borrow_mut().flush();
 
         self.register_raft_base_tick(event_loop);
     }
@@ -663,6 +660,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
                     self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()));
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(e) => panic!("unexpected error {:?}", e),
+            }
+        }
+    }
+
+    fn poll_raftlog_gc(&mut self) {
+        loop {
+            match self.raftlog_gc_receiver.as_ref().unwrap().try_recv() {
+                Ok(res) => {
+                    self.regions_need_compact = res.regions_need_compact;
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -1104,10 +1113,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if !raft_wb.is_empty() {
             // RaftLocalState, Raft Log Entry
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log || sync_log);
             self.raft_engine
-                .write_opt(raft_wb, &write_opts)
+                .write(raft_wb, self.cfg.sync_log || sync_log)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
@@ -1310,25 +1317,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_compact_log(
-        &mut self,
-        region_id: u64,
-        first_index: u64,
-        state: RaftTruncatedState,
-    ) {
+    fn on_ready_compact_log(&mut self, region_id: u64, state: RaftTruncatedState) {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let total_cnt = peer.last_applying_idx - first_index;
-        // the size of current CompactLog command can be ignored.
-        let remain_cnt = peer.last_applying_idx - state.get_index() - 1;
-        peer.raft_log_size_hint = peer.raft_log_size_hint * remain_cnt / total_cnt;
-        let task = RaftlogGcTask {
-            raft_engine: peer.get_store().get_raft_engine().clone(),
-            region_id: peer.get_store().get_region_id(),
-            start_idx: peer.last_compacted_idx,
-            end_idx: state.get_index() + 1,
-        };
-        peer.last_compacted_idx = task.end_idx;
-        peer.mut_store().compact_to(task.end_idx);
+        let task = RaftlogGcTask::region_task(
+            peer.get_store().get_raft_engine().clone(),
+            peer.get_store().get_region_id(),
+            state.get_index() + 1,
+        );
         if let Err(e) = self.raftlog_gc_worker.schedule(task) {
             error!(
                 "[region {}] failed to schedule compact task: {}",
@@ -1503,9 +1498,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for result in exec_results {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(region_id, cp),
-                ExecResult::CompactLog { first_index, state } => {
-                    self.on_ready_compact_log(region_id, first_index, state)
-                }
+                ExecResult::CompactLog { state, .. } => self.on_ready_compact_log(region_id, state),
                 ExecResult::SplitRegion {
                     left,
                     right,
@@ -1676,6 +1669,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    fn register_raft_gc_expried_files_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::RaftLogExpiredFilesGc,
+            self.cfg.raft_log_gc_expired_files_tick_interval.as_millis(),
+        ) {
+            error!(
+                "{} register raft gc expired file tick err: {:?}",
+                self.tag,
+                e
+            );
+        };
+    }
+
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let mut total_gc_logs = 0;
@@ -1718,16 +1725,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
             let mut compact_idx;
-            if applied_idx > first_idx &&
-                applied_idx - first_idx >= self.cfg.raft_log_gc_count_limit
-            {
-                compact_idx = applied_idx;
-            } else if peer.raft_log_size_hint >= self.cfg.raft_log_gc_size_limit.0 {
-                compact_idx = applied_idx;
-            } else if replicated_idx < first_idx ||
+
+            if replicated_idx < first_idx ||
                 replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold
             {
                 continue;
+            }
+            if self.regions_need_compact.get(&region_id).is_some() {
+                compact_idx = applied_idx;
             } else {
                 compact_idx = replicated_idx;
             }
@@ -1758,6 +1763,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .inc_by(total_gc_logs as f64)
             .unwrap();
         self.register_raft_gc_log_tick(event_loop);
+    }
+
+    fn on_raft_gc_expired_files_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let task = RaftlogGcTask::engine_task(self.raft_engine.clone());
+        if let Err(e) = self.raftlog_gc_worker.schedule(task) {
+            error!("failed to schedule gc expired files task: {}", e);
+        }
+        self.register_raft_gc_expried_files_tick(event_loop);
     }
 
     fn register_split_region_check_tick(&self, event_loop: &mut EventLoop<Self>) {
@@ -2481,6 +2494,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         match timeout {
             Tick::Raft => self.on_raft_base_tick(event_loop),
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
+            Tick::RaftLogExpiredFilesGc => self.on_raft_gc_expired_files_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::CompactCheck => self.on_compact_check_tick(event_loop),
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
@@ -2505,6 +2519,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         self.poll_apply();
+        self.poll_raftlog_gc();
 
         self.pending_snapshot_regions.clear();
     }

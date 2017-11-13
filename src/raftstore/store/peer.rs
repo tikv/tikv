@@ -42,6 +42,8 @@ use util::Either;
 use util::time::monotonic_raw_now;
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
+use raftengine::{LogBatch, RaftEngine};
+
 use pd::{PdTask, INVALID_ID};
 
 use super::store::{DestroyPeerJob, Store, StoreStat};
@@ -55,7 +57,6 @@ use super::metrics::*;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
-const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
 struct ReadIndexRequest {
     id: u64,
@@ -143,7 +144,7 @@ impl ProposalQueue {
 
 pub struct ReadyContext<'a, T: 'a> {
     pub kv_wb: WriteBatch,
-    pub raft_wb: WriteBatch,
+    pub raft_wb: LogBatch,
     pub sync_log: bool,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
@@ -154,7 +155,7 @@ impl<'a, T> ReadyContext<'a, T> {
     pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
             kv_wb: WriteBatch::new(),
-            raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
+            raft_wb: LogBatch::default(),
             sync_log: false,
             metrics: metrics,
             trans: t,
@@ -197,7 +198,7 @@ pub struct PeerStat {
 
 pub struct Peer {
     kv_engine: Arc<DB>,
-    raft_engine: Arc<DB>,
+    raft_engine: Arc<RaftEngine>,
     cfg: Rc<Config>,
     peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
@@ -222,9 +223,6 @@ pub struct Peer {
 
     // Index of last scheduled committed raft log.
     pub last_applying_idx: u64,
-    pub last_compacted_idx: u64,
-    // Approximate size of logs that is applied but not compacted yet.
-    pub raft_log_size_hint: u64,
     // When entry exceed max size, reject to propose the entry.
     pub raft_entry_max_size: u64,
 
@@ -312,7 +310,6 @@ impl Peer {
             region,
             sched,
             tag.clone(),
-            store.entry_cache_metries.clone(),
         )?;
 
         let applied_index = ps.applied_index();
@@ -354,13 +351,11 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_applying_idx: applied_index,
-            last_compacted_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
                 hash: vec![],
             },
-            raft_log_size_hint: 0,
             raft_entry_max_size: cfg.raft_entry_max_size.0,
             cfg: cfg,
             leader_lease_expired_time: None,
@@ -421,14 +416,14 @@ impl Peer {
 
         // Set Tombstone state explicitly
         let kv_wb = WriteBatch::new();
-        let raft_wb = WriteBatch::new();
-        self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
+        let mut raft_wb = LogBatch::default();
+        self.mut_store().clear_meta(&kv_wb, &mut raft_wb)?;
         write_peer_state(&self.kv_engine, &kv_wb, &region, PeerState::Tombstone)?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(self.cfg.sync_log);
         self.kv_engine.write_opt(kv_wb, &write_opts)?;
-        self.raft_engine.write_opt(raft_wb, &write_opts)?;
+        self.raft_engine.write(raft_wb, self.cfg.sync_log)?;
 
         if self.get_store().is_initialized() {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -461,7 +456,7 @@ impl Peer {
         self.kv_engine.clone()
     }
 
-    pub fn raft_engine(&self) -> Arc<DB> {
+    pub fn raft_engine(&self) -> Arc<RaftEngine> {
         self.raft_engine.clone()
     }
 
@@ -789,11 +784,6 @@ impl Peer {
         ready: &mut Ready,
         invoke_ctx: InvokeContext,
     ) -> Option<ApplySnapResult> {
-        if invoke_ctx.has_snapshot() {
-            // When apply snapshot, there is no log applied and not compacted yet.
-            self.raft_log_size_hint = 0;
-        }
-
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
 
         if !self.is_leader() {
@@ -834,8 +824,6 @@ impl Peer {
                 self.proposals.clear();
             }
             for entry in committed_entries.iter().rev() {
-                // raft meta is very small, can be ignored.
-                self.raft_log_size_hint += entry.get_data().len() as u64;
                 if to_be_updated {
                     to_be_updated = !self.maybe_update_lease(entry);
                 }

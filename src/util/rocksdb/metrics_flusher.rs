@@ -41,7 +41,6 @@ impl MetricsFlusher {
 
     pub fn start(&mut self) -> Result<(), io::Error> {
         let db = self.engines.kv_engine.clone();
-        let raft_db = self.engines.raft_engine.clone();
         let (tx, rx) = mpsc::channel();
         let interval = self.interval;
         self.sender = Some(tx);
@@ -52,10 +51,8 @@ impl MetricsFlusher {
                 let reset_interval = Duration::from_millis(DEFAULT_FLUSHER_RESET_INTERVAL);
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     flush_metrics(&db, "kv");
-                    flush_metrics(&raft_db, "raft");
                     if last_reset.elapsed() >= reset_interval {
                         db.reset_statistics();
-                        raft_db.reset_statistics();
                         last_reset = Instant::now();
                     }
                 }
@@ -102,6 +99,7 @@ mod tests {
     use util::rocksdb::{self, CFOptions};
     use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use std::thread::sleep;
+    use raftengine::{Config as RaftEngineCfg, RaftEngine};
 
     #[test]
     fn test_metrics_flusher() {
@@ -118,11 +116,10 @@ mod tests {
             rocksdb::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap(),
         );
 
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
-        let raft_engine = Arc::new(
-            rocksdb::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
-                .unwrap(),
-        );
+        let mut cfg = RaftEngineCfg::new();
+        cfg.dir = raft_path.to_str().unwrap().to_string();
+        let raft_engine = Arc::new(RaftEngine::new(cfg));
+
         let engines = Engines::new(engine, raft_engine);
         let mut metrics_flusher = MetricsFlusher::new(engines, Duration::from_millis(100));
 

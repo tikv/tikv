@@ -25,7 +25,8 @@ use futures::Future;
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::*;
 use tikv::config::TiKvConfig;
-use tikv::storage::{ALL_CFS, CF_DEFAULT};
+use tikv::storage::ALL_CFS;
+use tikv::raftengine::{Config as RaftEngineCfg, RaftEngine};
 use super::util::*;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -126,9 +127,9 @@ impl<T: Simulator> Cluster<T> {
                 rocksdb::new_engine(item.path().to_str().unwrap(), &kv_cfs).unwrap(),
             );
             let raft_path = item.path().join(Path::new("raft"));
-            let raft_engine = Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
-            );
+            let mut cfg = RaftEngineCfg::new();
+            cfg.dir = raft_path.to_str().unwrap().to_string();
+            let raft_engine = Arc::new(RaftEngine::new(cfg));
             self.dbs.push(Engines::new(engine, raft_engine));
         }
     }
@@ -182,7 +183,7 @@ impl<T: Simulator> Cluster<T> {
         self.engines[&node_id].kv_engine.clone()
     }
 
-    pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
+    pub fn get_raft_engine(&self, node_id: u64) -> Arc<RaftEngine> {
         self.engines[&node_id].raft_engine.clone()
     }
 
@@ -655,7 +656,9 @@ impl<T: Simulator> Cluster<T> {
     pub fn must_flush(&mut self, sync: bool) {
         for engines in &self.dbs {
             engines.kv_engine.flush(sync).unwrap();
-            engines.raft_engine.flush(sync).unwrap();
+            if sync {
+                engines.raft_engine.sync_data().unwrap();
+            }
         }
     }
 

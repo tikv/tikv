@@ -6,11 +6,14 @@ use util::codec;
 use protobuf;
 
 
+pub mod config;
 pub mod util;
 pub mod log_batch;
 pub mod pipe_log;
-pub mod mem_entries;
+pub mod memtable;
 pub mod engine;
+pub mod metrics;
+
 
 quick_error! {
     #[derive(Debug)]
@@ -53,3 +56,7 @@ quick_error! {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+pub use self::engine::{RaftEngine, RecoveryMode};
+pub use self::log_batch::LogBatch;
+pub use self::config::Config;

@@ -24,6 +24,7 @@ use raft;
 use kvproto::{errorpb, metapb};
 
 use super::coprocessor::Error as CopError;
+use raftengine;
 use util::{escape, transport};
 
 const RAFTSTORE_IS_BUSY: &'static str = "raftstore is busy";
@@ -132,6 +133,12 @@ quick_error!{
             cause(err)
             description(err.description())
             display("Transport {}", err)
+        }
+        RaftEngingErr(err: raftengine::Error) {
+            from()
+            cause(err)
+            description(err.description())
+            display("RaftEngine {}", err)
         }
     }
 }

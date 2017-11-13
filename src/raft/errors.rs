@@ -14,6 +14,7 @@
 
 use std::{cmp, io, result};
 use std::error;
+use raftengine;
 
 quick_error! {
     #[derive(Debug)]
@@ -43,7 +44,12 @@ quick_error! {
             description(err.description())
             display("unknown error {:?}", err)
         }
-
+        RaftEngingErr(err: raftengine::Error) {
+            from()
+            cause(err)
+            description(err.description())
+            display("RaftEngine {}", err)
+        }
     }
 }
 

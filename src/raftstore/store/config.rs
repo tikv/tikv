@@ -40,13 +40,10 @@ pub struct Config {
 
     // Interval to gc unnecessary raft log (ms).
     pub raft_log_gc_tick_interval: ReadableDuration,
+    // Interval to gc expired raft log files (ms).
+    pub raft_log_gc_expired_files_tick_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
-    // When entry count exceed this value, gc will be forced trigger.
-    pub raft_log_gc_count_limit: u64,
-    // When the approximate size of raft log entries exceed this value,
-    // gc will be forced trigger.
-    pub raft_log_gc_size_limit: ReadableSize,
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
@@ -116,10 +113,8 @@ impl Default for Config {
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
-            raft_log_gc_threshold: 50,
-            // Assume the average size of entries is 1k.
-            raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
-            raft_log_gc_size_limit: split_size * 3 / 4,
+            raft_log_gc_expired_files_tick_interval: ReadableDuration::secs(60),
+            raft_log_gc_threshold: 20,
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
             // Disable manual compaction by default.
@@ -185,10 +180,6 @@ impl Config {
             ));
         }
 
-        if self.raft_log_gc_size_limit.0 == 0 {
-            return Err(box_err!("raft log gc size limit should large than 0."));
-        }
-
         let election_timeout =
             self.raft_base_tick_interval.as_millis() * self.raft_election_timeout_ticks as u64;
         let lease = self.raft_store_max_leader_lease.as_millis() as u64;
@@ -228,10 +219,6 @@ mod tests {
 
         cfg = Config::new();
         cfg.raft_log_gc_threshold = 0;
-        assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
-        cfg.raft_log_gc_size_limit = ReadableSize(0);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();

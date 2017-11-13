@@ -15,8 +15,6 @@ const FILE_NAME_LEN: usize = FILE_NUM_LEN + LOG_SUFFIX_LEN;
 pub const FILE_MAGIC_HEADER: &'static [u8] = b"RAFT-LOG-FILE-HEADER";
 pub const VERSION: &'static [u8] = b"v1.0.0";
 const INIT_FILE_NUM: u64 = 1;
-const MB: usize = 1024 * 1024;
-const LOG_MAX_SIZE: usize = 128 * MB;
 
 pub struct PipeLog {
     first_file_num: u64,
@@ -52,6 +50,12 @@ impl PipeLog {
 
     pub fn open(dir: &str, bytes_per_sync: usize, rotate_size: usize) -> Result<PipeLog> {
         let path = Path::new(dir);
+        if !path.exists() {
+            info!("Create raft log directory: {}", dir);
+            fs::create_dir(dir)
+                .unwrap_or_else(|e| panic!("Create raft log directory failed, err: {:?}", e));
+        }
+
         if !path.is_dir() {
             return Err(box_err!("Not directory."));
         }
@@ -96,6 +100,8 @@ impl PipeLog {
             return Err(box_err!("Corruption occurs"));
         }
 
+        pipe_log.first_file_num = min_file_num;
+        pipe_log.active_file_num = max_file_num;
         pipe_log.open_active_log()?;
         Ok(pipe_log)
     }
@@ -113,7 +119,7 @@ impl PipeLog {
         self.active_log_size += content.len();
         if sync ||
             self.bytes_per_sync > 0 &&
-                self.active_log_size - self.active_log_size >= self.bytes_per_sync
+                self.active_log_size - self.last_sync_size >= self.bytes_per_sync
         {
             self.active_log.as_mut().unwrap().sync_data()?;
             self.last_sync_size = self.active_log_size;
@@ -127,8 +133,8 @@ impl PipeLog {
         Ok(file_num)
     }
 
-    pub fn append_log_batch(&mut self, batch: &LogBatch, sync: bool) -> Result<u64> {
-        match batch.to_vec() {
+    pub fn append_log_batch(&mut self, batch: &mut LogBatch, sync: bool) -> Result<u64> {
+        match batch.encode_to_bytes() {
             Some(content) => self.append(&content, sync),
             None => Ok(0),
         }
@@ -174,6 +180,11 @@ impl PipeLog {
         self.active_log_size = offset as usize;
         self.last_sync_size = self.active_log_size;
 
+        Ok(())
+    }
+
+    pub fn sync_data(&mut self) -> Result<()> {
+        self.active_log.as_mut().unwrap().sync_data()?;
         Ok(())
     }
 
@@ -264,6 +275,21 @@ impl PipeLog {
     pub fn first_file_num(&self) -> u64 {
         self.first_file_num
     }
+
+    pub fn total_size(&self) -> usize {
+        (self.active_file_num - self.first_file_num) as usize * self.rotate_size +
+            self.active_log_size
+    }
+
+    pub fn files_should_evict(&self, size_limit: usize) -> u64 {
+        let cur_size = self.total_size();
+        if cur_size > size_limit {
+            let count = (cur_size - size_limit) / self.rotate_size;
+            self.first_file_num + count as u64
+        } else {
+            self.first_file_num
+        }
+    }
 }
 
 fn generate_file_name(file_num: u64) -> String {
@@ -286,12 +312,12 @@ mod tests {
 
     #[test]
     fn test_file_name() {
-        let file_name = "0000000123.log";
-        assert_eq!(extract_file_num(&file_name).unwrap(), 123);
+        let file_name: &str = "0000000123.log";
+        assert_eq!(extract_file_num(file_name).unwrap(), 123);
         assert_eq!(generate_file_name(123), file_name);
 
-        let invalid_file_name = "0000abc123.log";
-        assert!(extract_file_num(&invalid_file_name).is_err());
+        let invalid_file_name: &str = "0000abc123.log";
+        assert!(extract_file_num(invalid_file_name).is_err());
     }
 
     #[test]
@@ -327,20 +353,22 @@ mod tests {
         let s_content = b"short content";
         assert_eq!(pipe_log.append(s_content.as_ref(), false).unwrap(), 3);
         assert_eq!(
-        pipe_log.active_log_size(),
-        FILE_MAGIC_HEADER.len() + VERSION.len() + s_content.len()
+            pipe_log.active_log_size(),
+            FILE_MAGIC_HEADER.len() + VERSION.len() + s_content.len()
         );
         pipe_log
-        .truncate_active_log((FILE_MAGIC_HEADER.len() + VERSION.len()) as u64)
-        .unwrap();
+            .truncate_active_log((FILE_MAGIC_HEADER.len() + VERSION.len()) as u64)
+            .unwrap();
         assert_eq!(
-        pipe_log.active_log_size(),
-        FILE_MAGIC_HEADER.len() + VERSION.len()
+            pipe_log.active_log_size(),
+            FILE_MAGIC_HEADER.len() + VERSION.len()
         );
         assert!(
-        pipe_log
-            .truncate_active_log((FILE_MAGIC_HEADER.len() + VERSION.len() + s_content.len()) as u64)
-            .is_err()
+            pipe_log
+                .truncate_active_log(
+                    (FILE_MAGIC_HEADER.len() + VERSION.len() + s_content.len()) as u64
+                )
+                .is_err()
         );
 
         // read next file
@@ -352,5 +380,13 @@ mod tests {
         assert!(pipe_log.read_next_file().unwrap().is_none());
 
         pipe_log.close().unwrap();
+
+        // reopen
+        let pipe_log = PipeLog::open(path, bytes_per_sync, rotate_size).unwrap();
+        assert_eq!(pipe_log.active_file_num(), 3);
+        assert_eq!(
+            pipe_log.active_log_size(),
+            FILE_MAGIC_HEADER.len() + VERSION.len()
+        );
     }
 }

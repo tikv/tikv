@@ -105,29 +105,23 @@ impl Debugger {
         Ok(regions)
     }
 
-    fn get_db_from_type(&self, db: DBType) -> Result<&DB> {
-        match db {
-            DBType::KV => Ok(&self.engines.kv_engine),
-            DBType::RAFT => Ok(&self.engines.raft_engine),
-            _ => Err(box_err!("invalid DBType type")),
-        }
-    }
-
     pub fn get(&self, db: DBType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
         validate_db_and_cf(db, cf)?;
-        let db = self.get_db_from_type(db)?;
-        match db.get_value_cf(cf, key) {
-            Ok(Some(v)) => Ok(v.to_vec()),
-            Ok(None) => Err(Error::NotFound(
-                format!("value for key {:?} in db {:?}", key, db),
-            )),
-            Err(e) => Err(box_err!(e)),
+        match db {
+            DBType::KV => match self.engines.kv_engine.get_value_cf(cf, key) {
+                Ok(Some(v)) => Ok(v.to_vec()),
+                Ok(None) => Err(Error::NotFound(
+                    format!("value for key {:?} in db {:?}", key, db),
+                )),
+                Err(e) => Err(box_err!(e)),
+            },
+            DBType::RAFT => Err(box_err!("raft-engine can't get")),
+            DBType::INVALID => Err(box_err!("Invalid db type")),
         }
     }
 
     pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry> {
-        let key = keys::raft_log_key(region_id, log_index);
-        match self.engines.raft_engine.get_msg(&key) {
+        match self.engines.raft_engine.get_entry(region_id, log_index) {
             Ok(Some(entry)) => Ok(entry),
             Ok(None) => Err(Error::NotFound(format!(
                 "raft log for region {} at index {}",
@@ -143,7 +137,7 @@ impl Debugger {
         let raft_state = box_try!(
             self.engines
                 .raft_engine
-                .get_msg::<RaftLocalState>(&raft_state_key)
+                .get_msg::<RaftLocalState>(region_id, &raft_state_key)
         );
 
         let apply_state_key = keys::apply_state_key(region_id);
@@ -214,7 +208,10 @@ impl Debugger {
     /// Compact the cf[start..end) in the db.
     pub fn compact(&self, db: DBType, cf: &str, start: &[u8], end: &[u8]) -> Result<()> {
         validate_db_and_cf(db, cf)?;
-        let db = self.get_db_from_type(db)?;
+        let db = match db {
+            DBType::KV => &self.engines.kv_engine,
+            _ => return Err(box_err!("Only support compact kv engine.")),
+        };
         let handle = box_try!(get_cf_handle(db, cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
@@ -440,8 +437,7 @@ pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
         (DBType::KV, CF_DEFAULT) |
         (DBType::KV, CF_WRITE) |
         (DBType::KV, CF_LOCK) |
-        (DBType::KV, CF_RAFT) |
-        (DBType::RAFT, CF_DEFAULT) => Ok(()),
+        (DBType::KV, CF_RAFT) => Ok(()),
         _ => Err(Error::InvalidArgument(
             format!("invalid cf {:?} for db {:?}", cf, db),
         )),
@@ -461,6 +457,7 @@ mod tests {
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use storage::mvcc::{Lock, LockType};
     use util::rocksdb::{self as rocksdb_util, CFOptions};
+    use raftengine::{Config as RaftEngineCfg, LogBatch, RaftEngine};
     use super::*;
 
     #[test]
@@ -470,7 +467,6 @@ mod tests {
             (DBType::KV, CF_WRITE),
             (DBType::KV, CF_LOCK),
             (DBType::KV, CF_RAFT),
-            (DBType::RAFT, CF_DEFAULT),
         ];
         for (db, cf) in valid_cases {
             validate_db_and_cf(db, cf).unwrap();
@@ -490,10 +486,11 @@ mod tests {
 
     fn new_debugger() -> Debugger {
         let tmp = TempDir::new("test_debug").unwrap();
-        let path = tmp.path().to_str().unwrap();
+        let path = tmp.path();
+        let raft_path = path.join("raft");
         let engine = Arc::new(
             rocksdb_util::new_engine_opt(
-                path,
+                path.to_str().unwrap(),
                 DBOptions::new(),
                 vec![
                     CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
@@ -503,8 +500,11 @@ mod tests {
                 ],
             ).unwrap(),
         );
+        let mut cfg = RaftEngineCfg::new();
+        cfg.dir = raft_path.to_str().unwrap().to_string();
+        let raft_engine = Arc::new(RaftEngine::new(cfg));
 
-        let engines = Engines::new(engine.clone(), engine);
+        let engines = Engines::new(engine, raft_engine);
         Debugger::new(engines)
     }
 
@@ -528,17 +528,21 @@ mod tests {
     #[test]
     fn test_raft_log() {
         let debugger = new_debugger();
-        let engine = &debugger.engines.raft_engine;
+        let raft_engine = &debugger.engines.raft_engine;
         let (region_id, log_index) = (1, 1);
-        let key = keys::raft_log_key(region_id, log_index);
         let mut entry = Entry::new();
         entry.set_term(1);
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
         entry.set_data(vec![42]);
-        engine.put_msg(key.as_slice(), &entry).unwrap();
+        let mut log_batch = LogBatch::default();
+        log_batch.add_entries(region_id, vec![entry.clone()]);
+        raft_engine.write(log_batch, false).unwrap();
         assert_eq!(
-            engine.get_msg::<Entry>(key.as_slice()).unwrap().unwrap(),
+            raft_engine
+                .get_entry(region_id, log_index)
+                .unwrap()
+                .unwrap(),
             entry
         );
 
@@ -560,10 +564,12 @@ mod tests {
         let raft_state_key = keys::raft_state_key(region_id);
         let mut raft_state = RaftLocalState::new();
         raft_state.set_last_index(42);
-        raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+        raft_engine
+            .put_msg(region_id, &raft_state_key, &raft_state)
+            .unwrap();
         assert_eq!(
             raft_engine
-                .get_msg::<RaftLocalState>(&raft_state_key)
+                .get_msg::<RaftLocalState>(region_id, &raft_state_key)
                 .unwrap()
                 .unwrap(),
             raft_state

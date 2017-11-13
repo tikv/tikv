@@ -295,8 +295,6 @@ impl<'a> RegionIterator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
     use std::sync::Arc;
     use std::path::Path;
 
@@ -307,39 +305,42 @@ mod tests {
     use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
-    use raftstore::store::{CacheQueryStats, PeerStorage};
-    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
+    use raftstore::store::PeerStorage;
+    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS};
     use util::{escape, rocksdb, worker};
+    use raftengine::{Config as RaftEngineCfg, RaftEngine};
 
     use super::*;
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_temp_engine(path: &TempDir) -> (Arc<DB>, Arc<DB>) {
+    fn new_temp_engine(path: &TempDir) -> (Arc<DB>, Arc<RaftEngine>) {
+        let db_path = path.path().join(Path::new("db"));
         let raft_path = path.path().join(Path::new("raft"));
+        let mut cfg = RaftEngineCfg::new();
+        cfg.dir = raft_path.to_str().unwrap().to_string();
         (
             Arc::new(
-                rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
+                rocksdb::new_engine(db_path.to_str().unwrap(), ALL_CFS).unwrap(),
             ),
-            Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
-            ),
+            Arc::new(RaftEngine::new(cfg)),
         )
     }
 
-    fn new_peer_storage(engine: Arc<DB>, raft_engine: Arc<DB>, r: &Region) -> PeerStorage {
-        let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
+    fn new_peer_storage(engine: Arc<DB>, raft_engine: Arc<RaftEngine>, r: &Region) -> PeerStorage {
         PeerStorage::new(
             engine,
             raft_engine,
             r,
             worker::dummy_scheduler(),
             "".to_owned(),
-            metrics,
         ).unwrap()
     }
 
-    fn load_default_dataset(engine: Arc<DB>, raft_engine: Arc<DB>) -> (PeerStorage, DataSet) {
+    fn load_default_dataset(
+        engine: Arc<DB>,
+        raft_engine: Arc<RaftEngine>,
+    ) -> (PeerStorage, DataSet) {
         let mut r = Region::new();
         r.mut_peers().push(Peer::new());
         r.set_id(10);

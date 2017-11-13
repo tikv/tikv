@@ -20,6 +20,7 @@ use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
 use tikv::server::Config as ServerConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
+use tikv::raftengine::Config as RaftEngineCfg;
 use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
@@ -83,9 +84,8 @@ fn test_serde_custom_tikv_config() {
         raft_max_inflight_msgs: 123,
         raft_entry_max_size: ReadableSize::mb(12),
         raft_log_gc_tick_interval: ReadableDuration::secs(12),
+        raft_log_gc_expired_files_tick_interval: ReadableDuration::secs(33),
         raft_log_gc_threshold: 12,
-        raft_log_gc_count_limit: 12,
-        raft_log_gc_size_limit: ReadableSize::kb(1),
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
@@ -256,57 +256,14 @@ fn test_serde_custom_tikv_config() {
             compaction_pri: CompactionPriority::MinOverlappingRatio,
         },
     };
-    value.raftdb = RaftDbConfig {
-        wal_recovery_mode: DBRecoveryMode::SkipAnyCorruptedRecords,
-        wal_dir: "/var".to_owned(),
-        wal_ttl_seconds: 1,
-        wal_size_limit: ReadableSize::kb(12),
-        max_total_wal_size: ReadableSize::gb(1),
-        max_manifest_file_size: ReadableSize::mb(12),
-        create_if_missing: false,
-        max_open_files: 12_345,
-        enable_statistics: false,
-        stats_dump_period: ReadableDuration::minutes(12),
-        compaction_readahead_size: ReadableSize::kb(1),
-        info_log_max_size: ReadableSize::kb(1),
-        info_log_roll_time: ReadableDuration::secs(1),
-        info_log_dir: "/var".to_owned(),
-        max_sub_compactions: 12,
-        writable_file_max_buffer_size: ReadableSize::mb(12),
-        use_direct_io_for_flush_and_compaction: true,
-        enable_pipelined_write: false,
-        allow_concurrent_memtable_write: true,
-        wal_bytes_per_sync: ReadableSize::mb(1),
-        defaultcf: RaftDefaultCfConfig {
-            block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
-            cache_index_and_filter_blocks: false,
-            pin_l0_filter_and_index_blocks: false,
-            use_bloom_filter: false,
-            whole_key_filtering: true,
-            bloom_filter_bits_per_key: 123,
-            block_based_bloom_filter: true,
-            read_amp_bytes_per_bit: 0,
-            compression_per_level: [
-                DBCompressionType::No,
-                DBCompressionType::No,
-                DBCompressionType::Zstd,
-                DBCompressionType::Zstd,
-                DBCompressionType::No,
-                DBCompressionType::Zstd,
-                DBCompressionType::Lz4,
-            ],
-            write_buffer_size: ReadableSize::mb(1),
-            max_write_buffer_number: 12,
-            min_write_buffer_number_to_merge: 12,
-            max_bytes_for_level_base: ReadableSize::kb(12),
-            target_file_size_base: ReadableSize::kb(123),
-            level0_file_num_compaction_trigger: 123,
-            level0_slowdown_writes_trigger: 123,
-            level0_stop_writes_trigger: 123,
-            max_compaction_bytes: ReadableSize::gb(1),
-            compaction_pri: CompactionPriority::MinOverlappingRatio,
-        },
+    value.raftdb = RaftEngineCfg {
+        dir: "/var".to_owned(),
+        recovery_mode: 1,
+        bytes_per_sync: ReadableSize::kb(8),
+        target_file_size: ReadableSize::mb(10),
+        total_size_limit: ReadableSize::gb(4),
+        rewrite_size_threshold: ReadableSize::kb(18),
+        compact_threshold: 0,
     };
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
