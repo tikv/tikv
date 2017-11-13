@@ -1397,7 +1397,7 @@ mod test {
     use raft::{Error as RaftError, StorageError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, Engines};
+    use raftstore::store::{bootstrap, Engines, SnapshotIOLimiter};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
     use raftstore::store::local_metrics::RaftMetrics;

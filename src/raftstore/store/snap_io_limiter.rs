@@ -22,7 +22,7 @@ pub struct SnapshotIOLimiter {
 }
 
 impl SnapshotIOLimiter {
-    fn new(
+    pub fn new(
         min_bytes_per_time: i64,
         max_bytes_per_time: i64,
         bytes_per_sec: i64,
