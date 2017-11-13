@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use tipb::executor::{ExecType, Executor};
 use tipb::schema::ColumnInfo;
-use tipb::select::{DAGRequest, SelectResponse};
+use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
 
@@ -23,7 +23,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqContext};
+use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext, BATCH_ROW_COUNT};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{AggregationExecutor, Executor as DAGExecutor, IndexScanExecutor,
@@ -62,11 +62,18 @@ impl<'s> DAGContext<'s> {
         self.validate_dag()?;
         let mut exec = self.build_dag(statistics)?;
         let mut chunks = vec![];
+        let mut cur_chunk_cnt = 0;
         loop {
             match exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    let chunk = get_chunk(&mut chunks);
+                    if chunks.is_empty() || cur_chunk_cnt >= BATCH_ROW_COUNT {
+                        let chunk = Chunk::new();
+                        chunks.push(chunk);
+                        cur_chunk_cnt = 0;
+                    }
+                    let chunk = chunks.last_mut().unwrap();
+                    cur_chunk_cnt += 1;
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
