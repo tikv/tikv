@@ -660,10 +660,8 @@ impl TiDbEndPoint {
 
     pub fn handle_analyze(self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let mut ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
-        let res = ctx.handle_request();
-        ctx.collect_statistics_into(&mut t.statistics);
-        res
+        let ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
+        ctx.handle_request(&mut t.statistics)
     }
 }
 

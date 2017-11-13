@@ -16,7 +16,7 @@ use std::mem;
 use rand::{thread_rng, Rng, ThreadRng};
 use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Response};
-use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeReq, AnalyzeType};
+use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::schema::ColumnInfo;
 use tipb::executor::TableScan;
 
@@ -30,7 +30,6 @@ use super::histogram::Histogram;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext {
-    statistics: Statistics,
     req: AnalyzeReq,
     snap: Option<SnapshotStore>,
     ranges: Vec<KeyRange>,
@@ -53,14 +52,32 @@ impl AnalyzeContext {
             req: req,
             snap: Some(snap),
             ranges: ranges,
-            statistics: Statistics::default(),
         }
     }
 
-    pub fn handle_request(&mut self) -> Result<Response> {
+    pub fn handle_request(mut self, stats: &mut Statistics) -> Result<Response> {
         let ret = match self.req.get_tp() {
-            AnalyzeType::TypeIndex => self.handle_index(),
-            AnalyzeType::TypeColumn => self.handle_column(),
+            AnalyzeType::TypeIndex => {
+                let req = self.req.take_idx_req();
+                let mut scanner = IndexScanExecutor::new_with_cols_len(
+                    req.get_num_columns() as i64,
+                    mem::replace(&mut self.ranges, Vec::new()),
+                    self.snap.take().unwrap(),
+                );
+                let res = AnalyzeContext::handle_index(req, &mut scanner);
+                scanner.collect_statistics_into(stats);
+                res
+            }
+
+            AnalyzeType::TypeColumn => {
+                let col_req = self.req.take_col_req();
+                let snap = self.snap.take().unwrap();
+                let ranges = mem::replace(&mut self.ranges, Vec::new());
+                let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
+                let res = AnalyzeContext::handle_column(&mut builder);
+                builder.data.collect_statistics_into(stats);
+                res
+            }
         };
         match ret {
             Ok(data) => {
@@ -80,14 +97,8 @@ impl AnalyzeContext {
     // handle_column is used to process `AnalyzeColumnsReq`
     // it would build a histogram for the primary key(if needed) and
     // collectors for each column value.
-    fn handle_column(&mut self) -> Result<Vec<u8>> {
-        let col_req = self.req.take_col_req();
-        let snap = self.snap.take().unwrap();
-        let ranges = mem::replace(&mut self.ranges, Vec::new());
-        let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
-
+    fn handle_column(builder: &mut SampleBuilder) -> Result<Vec<u8>> {
         let (collectors, pk_builder) = builder.collect_samples_and_estimate_ndvs()?;
-        builder.data.collect_statistics_into(&mut self.statistics);
 
         let pk_hist = pk_builder.into_proto();
         let cols: Vec<analyze::SampleCollector> =
@@ -104,28 +115,16 @@ impl AnalyzeContext {
 
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram of index values.
-    fn handle_index(&mut self) -> Result<Vec<u8>> {
-        let req = self.req.take_idx_req();
-        let mut scanner = IndexScanExecutor::new_with_cols_len(
-            req.get_num_columns() as i64,
-            mem::replace(&mut self.ranges, Vec::new()),
-            self.snap.take().unwrap(),
-        );
+    fn handle_index(req: AnalyzeIndexReq, scanner: &mut IndexScanExecutor) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         while let Some(row) = scanner.next()? {
             let bytes = row.data.get_column_values();
             hist.append(bytes);
         }
-        scanner.collect_statistics_into(&mut self.statistics);
-
         let mut res = analyze::AnalyzeIndexResp::new();
         res.set_hist(hist.into_proto());
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
-    }
-
-    pub fn collect_statistics_into(self, stats: &mut Statistics) {
-        stats.add(&self.statistics);
     }
 }
 
