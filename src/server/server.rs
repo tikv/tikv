@@ -246,13 +246,18 @@ mod tests {
 
         let addr = Arc::new(Mutex::new(None));
         let pd_worker = FutureWorker::new("pd worker");
+        let limiter = Arc::new(SnapshotIOLimiter::new(
+            64 * 1024,
+            1024 * 1024,
+            10 * 1024 * 1024,
+        ));
         let mut server = Server::new(
             &cfg,
             1024,
             storage,
             router,
             MockResolver { addr: addr.clone() },
-            SnapManager::new("", None, 64 * 1024, 1024 * 1024, 10 * 1024 * 1024),
+            SnapManager::new("", None, limiter.clone()),
             pd_worker.scheduler(),
             None,
         ).unwrap();

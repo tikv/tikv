@@ -42,7 +42,6 @@ pub mod metrics;
 pub mod threadpool;
 pub mod collections;
 pub mod time;
-pub mod io_limiter;
 
 pub use self::rocksdb::properties;
 

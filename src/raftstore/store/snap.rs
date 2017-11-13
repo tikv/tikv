@@ -35,7 +35,6 @@ use raftstore::store::Msg;
 use raftstore::store::SnapshotIOLimiter;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use util::io_limiter::IOLimiter;
 use util::transport::SendCh;
 use util::HandyRwLock;
 use util::collections::{HashMap, HashMapEntry as Entry};
@@ -1102,9 +1101,7 @@ impl SnapManager {
     pub fn new<T: Into<String>>(
         path: T,
         ch: Option<SendCh<Msg>>,
-        min_bytes_per_time: usize,
-        max_bytes_per_time: usize,
-        bytes_per_sec: usize,
+        limiter: Arc<SnapshotIOLimiter>,
     ) -> SnapManager {
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
@@ -1113,11 +1110,7 @@ impl SnapManager {
                 snap_size: Arc::new(RwLock::new(0)),
             })),
             ch: ch,
-            limiter: Arc::new(SnapshotIOLimiter::new(
-                min_bytes_per_time as i64,
-                max_bytes_per_time as i64,
-                bytes_per_sec as i64,
-            )),
+            limiter: limiter,
         }
     }
 
@@ -1391,7 +1384,6 @@ mod test {
 
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::{rocksdb, HandyRwLock};
-    use util::io_limiter::IOLimiter;
     use raftstore::Result;
     use raftstore::store::keys;
     use raftstore::store::SnapshotIOLimiter;
@@ -2062,7 +2054,12 @@ mod test {
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
-        let mut mgr = SnapManager::new(path, None, 64 * 1024, 1024 * 1024, 10 * 1024 * 1024);
+        let limiter = Arc::new(SnapshotIOLimiter::new(
+            64 * 1024,
+            1024 * 1024,
+            10 * 1024 * 1024,
+        ));
+        let mut mgr = SnapManager::new(path, None, limiter.clone());
         mgr.init().unwrap();
         assert!(temp_path.exists());
 
@@ -2070,7 +2067,7 @@ mod test {
         let temp_path2 = temp_dir.path().join("snap2");
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
-        mgr = SnapManager::new(path2, None, 64 * 1024, 1024 * 1024, 10 * 1024 * 1024);
+        mgr = SnapManager::new(path2, None, limiter.clone());
         assert!(mgr.init().is_err());
     }
 
@@ -2078,7 +2075,12 @@ mod test {
     fn test_snap_mgr_v2() {
         let temp_dir = TempDir::new("test-snap-mgr-v2").unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let mgr = SnapManager::new(path.clone(), None, 64 * 1024, 1024 * 1024, 10 * 1024 * 1024);
+        let limiter = Arc::new(SnapshotIOLimiter::new(
+            64 * 1024,
+            1024 * 1024,
+            10 * 1024 * 1024,
+        ));
+        let mgr = SnapManager::new(path.clone(), None, limiter.clone());
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
@@ -2094,11 +2096,6 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
         s1.build(
             &snapshot,
             &region,
@@ -2140,7 +2137,12 @@ mod test {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        let mgr = SnapManager::new(path, None, 64 * 1024, 1024 * 1024, 10 * 1024 * 1024);
+        let limiter = Arc::new(SnapshotIOLimiter::new(
+            64 * 1024,
+            1024 * 1024,
+            10 * 1024 * 1024,
+        ));
+        let mgr = SnapManager::new(path, None, limiter.clone());
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
 
@@ -2171,13 +2173,12 @@ mod test {
     fn test_snap_deletion_on_registry() {
         let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(
-            src_path.clone(),
-            None,
+        let limiter = Arc::new(SnapshotIOLimiter::new(
             64 * 1024,
             1024 * 1024,
             10 * 1024 * 1024,
-        );
+        ));
+        let src_mgr = SnapManager::new(src_path.clone(), None, limiter.clone());
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
@@ -2193,11 +2194,6 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
         s1.build(
             &snapshot,
             &region,
@@ -2218,13 +2214,7 @@ mod test {
 
         let dst_temp_dir = TempDir::new("test-snap-deletion-on-registry-dst").unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(
-            dst_path.clone(),
-            None,
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        );
+        let dst_mgr = SnapManager::new(dst_path.clone(), None, limiter.clone());
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.

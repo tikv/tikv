@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use util::io_limiter::IOLimiter;
+use std::io::{Result, Write};
 
 use rocksdb::RateLimiter;
 
@@ -21,7 +21,7 @@ pub struct SnapshotIOLimiter {
     max_bytes_per_time: i64,
 }
 
-impl IOLimiter for SnapshotIOLimiter {
+impl SnapshotIOLimiter {
     fn new(
         min_bytes_per_time: i64,
         max_bytes_per_time: i64,
@@ -34,19 +34,19 @@ impl IOLimiter for SnapshotIOLimiter {
         }
     }
 
-    fn set_bytes_per_second(&self, bytes_per_sec: i64) {
+    pub fn set_bytes_per_second(&self, bytes_per_sec: i64) {
         self.inner.set_bytes_per_second(bytes_per_sec);
     }
 
-    fn request(&self, bytes: i64) {
+    pub fn request(&self, bytes: i64) {
         self.inner.request(bytes, 1);
     }
 
-    fn get_min_bytes_per_time(&self) -> i64 {
+    pub fn get_min_bytes_per_time(&self) -> i64 {
         self.min_bytes_per_time
     }
 
-    fn get_max_bytes_per_time(&self) -> i64 {
+    pub fn get_max_bytes_per_time(&self) -> i64 {
         let single = self.inner.get_singleburst_bytes();
         if single > self.max_bytes_per_time {
             self.max_bytes_per_time
@@ -55,22 +55,40 @@ impl IOLimiter for SnapshotIOLimiter {
         }
     }
 
-    fn get_total_bytes_through(&self) -> i64 {
+    pub fn get_total_bytes_through(&self) -> i64 {
         self.inner.get_total_bytes_through(1)
     }
 
-    fn get_bytes_per_second(&self) -> i64 {
+    pub fn get_bytes_per_second(&self) -> i64 {
         self.inner.get_bytes_per_second()
     }
 
-    fn get_total_requests(&self) -> i64 {
+    pub fn get_total_requests(&self) -> i64 {
         self.inner.get_total_requests(1)
+    }
+
+    pub fn write<W: Write>(&self, w: &mut W, data: &[u8]) -> Result<()> {
+        let total = data.len();
+        let single = self.get_max_bytes_per_time() as usize;
+        let mut curr = 0;
+        while curr < total {
+            let end;
+            if curr + single >= total {
+                end = total;
+                self.request((total - curr) as i64);
+            } else {
+                end = curr + single;
+                self.request(single as i64);
+            }
+            w.write_all(&data[curr..end])?;
+            curr = end;
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
-    use util::io_limiter::IOLimiter;
     use super::SnapshotIOLimiter;
 
     #[test]
