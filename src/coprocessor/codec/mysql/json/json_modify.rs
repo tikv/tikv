@@ -138,6 +138,7 @@ mod test {
                 r#"{"a": [3, 4]}"#,
                 true,
             ),
+
             (
                 r#"{"a": [3]}"#,
                 "$[0]",
@@ -146,6 +147,7 @@ mod test {
                 r#"4"#,
                 true,
             ),
+
             (
                 r#"{"a": [3]}"#,
                 "$[1]",
@@ -154,6 +156,7 @@ mod test {
                 r#"[{"a": [3]}, 4]"#,
                 true,
             ),
+
             // Nothing changed because the path is empty and we want to insert.
             (r#"{}"#, "$", r#"1"#, ModifyType::Insert, r#"{}"#, true),
             // Nothing changed because the path without last leg doesn't exist.
@@ -192,6 +195,7 @@ mod test {
                 r#"{"a": [3, 4]}"#,
                 true,
             ),
+
             // Bad path expression.
             (r#"null"#, "$.*", r#"{}"#, ModifyType::Set, r#"null"#, false),
             (

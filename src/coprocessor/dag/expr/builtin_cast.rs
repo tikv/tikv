@@ -199,6 +199,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         self.produce_dec_with_specified_tp(ctx, val).map(Some)
+
     }
 
     pub fn cast_str_as_decimal<'a, 'b: 'a>(
@@ -706,7 +707,7 @@ mod test {
         let mut ctx = StatementContext::default();
         ctx.ignore_truncate = true;
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[allow(inconsistent_digit_grouping)]
+	#[allow(inconsistent_digit_grouping)]
         let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -817,7 +818,7 @@ mod test {
         let mut ctx = StatementContext::default();
         ctx.ignore_truncate = true;
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[allow(inconsistent_digit_grouping)]
+	#[allow(inconsistent_digit_grouping)]
         let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
