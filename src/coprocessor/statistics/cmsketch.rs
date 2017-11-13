@@ -27,12 +27,16 @@ pub struct CMSketch {
 }
 
 impl CMSketch {
-    pub fn new(d: usize, w: usize) -> CMSketch {
-        CMSketch {
-            depth: d,
-            width: w,
-            count: 0,
-            table: vec![vec![0; w]; d],
+    pub fn new(d: usize, w: usize) -> Option<CMSketch> {
+        if d == 0 || w == 0 {
+            None
+        } else {
+            Some(CMSketch {
+                depth: d,
+                width: w,
+                count: 0,
+                table: vec![vec![0; w]; d],
+            })
         }
     }
 
@@ -72,7 +76,7 @@ mod test {
     use util::as_slice;
     use std::collections::HashMap;
     use std::cmp::min;
-    use rand::{thread_rng, Rng};
+    use rand::{Rng, SeedableRng, StdRng};
     use zipf::ZipfDistribution;
     use super::*;
 
@@ -101,9 +105,11 @@ mod test {
     }
 
     fn average_error(depth: usize, width: usize, total: u32, max_value: usize, s: f64) -> u64 {
-        let mut c = CMSketch::new(depth, width);
+        let mut c = CMSketch::new(depth, width).unwrap();
         let mut map: HashMap<u64, u32> = HashMap::new();
-        let mut gen = ZipfDistribution::new(thread_rng(), max_value, s).unwrap();
+        let seed: &[_] = &[1, 2, 3, 4];
+        let mut gen: ZipfDistribution<StdRng> =
+            ZipfDistribution::new(SeedableRng::from_seed(seed), max_value, s).unwrap();
         for _ in 0..total {
             let val = gen.next_u64();
             let bytes = datum::encode_value(as_slice(&Datum::U64(val))).unwrap();
@@ -129,17 +135,8 @@ mod test {
     fn test_cm_sketch() {
         let (depth, width) = (8, 2048);
         let (total, max_value) = (1000000, 10000000);
-        assert_eq!(
-            average_error(depth, width, total, max_value, 1.1) <= 6,
-            true
-        );
-        assert_eq!(
-            average_error(depth, width, total, max_value, 2.0) <= 33,
-            true
-        );
-        assert_eq!(
-            average_error(depth, width, total, max_value, 3.0) <= 90,
-            true
-        );
+        assert_eq!(average_error(depth, width, total, max_value, 1.1), 3);
+        assert_eq!(average_error(depth, width, total, max_value, 2.0), 24);
+        assert_eq!(average_error(depth, width, total, max_value, 3.0), 64);
     }
 }

@@ -88,14 +88,10 @@ impl<'a> AnalyzeContext<'a> {
             self.statistics,
         );
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
-        let mut cms = if req.has_cmsketch_depth() && req.has_cmsketch_width() {
-            Some(CMSketch::new(
-                req.get_cmsketch_depth() as usize,
-                req.get_cmsketch_width() as usize,
-            ))
-        } else {
-            None
-        };
+        let mut cms = CMSketch::new(
+            req.get_cmsketch_depth() as usize,
+            req.get_cmsketch_width() as usize,
+        );
         while let Some(row) = scanner.next()? {
             let bytes = row.data.get_column_values();
             hist.append(bytes);
@@ -233,19 +229,15 @@ impl SampleCollector {
         cm_sketch_depth: usize,
         cm_sketch_width: usize,
     ) -> SampleCollector {
-        let mut collector = SampleCollector {
+        SampleCollector {
             samples: Default::default(),
             null_count: 0,
             count: 0,
             max_sample_size,
             fm_sketch: FMSketch::new(max_fm_sketch_size),
-            cm_sketch: None,
+            cm_sketch: CMSketch::new(cm_sketch_depth, cm_sketch_width),
             rng: thread_rng(),
-        };
-        if cm_sketch_width > 0 && cm_sketch_depth > 0 {
-            collector.cm_sketch = Some(CMSketch::new(cm_sketch_depth, cm_sketch_width))
         }
-        collector
     }
 
     fn into_proto(self) -> analyze::SampleCollector {
