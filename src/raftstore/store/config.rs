@@ -15,7 +15,7 @@ use std::u64;
 
 use time::Duration as TimeDuration;
 
-use raftstore::Result;
+use raftstore::{coprocessor, Result};
 use util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -50,11 +50,6 @@ pub struct Config {
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
-    /// When region [a, b) size meets region_max_size, it will be split
-    /// into two region into [a, c), [c, b). And the size of [a, c) will
-    /// be region_split_size (or a little bit smaller).
-    pub region_max_size: ReadableSize,
-    pub region_split_size: ReadableSize,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_diff: ReadableSize,
@@ -99,11 +94,19 @@ pub struct Config {
 
     /// Max log gap allowed to propose merge.
     pub max_merge_log_gap: u64,
+    // Deprecated! These two configuration has been moved to Coprocessor.
+    // They are preserved for compatibility check.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub region_max_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub region_split_size: ReadableSize,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        let split_size = ReadableSize::mb(96);
+        let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             sync_log: true,
             raftdb_path: String::new(),
@@ -120,8 +123,6 @@ impl Default for Config {
             raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
             raft_log_gc_size_limit: split_size * 3 / 4,
             split_region_check_tick_interval: ReadableDuration::secs(10),
-            region_max_size: split_size / 2 * 3,
-            region_split_size: split_size,
             region_split_check_diff: split_size / 16,
             // Disable manual compaction by default.
             region_compact_check_interval: ReadableDuration::secs(0),
@@ -145,6 +146,10 @@ impl Default for Config {
             right_derive_when_split: true,
             allow_remove_leader: false,
             max_merge_log_gap: 10,
+
+            // They are preserved for compatibility check.
+            region_max_size: ReadableSize(0),
+            region_split_size: ReadableSize(0),
         }
     }
 }
@@ -185,14 +190,6 @@ impl Config {
 
         if self.raft_log_gc_size_limit.0 == 0 {
             return Err(box_err!("raft log gc size limit should large than 0."));
-        }
-
-        if self.region_max_size.0 < self.region_split_size.0 {
-            return Err(box_err!(
-                "region max size {} must >= split size {}",
-                self.region_max_size.0,
-                self.region_split_size.0
-            ));
         }
 
         let election_timeout =
@@ -246,11 +243,6 @@ mod tests {
 
         cfg = Config::new();
         cfg.raft_log_gc_size_limit = ReadableSize(0);
-        assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
-        cfg.region_max_size = ReadableSize(10);
-        cfg.region_split_size = ReadableSize(20);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();

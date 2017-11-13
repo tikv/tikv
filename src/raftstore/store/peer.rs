@@ -39,7 +39,7 @@ use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{FutureWorker, Scheduler};
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
-use util::Either;
+use util::{Either, MustConsumeVec};
 use util::time::monotonic_raw_now;
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
@@ -60,7 +60,7 @@ const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
 struct ReadIndexRequest {
     id: u64,
-    cmds: Vec<(RaftCmdRequest, Callback)>,
+    cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
 }
 
@@ -69,14 +69,6 @@ impl ReadIndexRequest {
         unsafe {
             let id = &self.id as *const u64 as *const u8;
             slice::from_raw_parts(id, 8)
-        }
-    }
-}
-
-impl Drop for ReadIndexRequest {
-    fn drop(&mut self) {
-        if !self.cmds.is_empty() {
-            panic!("callback of index read at {} is leak.", self.id);
         }
     }
 }
@@ -1354,9 +1346,11 @@ impl Peer {
             return false;
         }
 
+        let mut v = MustConsumeVec::with_capacity("callback of index read", 1);
+        v.push((req, cb));
         self.pending_reads.reads.push_back(ReadIndexRequest {
             id: id,
-            cmds: vec![(req, cb)],
+            cmds: v,
             renew_lease_time: renew_lease_time,
         });
 

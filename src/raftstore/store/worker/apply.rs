@@ -939,7 +939,7 @@ impl ApplyDelegate {
 
     fn exec_pre_merge(
         &mut self,
-        ctx: &ExecContext,
+        ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC
@@ -948,7 +948,8 @@ impl ApplyDelegate {
 
         let pre_merge = req.get_pre_merge();
         let index = pre_merge.get_min_index();
-        let first_index = peer_storage::first_index(&ctx.apply_state);
+        let exec_ctx = ctx.exec_ctx.as_ref().unwrap();
+        let first_index = peer_storage::first_index(&exec_ctx.apply_state);
         if index < first_index {
             warn!(
                 "{} first index {} < min_index {}, skip pre merge.",
@@ -972,11 +973,11 @@ impl ApplyDelegate {
         let mut merging_state = MergeState::new();
         merging_state.set_min_index(index);
         merging_state.set_direction(pre_merge.get_direction());
-        merging_state.set_commit(ctx.index);
+        merging_state.set_commit(exec_ctx.index);
         merging_state.set_conf_version(pre_merge.get_conf_version());
         write_merge_state(
             &self.engine,
-            ctx.wb,
+            &ctx.wb,
             &region,
             PeerState::Merging,
             merging_state.clone(),
@@ -1723,7 +1724,7 @@ mod tests {
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
         let (_tmp, db) = create_tmp_engine("apply-basic");
-        let host = Arc::new(CoprocessorHost::new());
+        let host = Arc::new(CoprocessorHost::default());
         let mut runner = new_runner(db.clone(), host, tx);
 
         let mut reg = Registration::default();
@@ -1963,7 +1964,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let host = CoprocessorHost::new();
+        let host = CoprocessorHost::default();
         let mut apply_ctx = ApplyContext::new(&host);
         let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
