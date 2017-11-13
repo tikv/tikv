@@ -287,6 +287,12 @@ pub struct MvccInfoIterator {
 
 impl MvccInfoIterator {
     fn new(db: &Arc<DB>, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
+        if !keys::validate_data_key(from) {
+            return Err(Error::InvalidArgument(
+                format!("from non-mvcc area {:?}", from),
+            ));
+        }
+
         let gen_iter = |cf: &str| -> Result<_> {
             let to = if to.is_empty() { None } else { Some(to) };
             let readopts = IterOption::new(to.map(Vec::from), false).build_read_opts();
