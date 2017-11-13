@@ -20,6 +20,7 @@ use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::rocksdb;
 use tikv::util::worker::FutureWorker;
+use tikv::raftengine::{Config as RaftEngineCfg, RaftEngine};
 use tempdir::TempDir;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
@@ -57,9 +58,9 @@ fn test_node_bootstrap_with_prepared_data() {
         rocksdb::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS).unwrap(),
     );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine = Arc::new(
-        rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), &[]).unwrap(),
-    );
+    let mut raft_cfg = RaftEngineCfg::new();
+    raft_cfg.dir = tmp_path_raft.to_str().unwrap().to_string();
+    let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
     let engines = Engines::new(engine.clone(), raft_engine.clone());
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 

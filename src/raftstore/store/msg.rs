@@ -28,6 +28,7 @@ pub type BatchCallback = Box<FnBox(Vec<Option<RaftCmdResponse>>) + Send>;
 pub enum Tick {
     Raft,
     RaftLogGc,
+    RaftLogExpiredFilesGc,
     SplitRegionCheck,
     CompactCheck,
     PdHeartbeat,

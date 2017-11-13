@@ -72,6 +72,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use tikv::raftengine::RaftEngine;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -128,9 +129,9 @@ fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 }
 
 fn check_system_config(config: &TiKvConfig) {
-    if let Err(e) = util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
-    ) {
+    if let Err(e) =
+        util::config::check_max_open_fds(RESERVED_OPEN_FDS + config.rocksdb.max_open_files as u64)
+    {
         fatal!("{:?}", e);
     }
 
@@ -149,7 +150,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let lock_path = store_path.join(Path::new("LOCK"));
     let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
-    let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
 
     let f = File::create(lock_path.as_path()).unwrap_or_else(|e| {
         fatal!("failed to create lock at {}: {:?}", lock_path.display(), e)
@@ -178,17 +178,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let mut storage = create_raft_storage(raft_router.clone(), kv_engine.clone(), &cfg.storage)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
-    // Create raft engine.
-    let raft_db_opts = cfg.raftdb.build_opt();
-    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
-    let raft_engine = Arc::new(
-        rocksdb_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        ).unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
-    );
-    let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
+    // Create raft engine
+    let raft_engine = Arc::new(RaftEngine::new(cfg.raftdb.clone()));
+    let engines = Engines::new(kv_engine.clone(), raft_engine);
 
     // Create pd client and pd work, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
