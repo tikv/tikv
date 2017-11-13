@@ -86,9 +86,13 @@ impl DAGContext {
                     }
                 }
                 Ok(None) => {
+                    if cur_row_count > 0 {
+                        self.chunks.push(chunk);
+                    }
+                    let chunks = mem::replace(&mut self.chunks, Vec::new());
+
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
-                    let chunks = mem::replace(&mut self.chunks, Vec::new());
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
