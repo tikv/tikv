@@ -11,18 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::Message as PbMsg;
+use protobuf::{Message as PbMsg, RepeatedField};
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
+use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext, BATCH_ROW_COUNT};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{build_exec, Executor, Row};
@@ -33,6 +34,7 @@ pub struct DAGContext {
     req_ctx: Arc<ReqContext>,
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
+    chunks: Vec<Chunk>,
 }
 
 impl DAGContext {
@@ -60,10 +62,12 @@ impl DAGContext {
             req_ctx: req_ctx,
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
+            chunks: Vec::new(),
         })
     }
 
     pub fn handle_request(&mut self) -> Result<Response> {
+        let mut cur_row_count = 0;
         let mut chunk = Chunk::default();
         loop {
             match self.exec.next() {
@@ -75,11 +79,17 @@ impl DAGContext {
                         let value = inflate_cols(&row, &self.columns, &self.output_offsets)?;
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
+                    cur_row_count += 1;
+                    if cur_row_count >= BATCH_ROW_COUNT {
+                        self.chunks.push(mem::replace(&mut chunk, Chunk::default()));
+                        cur_row_count = 0;
+                    }
                 }
                 Ok(None) => {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
-                    sel_resp.mut_chunks().push(chunk);
+                    let chunks = mem::replace(&mut self.chunks, Vec::new());
+                    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
