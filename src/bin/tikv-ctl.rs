@@ -49,7 +49,7 @@ use kvproto::debugpb::DB as DBType;
 use kvproto::debugpb_grpc::DebugClient;
 use tikv::util::{self, escape, unescape};
 use tikv::raftstore::store::{keys, Engines};
-use tikv::raftstore::store::debug::{Debugger, RegionInfo};
+use tikv::server::debug::{Debugger, RegionInfo};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::pd::{PdClient, RpcClient};
 
