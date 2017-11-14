@@ -246,8 +246,7 @@ pub struct Peer {
     //      locally.
     leader_lease_expired_time: Option<Either<Timespec, Timespec>>,
 
-    // If a snapshot is being applied asynchronously, messages should not be sent untill
-    // application is finished.
+    // If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
 
     pub peer_stat: PeerStat,
@@ -732,6 +731,7 @@ impl Peer {
         }
 
         if !self.pending_messages.is_empty() {
+            fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
             self.send(ctx.trans, messages, &mut ctx.metrics.message)
                 .unwrap_or_else(|e| {
