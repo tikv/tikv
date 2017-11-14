@@ -21,7 +21,6 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 use rocksdb::{WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use time::{self, Timespec};
@@ -1140,7 +1139,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.trans.flush();
         }
 
-        self.raft_metrics.ready.has_ready_region += ready_res.len() as u64;
+        self.raft_metrics.ready.has_ready_region += ready_res_cnt as u64;
 
         let mut new_res = self.poll_append();
         ready_res.append(&mut new_res);
