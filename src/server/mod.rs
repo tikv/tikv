@@ -24,6 +24,7 @@ pub mod transport;
 pub mod node;
 pub mod resolve;
 pub mod snap;
+pub mod debug;
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
