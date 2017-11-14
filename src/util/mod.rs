@@ -449,10 +449,16 @@ pub struct MustConsumeVec<T> {
 }
 
 impl<T> MustConsumeVec<T> {
+    #[inline]
     pub fn new(tag: &'static str) -> MustConsumeVec<T> {
+        MustConsumeVec::with_capacity(tag, 0)
+    }
+
+    #[inline]
+    pub fn with_capacity(tag: &'static str, cap: usize) -> MustConsumeVec<T> {
         MustConsumeVec {
             tag: tag,
-            v: vec![],
+            v: Vec::with_capacity(cap),
         }
     }
 }
@@ -656,7 +662,7 @@ mod tests {
 
     #[test]
     fn test_resource_leak() {
-        let res = panic::catch_unwind(|| {
+        let res = recover_safe!(|| {
             let mut v = MustConsumeVec::new("test");
             v.push(2);
         });
