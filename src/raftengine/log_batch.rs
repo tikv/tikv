@@ -3,6 +3,7 @@ use std::u32;
 use std::mem;
 use std::io::BufRead;
 
+use crc32c::crc32c;
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use byteorder::BigEndian;
 use kvproto::eraftpb::Entry;
@@ -13,7 +14,6 @@ use util::codec::number::{NumberDecoder, NumberEncoder};
 
 use super::Result;
 use super::Error;
-use super::util::calc_crc32;
 
 const BATCH_MIN_SIZE: usize = 12; // 8 bytes total length + 4 checksum
 
@@ -381,7 +381,7 @@ impl LogBatch {
         // verify checksum
         let offset = batch_len - 4;
         let old_checksum = (&buf[offset..offset + 4]).decode_u32_le()?;
-        let new_checksum = calc_crc32(&buf[..offset]);
+        let new_checksum = crc32c(&buf[..offset]);
         if old_checksum != new_checksum {
             return Err(Error::CheckSumError);
         }
@@ -419,7 +419,7 @@ impl LogBatch {
         for item in &mut self.items {
             item.encode_to(&mut vec).unwrap();
         }
-        let checksum = calc_crc32(&vec.as_slice()[8..]);
+        let checksum = crc32c(&vec.as_slice()[8..]);
         vec.encode_u32_le(checksum).unwrap();
         let len = vec.len() as u64 - 8;
         vec.as_mut_slice().write_u64::<BigEndian>(len).unwrap();

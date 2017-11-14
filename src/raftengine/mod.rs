@@ -7,7 +7,6 @@ use protobuf;
 
 
 pub mod config;
-pub mod util;
 pub mod log_batch;
 pub mod pipe_log;
 pub mod memtable;

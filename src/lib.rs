@@ -47,6 +47,7 @@ extern crate time;
 extern crate tipb;
 extern crate libc;
 extern crate crc;
+extern crate crc32c;
 extern crate alloc;
 extern crate chrono;
 #[macro_use]
