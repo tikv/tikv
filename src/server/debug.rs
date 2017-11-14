@@ -24,8 +24,8 @@ use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
+use raftstore::store::write_peer_state;
 use raftstore::store::{keys, Engines, Iterable, Peekable};
-use raftstore::store::peer_storage::write_peer_state;
 use raftstore::store::engine::IterOption;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
