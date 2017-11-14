@@ -177,8 +177,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
-    use std::sync::{Arc, Mutex};
-    use std::sync::mpsc::{self, Sender};
+    use std::sync::*;
+    use std::sync::mpsc::*;
+    use std::sync::atomic::*;
     use std::net::SocketAddr;
 
     use super::*;
@@ -195,11 +196,15 @@ mod tests {
 
     #[derive(Clone)]
     struct MockResolver {
+        quick_fail: Arc<AtomicBool>,
         addr: Arc<Mutex<Option<SocketAddr>>>,
     }
 
     impl StoreAddrResolver for MockResolver {
         fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
+            if self.quick_fail.load(Ordering::SeqCst) {
+                return Err(box_err!("quick fail"));
+            }
             cb.call_box((self.addr.lock().unwrap().ok_or(box_err!("not set")),));
             Ok(())
         }
@@ -228,6 +233,13 @@ mod tests {
         }
     }
 
+    pub fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
+        *msg == SignificantMsg::Unreachable {
+            region_id,
+            to_peer_id,
+        }
+    }
+
     #[test]
     fn test_peer_resolve() {
         let mut cfg = Config::default();
@@ -245,36 +257,49 @@ mod tests {
         };
 
         let addr = Arc::new(Mutex::new(None));
+        let quick_fail = Arc::new(AtomicBool::new(false));
         let pd_worker = FutureWorker::new("pd worker");
         let mut server = Server::new(
             &cfg,
             1024,
             storage,
             router,
-            MockResolver { addr: addr.clone() },
+            MockResolver {
+                quick_fail: quick_fail.clone(),
+                addr: addr.clone(),
+            },
             SnapManager::new("", None),
             pd_worker.scheduler(),
             None,
         ).unwrap();
-        *addr.lock().unwrap() = Some(server.listening_addr());
 
         server.start(&cfg).unwrap();
 
         let mut trans = server.transport();
         trans.report_unreachable(RaftMessage::new());
-        assert_eq!(
-            significant_msg_receiver.try_recv().unwrap(),
-            SignificantMsg::Unreachable {
-                region_id: 0,
-                to_peer_id: 0,
-            }
-        );
+        let mut resp = significant_msg_receiver.try_recv().unwrap();
+        assert!(is_unreachable_to(&resp, 0, 0), "{:?}", resp);
 
         let mut msg = RaftMessage::new();
         msg.set_region_id(1);
-        trans.send(msg).unwrap();
+        trans.send(msg.clone()).unwrap();
+        trans.flush();
+        resp = significant_msg_receiver.try_recv().unwrap();
+        assert!(is_unreachable_to(&resp, 1, 0), "{:?}", resp);
+
+        *addr.lock().unwrap() = Some(server.listening_addr());
+
+        trans.send(msg.clone()).unwrap();
         trans.flush();
         assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
+
+        msg.mut_to_peer().set_store_id(2);
+        msg.set_region_id(2);
+        quick_fail.store(true, Ordering::SeqCst);
+        trans.send(msg.clone()).unwrap();
+        trans.flush();
+        resp = significant_msg_receiver.try_recv().unwrap();
+        assert!(is_unreachable_to(&resp, 2, 0), "{:?}", resp);
         server.stop().unwrap();
     }
 }
