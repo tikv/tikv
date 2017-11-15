@@ -37,7 +37,7 @@ pub struct DAGContext<'s> {
     snap: &'s Snapshot,
     eval_ctx: Rc<EvalContext>,
     req_ctx: &'s ReqContext,
-    batch_row_count: usize,
+    batch_row_limit: usize,
 }
 
 impl<'s> DAGContext<'s> {
@@ -47,7 +47,7 @@ impl<'s> DAGContext<'s> {
         snap: &'s Snapshot,
         eval_ctx: Rc<EvalContext>,
         req_ctx: &'s ReqContext,
-        batch_row_count: usize,
+        batch_row_limit: usize,
     ) -> DAGContext<'s> {
         DAGContext {
             req: req,
@@ -57,7 +57,7 @@ impl<'s> DAGContext<'s> {
             has_aggr: false,
             eval_ctx: eval_ctx,
             req_ctx: req_ctx,
-            batch_row_count: batch_row_count,
+            batch_row_limit: batch_row_limit,
         }
     }
 
@@ -70,7 +70,7 @@ impl<'s> DAGContext<'s> {
             match exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    if chunks.is_empty() || record_cnt >= self.batch_row_count {
+                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);
                         record_cnt = 0;

@@ -73,7 +73,7 @@ pub struct Host {
     low_priority_pool: ThreadPool<CopContext>,
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
-    batch_row_count: usize,
+    batch_row_limit: usize,
 }
 
 pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
@@ -172,7 +172,7 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
-            batch_row_count: cfg.end_point_batch_row_count,
+            batch_row_limit: cfg.end_point_batch_row_limit,
             pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-normal-pool"),
                 CopContextFactory { sender: r.clone() },
@@ -214,7 +214,7 @@ impl Host {
             return;
         }
 
-        let batch_row_count = self.batch_row_count;
+        let batch_row_limit = self.batch_row_limit;
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
@@ -231,7 +231,7 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
-                let stats = end_point.handle_request(req, batch_row_count);
+                let stats = end_point.handle_request(req, batch_row_limit);
                 ctx.add_statistics(type_str, &stats);
                 ctx.add_statistics_by_region(region_id, &stats);
                 COPR_PENDING_REQS
@@ -630,14 +630,14 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask, batch_row_count: usize) -> Statistics {
+    fn handle_request(&self, mut t: RequestTask, batch_row_limit: usize) -> Statistics {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
             return on_error(e, t);
         }
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t, batch_row_count),
-            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_count),
+            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t, batch_row_limit),
+            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
         };
@@ -651,14 +651,14 @@ impl TiDbEndPoint {
         &self,
         sel: SelectRequest,
         t: &mut RequestTask,
-        batch_row_count: usize,
+        batch_row_limit: usize,
     ) -> Result<Response> {
         let ctx = SelectContext::new(
             sel,
             self.snap.as_ref(),
             &mut t.statistics,
             &t.ctx,
-            batch_row_count,
+            batch_row_limit,
         )?;
         let range = t.req.get_ranges().to_vec();
         ctx.handle_request(range)
@@ -668,7 +668,7 @@ impl TiDbEndPoint {
         &self,
         dag: DAGRequest,
         t: &mut RequestTask,
-        batch_row_count: usize,
+        batch_row_limit: usize,
     ) -> Result<Response> {
         let ranges = t.req.get_ranges().to_vec();
         let eval_ctx = Rc::new(box_try!(EvalContext::new(
@@ -681,7 +681,7 @@ impl TiDbEndPoint {
             self.snap.as_ref(),
             eval_ctx.clone(),
             &t.ctx,
-            batch_row_count,
+            batch_row_limit,
         );
         ctx.handle_request(&mut t.statistics)
     }

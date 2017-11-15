@@ -989,20 +989,20 @@ fn test_select() {
 
 
 #[test]
-fn test_batch_row_count() {
+fn test_batch_row_limit() {
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
         (4, Some("name:3"), 1),
         (5, Some("name:1"), 4),
     ];
-    let batch_row_count = 3;
-    let chunk_datum_limit = batch_row_count * 3;
+    let batch_row_limit = 3;
+    let chunk_datum_limit = batch_row_limit * 3;
     let product = ProductTable::new();
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         let mut cfg = Config::default();
-        cfg.end_point_batch_row_count = batch_row_count;
+        cfg.end_point_batch_row_limit = batch_row_limit;
         init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
     };
 
