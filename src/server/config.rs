@@ -42,6 +42,9 @@ const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
 // larger latency.
 pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
 
+// Number of rows in each chunk.
+pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -64,6 +67,8 @@ pub struct Config {
     pub end_point_concurrency: usize,
     pub end_point_max_tasks: usize,
     pub end_point_stack_size: ReadableSize,
+    pub end_point_recursion_limit: u32,
+    pub end_point_batch_row_limit: usize,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -91,6 +96,8 @@ impl Default for Config {
             end_point_concurrency: concurrency,
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
+            end_point_recursion_limit: 1000,
+            end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
         }
     }
 }
