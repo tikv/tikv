@@ -23,7 +23,7 @@ use raftstore::store::engine::{IterOption, Iterable};
 use coprocessor::codec::table as table_codec;
 use util::escape;
 
-use super::super::{Coprocessor, ObserverContext, RegionObserver, Result};
+use super::super::{Coprocessor, ObserverContext, Result, SplitCheckObserver};
 use super::Status;
 
 #[derive(Default)]
@@ -37,7 +37,7 @@ pub struct TableCheckObserver;
 
 impl Coprocessor for TableCheckObserver {}
 
-impl RegionObserver for TableCheckObserver {
+impl SplitCheckObserver for TableCheckObserver {
     fn new_split_check_status(&self, ctx: &mut ObserverContext, status: &mut Status, engine: &DB) {
         let mut table_status = TableStatus::default();
         let skip = before_check(&mut table_status, engine, ctx.region());
