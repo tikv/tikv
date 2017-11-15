@@ -65,18 +65,18 @@ impl<'s> DAGContext<'s> {
         self.validate_dag()?;
         let mut exec = self.build_dag(statistics)?;
         let mut chunks = vec![];
-        let mut cur_chunk_cnt = 0;
+        let mut record_cnt = 0;
         loop {
             match exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    if chunks.is_empty() || cur_chunk_cnt >= self.batch_row_count {
+                    if chunks.is_empty() || record_cnt >= self.batch_row_count {
                         let chunk = Chunk::new();
                         chunks.push(chunk);
-                        cur_chunk_cnt = 0;
+                        record_cnt = 0;
                     }
                     let chunk = chunks.last_mut().unwrap();
-                    cur_chunk_cnt += 1;
+                    record_cnt += 1;
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
