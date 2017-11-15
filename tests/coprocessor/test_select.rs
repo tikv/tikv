@@ -58,9 +58,7 @@ fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
     let mut iter = chunks.iter();
     let res = iter.any(|x| x.get_rows_data().decode().unwrap().len() != datum_limit);
     if res {
-        let last_len = iter.next().unwrap().get_rows_data().decode().unwrap().len();
-        assert!(last_len < datum_limit);
-        assert!(iter.next().is_none())
+        assert!(iter.next().is_none());
     }
 }
 
@@ -998,7 +996,7 @@ fn test_batch_row_count() {
         (4, Some("name:3"), 1),
         (5, Some("name:1"), 4),
     ];
-    let batch_row_count = 2;
+    let batch_row_count = 3;
     let chunk_datum_limit = batch_row_count * 3;
     let product = ProductTable::new();
     let (_, mut end_point) = {
@@ -1012,7 +1010,6 @@ fn test_batch_row_count() {
     let req = Select::from(&product.table).build();
     let mut resp = handle_select(&end_point, req);
     check_chunk_datum_count(resp.get_chunks(), chunk_datum_limit);
-    //batch_row_count_check_for_select(resp.get_chunks(),2);
     assert_eq!(row_cnt(resp.get_chunks()), data.len());
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
     for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
