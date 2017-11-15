@@ -1,12 +1,13 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::io::{Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::u64;
 use std::cmp;
 
 use super::Result;
 use super::log_batch::LogBatch;
+use super::metrics::*;
 
 const LOG_SUFFIX: &'static str = ".log";
 const LOG_SUFFIX_LEN: usize = 4;
@@ -115,7 +116,7 @@ impl PipeLog {
     pub fn append(&mut self, content: &[u8], sync: bool) -> Result<u64> {
         let file_num = self.active_file_num;
 
-        self.active_log.as_mut().unwrap().write_all(content)?;
+        PipeLog::write_all(self.active_log.as_mut().unwrap(), content)?;
         self.active_log_size += content.len();
         if sync ||
             self.bytes_per_sync > 0 &&
@@ -133,6 +134,18 @@ impl PipeLog {
         Ok(file_num)
     }
 
+    fn write_all(f: &mut File, data: &[u8]) -> io::Result<()> {
+        while let Err(e) = f.write(data) {
+            if e.kind() == ErrorKind::Interrupted {
+                warn!("Write is interrupted, retry");
+                continue;
+            } else {
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
     pub fn append_log_batch(&mut self, batch: &mut LogBatch, sync: bool) -> Result<u64> {
         match batch.encode_to_bytes() {
             Some(content) => self.append(&content, sync),
@@ -141,8 +154,10 @@ impl PipeLog {
     }
 
     pub fn purge_to(&mut self, file_num: u64) -> Result<()> {
+        PIPE_FILES_COUNT_GAUGE.set((self.active_file_num - self.first_file_num + 1) as f64);
         if self.first_file_num >= file_num {
             debug!("Purge nothing.");
+            EXPIRED_FILES_PURGED_HISTOGRAM.observe(0.0);
             return Ok(());
         }
 
@@ -150,6 +165,7 @@ impl PipeLog {
             return Err(box_err!("Can't purge active log."));
         }
 
+        let old_first_file_num = self.first_file_num;
         loop {
             if self.first_file_num >= file_num {
                 break;
@@ -160,6 +176,11 @@ impl PipeLog {
 
             self.first_file_num += 1;
         }
+        debug!(
+            "purge {} expired files",
+            self.first_file_num - old_first_file_num
+        );
+        EXPIRED_FILES_PURGED_HISTOGRAM.observe((self.first_file_num - old_first_file_num) as f64);
         Ok(())
     }
 
@@ -231,16 +252,23 @@ impl PipeLog {
         let mut file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(path)
+            .open(path.clone())
             .unwrap_or_else(|e| panic!("Create file failed, error: {:?}", e));
 
         // Write HEADER.
-        file.write_all(FILE_MAGIC_HEADER)
-            .unwrap_or_else(|e| panic!("Write file_magic_header failed, error: {:?}", e));
-        file.write_all(VERSION)
-            .unwrap_or_else(|e| panic!("Write version failed, error: {:?}", e));
-        file.sync_all().unwrap();
-        file
+        let mut header = Vec::with_capacity(FILE_MAGIC_HEADER.len() + VERSION.len());
+        header.extend_from_slice(FILE_MAGIC_HEADER);
+        header.extend_from_slice(VERSION);
+        match PipeLog::write_all(&mut file, header.as_slice()) {
+            Err(e) => {
+                fs::remove_file(path).unwrap();
+                panic!("Write HEADER failed, error: {:?}", e)
+            }
+            Ok(()) => {
+                file.sync_all().unwrap();
+                file
+            }
+        }
     }
 
     pub fn read_next_file(&mut self) -> Result<Option<Vec<u8>>> {

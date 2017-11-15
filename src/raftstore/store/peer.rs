@@ -225,6 +225,8 @@ pub struct Peer {
     pub last_applying_idx: u64,
     // When entry exceed max size, reject to propose the entry.
     pub raft_entry_max_size: u64,
+    // Index of replicated_idx when last time run `on_raft_gc_log_tick`.
+    pub last_replicated_idx: u64,
 
     apply_scheduler: Scheduler<ApplyTask>,
 
@@ -360,6 +362,7 @@ impl Peer {
             cfg: cfg,
             leader_lease_expired_time: None,
             peer_stat: PeerStat::default(),
+            last_replicated_idx: 0,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
