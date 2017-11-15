@@ -15,7 +15,7 @@ use rocksdb::DB;
 use raftstore::store::{util, Msg};
 use util::transport::{RetryableSendCh, Sender};
 
-use super::super::{Coprocessor, ObserverContext, RegionObserver};
+use super::super::{Coprocessor, ObserverContext, SplitCheckObserver};
 use super::super::metrics::*;
 use super::Status;
 
@@ -47,7 +47,7 @@ impl<C: Sender<Msg>> SizeCheckObserver<C> {
 
 impl<C> Coprocessor for SizeCheckObserver<C> {}
 
-impl<C: Sender<Msg> + Send> RegionObserver for SizeCheckObserver<C> {
+impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn new_split_check_status(&self, ctx: &mut ObserverContext, status: &mut Status, engine: &DB) {
         let size_status = SizeStatus::default();
         let region = ctx.region();
