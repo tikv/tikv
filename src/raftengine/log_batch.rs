@@ -3,6 +3,9 @@ use std::u32;
 use std::mem;
 use std::io::BufRead;
 
+// crc32c implement Castagnoli Polynomial algorithm
+// which also is used in iSCSI and SCTP. It is 50x
+// faster than crc as we test.
 use crc32c::crc32c;
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use byteorder::BigEndian;

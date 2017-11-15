@@ -114,7 +114,7 @@ impl Default for Config {
             raft_entry_max_size: ReadableSize::mb(8),
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
             raft_log_gc_expired_files_tick_interval: ReadableDuration::secs(60),
-            raft_log_gc_threshold: 20,
+            raft_log_gc_threshold: 50,
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
             // Disable manual compaction by default.

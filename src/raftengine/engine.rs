@@ -20,7 +20,7 @@ use super::log_batch::{Command, LogBatch, LogItemType, OpType};
 use super::config::Config;
 use super::metrics::*;
 
-const SLOTS_COUNT: usize = 32;
+const SLOTS_COUNT: usize = 128;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(i32)]

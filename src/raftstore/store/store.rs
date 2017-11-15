@@ -1726,12 +1726,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let first_idx = peer.get_store().first_index();
             let mut compact_idx;
 
-            if replicated_idx < first_idx ||
-                replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold
-            {
+            let last_replicated_idx = peer.last_replicated_idx;
+            peer.last_replicated_idx = replicated_idx;
+            if replicated_idx < first_idx {
                 continue;
             }
-            if self.regions_need_compact.get(&region_id).is_some() {
+            if replicated_idx - first_idx < self.cfg.raft_log_gc_threshold {
+                // The replicated_idx is same as the last time we check, it means this region
+                // probably has no new writing. Compact these few entries have been replicated,
+                // so we don't rewriting them again and again.
+                if last_replicated_idx == replicated_idx && replicated_idx - first_idx > 0 {
+                    compact_idx = replicated_idx;
+                } else {
+                    continue;
+                }
+            } else if self.regions_need_compact.get(&region_id).is_some() {
                 compact_idx = applied_idx;
             } else {
                 compact_idx = replicated_idx;
@@ -1758,6 +1767,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
             }
         }
+
+        self.regions_need_compact.clear();
 
         PEER_GC_RAFT_LOG_COUNTER
             .inc_by(total_gc_logs as f64)
