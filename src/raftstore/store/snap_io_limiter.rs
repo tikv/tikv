@@ -11,9 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use std::io::{Result, Write};
 
 use rocksdb::RateLimiter;
+
+const SNAP_MIN_BYTES_PER_TIME: i64 = 64 * 1024;
+const SNAP_MAX_BYTES_PER_TIME: i64 = 1024 * 1024;
+const SNAP_MAX_BYTES_PER_SEC: i64 = 10 * 1024 * 1024;
+const REFILL_PERIOD: i64 = 100 * 1000;
+const FARENESS: i32 = 10;
 
 pub struct SnapshotIOLimiter {
     inner: RateLimiter,
@@ -23,14 +30,14 @@ pub struct SnapshotIOLimiter {
 
 impl SnapshotIOLimiter {
     pub fn new(
-        min_bytes_per_time: i64,
-        max_bytes_per_time: i64,
-        bytes_per_sec: i64,
+        min_bytes_per_time: u64,
+        max_bytes_per_time: u64,
+        bytes_per_sec: u64,
     ) -> SnapshotIOLimiter {
         SnapshotIOLimiter {
-            inner: RateLimiter::new(bytes_per_sec, 100 * 1000, 10),
-            min_bytes_per_time: min_bytes_per_time,
-            max_bytes_per_time: max_bytes_per_time,
+            inner: RateLimiter::new(bytes_per_sec as i64, REFILL_PERIOD, FARENESS),
+            min_bytes_per_time: min_bytes_per_time as i64,
+            max_bytes_per_time: max_bytes_per_time as i64,
         }
     }
 
@@ -66,30 +73,67 @@ impl SnapshotIOLimiter {
     pub fn get_total_requests(&self) -> i64 {
         self.inner.get_total_requests(1)
     }
+}
 
-    pub fn write<W: Write>(&self, w: &mut W, data: &[u8]) -> Result<()> {
-        let total = data.len();
-        let single = self.get_max_bytes_per_time() as usize;
+impl Default for SnapshotIOLimiter {
+    fn default() -> SnapshotIOLimiter {
+        SnapshotIOLimiter {
+            inner: RateLimiter::new(SNAP_MAX_BYTES_PER_SEC, REFILL_PERIOD, FARENESS),
+            min_bytes_per_time: SNAP_MIN_BYTES_PER_TIME,
+            max_bytes_per_time: SNAP_MAX_BYTES_PER_TIME,
+        }
+    }
+}
+
+pub struct LimiterWriter<'a, T: 'a>
+where
+    T: Write,
+{
+    pub limiter: Arc<SnapshotIOLimiter>,
+    pub writer: &'a mut T,
+}
+
+impl<'a, T> Write for LimiterWriter<'a, T>
+where
+    T: Write,
+{
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        let total = buf.len();
+        let single = self.limiter.get_max_bytes_per_time() as usize;
         let mut curr = 0;
         while curr < total {
             let end;
             if curr + single >= total {
                 end = total;
-                self.request((total - curr) as i64);
+                self.limiter.request((total - curr) as i64);
             } else {
                 end = curr + single;
-                self.request(single as i64);
+                self.limiter.request(single as i64);
             }
-            w.write_all(&data[curr..end])?;
+            self.writer.write_all(&buf[curr..end])?;
             curr = end;
         }
+        Ok(total)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.writer.flush()?;
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::SnapshotIOLimiter;
+    use super::{SnapshotIOLimiter, SNAP_MAX_BYTES_PER_SEC, SNAP_MIN_BYTES_PER_TIME,
+                SNAP_MIN_BYTES_PER_TIME};
+
+    #[test]
+    fn test_default_snapshot_io_limiter() {
+        let limiter = SnapshotIOLimiter::default();
+        assert_eq!(limiter.get_min_bytes_per_time(), SNAP_MIN_BYTES_PER_TIME);
+        assert!(limiter.get_max_bytes_per_time() <= SNAP_MAX_BYTES_PER_TIME);
+        assert_eq!(limiter.get_bytes_per_second(), SNAP_MAX_BYTES_PER_SEC);
+    }
 
     #[test]
     fn test_snapshot_io_limiter() {

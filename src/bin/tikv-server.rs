@@ -196,9 +196,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
     let limiter = Arc::new(SnapshotIOLimiter::new(
-        cfg.raft_store.snap_min_write_bytes_per_time as i64,
-        cfg.raft_store.snap_max_write_bytes_per_time as i64,
-        cfg.raft_store.snap_max_write_bytes_per_sec as i64,
+        cfg.server.snap_min_write_bytes_per_time.0,
+        cfg.server.snap_max_write_bytes_per_time.0,
+        cfg.server.snap_max_write_bytes_per_sec.0,
     ));
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),

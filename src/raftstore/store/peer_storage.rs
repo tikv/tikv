@@ -1679,11 +1679,7 @@ mod test {
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None, limiter.clone());
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
@@ -1967,11 +1963,7 @@ mod test {
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None, limiter.clone());
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();

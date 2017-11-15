@@ -1567,11 +1567,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         s1.build(
             &snapshot,
             &region,
@@ -1688,11 +1684,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         s1.build(
             &snapshot,
             &region,
@@ -1873,11 +1865,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         s1.build(
             &snapshot,
             &region,
@@ -1981,11 +1969,7 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         s1.build(
             &snapshot,
             &region,
@@ -2054,11 +2038,7 @@ mod test {
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         let mut mgr = SnapManager::new(path, None, limiter.clone());
         mgr.init().unwrap();
         assert!(temp_path.exists());
@@ -2075,11 +2055,7 @@ mod test {
     fn test_snap_mgr_v2() {
         let temp_dir = TempDir::new("test-snap-mgr-v2").unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         let mgr = SnapManager::new(path.clone(), None, limiter.clone());
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
@@ -2137,11 +2113,7 @@ mod test {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         let mgr = SnapManager::new(path, None, limiter.clone());
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
@@ -2173,11 +2145,7 @@ mod test {
     fn test_snap_deletion_on_registry() {
         let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         let src_mgr = SnapManager::new(src_path.clone(), None, limiter.clone());
         src_mgr.init().unwrap();
 

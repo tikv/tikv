@@ -66,6 +66,9 @@ fn test_serde_custom_tikv_config() {
         end_point_max_tasks: 12,
         end_point_stack_size: ReadableSize::mb(12),
         end_point_recursion_limit: 100,
+        snap_min_write_bytes_per_time: ReadableSize::kb(64),
+        snap_max_write_bytes_per_time: ReadableSize::mb(1),
+        snap_max_write_bytes_per_sec: ReadableSize::mb(10),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -106,9 +109,6 @@ fn test_serde_custom_tikv_config() {
         raft_store_max_leader_lease: ReadableDuration::secs(12),
         right_derive_when_split: false,
         allow_remove_leader: true,
-        snap_min_write_bytes_per_time: 64 * 1024,
-        snap_max_write_bytes_per_time: 1024 * 1024,
-        snap_max_write_bytes_per_sec: 10 * 1024 * 1024,
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
     };

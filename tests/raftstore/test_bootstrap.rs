@@ -69,11 +69,7 @@ fn test_node_bootstrap_with_prepared_data() {
         &cfg.raft_store,
         pd_client.clone(),
     );
-    let limiter = Arc::new(SnapshotIOLimiter::new(
-        64 * 1024,
-        1024 * 1024,
-        10 * 1024 * 1024,
-    ));
+    let limiter = Arc::new(SnapshotIOLimiter::default());
     let snap_mgr = SnapManager::new(
         tmp_mgr.path().to_str().unwrap(),
         Some(node.get_sendch()),

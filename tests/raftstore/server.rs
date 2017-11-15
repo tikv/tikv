@@ -121,11 +121,7 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), limiter.clone());
         let pd_worker = FutureWorker::new("test-pd-worker");
         let mut server = Server::new(

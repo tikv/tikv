@@ -65,6 +65,10 @@ pub struct Config {
     pub end_point_max_tasks: usize,
     pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
+    pub snap_min_write_bytes_per_time: ReadableSize,
+    pub snap_max_write_bytes_per_time: ReadableSize,
+    pub snap_max_write_bytes_per_sec: ReadableSize,
+
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -93,6 +97,9 @@ impl Default for Config {
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
+            snap_min_write_bytes_per_time: ReadableSize::kb(64),
+            snap_max_write_bytes_per_time: ReadableSize::mb(1),
+            snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         }
     }
 }
@@ -136,6 +143,15 @@ impl Config {
         for (k, v) in &self.labels {
             validate_label(k, "key")?;
             validate_label(v, "value")?;
+        }
+
+        if self.snap_max_write_bytes_per_time.0 > self.snap_max_write_bytes_per_sec.0 / 10 {
+            return Err(box_err!(
+                "snap_max_write_bytes_per_time {} should be much smaller than \
+                 snap_max_write_bytes_per_sec {}",
+                self.snap_max_write_bytes_per_time.0,
+                self.snap_max_write_bytes_per_sec.0
+            ));
         }
 
         Ok(())
@@ -205,6 +221,11 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.validate().unwrap();
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.snap_max_write_bytes_per_time = ReadableSize::mb(1);
+        invalid_cfg.snap_max_write_bytes_per_sec = ReadableSize::mb(1);
+        assert!(invalid_cfg.validate().is_err());
 
         cfg.labels.insert("k1".to_owned(), "v1".to_owned());
         cfg.validate().unwrap();

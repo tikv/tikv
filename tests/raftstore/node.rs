@@ -167,11 +167,7 @@ impl Simulator for NodeCluster {
             self.pd_client.clone(),
         );
 
-        let limiter = Arc::new(SnapshotIOLimiter::new(
-            64 * 1024,
-            1024 * 1024,
-            10 * 1024 * 1024,
-        ));
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         let (snap_mgr, tmp) =
             if node_id == 0 || !self.trans.rl().snap_paths.contains_key(&node_id) {
                 let tmp = TempDir::new("test_cluster").unwrap();
