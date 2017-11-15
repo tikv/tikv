@@ -233,7 +233,7 @@ mod tests {
         }
     }
 
-    pub fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
+    fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
         *msg == SignificantMsg::Unreachable {
             region_id,
             to_peer_id,
