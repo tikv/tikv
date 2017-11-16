@@ -42,6 +42,9 @@ const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
 // larger latency.
 pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
 
+// Number of rows in each chunk.
+pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -68,6 +71,7 @@ pub struct Config {
     pub snap_min_write_bytes_per_time: ReadableSize,
     pub snap_max_write_bytes_per_time: ReadableSize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
+    pub end_point_batch_row_limit: usize,
 
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
@@ -100,6 +104,7 @@ impl Default for Config {
             snap_min_write_bytes_per_time: ReadableSize::kb(64),
             snap_max_write_bytes_per_time: ReadableSize::mb(1),
             snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+            end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
         }
     }
 }

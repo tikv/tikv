@@ -69,6 +69,7 @@ fn test_serde_custom_tikv_config() {
         snap_min_write_bytes_per_time: ReadableSize::kb(64),
         snap_max_write_bytes_per_time: ReadableSize::mb(1),
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+        end_point_batch_row_limit: 64,
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),

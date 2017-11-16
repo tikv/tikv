@@ -17,6 +17,7 @@ end-point-recursion-limit = 100
 snap-min-write-bytes-per-time = "64KB"
 snap-max-write-bytes-per-time = "1MB"
 snap-max-write-bytes-per-sec = "10MB"
+end-point-batch-row-limit = 64
 
 [server.labels]
 a = "b"
