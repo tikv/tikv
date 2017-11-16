@@ -101,7 +101,7 @@ where
         let total = buf.len();
         let single = self.limiter.get_max_bytes_per_time() as usize;
         let mut curr = 0;
-        let end;
+        let mut end;
         while curr < total {
             if curr + single >= total {
                 end = total;
