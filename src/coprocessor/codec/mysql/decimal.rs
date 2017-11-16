@@ -200,7 +200,7 @@ fn fix_word_cnt_err(int_word_cnt: u8, frac_word_cnt: u8, word_buf_len: u8) -> Re
     Res::Ok((int_word_cnt, frac_word_cnt))
 }
 
-/// `sub` substracts rhs and carry from lhs, store the diff and new carry.
+/// `sub` subtracts rhs and carry from lhs, store the diff and new carry.
 fn sub(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
     let diff = lhs as i32 - rhs as i32 - *carry;
     if diff < 0 {
@@ -212,7 +212,7 @@ fn sub(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
     }
 }
 
-/// `sub2` substracts rhs and carry from lhs, stores the diff and new carry.
+/// `sub2` subtracts rhs and carry from lhs, stores the diff and new carry.
 /// the new carry may be 2.
 fn sub2(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
     let mut diff = lhs as i32 - rhs as i32 - *carry;
@@ -231,7 +231,7 @@ fn sub2(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
 type SubTmp = (usize, usize, u8);
 
 /// calculate the carry for lhs - rhs, returns the carry and needed temporary results for
-/// begining a subtraction.
+/// beginning a subtraction.
 ///
 /// The new carry can be None if lhs is equals to rhs.
 #[inline]
