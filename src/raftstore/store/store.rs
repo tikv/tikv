@@ -243,7 +243,7 @@ impl<T, C> Store<T, C> {
     }
 
     /// Initialize this store. It scans the db engine, loads all regions
-    /// and their peers from it, and schedules snapshot worker if neccessary.
+    /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
     fn init(&mut self) -> Result<()> {
         // Scan region meta to get saved regions.
@@ -1897,7 +1897,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         region_id,
                         self.store_id()
                     );
-                    return Err(Error::NotLeader(region_id, Some(peer.peer.clone())));
+                    return Err(Error::NotLeader(
+                        region_id,
+                        peer.get_peer_from_cache(peer.leader_id()),
+                    ));
                 }
                 peer
             }
