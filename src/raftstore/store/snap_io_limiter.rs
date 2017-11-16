@@ -78,7 +78,11 @@ impl SnapshotIOLimiter {
 impl Default for SnapshotIOLimiter {
     fn default() -> SnapshotIOLimiter {
         SnapshotIOLimiter {
-            inner: RateLimiter::new(DEFAULT_SNAP_MAX_BYTES_PER_SEC as i64, REFILL_PERIOD, FARENESS),
+            inner: RateLimiter::new(
+                DEFAULT_SNAP_MAX_BYTES_PER_SEC as i64,
+                REFILL_PERIOD,
+                FARENESS,
+            ),
             min_bytes_per_time: DEFAULT_SNAP_MIN_BYTES_PER_TIME as i64,
             max_bytes_per_time: DEFAULT_SNAP_MAX_BYTES_PER_TIME as i64,
         }
@@ -136,9 +140,15 @@ mod test {
     #[test]
     fn test_default_snapshot_io_limiter() {
         let limiter = SnapshotIOLimiter::default();
-        assert_eq!(limiter.get_min_bytes_per_time(), DEFAULT_SNAP_MIN_BYTES_PER_TIME as i64);
+        assert_eq!(
+            limiter.get_min_bytes_per_time(),
+            DEFAULT_SNAP_MIN_BYTES_PER_TIME as i64
+        );
         assert!(limiter.get_max_bytes_per_time() <= DEFAULT_SNAP_MAX_BYTES_PER_TIME as i64);
-        assert_eq!(limiter.get_bytes_per_second(), DEFAULT_SNAP_MAX_BYTES_PER_SEC as i64);
+        assert_eq!(
+            limiter.get_bytes_per_second(),
+            DEFAULT_SNAP_MAX_BYTES_PER_SEC as i64
+        );
     }
 
     #[test]
