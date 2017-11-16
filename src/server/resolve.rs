@@ -63,8 +63,8 @@ impl<T: PdClient> Runner<T> {
     fn resolve(&mut self, store_id: u64) -> Result<SocketAddr> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
-            let elasped = now.duration_since(s.last_update);
-            if elasped.as_secs() < STORE_ADDRESS_REFRESH_SECONDS {
+            let elapsed = now.duration_since(s.last_update);
+            if elapsed.as_secs() < STORE_ADDRESS_REFRESH_SECONDS {
                 return Ok(s.sock);
             }
         }

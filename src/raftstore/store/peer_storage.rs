@@ -1084,7 +1084,7 @@ impl PeerStorage {
     /// Save memory states to disk.
     ///
     /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write
-    /// it explictly to disk. If it's flushed to disk successfully, `post_ready` should be called
+    /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
     /// to update the memory states properly.
     // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
     // a requirement to advance the ready object properly later.
