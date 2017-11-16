@@ -223,7 +223,7 @@ impl Debugger {
     }
 
     /// Set a region to tombstone by manual, and apply other status(such as
-    /// peers, version, and key range) from `region` which comes from PD normaly.
+    /// peers, version, and key range) from `region` which comes from PD normally.
     pub fn set_region_tombstone(&self, id: u64, region: Region) -> Result<()> {
         let db = &self.engines.kv_engine;
         let key = keys::region_state_key(id);
