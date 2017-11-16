@@ -243,7 +243,7 @@ impl<T, C> Store<T, C> {
     }
 
     /// Initialize this store. It scans the db engine, loads all regions
-    /// and their peers from it, and schedules snapshot worker if neccessary.
+    /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
     fn init(&mut self) -> Result<()> {
         // Scan region meta to get saved regions.
