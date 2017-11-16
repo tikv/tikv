@@ -65,13 +65,13 @@ pub trait Sender<T>: Clone {
     fn send(&self, t: T) -> Result<(), NotifyError<T>>;
 }
 
-impl<T: Send> Sender<T> for mio::Sender<T> {
+impl<T: Send> Sender<T> for mio::deprecated::Sender<T> {
     fn send(&self, t: T) -> Result<(), NotifyError<T>> {
-        match mio::Sender::send(self, t) {
+        match mio::deprecated::Sender::send(self, t) {
             Ok(()) => Ok(()),
-            Err(mio::NotifyError::Closed(t)) => Err(NotifyError::Closed(t)),
-            Err(mio::NotifyError::Full(t)) => Err(NotifyError::Full(t)),
-            Err(mio::NotifyError::Io(e)) => Err(NotifyError::Io(e)),
+            Err(mio::deprecated::NotifyError::Closed(t)) => Err(NotifyError::Closed(t)),
+            Err(mio::deprecated::NotifyError::Full(t)) => Err(NotifyError::Full(t)),
+            Err(mio::deprecated::NotifyError::Io(e)) => Err(NotifyError::Io(e)),
         }
     }
 }
@@ -151,7 +151,7 @@ impl<T, C: Sender<T>> Clone for RetryableSendCh<T, C> {
     }
 }
 
-pub type SendCh<T> = RetryableSendCh<T, mio::Sender<T>>;
+pub type SendCh<T> = RetryableSendCh<T, mio::deprecated::Sender<T>>;
 pub type SyncSendCh<T> = RetryableSendCh<T, mpsc::SyncSender<T>>;
 
 #[cfg(test)]
@@ -160,7 +160,7 @@ mod tests {
     use std::sync::mpsc::Receiver;
     use std::time::Duration;
 
-    use mio::{EventLoop, EventLoopConfig, Handler};
+    use mio::deprecated::{EventLoop, EventLoopBuilder, Handler};
 
     use super::*;
 
@@ -222,9 +222,9 @@ mod tests {
 
     #[test]
     fn test_sendch_full() {
-        let mut config = EventLoopConfig::new();
+        let mut config = EventLoopBuilder::new();
         config.notify_capacity(2);
-        let mut event_loop = EventLoop::configured(config).unwrap();
+        let mut event_loop = config.build().unwrap();
         let ch = SendCh::new(event_loop.channel(), "test");
         let _ch = ch.clone();
         let h = thread::spawn(move || {

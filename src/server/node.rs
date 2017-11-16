@@ -17,7 +17,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::process;
 
-use mio::EventLoop;
+use mio::deprecated::EventLoop;
 use rocksdb::DB;
 
 use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};

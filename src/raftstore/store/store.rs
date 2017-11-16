@@ -23,7 +23,7 @@ use std::u64;
 
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
-use mio::{self, EventLoop, EventLoopConfig, Sender};
+use mio::deprecated::{self, EventLoop, EventLoopBuilder, Handler, Sender};
 use protobuf;
 use time::{self, Timespec};
 
@@ -174,12 +174,14 @@ where
     T: Transport,
     C: PdClient,
 {
-    let mut config = EventLoopConfig::new();
+    let mut config = EventLoopBuilder::new();
     // To make raft base tick more accurate, timer tick should be small enough.
-    config.timer_tick_ms(cfg.raft_base_tick_interval.as_millis() / MIO_TICK_RATIO);
+    config.timer_tick(Duration::from_millis(
+        cfg.raft_base_tick_interval.as_millis() / MIO_TICK_RATIO,
+    ));
     config.notify_capacity(cfg.notify_capacity);
     config.messages_per_tick(cfg.messages_per_tick);
-    let event_loop = EventLoop::configured(config)?;
+    let event_loop = config.build()?;
     Ok(event_loop)
 }
 
@@ -2391,7 +2393,7 @@ fn register_timer<T: Transport, C: PdClient>(
         // 0 delay means turn off the timer.
         return Ok(());
     }
-    if let Err(e) = event_loop.timeout_ms(tick, delay) {
+    if let Err(e) = event_loop.timeout(tick, Duration::from_millis(delay)) {
         return Err(box_err!(
             "failed to register timeout [{:?}, delay: {:?}ms]: {:?}",
             tick,
@@ -2418,7 +2420,7 @@ fn new_compact_log_request(
     request
 }
 
-impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
+impl<T: Transport, C: PdClient> Handler for Store<T, C> {
     type Timeout = Tick;
     type Message = Msg;
 

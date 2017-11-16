@@ -152,7 +152,7 @@ mod tests {
     use std::boxed::FnBox;
     use std::time::Duration;
 
-    use mio::{EventLoop, Handler};
+    use mio::deprecated::{EventLoop, Handler};
 
     use super::*;
     use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};

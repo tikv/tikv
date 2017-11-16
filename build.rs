@@ -26,6 +26,9 @@ fn main() {
         .unwrap()
         .write_all(build_info().as_bytes())
         .unwrap();
+
+    #[cfg(all(target_arch = "powerpc64", target_endian = "little"))]
+    println!(r"cargo:rustc-link-lib=jemalloc");
 }
 
 // build_info returns a string of commit hash and utc time.
