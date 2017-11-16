@@ -127,8 +127,8 @@ mod test {
     use std::fs::{self, File};
     use std::sync::Arc;
 
-    use super::{SnapshotIOLimiter, SNAP_MAX_BYTES_PER_SEC, SNAP_MIN_BYTES_PER_TIME,
-                SNAP_MAX_BYTES_PER_TIME};
+    use super::{SnapshotIOLimiter, SNAP_MAX_BYTES_PER_SEC, SNAP_MAX_BYTES_PER_TIME,
+                SNAP_MIN_BYTES_PER_TIME};
 
     #[test]
     fn test_default_snapshot_io_limiter() {
@@ -158,7 +158,10 @@ mod test {
     #[test]
     fn test_limiter_writer() {
         let mut file = File::create("./test_limiter_writer.txt").unwrap();
-        let mut limiter_writer = LimiterWriter{limiter:SnapshotIOLimiter::default(), writer:&mut file};
+        let mut limiter_writer = LimiterWriter {
+            limiter: SnapshotIOLimiter::default(),
+            writer: &mut file,
+        };
         limiter_writer.write(&"Hello, World!");
         limiter_writer.flush();
 
