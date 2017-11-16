@@ -181,9 +181,9 @@ impl SampleBuilder {
             vec![SampleCollector::new(self.max_sample_size, self.max_sketch_size); self.col_len];
         while let Some(row) = self.data.next()? {
             let cols = row.get_binary_cols(&self.cols)?;
-            let retreive_len = cols.len();
+            let retrieve_len = cols.len();
             let mut cols_iter = cols.into_iter();
-            if self.col_len != retreive_len {
+            if self.col_len != retrieve_len {
                 if let Some(v) = cols_iter.next() {
                     pk_builder.append(&v);
                 }

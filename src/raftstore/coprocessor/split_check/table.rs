@@ -202,7 +202,7 @@ fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-// Encode a key like `t{i64}` will append some unecessary bytes to the output,
+// Encode a key like `t{i64}` will append some unnecessary bytes to the output,
 // The first 10 bytes are enough to find out which table this key belongs to.
 const ENCODED_TABLE_TABLE_PREFIX: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
 

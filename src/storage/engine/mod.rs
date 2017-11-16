@@ -827,7 +827,7 @@ mod tests {
     }
 
     #[allow(cyclomatic_complexity)]
-    // use step to controll the distance between target key and current key in cursor.
+    // use step to control the distance between target key and current key in cursor.
     fn test_linear_seek(
         snapshot: &Snapshot,
         mode: ScanMode,
