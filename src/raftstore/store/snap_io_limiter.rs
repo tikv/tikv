@@ -163,13 +163,13 @@ mod test {
             limiter: Arc::new(SnapshotIOLimiter::default()),
             writer: &mut file,
         };
-        limiter_writer.write(b"Hello, World!");
-        limiter_writer.flush();
+        limiter_writer.write(b"Hello, World!").unwrap();
+        limiter_writer.flush().unwrap();
 
         let mut file = File::open("./test_limiter_writer.txt").unwrap();
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
         assert_eq!(contents, "Hello, World!");
-        fs::remove_file("./test_limiter_writer.txt");
+        fs::remove_file("./test_limiter_writer.txt").unwrap();
     }
 }
