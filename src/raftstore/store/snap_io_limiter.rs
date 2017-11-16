@@ -158,7 +158,7 @@ mod test {
     #[test]
     fn test_limiter_writer() {
         let mut file = File::create("./test_limiter_writer.txt").unwrap();
-        let mut limiter_writer = LimiterWriter{limiter:SnapshotIOLimiter::default(), &mut file};
+        let mut limiter_writer = LimiterWriter{limiter:SnapshotIOLimiter::default(), writer:&mut file};
         limiter_writer.write(&"Hello, World!");
         limiter_writer.flush();
 
