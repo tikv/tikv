@@ -1471,7 +1471,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .set_region_epoch(slibing_peer.region().get_region_epoch().clone());
             let mut admin = AdminRequest::new();
             admin.set_cmd_type(AdminCmdType::Merge);
-            admin.mut_merge().set_source_region_id(region.get_id());
+            admin.mut_merge().set_source_region(region.clone());
+            admin.mut_merge().set_commit(state.get_commit());
             admin
                 .mut_merge()
                 .set_entries(RepeatedField::from_vec(entries));
@@ -1492,6 +1493,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             unimplemented!("rollback pre-merge");
         }
         self.merge_states.push((region, state));
+    }
+
+    fn on_ready_merge(&mut self, region: metapb::Region, source_region: metapb::Region) {
+        let source_peer = {
+            let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
+            peer.become_readonly();
+            peer.peer.clone()
+        };
+        self.destroy_peer(source_region.get_id(), source_peer);
+        self.merge_states
+            .retain(|&(ref r, _)| r.get_id() != source_region.get_id());
+        // If merge backward, then stale meta is clear when source region is destroyed.
+        // So only forward needs to be considered.
+        if region.get_end_key() == source_region.get_end_key() {
+            self.region_ranges
+                .remove(&keys::enc_start_key(&source_region));
+            self.region_ranges
+                .insert(keys::enc_end_key(&region), region.get_id());
+        }
+        let region_id = region.get_id();
+        self.region_peers
+            .get_mut(&region_id)
+            .unwrap()
+            .mut_store()
+            .region = region;
     }
 
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
@@ -1569,6 +1595,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::PreMerge { region, state } => {
                     self.on_ready_pre_merge(region, state);
                 }
+                ExecResult::Merge {
+                    region,
+                    source_region,
+                } => {
+                    self.on_ready_merge(region, source_region);
+                }
                 ExecResult::ComputeHash {
                     region,
                     index,
@@ -1610,7 +1642,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let direction = msg.get_admin_request().get_pre_merge().get_direction();
             self.get_slibing_peer(region, direction)
         } else {
-            let region_id = msg.get_admin_request().get_merge().get_source_region_id();
+            let region_id = msg.get_admin_request()
+                .get_merge()
+                .get_source_region()
+                .get_id();
             self.region_peers.get(&region_id)
         };
         let slibing_region = match slibing_peer {

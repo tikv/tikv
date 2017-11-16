@@ -25,7 +25,8 @@ use protobuf::RepeatedField;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState};
+use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState,
+                             RegionLocalState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           RaftCmdRequest, RaftCmdResponse, Request, Response};
 
@@ -34,6 +35,7 @@ use util::{escape, rocksdb, MustConsumeVec};
 use util::time::{duration_to_sec, SlowTimer};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT};
+use raft::NO_LIMIT;
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{cmd_resp, keys, util, Store};
@@ -159,6 +161,10 @@ pub enum ExecResult {
         right_derive: bool,
     },
     PreMerge { region: Region, state: MergeState },
+    Merge {
+        region: Region,
+        source_region: Region,
+    },
     ComputeHash {
         region: Region,
         index: u64,
@@ -172,6 +178,7 @@ struct ApplyContext<'a> {
     host: &'a CoprocessorHost,
     wb: WriteBatch,
     cbs: MustConsumeVec<(Callback, RaftCmdResponse)>,
+    merged_regions: Vec<u64>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
     sync_log: bool,
@@ -184,6 +191,7 @@ impl<'a> ApplyContext<'a> {
             host: host,
             wb: WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE),
             cbs: MustConsumeVec::new("callback of apply context"),
+            merged_regions: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
             sync_log: false,
@@ -240,11 +248,14 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
 }
 
 fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
-    // When encounter ComputeHash cmd, we must flush the write batch to engine immediately.
-    if cmd.has_admin_request() &&
-        cmd.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash
-    {
-        return true;
+    if cmd.has_admin_request() {
+        match cmd.get_admin_request().get_cmd_type() {
+            // ComputeHash require an up to date snapshot.
+            AdminCmdType::ComputeHash |
+            // Merge needs to get the latest apply index.
+            AdminCmdType::Merge => return true,
+            _ => {}
+        }
     }
 
     // When write batch contains more than `recommended` keys, flush the batch to engine.
@@ -286,14 +297,6 @@ pub struct ApplyDelegate {
 }
 
 impl ApplyDelegate {
-    pub fn region_id(&self) -> u64 {
-        self.region.get_id()
-    }
-
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
     fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
         ApplyDelegate::from_registration(peer.kv_engine(), reg)
@@ -312,6 +315,14 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
         }
+    }
+
+    pub fn region_id(&self) -> u64 {
+        self.region.get_id()
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     fn handle_raft_committed_entries(
@@ -589,6 +600,13 @@ impl ApplyDelegate {
                 ExecResult::PreMerge { ref region, .. } => {
                     self.region = region.clone();
                 }
+                ExecResult::Merge {
+                    ref region,
+                    ref source_region,
+                } => {
+                    self.region = region.clone();
+                    ctx.merged_regions.push(source_region.get_id());
+                }
             }
         }
 
@@ -693,8 +711,8 @@ impl ApplyDelegate {
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             // TODO: is it backward compatible to add new cmd_type?
             AdminCmdType::PreMerge => self.exec_pre_merge(ctx, request),
+            AdminCmdType::Merge => self.exec_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
-            AdminCmdType::Merge => unimplemented!(),
         }?;
         response.set_cmd_type(cmd_type);
 
@@ -996,6 +1014,120 @@ impl ApplyDelegate {
             Some(ExecResult::PreMerge {
                 region: region,
                 state: merging_state,
+            }),
+        ))
+    }
+
+    fn exec_merge(
+        &mut self,
+        ctx: &mut ApplyContext,
+        req: &AdminRequest,
+    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["merge", "all"])
+            .inc();
+
+        let merge = req.get_merge();
+        let source_region = merge.get_source_region();
+        let region_state_key = keys::region_state_key(source_region.get_id());
+        let state: RegionLocalState = self.engine
+            .get_msg_cf(CF_RAFT, &region_state_key)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to get regions state of {:?}: {:?}",
+                    source_region,
+                    e
+                )
+            })
+            .unwrap();
+        match state.get_state() {
+            PeerState::Normal | PeerState::Merging => {}
+            _ => panic!("unexpected state of merging region {:?}", state),
+        }
+        let exist_region = state.get_region();
+        assert_eq!(source_region.get_start_key(), exist_region.get_start_key());
+        assert_eq!(source_region.get_end_key(), exist_region.get_end_key());
+
+        let apply_state_key = keys::apply_state_key(source_region.get_id());
+        let apply_state: RaftApplyState = self.engine
+            .get_msg_cf(CF_RAFT, &apply_state_key)
+            .unwrap_or_else(|e| {
+                panic!("failed to get apply state of {:?}: {:?}", source_region, e)
+            })
+            .unwrap();
+        let apply_index = apply_state.get_applied_index();
+        if apply_index >= merge.get_commit() {
+            assert_eq!(
+                source_region.get_region_epoch(),
+                exist_region.get_region_epoch()
+            );
+        } else {
+            let first_index = merge
+                .get_entries()
+                .get(0)
+                .map_or(merge.get_commit(), |e| e.get_index());
+            let mut entries = vec![];
+            // TODO: change it to raft_engine
+            peer_storage::fetch_entries_to(
+                &self.engine,
+                source_region.get_id(),
+                apply_index + 1,
+                first_index,
+                NO_LIMIT,
+                &mut entries,
+            ).unwrap_or_else(|e| {
+                panic!(
+                    "failed to load entries from region {}: {:?}",
+                    source_region.get_id(),
+                    e
+                );
+            });
+            if !merge.get_entries().is_empty() {
+                entries.extend(merge.get_entries().to_vec());
+            }
+            let exec_ctx = ctx.exec_ctx.take();
+            let reg = Registration {
+                id: 0,
+                term: 0,
+                apply_state: apply_state,
+                // It's not used.
+                applied_index_term: 0,
+                region: exist_region.to_owned(),
+            };
+            let mut delegate = ApplyDelegate::from_registration(self.engine.clone(), reg);
+            // Effective administration commands are filtered, so ExecResults can be
+            // ignored directly.
+            delegate.handle_raft_committed_entries(ctx, entries);
+            ctx.exec_ctx = exec_ctx;
+        }
+
+        let mut region = self.region.clone();
+        let version = region.get_region_epoch().get_version() + 1;
+        region.mut_region_epoch().set_version(version);
+        if keys::enc_end_key(&region) == keys::enc_start_key(source_region) {
+            region.set_end_key(source_region.get_end_key().to_vec());
+        } else {
+            region.set_start_key(source_region.get_start_key().to_vec());
+        }
+        write_peer_state(&self.engine, &ctx.wb, &region, PeerState::Normal)
+            .and_then(|_| {
+                write_peer_state(&self.engine, &ctx.wb, exist_region, PeerState::Tombstone)
+            })
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to save merge region {:?}: {:?}",
+                    self.tag,
+                    region,
+                    e
+                )
+            });
+
+        let resp = AdminResponse::new();
+        Ok((
+            resp,
+            Some(ExecResult::Merge {
+                region: region,
+                source_region: source_region.to_owned(),
             }),
         ))
     }
@@ -1502,7 +1634,7 @@ impl Runner {
         let mut apply_ctx = ApplyContext::new(self.host.as_ref());
         let mut committed_count = 0;
         for apply in applys {
-            if apply.entries.is_empty() {
+            if apply.entries.is_empty() || apply_ctx.merged_regions.contains(&apply.region_id) {
                 continue;
             }
             let mut e = match self.delegates.entry(apply.region_id) {
@@ -1547,6 +1679,12 @@ impl Runner {
             self.db
                 .write_opt(apply_ctx.wb, &write_opts)
                 .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
+        }
+
+        for region_id in apply_ctx.merged_regions.drain(..) {
+            if let Some(mut e) = self.delegates.remove(&region_id) {
+                e.destroy();
+            }
         }
 
         // Call callbacks

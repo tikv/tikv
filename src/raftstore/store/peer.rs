@@ -429,7 +429,7 @@ impl Peer {
         self.kv_engine.write_opt(kv_wb, &write_opts)?;
         self.raft_engine.write_opt(raft_wb, &write_opts)?;
 
-        if self.get_store().is_initialized() {
+        if self.get_store().is_initialized() && !self.read_only {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
             if let Err(e) = self.get_store().clear_data() {
