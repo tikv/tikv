@@ -124,8 +124,11 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::fs::{self, File};
+    use std::sync::Arc;
+
     use super::{SnapshotIOLimiter, SNAP_MAX_BYTES_PER_SEC, SNAP_MIN_BYTES_PER_TIME,
-                SNAP_MIN_BYTES_PER_TIME};
+                SNAP_MAX_BYTES_PER_TIME};
 
     #[test]
     fn test_default_snapshot_io_limiter() {
@@ -150,5 +153,19 @@ mod test {
         assert_eq!(limiter.get_total_bytes_through(), 1024 * 1024);
 
         assert_eq!(limiter.get_total_requests(), 1);
+    }
+
+    #[test]
+    fn test_limiter_writer() {
+        let mut file = File::create("./test_limiter_writer.txt").unwrap();
+        let mut limiter_writer = LimiterWriter{limiter:SnapshotIOLimiter::default(), &mut file};
+        limiter_writer.write(&"Hello, World!");
+        limiter_writer.flush();
+
+        let mut file = File::open("./test_limiter_writer.txt").unwrap();
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "Hello, World!");
+        fs::remove_file("./test_limiter_writer.txt");
     }
 }
