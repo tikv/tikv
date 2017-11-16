@@ -51,7 +51,7 @@ impl CMSketch {
     }
 
     // `insert` inserts the data into cm sketch. For each row i, the position at
-    // (h1 + h2*j) % width will be incremented by one, where the (h1, h2) is the hash value
+    // (h1 + h2*i) % width will be incremented by one, where the (h1, h2) is the hash value
     // of data.
     pub fn insert(&mut self, bytes: &[u8]) {
         self.count = self.count.wrapping_add(1);
