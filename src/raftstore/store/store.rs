@@ -1897,7 +1897,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         region_id,
                         self.store_id()
                     );
-                    return Err(Error::NotLeader(region_id, Some(peer.peer.clone())));
+                    return Err(Error::NotLeader(
+                        region_id,
+                        peer.get_peer_from_cache(peer.leader_id()),
+                    ));
                 }
                 peer
             }
