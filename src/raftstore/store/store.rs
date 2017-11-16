@@ -719,7 +719,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let message = msg.get_message();
         let msg_type = message.get_msg_type();
-        if msg_type != MessageType::MsgRequestVote &&
+        if msg_type != MessageType::MsgRequestVote && msg_type != MessageType::MsgRequestPreVote &&
             (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX)
         {
             debug!(
@@ -829,7 +829,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
-        let is_vote_msg = msg_type == MessageType::MsgRequestVote;
+        let is_vote_msg =
+            msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote;
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:

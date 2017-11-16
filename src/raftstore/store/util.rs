@@ -76,7 +76,8 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
 
 #[inline]
 pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
-    msg.get_message().get_msg_type() == MessageType::MsgRequestVote &&
+    (msg.get_message().get_msg_type() == MessageType::MsgRequestVote ||
+        msg.get_message().get_msg_type() == MessageType::MsgRequestPreVote) &&
         msg.get_message().get_term() == peer_storage::RAFT_INIT_LOG_TERM + 1
 }
 
