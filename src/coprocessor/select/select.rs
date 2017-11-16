@@ -26,8 +26,7 @@ use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::codec::datum::Datum;
 use coprocessor::metrics::*;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_pk, is_point, to_pb_error, ReqContext, BATCH_ROW_COUNT,
-                            SINGLE_GROUP};
+use coprocessor::endpoint::{get_pk, is_point, to_pb_error, ReqContext, SINGLE_GROUP};
 use util::Either;
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::codec::number::NumberDecoder;
@@ -532,7 +531,7 @@ impl SelectContextCore {
     ///       groupKey2, count1, value2, count3, value3
     fn aggr_rows(&mut self) -> Result<()> {
         self.chunks = Vec::with_capacity(
-            (self.gk_aggrs.len() + BATCH_ROW_COUNT - 1) / BATCH_ROW_COUNT,
+            (self.gk_aggrs.len() + self.batch_row_limit - 1) / self.batch_row_limit,
         );
         // Each aggregate partial result will be converted to two datum.
         let mut row_data = Vec::with_capacity(1 + 2 * self.sel.get_aggregates().len());
