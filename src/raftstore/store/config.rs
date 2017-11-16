@@ -94,6 +94,9 @@ pub struct Config {
 
     /// Max log gap allowed to propose merge.
     pub max_merge_log_gap: u64,
+    // Interval to repropose merge.
+    pub merge_check_tick_interval: ReadableDuration,
+
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -146,6 +149,7 @@ impl Default for Config {
             right_derive_when_split: true,
             allow_remove_leader: false,
             max_merge_log_gap: 10,
+            merge_check_tick_interval: ReadableDuration::secs(10),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -211,6 +215,10 @@ impl Config {
             ));
         }
 
+        if self.merge_check_tick_interval.as_millis() == 0 {
+            return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
+        }
+
         Ok(())
     }
 }
@@ -254,6 +262,10 @@ mod tests {
         cfg = Config::new();
         cfg.raft_log_gc_count_limit = 100;
         cfg.max_merge_log_gap = 110;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.merge_check_tick_interval = ReadableDuration::secs(0);
         assert!(cfg.validate().is_err());
     }
 }

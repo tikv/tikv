@@ -379,6 +379,10 @@ impl Peer {
         self.read_only = true;
     }
 
+    pub fn become_writable(&mut self) {
+        self.read_only = false;
+    }
+
     pub fn mark_to_be_checked(&mut self, pending_raft_groups: &mut HashSet<u64>) {
         if !self.marked_to_be_checked {
             self.marked_to_be_checked = true;
@@ -1602,7 +1606,10 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
             AdminCmdType::Split => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
             // TODO: prevent compact log once pre-merge is applied.
-            AdminCmdType::PreMerge | AdminCmdType::Merge | AdminCmdType::TransferLeader => {
+            AdminCmdType::PreMerge |
+            AdminCmdType::Merge |
+            AdminCmdType::RollbackPreMerge |
+            AdminCmdType::TransferLeader => {
                 check_ver = true;
                 check_conf_ver = true;
             }

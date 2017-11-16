@@ -73,6 +73,7 @@ raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
 max-merge-log-gap = 3
+merge-check-tick-interval = "11s"
 
 [coprocessor]
 split-region-on-table = true

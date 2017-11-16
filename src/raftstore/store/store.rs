@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
-use std::{cmp, thread, u64};
+use std::{cmp, mem, thread, u64};
 
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -502,6 +502,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
+        self.register_merge_check_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             self.kv_engine.clone(),
@@ -1444,6 +1445,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn register_merge_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::CheckMerge,
+            self.cfg.merge_check_tick_interval.as_millis(),
+        ) {
+            error!("{} register split region check tick err: {:?}", self.tag, e);
+        };
+    }
+
     fn schedule_merge(&mut self, region: &metapb::Region, state: &MergeState) -> bool {
         let req = {
             let direction = state.get_direction();
@@ -1483,6 +1494,35 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         true
     }
 
+    fn rollback_pre_merge(&mut self, region: &metapb::Region, state: &MergeState) {
+        let req = {
+            let peer = &self.region_peers[&region.get_id()];
+            let mut request = new_admin_request(region.get_id(), peer.peer.clone());
+            request
+                .mut_header()
+                .set_region_epoch(peer.region().get_region_epoch().clone());
+            let mut admin = AdminRequest::new();
+            admin.set_cmd_type(AdminCmdType::RollbackPreMerge);
+            admin
+                .mut_rollback_pre_merge()
+                .set_commit(state.get_commit());
+            request.set_admin_request(admin);
+            request
+        };
+        self.propose_raft_command(req, Box::new(|_| {}));
+    }
+
+    fn on_check_merge(&mut self, event_loop: &mut EventLoop<Self>) {
+        let merge_states = mem::replace(&mut self.merge_states, vec![]);
+        for &(ref region, ref state) in &merge_states {
+            if !self.schedule_merge(region, state) {
+                self.rollback_pre_merge(region, state);
+            }
+        }
+        self.merge_states = merge_states;
+        self.register_merge_check_tick(event_loop);
+    }
+
     fn on_ready_pre_merge(&mut self, region: metapb::Region, state: MergeState) {
         self.region_peers
             .get_mut(&region.get_id())
@@ -1490,7 +1530,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .become_readonly();
 
         if !self.schedule_merge(&region, &state) {
-            unimplemented!("rollback pre-merge");
+            self.rollback_pre_merge(&region, &state);
         }
         self.merge_states.push((region, state));
     }
@@ -1518,6 +1558,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .unwrap()
             .mut_store()
             .region = region;
+    }
+
+    fn on_ready_rollback_pre_merge(&mut self, region_id: u64, commit: u64) {
+        self.merge_states.retain(|&(ref r, ref c)| {
+            if r.get_id() != region_id {
+                return true;
+            }
+            assert_eq!(c.get_commit(), commit);
+            false
+        });
+        self.region_peers
+            .get_mut(&region_id)
+            .unwrap()
+            .become_writable();
     }
 
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
@@ -1600,6 +1654,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     source_region,
                 } => {
                     self.on_ready_merge(region, source_region);
+                }
+                ExecResult::RollbackPreMerge { region_id, commit } => {
+                    self.on_ready_rollback_pre_merge(region_id, commit)
                 }
                 ExecResult::ComputeHash {
                     region,
@@ -2644,6 +2701,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
+            Tick::CheckMerge => self.on_check_merge(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

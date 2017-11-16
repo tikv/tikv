@@ -165,6 +165,7 @@ pub enum ExecResult {
         region: Region,
         source_region: Region,
     },
+    RollbackPreMerge { region_id: u64, commit: u64 },
     ComputeHash {
         region: Region,
         index: u64,
@@ -583,7 +584,8 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
                 ExecResult::CompactLog { .. } |
-                ExecResult::DeleteRange { .. } => {}
+                ExecResult::DeleteRange { .. } |
+                ExecResult::RollbackPreMerge { .. } => {}
                 ExecResult::SplitRegion {
                     ref left,
                     ref right,
@@ -712,6 +714,7 @@ impl ApplyDelegate {
             // TODO: is it backward compatible to add new cmd_type?
             AdminCmdType::PreMerge => self.exec_pre_merge(ctx, request),
             AdminCmdType::Merge => self.exec_merge(ctx, request),
+            AdminCmdType::RollbackPreMerge => self.exec_rollback_pre_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -1128,6 +1131,42 @@ impl ApplyDelegate {
             Some(ExecResult::Merge {
                 region: region,
                 source_region: source_region.to_owned(),
+            }),
+        ))
+    }
+
+    fn exec_rollback_pre_merge(
+        &mut self,
+        ctx: &mut ApplyContext,
+        req: &AdminRequest,
+    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        let region_state_key = keys::region_state_key(self.region_id());
+        let state: RegionLocalState = self.engine
+            .get_msg_cf(CF_RAFT, &region_state_key)
+            .unwrap_or_else(|e| {
+                panic!("{} failed to get regions state: {:?}", self.tag, e)
+            })
+            .unwrap();
+        assert_eq!(state.get_state(), PeerState::Merging);
+        let rollback = req.get_rollback_pre_merge();
+        assert_eq!(state.get_merge_state().get_commit(), rollback.get_commit());
+        // Epoch doesn't need to be touched here. All effective proposals should be
+        // dropped by readonly state.
+        write_peer_state(&self.engine, &ctx.wb, &self.region, PeerState::Tombstone)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to rollback pre merge {:?}: {:?}",
+                    self.tag,
+                    rollback,
+                    e
+                )
+            });
+        let resp = AdminResponse::new();
+        Ok((
+            resp,
+            Some(ExecResult::RollbackPreMerge {
+                region_id: self.region.get_id(),
+                commit: rollback.get_commit(),
             }),
         ))
     }

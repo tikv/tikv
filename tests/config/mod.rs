@@ -107,6 +107,7 @@ fn test_serde_custom_tikv_config() {
         right_derive_when_split: false,
         allow_remove_leader: true,
         max_merge_log_gap: 3,
+        merge_check_tick_interval: ReadableDuration::secs(11),
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
     };
