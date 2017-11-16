@@ -125,7 +125,7 @@ where
 #[cfg(test)]
 mod test {
     use std::fs::{self, File};
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::sync::Arc;
 
     use super::{LimiterWriter, SnapshotIOLimiter, SNAP_MAX_BYTES_PER_SEC, SNAP_MAX_BYTES_PER_TIME,
@@ -160,7 +160,7 @@ mod test {
     fn test_limiter_writer() {
         let mut file = File::create("./test_limiter_writer.txt").unwrap();
         let mut limiter_writer = LimiterWriter {
-            limiter: SnapshotIOLimiter::default(),
+            limiter: Arc::new(SnapshotIOLimiter::default()),
             writer: &mut file,
         };
         limiter_writer.write(&"Hello, World!");
