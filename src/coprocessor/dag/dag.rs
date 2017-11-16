@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
 use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
@@ -23,7 +22,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext, BATCH_ROW_COUNT};
+use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{build_exec, Executor, Row};
@@ -34,7 +33,7 @@ pub struct DAGContext {
     req_ctx: Arc<ReqContext>,
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
-    chunks: Vec<Chunk>,
+    batch_row_limit: usize,
 }
 
 impl DAGContext {
@@ -43,6 +42,7 @@ impl DAGContext {
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
         req_ctx: Arc<ReqContext>,
+        batch_row_limit: usize,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
@@ -62,35 +62,32 @@ impl DAGContext {
             req_ctx: req_ctx,
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
-            chunks: Vec::new(),
+            batch_row_limit: batch_row_limit,
         })
     }
 
     pub fn handle_request(&mut self) -> Result<Response> {
-        let mut cur_row_count = 0;
-        let mut chunk = Chunk::default();
+        let mut record_cnt = 0;
+        let mut chunks = Vec::new();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
+                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
+                        let chunk = Chunk::new();
+                        chunks.push(chunk);
+                        record_cnt = 0;
+                    }
+                    let chunk = chunks.last_mut().unwrap();
+                    record_cnt += 1;
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
                         let value = inflate_cols(&row, &self.columns, &self.output_offsets)?;
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
-                    cur_row_count += 1;
-                    if cur_row_count >= BATCH_ROW_COUNT {
-                        self.chunks.push(mem::replace(&mut chunk, Chunk::default()));
-                        cur_row_count = 0;
-                    }
                 }
                 Ok(None) => {
-                    if cur_row_count > 0 {
-                        self.chunks.push(chunk);
-                    }
-                    let chunks = mem::replace(&mut self.chunks, Vec::new());
-
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));

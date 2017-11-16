@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
-use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
+use tipb::select::{self, DAGRequest, SelectRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
@@ -72,6 +72,7 @@ pub struct Host {
     low_priority_pool: ThreadPool<CopContext>,
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
+    batch_row_limit: usize,
 }
 
 pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
@@ -169,6 +170,7 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
+            batch_row_limit: cfg.end_point_batch_row_limit,
             pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-normal-pool"),
                 CopContextFactory { sender: r.clone() },
@@ -210,6 +212,7 @@ impl Host {
             return;
         }
 
+        let batch_row_limit = self.batch_row_limit;
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
@@ -226,7 +229,7 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
-                let stats = end_point.handle_request(req);
+                let stats = end_point.handle_request(req, batch_row_limit);
                 ctx.add_statistics(type_str, &stats);
                 ctx.add_statistics_by_region(region_id, &stats);
                 COPR_PENDING_REQS
@@ -624,15 +627,15 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(self, mut t: RequestTask) -> Statistics {
+    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> Statistics {
         t.stop_record_waiting();
 
         if let Err(e) = t.check_outdated() {
             return on_error(e, t);
         }
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
-            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t),
+            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t, batch_row_limit),
+            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
         };
@@ -642,17 +645,27 @@ impl TiDbEndPoint {
         }
     }
 
-    fn handle_select(self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let mut ctx = SelectContext::new(sel, self.snap, t.ctx.clone())?;
+    fn handle_select(
+        self,
+        sel: SelectRequest,
+        t: &mut RequestTask,
+        batch_row_limit: usize,
+    ) -> Result<Response> {
+        let mut ctx = SelectContext::new(sel, self.snap, t.ctx.clone(), batch_row_limit)?;
         let ranges = t.req.take_ranges().into_vec();
         let res = ctx.handle_request(ranges);
         ctx.collect_statistics_into(&mut t.statistics);
         res
     }
 
-    pub fn handle_dag(self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
+    pub fn handle_dag(
+        self,
+        dag: DAGRequest,
+        t: &mut RequestTask,
+        batch_row_limit: usize,
+    ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone())?;
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
         let res = ctx.handle_request();
         ctx.collect_statistics_into(&mut t.statistics);
         res
@@ -708,18 +721,6 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     } else {
         Datum::I64(h)
     }
-}
-
-#[inline]
-pub fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
-    if chunks
-        .last()
-        .map_or(true, |chunk| chunk.get_rows_meta().len() >= BATCH_ROW_COUNT)
-    {
-        let chunk = Chunk::new();
-        chunks.push(chunk);
-    }
-    chunks.last_mut().unwrap()
 }
 
 pub const STR_REQ_TYPE_SELECT: &'static str = "select";

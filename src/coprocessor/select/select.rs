@@ -26,7 +26,7 @@ use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::codec::datum::Datum;
 use coprocessor::metrics::*;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_chunk, get_pk, is_point, to_pb_error, ReqContext, BATCH_ROW_COUNT,
+use coprocessor::endpoint::{get_pk, is_point, to_pb_error, ReqContext, BATCH_ROW_COUNT,
                             SINGLE_GROUP};
 use util::Either;
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
@@ -52,6 +52,7 @@ impl SelectContext {
         sel: SelectRequest,
         snap: Box<Snapshot>,
         req_ctx: Arc<ReqContext>,
+        batch_row_limit: usize,
     ) -> Result<SelectContext> {
         let snap = SnapshotStore::new(
             snap,
@@ -60,7 +61,7 @@ impl SelectContext {
             req_ctx.fill_cache,
         );
         Ok(SelectContext {
-            core: SelectContextCore::new(sel)?,
+            core: SelectContextCore::new(sel, batch_row_limit)?,
             snap: snap,
             statistics: Statistics::default(),
             req_ctx: req_ctx,
@@ -260,10 +261,11 @@ struct SelectContextCore {
     gks: Vec<Arc<Vec<u8>>>,
     gk_aggrs: HashMap<Arc<Vec<u8>>, Vec<Box<AggrFunc>>>,
     chunks: Vec<Chunk>,
+    batch_row_limit: usize,
 }
 
 impl SelectContextCore {
-    fn new(sel: SelectRequest) -> Result<SelectContextCore> {
+    fn new(sel: SelectRequest, batch_row_limit: usize) -> Result<SelectContextCore> {
         let cond_cols;
         let topn_cols;
         let mut order_by_cols: Vec<ByItem> = Vec::new();
@@ -379,6 +381,7 @@ impl SelectContextCore {
             order_cols: Arc::new(order_by_cols),
             limit: limit,
             desc_scan: desc_can,
+            batch_row_limit: batch_row_limit,
         })
     }
 
@@ -431,7 +434,7 @@ impl SelectContextCore {
     }
 
     fn get_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
-        let chunk = get_chunk(&mut self.chunks);
+        let chunk = get_chunk(&mut self.chunks, self.batch_row_limit);
         let last_len = chunk.get_rows_data().len();
         let cols = if self.sel.has_table_info() {
             self.sel.get_table_info().get_columns()
@@ -535,8 +538,7 @@ impl SelectContextCore {
         let mut row_data = Vec::with_capacity(1 + 2 * self.sel.get_aggregates().len());
         for gk in self.gks.drain(..) {
             let aggrs = self.gk_aggrs.remove(&gk).unwrap();
-
-            let chunk = get_chunk(&mut self.chunks);
+            let chunk = get_chunk(&mut self.chunks, self.batch_row_limit);
             // The first column is group key.
             row_data.push(Datum::Bytes(Arc::try_unwrap(gk).unwrap()));
             for mut aggr in aggrs {
@@ -610,4 +612,16 @@ where
         }
     }
     Ok(())
+}
+
+#[inline]
+fn get_chunk(chunks: &mut Vec<Chunk>, batch_row_limit: usize) -> &mut Chunk {
+    if chunks
+        .last()
+        .map_or(true, |chunk| chunk.get_rows_meta().len() >= batch_row_limit)
+    {
+        let chunk = Chunk::new();
+        chunks.push(chunk);
+    }
+    chunks.last_mut().unwrap()
 }
