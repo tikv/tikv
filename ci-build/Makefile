@@ -22,7 +22,7 @@ ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/lib/librocksdb.so.5.6.1:
 	cd rocksdb-5.6.1 && \
 	INSTALL_PATH=${LOCAL_DIR} make install-shared
 
-# TODO: use offical archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
+# TODO: use official archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
 ${LOCAL_DIR}/bin/kcov:
 	cd /tmp && \
 	curl -L https://github.com/SimonKagstrom/kcov/archive/v33.tar.gz -o kcov.tar.gz && \
