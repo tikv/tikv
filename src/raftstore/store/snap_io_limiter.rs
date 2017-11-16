@@ -125,9 +125,10 @@ where
 #[cfg(test)]
 mod test {
     use std::fs::{self, File};
+    use std::io::Read;
     use std::sync::Arc;
 
-    use super::{SnapshotIOLimiter, SNAP_MAX_BYTES_PER_SEC, SNAP_MAX_BYTES_PER_TIME,
+    use super::{LimiterWriter, SnapshotIOLimiter, SNAP_MAX_BYTES_PER_SEC, SNAP_MAX_BYTES_PER_TIME,
                 SNAP_MIN_BYTES_PER_TIME};
 
     #[test]
