@@ -40,6 +40,7 @@ impl CMSketch {
         }
     }
 
+    // `hash` hashes the data into two u64 using murmur hash.
     fn hash(mut bytes: &[u8]) -> (u64, u64) {
         let mut out: [u8; 16] = [0; 16];
         murmur3_x64_128(&mut bytes, 0, &mut out);
@@ -49,6 +50,9 @@ impl CMSketch {
         )
     }
 
+    // `insert` inserts the data into cm sketch. For each row i, the position at
+    // (h1 + h2*j) % width will be incremented by one, where the (h1, h2) is the hash value
+    // of data.
     pub fn insert(&mut self, bytes: &[u8]) {
         self.count = self.count.wrapping_add(1);
         let (h1, h2) = CMSketch::hash(bytes);

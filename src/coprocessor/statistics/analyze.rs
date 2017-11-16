@@ -145,7 +145,7 @@ struct SampleBuilder<'a> {
 
 /// `SampleBuilder` is used to analyze columns. It collects sample from
 /// the result set using Reservoir Sampling algorithm, estimates NDVs
-/// using FM Sketch during the collecting process, and build count-min sketch.
+/// using FM Sketch during the collecting process, and builds count-min sketch.
 impl<'a> SampleBuilder<'a> {
     fn new(
         mut req: AnalyzeColumnsReq,
