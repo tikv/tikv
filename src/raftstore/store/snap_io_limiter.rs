@@ -16,9 +16,9 @@ use std::io::{Result, Write};
 
 use rocksdb::RateLimiter;
 
-const SNAP_MIN_BYTES_PER_TIME: i64 = 64 * 1024;
-const SNAP_MAX_BYTES_PER_TIME: i64 = 1024 * 1024;
-const SNAP_MAX_BYTES_PER_SEC: i64 = 10 * 1024 * 1024;
+use server::config::{DEFAULT_SNAP_MAX_BYTES_PER_SEC, DEFAULT_SNAP_MAX_BYTES_PER_TIME,
+                     DEFAULT_SNAP_MIN_BYTES_PER_TIME};
+
 const REFILL_PERIOD: i64 = 100 * 1000;
 const FARENESS: i32 = 10;
 
@@ -78,9 +78,9 @@ impl SnapshotIOLimiter {
 impl Default for SnapshotIOLimiter {
     fn default() -> SnapshotIOLimiter {
         SnapshotIOLimiter {
-            inner: RateLimiter::new(SNAP_MAX_BYTES_PER_SEC, REFILL_PERIOD, FARENESS),
-            min_bytes_per_time: SNAP_MIN_BYTES_PER_TIME,
-            max_bytes_per_time: SNAP_MAX_BYTES_PER_TIME,
+            inner: RateLimiter::new(DEFAULT_SNAP_MAX_BYTES_PER_SEC as i64, REFILL_PERIOD, FARENESS),
+            min_bytes_per_time: DEFAULT_SNAP_MIN_BYTES_PER_TIME as i64,
+            max_bytes_per_time: DEFAULT_SNAP_MAX_BYTES_PER_TIME as i64,
         }
     }
 }
@@ -101,8 +101,8 @@ where
         let total = buf.len();
         let single = self.limiter.get_max_bytes_per_time() as usize;
         let mut curr = 0;
+        let end;
         while curr < total {
-            let end;
             if curr + single >= total {
                 end = total;
                 self.limiter.request((total - curr) as i64);
@@ -128,15 +128,17 @@ mod test {
     use std::io::{Read, Write};
     use std::sync::Arc;
 
-    use super::{LimiterWriter, SnapshotIOLimiter, SNAP_MAX_BYTES_PER_SEC, SNAP_MAX_BYTES_PER_TIME,
-                SNAP_MIN_BYTES_PER_TIME};
+    use server::config::{DEFAULT_SNAP_MAX_BYTES_PER_SEC, DEFAULT_SNAP_MAX_BYTES_PER_TIME,
+                         DEFAULT_SNAP_MIN_BYTES_PER_TIME};
+
+    use super::{LimiterWriter, SnapshotIOLimiter};
 
     #[test]
     fn test_default_snapshot_io_limiter() {
         let limiter = SnapshotIOLimiter::default();
-        assert_eq!(limiter.get_min_bytes_per_time(), SNAP_MIN_BYTES_PER_TIME);
-        assert!(limiter.get_max_bytes_per_time() <= SNAP_MAX_BYTES_PER_TIME);
-        assert_eq!(limiter.get_bytes_per_second(), SNAP_MAX_BYTES_PER_SEC);
+        assert_eq!(limiter.get_min_bytes_per_time(), DEFAULT_SNAP_MIN_BYTES_PER_TIME as i64);
+        assert!(limiter.get_max_bytes_per_time() <= DEFAULT_SNAP_MAX_BYTES_PER_TIME as i64);
+        assert_eq!(limiter.get_bytes_per_second(), DEFAULT_SNAP_MAX_BYTES_PER_SEC as i64);
     }
 
     #[test]
