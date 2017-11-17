@@ -18,6 +18,7 @@
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
+#![cfg_attr(feature = "no-fail", allow(dead_code))]
 #![recursion_limit = "100"]
 #![allow(module_inception)]
 #![allow(should_implement_trait)]

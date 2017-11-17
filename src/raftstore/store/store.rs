@@ -1060,6 +1060,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // check if snapshot file exists.
         self.snap_mgr.get_snapshot_for_applying(&key)?;
 
+        fail_point!("check_snapshot", key.region_id < 10, |msg| {
+            error!("snap rejected by failpoint: {:?}", msg);
+            Ok(Some(key))
+        });
+
         self.pending_snapshot_regions.push(snap_region);
 
         Ok(None)
