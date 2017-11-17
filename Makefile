@@ -30,7 +30,7 @@ default: release
 all: format build test
 
 dev:
-	@export ENABLE_FEATURES=dev && make all
+	@env ENABLE_FEATURES=dev FAIL_POINT=1 make all
 
 build:
 	cargo build --features "${ENABLE_FEATURES}"
