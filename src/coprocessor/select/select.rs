@@ -100,7 +100,7 @@ impl SelectContext {
         Ok(resp)
     }
 
-    fn set_scan_on(&mut self, range: KeyRange) -> Result<()> {
+    fn reset_scan_range(&mut self, range: KeyRange) -> Result<()> {
         if self.scanner.is_none() {
             let scan_on = if self.req_ctx.table_scan {
                 ScanOn::Table
@@ -146,13 +146,13 @@ impl SelectContext {
     fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
+            COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
             let value = match self.snap
                 .get(&Key::from_raw(range.get_start()), &mut self.statistics)?
             {
                 None => return Ok(0),
                 Some(v) => v,
             };
-            CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
             let values = {
                 let ids = self.core.cols.as_ref().left().unwrap();
                 box_try!(table::cut_row(value, ids))
@@ -160,14 +160,14 @@ impl SelectContext {
             let h = box_try!(table::decode_handle(range.get_start()));
             row_count += self.core.handle_row(h, values)?;
         } else {
-            self.set_scan_on(range)?;
+            self.reset_scan_range(range)?;
             let scanner = self.scanner.as_mut().unwrap();
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     self.req_ctx.check_if_outdated()?;
                 }
+                COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 if let Some((key, value)) = scanner.next_row()? {
-                    CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                     let h = box_try!(table::decode_handle(&key));
                     let row_data = {
                         let ids = self.core.cols.as_ref().left().unwrap();
@@ -202,7 +202,7 @@ impl SelectContext {
 
     fn get_idx_row_from_range(&mut self, r: KeyRange) -> Result<usize> {
         let mut row_cnt = 0;
-        self.set_scan_on(r)?;
+        self.reset_scan_range(r)?;
         let scanner = self.scanner.as_mut().unwrap();
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {

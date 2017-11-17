@@ -85,6 +85,8 @@ impl IndexScanExecutor {
         if self.scanner.is_none() {
             return Ok(None);
         }
+        COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+
         let scanner = self.scanner.as_mut().unwrap();
         let (key, value) = match scanner.next_row()? {
             Some((key, value)) => (key, value),
@@ -119,7 +121,6 @@ impl Executor for IndexScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
-                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
