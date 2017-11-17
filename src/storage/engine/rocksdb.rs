@@ -212,14 +212,14 @@ impl Snapshot for RocksSnapshot {
 
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor> {
         trace!("RocksSnapshot: create iterator");
-        let iter = self.new_arc_iter(iter_opt);
+        let iter = self.db_iterator(iter_opt);
         Ok(Cursor::new(Box::new(iter), mode))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf(&self, cf: CfName, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor> {
         trace!("RocksSnapshot: create cf iterator");
-        let iter = self.new_arc_iter_cf(cf, iter_opt)?;
+        let iter = self.db_iterator_cf(cf, iter_opt)?;
         Ok(Cursor::new(Box::new(iter), mode))
     }
 

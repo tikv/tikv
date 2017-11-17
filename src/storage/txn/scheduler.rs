@@ -813,7 +813,7 @@ fn process_write_impl(
             statistics.add(txn.get_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                let modifies = txn.take_modifies();
+                let modifies = txn.into_modifies();
                 (pr, modifies, rows)
             } else {
                 // Skip write stage if some keys are locked.
@@ -847,7 +847,7 @@ fn process_write_impl(
             }
 
             statistics.add(txn.get_statistics());
-            (ProcessResult::Res, txn.take_modifies(), rows)
+            (ProcessResult::Res, txn.into_modifies(), rows)
         }
         Command::Cleanup {
             ref ctx,
@@ -865,7 +865,7 @@ fn process_write_impl(
             txn.rollback(key)?;
 
             statistics.add(txn.get_statistics());
-            (ProcessResult::Res, txn.take_modifies(), 1)
+            (ProcessResult::Res, txn.into_modifies(), 1)
         }
         Command::Rollback {
             ref ctx,
@@ -886,7 +886,7 @@ fn process_write_impl(
             }
 
             statistics.add(txn.get_statistics());
-            (ProcessResult::Res, txn.take_modifies(), rows)
+            (ProcessResult::Res, txn.into_modifies(), rows)
         }
         Command::ResolveLock {
             ref ctx,
@@ -925,7 +925,7 @@ fn process_write_impl(
                 write_size += txn.write_size();
 
                 statistics.add(txn.get_statistics());
-                modifies.append(&mut txn.take_modifies());
+                modifies.append(&mut txn.into_modifies());
 
                 if write_size >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(current_key.to_owned());
@@ -984,7 +984,7 @@ fn process_write_impl(
                     },
                 }
             };
-            (pr, txn.take_modifies(), rows)
+            (pr, txn.into_modifies(), rows)
         }
         _ => panic!("unsupported write command"),
     };

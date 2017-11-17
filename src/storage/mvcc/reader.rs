@@ -593,7 +593,7 @@ mod tests {
             let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
             txn.prewrite(m, pk, &Options::default()).unwrap();
 
-            self.write(txn.take_modifies());
+            self.write(txn.into_modifies());
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
@@ -601,7 +601,7 @@ mod tests {
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
             let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
             txn.commit(&k, commit_ts).unwrap();
-            self.write(txn.take_modifies());
+            self.write(txn.into_modifies());
         }
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
@@ -609,7 +609,7 @@ mod tests {
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
             let mut txn = MvccTxn::new(Box::new(snap), safe_point, None, IsolationLevel::SI, true);
             txn.gc(&k, safe_point).unwrap();
-            self.write(txn.take_modifies());
+            self.write(txn.into_modifies());
         }
 
         fn write(&mut self, modifies: Vec<Modify>) {

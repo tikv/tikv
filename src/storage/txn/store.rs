@@ -222,7 +222,7 @@ mod test {
                         &Options::default(),
                     ).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.take_modifies()).unwrap();
+                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }
             self.refresh_snapshot();
             // do commit
@@ -238,7 +238,7 @@ mod test {
                     let key = key.as_bytes();
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.take_modifies()).unwrap();
+                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }
             self.refresh_snapshot();
         }

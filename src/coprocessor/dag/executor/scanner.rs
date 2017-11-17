@@ -271,7 +271,7 @@ pub mod test {
                         &Options::default(),
                     ).unwrap();
                 }
-                txn.take_modifies()
+                txn.into_modifies()
             };
             self.write_modifies(txn_motifies);
 
@@ -287,7 +287,7 @@ pub mod test {
                 for &(ref key, _) in kv_data {
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
-                txn.take_modifies()
+                txn.into_modifies()
             };
             self.write_modifies(txn_modifies);
         }

@@ -82,7 +82,7 @@ impl Snapshot {
         self.db.clone()
     }
 
-    pub fn new_arc_iter(&self, iter_opt: IterOption) -> DBIterator<Arc<DB>> {
+    pub fn db_iterator(&self, iter_opt: IterOption) -> DBIterator<Arc<DB>> {
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -90,7 +90,7 @@ impl Snapshot {
         DBIterator::new(self.db.clone(), opt)
     }
 
-    pub fn new_arc_iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
+    pub fn db_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
         let handle = rocksdb::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();
         unsafe {

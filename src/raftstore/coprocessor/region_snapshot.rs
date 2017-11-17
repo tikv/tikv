@@ -168,7 +168,7 @@ fn set_upper_bound(iter_opt: IterOption, region: &Region) -> IterOption {
 impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
         iter_opt = set_upper_bound(iter_opt, &region);
-        let iter = snap.new_arc_iter(iter_opt);
+        let iter = snap.db_iterator(iter_opt);
         RegionIterator {
             iter: iter,
             valid: false,
@@ -185,7 +185,7 @@ impl RegionIterator {
         cf: &str,
     ) -> RegionIterator {
         iter_opt = set_upper_bound(iter_opt, &region);
-        let iter = snap.new_arc_iter_cf(cf, iter_opt).unwrap();
+        let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
         RegionIterator {
             iter: iter,
             valid: false,
