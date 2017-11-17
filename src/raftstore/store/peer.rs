@@ -946,8 +946,7 @@ impl Peer {
 
     fn update_lease_with(&mut self, propose_time: Timespec) {
         // Try to renew the leader lease as this command asks to.
-        if self.leader_lease_expired_time.has_lease() {
-            let current_expired_time = self.leader_lease_expired_time.expired_time().unwrap();
+        if let Some(current_expired_time) = self.leader_lease_expired_time.expired_time() {
             // This peer is leader and has recorded leader lease.
             // Calculate the renewed lease for this command. If the renewed lease lives longer
             // than the current leader lease, update the current leader lease to the renewed lease.
@@ -1167,23 +1166,19 @@ impl Peer {
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // If the leader lease has expired, local read should not be performed.
-        if !self.leader_lease_expired_time.has_lease() {
-            return Ok(RequestPolicy::ReadIndex);
-        }
-
+        // Local read should be performed, iff leader is in safe lease.
         if self.leader_lease_expired_time.has_safe_lease() {
             if self.leader_lease_expired_time.in_safe_lease() {
                 return Ok(RequestPolicy::ReadLocal);
+            } else {
+                debug!(
+                    "{} leader lease expired time {:?} is outdated",
+                    self.tag,
+                    self.leader_lease_expired_time.expired_time().unwrap(),
+                );
+                // Reset leader lease expiring time.
+                self.leader_lease_expired_time.clear();
             }
-
-            debug!(
-                "{} leader lease expired time {:?} is outdated",
-                self.tag,
-                self.leader_lease_expired_time.expired_time().unwrap(),
-            );
-            // Reset leader lease expiring time.
-            self.leader_lease_expired_time.clear();
         }
 
         // Perform a consistent read to Raft quorum and try to renew the leader lease.

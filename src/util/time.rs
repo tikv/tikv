@@ -391,10 +391,6 @@ impl Lease {
         self.lease_expired_time = Some(Either::Right(lease_expired_time));
     }
 
-    pub fn has_lease(&self) -> bool {
-        self.lease_expired_time.is_some()
-    }
-
     pub fn has_safe_lease(&self) -> bool {
         match self.lease_expired_time {
             Some(Either::Left(_)) => true,
