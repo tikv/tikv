@@ -13,7 +13,7 @@
 
 use std::usize;
 use std::time::Duration;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
@@ -21,7 +21,7 @@ use tipb::select::{self, DAGRequest, SelectRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
-use protobuf::Message as PbMsg;
+use protobuf::{CodedInputStream, Message as PbMsg};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
@@ -38,7 +38,6 @@ use pd::PdTask;
 use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::select::select::SelectContext;
-use super::select::xeval::EvalContext;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
@@ -48,7 +47,6 @@ pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
-pub const BATCH_ROW_COUNT: usize = 64;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
@@ -155,7 +153,6 @@ impl Context for CopContext {
                 error!("send coprocessor statistics: {:?}", e);
             };
         }
-
     }
 }
 
@@ -302,11 +299,11 @@ pub struct RequestTask {
     statistics: Statistics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
-    ctx: ReqContext,
+    ctx: Arc<ReqContext>,
 }
 
 impl RequestTask {
-    pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
+    pub fn new(req: Request, on_resp: OnResponse, recursion_limit: u32) -> RequestTask {
         let timer = Instant::now_coarse();
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;
@@ -317,8 +314,10 @@ impl RequestTask {
                 if tp == REQ_TYPE_SELECT {
                     table_scan = true;
                 }
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
                 let mut sel = SelectRequest::new();
-                if let Err(e) = sel.merge_from_bytes(req.get_data()) {
+                if let Err(e) = sel.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(sel.get_start_ts());
@@ -326,8 +325,10 @@ impl RequestTask {
                 }
             }
             REQ_TYPE_DAG => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
                 let mut dag = DAGRequest::new();
-                if let Err(e) = dag.merge_from_bytes(req.get_data()) {
+                if let Err(e) = dag.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(dag.get_start_ts());
@@ -340,8 +341,10 @@ impl RequestTask {
                 }
             }
             REQ_TYPE_ANALYZE => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
                 let mut analyze = AnalyzeReq::new();
-                if let Err(e) = analyze.merge_from_bytes(req.get_data()) {
+                if let Err(e) = analyze.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(analyze.get_start_ts());
@@ -368,7 +371,7 @@ impl RequestTask {
             statistics: Default::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
-            ctx: req_ctx,
+            ctx: Arc::new(req_ctx),
         }
     }
 
@@ -400,7 +403,6 @@ impl RequestTask {
         COPR_REQ_HANDLE_TIME
             .with_label_values(&[type_str])
             .observe(handle_time - wait_time);
-
 
         COPR_SCAN_KEYS
             .with_label_values(&[type_str])
@@ -624,8 +626,9 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask, batch_row_limit: usize) -> Statistics {
+    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> Statistics {
         t.stop_record_waiting();
+
         if let Err(e) = t.check_outdated() {
             return on_error(e, t);
         }
@@ -642,54 +645,35 @@ impl TiDbEndPoint {
     }
 
     fn handle_select(
-        &self,
+        self,
         sel: SelectRequest,
         t: &mut RequestTask,
         batch_row_limit: usize,
     ) -> Result<Response> {
-        let ctx = SelectContext::new(
-            sel,
-            self.snap.as_ref(),
-            &mut t.statistics,
-            &t.ctx,
-            batch_row_limit,
-        )?;
-        let range = t.req.get_ranges().to_vec();
-        ctx.handle_request(range)
+        let mut ctx = SelectContext::new(sel, self.snap, t.ctx.clone(), batch_row_limit)?;
+        let ranges = t.req.take_ranges().into_vec();
+        let res = ctx.handle_request(ranges);
+        ctx.collect_statistics_into(&mut t.statistics);
+        res
     }
 
     pub fn handle_dag(
-        &self,
+        self,
         dag: DAGRequest,
         t: &mut RequestTask,
         batch_row_limit: usize,
     ) -> Result<Response> {
-        let ranges = t.req.get_ranges().to_vec();
-        let eval_ctx = Rc::new(box_try!(EvalContext::new(
-            dag.get_time_zone_offset(),
-            dag.get_flags()
-        )));
-        let ctx = DAGContext::new(
-            dag,
-            ranges,
-            self.snap.as_ref(),
-            eval_ctx.clone(),
-            &t.ctx,
-            batch_row_limit,
-        );
-        ctx.handle_request(&mut t.statistics)
+        let ranges = t.req.take_ranges().into_vec();
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
+        let res = ctx.handle_request();
+        ctx.collect_statistics_into(&mut t.statistics);
+        res
     }
 
-    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
-        let ranges = t.req.get_ranges().to_vec();
-        let ctx = AnalyzeContext::new(
-            analyze,
-            ranges,
-            self.snap.as_ref(),
-            &mut t.statistics,
-            &t.ctx,
-        );
-        ctx.handle_request()
+    pub fn handle_analyze(self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
+        let ranges = t.req.take_ranges().into_vec();
+        let ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
+        ctx.handle_request(&mut t.statistics)
     }
 }
 
@@ -762,6 +746,9 @@ mod tests {
     use std::time::Duration;
 
     use kvproto::coprocessor::Request;
+    use tipb::select::DAGRequest;
+    use tipb::expression::Expr;
+    use tipb::executor::Executor;
 
     use util::worker::{FutureWorker, Worker};
     use util::time::Instant;
@@ -789,14 +776,23 @@ mod tests {
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
-        task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
+        let mut task = RequestTask::new(
+            Request::new(),
+            box move |msg| { tx.send(msg).unwrap(); },
+            1000,
+        );
+        let ctx = ReqContext {
+            deadline: task.ctx.deadline - Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS),
+            isolation_level: task.ctx.isolation_level,
+            fill_cache: task.ctx.fill_cache,
+            table_scan: task.ctx.table_scan,
+        };
+        task.ctx = Arc::new(ctx);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
     }
-
     #[test]
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");
@@ -818,10 +814,14 @@ mod tests {
             } else {
                 req.mut_context().set_priority(CommandPri::High);
             }
-            let task = RequestTask::new(req, box move |msg| {
-                thread::sleep(Duration::from_millis(100));
-                let _ = tx.send(msg);
-            });
+            let task = RequestTask::new(
+                req,
+                box move |msg| {
+                    thread::sleep(Duration::from_millis(100));
+                    let _ = tx.send(msg);
+                },
+                1000,
+            );
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {
@@ -833,5 +833,35 @@ mod tests {
             return;
         }
         panic!("suppose to get ServerIsBusy error.");
+    }
+
+    #[test]
+    fn test_stack_guard() {
+        let mut expr = Expr::new();
+        for _ in 0..10 {
+            let mut e = Expr::new();
+            e.mut_children().push(expr);
+            expr = e;
+        }
+        let mut e = Executor::new();
+        e.mut_selection().mut_conditions().push(expr);
+        let mut dag = DAGRequest::new();
+        dag.mut_executors().push(e);
+        let mut req = Request::new();
+        req.set_tp(REQ_TYPE_DAG);
+        req.set_data(dag.write_to_bytes().unwrap());
+        RequestTask::new(req.clone(), box move |_| unreachable!(), 100);
+        RequestTask::new(
+            req,
+            box move |res| {
+                let s = format!("{:?}", res);
+                assert!(
+                    s.contains("Recursion"),
+                    "parse should fail due to recursion limit {}",
+                    s
+                );
+            },
+            5,
+        );
     }
 }
