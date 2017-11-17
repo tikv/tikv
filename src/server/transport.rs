@@ -18,12 +18,13 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 
 use util::transport::SendCh;
-use util::HandyRwLock;
+use util::{Either, HandyRwLock};
 use util::worker::{Scheduler, Stopped};
 use util::collections::HashSet;
 use raft::SnapshotStatus;
-use raftstore::store::{BatchCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
-use raftstore::Result as RaftStoreResult;
+use raftstore::store::{BatchCallback, Callback, LocalReadTask, Msg as StoreMsg, SignificantMsg,
+                       Transport};
+use raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
 use server::raft_client::RaftClient;
 use server::Result;
 use super::snap::Task as SnapTask;
@@ -86,29 +87,42 @@ pub trait RaftStoreRouter: Send + Clone {
 pub struct ServerRaftStoreRouter {
     pub ch: SendCh<StoreMsg>,
     pub significant_msg_sender: Sender<SignificantMsg>,
+    local_reader_ch: Option<Scheduler<LocalReadTask>>,
 }
 
 impl ServerRaftStoreRouter {
     pub fn new(
-        ch: SendCh<StoreMsg>,
+        raftstore_ch: SendCh<StoreMsg>,
         significant_msg_sender: Sender<SignificantMsg>,
+        local_reader_ch: Option<Scheduler<LocalReadTask>>,
     ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
-            ch: ch,
+            ch: raftstore_ch,
             significant_msg_sender: significant_msg_sender,
+            local_reader_ch: local_reader_ch,
         }
     }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.ch.try_send(msg)?;
-        Ok(())
+        match self.local_reader_ch {
+            Some(ref local_reader_ch) => match LocalReadTask::accept(msg) {
+                Either::Left(task) => local_reader_ch.schedule(task).map_err(|e| box_err!(e)),
+                Either::Right(msg) => self.ch.try_send(msg).map_err(RaftStoreError::Transport),
+            },
+            None => self.ch.try_send(msg).map_err(RaftStoreError::Transport),
+        }
     }
 
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.ch.send(msg)?;
-        Ok(())
+        match self.local_reader_ch {
+            Some(ref local_reader_ch) => match LocalReadTask::accept(msg) {
+                Either::Left(task) => local_reader_ch.schedule(task).map_err(|e| box_err!(e)),
+                Either::Right(msg) => self.ch.send(msg).map_err(RaftStoreError::Transport),
+            },
+            None => self.ch.send(msg).map_err(RaftStoreError::Transport),
+        }
     }
 
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {

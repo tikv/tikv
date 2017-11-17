@@ -178,7 +178,8 @@ pub struct ConsistencyState {
     pub hash: Vec<u8>,
 }
 
-enum RequestPolicy {
+#[derive(Debug)]
+pub enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
     // Handle the read request via raft's SafeReadIndex mechanism.

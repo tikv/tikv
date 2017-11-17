@@ -33,7 +33,7 @@ pub use self::msg::{BatchCallback, Callback, Msg, SignificantMsg, Tick};
 pub use self::store::{create_event_loop, Engines, Store, StoreChannel, StoreStat};
 pub use self::config::Config;
 pub use self::transport::Transport;
-pub use self::peer::{Peer, PeerStat};
+pub use self::peer::{check_epoch, Peer, PeerStat, RequestPolicy};
 pub use self::bootstrap::{bootstrap_store, clear_prepare_bootstrap, clear_prepare_bootstrap_state,
                           prepare_bootstrap, write_prepare_bootstrap};
 pub use self::engine::{Iterable, Mutable, Peekable};
@@ -41,6 +41,7 @@ pub use self::peer_storage::{do_snapshot, CacheQueryStats, PeerStorage, SnapStat
                              RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
 pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, SnapEntry, SnapKey, SnapManager,
                      Snapshot, SnapshotDeleter, SnapshotStatistics};
+pub use self::worker::LocalReadTask;
 
 // Only used in tests
 #[cfg(test)]

@@ -62,7 +62,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
-use tikv::util::worker::FutureWorker;
+use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -166,7 +166,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
     let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
     let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
-    let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
+
+    // Create Local Reader.
+    let local_reader = Worker::new("local reader");
+    let local_ch = local_reader.scheduler();
+
+    // Create router.
+    let raft_router =
+        ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender, Some(local_ch));
 
     // Create kv engine, storage.
     let kv_db_opts = cfg.rocksdb.build_opt();
@@ -226,6 +233,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         snap_mgr,
         significant_msg_receiver,
         pd_worker,
+        local_reader,
         coprocessor_host,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));

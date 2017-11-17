@@ -25,10 +25,10 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
-use util::worker::FutureWorker;
+use util::worker::{FutureWorker, Worker};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg,
-                       SnapManager, Store, StoreChannel, Transport};
+use raftstore::store::{self, keys, Config as StoreConfig, Engines, LocalReadTask, Msg, Peekable,
+                       SignificantMsg, SnapManager, Store, StoreChannel, Transport};
 use super::Result;
 use server::Config as ServerConfig;
 use storage::{Config as StorageConfig, RaftKv, Storage};
@@ -128,6 +128,7 @@ where
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
+        local_read_worker: Worker<LocalReadTask>,
         coprocessor_host: CoprocessorHost,
     ) -> Result<()>
     where
@@ -167,6 +168,7 @@ where
             snap_mgr,
             significant_msg_receiver,
             pd_worker,
+            local_read_worker,
             coprocessor_host,
         )?;
         Ok(())
@@ -321,6 +323,7 @@ where
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
+        local_read_worker: Worker<LocalReadTask>,
         coprocessor_host: CoprocessorHost,
     ) -> Result<()>
     where
@@ -353,6 +356,7 @@ where
                 pd_client,
                 snap_mgr,
                 pd_worker,
+                local_read_worker,
                 coprocessor_host,
             ) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),

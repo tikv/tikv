@@ -48,8 +48,9 @@ use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
-                    ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
+                    ConsistencyCheckRunner, ConsistencyCheckTask, LocalReadTask, LocalReader,
+                    RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
+                    SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -145,6 +146,7 @@ pub struct Store<T, C: 'static> {
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
+    local_read_worker: Worker<LocalReadTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
@@ -194,6 +196,7 @@ impl<T, C> Store<T, C> {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
+        local_read_worker: Worker<LocalReadTask>,
         mut coprocessor_host: CoprocessorHost,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
@@ -221,6 +224,7 @@ impl<T, C> Store<T, C> {
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: pd_worker,
+            local_read_worker: local_read_worker,
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
@@ -530,6 +534,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.kv_engine.clone(),
         );
         box_try!(self.pd_worker.start(pd_runner));
+
+        let local_reader = LocalReader::new(
+            self.kv_engine.clone(),
+            self.store.clone(),
+            self.sendch.clone(),
+        );
+        box_try!(self.local_read_worker.start(local_reader));
 
         let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
         box_try!(
