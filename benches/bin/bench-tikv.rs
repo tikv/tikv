@@ -38,7 +38,7 @@ extern crate futures;
 extern crate grpcio as grpc;
 
 #[allow(dead_code)]
-#[path = "../../tests/util.rs"]
+#[path = "../../tests/util/mod.rs"]
 mod test_util;
 #[allow(dead_code)]
 #[path = "../../tests/raftstore/util.rs"]

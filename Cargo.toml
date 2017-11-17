@@ -32,9 +32,6 @@ name = "tikv-ctl"
 [[bin]]
 name = "tikv-fail"
 
-[[test]]
-name = "tests"
-
 [dependencies]
 log = "0.3"
 byteorder = "0.5"
