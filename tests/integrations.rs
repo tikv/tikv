@@ -45,6 +45,7 @@ extern crate toml;
 
 mod raft;
 mod raftstore;
+mod raftstore_cases;
 mod coprocessor;
 mod storage;
 mod util;
