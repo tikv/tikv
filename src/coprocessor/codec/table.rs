@@ -35,6 +35,7 @@ pub const RECORD_PREFIX_SEP: &'static [u8] = b"_r";
 pub const INDEX_PREFIX_SEP: &'static [u8] = b"_i";
 pub const SEP_LEN: usize = 2;
 pub const TABLE_PREFIX_LEN: usize = 1;
+pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 
 
 trait TableEncoder: NumberEncoder {
@@ -52,6 +53,19 @@ trait TableEncoder: NumberEncoder {
 }
 
 impl<T: Write> TableEncoder for T {}
+
+/// Extract table prefix from table record or index.
+// It is useful in tests.
+pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
+    if !key.starts_with(TABLE_PREFIX) || key.len() < TABLE_PREFIX_KEY_LEN {
+        Err(invalid_type!(
+            "record key or index key expected, but got {:?}",
+            key
+        ))
+    } else {
+        Ok(&key[..TABLE_PREFIX_KEY_LEN])
+    }
+}
 
 pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
@@ -170,20 +184,6 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
     }
     match col.get_tp() as u8 {
         types::FLOAT => Ok(Datum::F64(datum.f64() as f32 as f64)),
-        types::TINY |
-        types::SHORT |
-        types::YEAR |
-        types::INT24 |
-        types::LONG |
-        types::LONG_LONG |
-        types::DOUBLE |
-        types::TINY_BLOB |
-        types::MEDIUM_BLOB |
-        types::BLOB |
-        types::LONG_BLOB |
-        types::VARCHAR |
-        types::STRING |
-        types::NEW_DECIMAL => Ok(datum),
         types::DATE | types::DATETIME | types::TIMESTAMP => {
             let fsp = col.get_decimal() as i8;
             let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, &ctx.tz)?;
@@ -194,7 +194,28 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
             Err(box_err!("unflatten column {:?} is not supported yet.", col))
         }
         t => {
-            error!("unknown type {} {:?}", t, datum);
+            debug_assert!(
+                [
+                    types::TINY,
+                    types::SHORT,
+                    types::YEAR,
+                    types::INT24,
+                    types::LONG,
+                    types::LONG_LONG,
+                    types::DOUBLE,
+                    types::TINY_BLOB,
+                    types::MEDIUM_BLOB,
+                    types::BLOB,
+                    types::LONG_BLOB,
+                    types::VARCHAR,
+                    types::STRING,
+                    types::NEW_DECIMAL,
+                    types::JSON
+                ].contains(&t),
+                "unknown type {} {:?}",
+                t,
+                datum
+            );
             Ok(datum)
         }
     }
@@ -432,13 +453,15 @@ mod test {
         let mut cols = map![
             1 => new_col_info(types::LONG_LONG),
             2 => new_col_info(types::VARCHAR),
-            3 => new_col_info(types::NEW_DECIMAL)
+            3 => new_col_info(types::NEW_DECIMAL),
+            5 => new_col_info(types::JSON)
         ];
 
         let mut row = map![
             1 => Datum::I64(100),
             2 => Datum::Bytes(b"abc".to_vec()),
-            3 => Datum::Dec(10.into())
+            3 => Datum::Dec(10.into()),
+            5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap())
         ];
 
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
@@ -560,5 +583,25 @@ mod test {
         res = cut_idx_key_as_owned(&bs, &[]);
         assert!(res.0.is_empty());
         assert!(res.1.is_none());
+    }
+
+    #[test]
+    fn test_extract_table_prefix() {
+        let cases = vec![
+            (vec![], None),
+            (b"a\x80\x00\x00\x00\x00\x00\x00\x01".to_vec(), None),
+            (b"t\x80\x00\x00\x00\x00\x00\x01".to_vec(), None),
+            (
+                b"t\x80\x00\x00\x00\x00\x00\x00\x01".to_vec(),
+                Some(b"t\x80\x00\x00\x00\x00\x00\x00\x01".to_vec()),
+            ),
+            (
+                b"t\x80\x00\x00\x00\x00\x00\x00\x01_r\xff\xff".to_vec(),
+                Some(b"t\x80\x00\x00\x00\x00\x00\x00\x01".to_vec()),
+            ),
+        ];
+        for (input, output) in cases {
+            assert_eq!(extract_table_prefix(&input).ok().map(From::from), output);
+        }
     }
 }

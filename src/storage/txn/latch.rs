@@ -71,7 +71,7 @@ impl Lock {
 
 /// Latches which are used for concurrency control in the scheduler.
 ///
-/// Each latch is indexed by a slot ID, hence the term latch and slot are used interchangably, but
+/// Each latch is indexed by a slot ID, hence the term latch and slot are used interchangeably, but
 /// conceptually a latch is a queue, and a slot is an index to the queue.
 pub struct Latches {
     slots: Vec<Latch>,

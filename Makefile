@@ -30,7 +30,7 @@ default: release
 all: format build test
 
 dev:
-	@export ENABLE_FEATURES=dev && make all
+	@env ENABLE_FEATURES=dev FAIL_POINT=1 make all
 
 build:
 	cargo build --features "${ENABLE_FEATURES}"
@@ -59,7 +59,7 @@ static_fail_release:
 trace_test:
 	export CI=true && \
 	export SKIP_FORMAT_CHECK=true && \
-	${PROJECT_DIR}/travis-build/test.sh
+	${PROJECT_DIR}/ci-build/test.sh
 
 test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it

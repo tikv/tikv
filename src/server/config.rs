@@ -32,12 +32,18 @@ const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
+// Enpoints may occur very deep recursion,
+// so enlarge their stack size to 10 MB.
+const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
 // backoff. So when it needs to wait for more than 2 seconds, return error won't causse
 // larger latency.
 pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
+
+// Number of rows in each chunk.
+pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -60,6 +66,9 @@ pub struct Config {
     pub grpc_stream_initial_window_size: ReadableSize,
     pub end_point_concurrency: usize,
     pub end_point_max_tasks: usize,
+    pub end_point_stack_size: ReadableSize,
+    pub end_point_recursion_limit: u32,
+    pub end_point_batch_row_limit: usize,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -86,6 +95,9 @@ impl Default for Config {
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             end_point_concurrency: concurrency,
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
+            end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
+            end_point_recursion_limit: 1000,
+            end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
         }
     }
 }
@@ -112,6 +124,18 @@ impl Config {
 
         if self.end_point_max_tasks == 0 {
             return Err(box_err!("server.end-point-max-tasks should not be 0."));
+        }
+
+        // 2MB is the default stack size for threads in rust, but endpoints may occur
+        // very deep recursion, 2MB considered too small.
+        //
+        // See more: https://doc.rust-lang.org/std/thread/struct.Builder.html#method.stack_size
+        if self.end_point_stack_size.0 < ReadableSize::mb(2).0 {
+            return Err(box_err!("server.end-point-stack-size is too small."));
+        }
+
+        if self.end_point_recursion_limit < 100 {
+            return Err(box_err!("server.end-point-recursion-limit is too small"));
         }
 
         for (k, v) in &self.labels {
@@ -170,7 +194,15 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
+        invalid_cfg.end_point_stack_size = ReadableSize::mb(1);
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_max_tasks = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.end_point_recursion_limit = 0;
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();

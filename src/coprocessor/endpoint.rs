@@ -17,11 +17,11 @@ use std::rc::Rc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
-use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
+use tipb::select::{self, DAGRequest, SelectRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
-use protobuf::Message as PbMsg;
+use protobuf::{CodedInputStream, Message as PbMsg};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
@@ -73,6 +73,7 @@ pub struct Host {
     low_priority_pool: ThreadPool<CopContext>,
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
+    batch_row_limit: usize,
 }
 
 pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
@@ -171,20 +172,24 @@ impl Host {
             reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
+            batch_row_limit: cfg.end_point_batch_row_limit,
             pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-normal-pool"),
                 CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
+                .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
             low_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-low-pool"),
                 CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
+                .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
             high_priority_pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-high-pool"),
                 CopContextFactory { sender: r.clone() },
             ).thread_count(cfg.end_point_concurrency)
+                .stack_size(cfg.end_point_stack_size.0 as usize)
                 .build(),
         }
     }
@@ -209,7 +214,7 @@ impl Host {
             return;
         }
 
-
+        let batch_row_limit = self.batch_row_limit;
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
@@ -226,7 +231,7 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
-                let stats = end_point.handle_request(req);
+                let stats = end_point.handle_request(req, batch_row_limit);
                 ctx.add_statistics(type_str, &stats);
                 ctx.add_statistics_by_region(region_id, &stats);
                 COPR_PENDING_REQS
@@ -301,7 +306,7 @@ pub struct RequestTask {
 }
 
 impl RequestTask {
-    pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
+    pub fn new(req: Request, on_resp: OnResponse, recursion_limit: u32) -> RequestTask {
         let timer = Instant::now_coarse();
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;
@@ -312,8 +317,10 @@ impl RequestTask {
                 if tp == REQ_TYPE_SELECT {
                     table_scan = true;
                 }
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
                 let mut sel = SelectRequest::new();
-                if let Err(e) = sel.merge_from_bytes(req.get_data()) {
+                if let Err(e) = sel.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(sel.get_start_ts());
@@ -321,8 +328,10 @@ impl RequestTask {
                 }
             }
             REQ_TYPE_DAG => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
                 let mut dag = DAGRequest::new();
-                if let Err(e) = dag.merge_from_bytes(req.get_data()) {
+                if let Err(e) = dag.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(dag.get_start_ts());
@@ -335,8 +344,10 @@ impl RequestTask {
                 }
             }
             REQ_TYPE_ANALYZE => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
                 let mut analyze = AnalyzeReq::new();
-                if let Err(e) = analyze.merge_from_bytes(req.get_data()) {
+                if let Err(e) = analyze.merge_from(&mut is) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(analyze.get_start_ts());
@@ -619,14 +630,14 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask) -> Statistics {
+    fn handle_request(&self, mut t: RequestTask, batch_row_limit: usize) -> Statistics {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
             return on_error(e, t);
         }
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
-            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t),
+            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t, batch_row_limit),
+            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
         };
@@ -636,19 +647,42 @@ impl TiDbEndPoint {
         }
     }
 
-    fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let ctx = SelectContext::new(sel, self.snap.as_ref(), &mut t.statistics, &t.ctx)?;
+    fn handle_select(
+        &self,
+        sel: SelectRequest,
+        t: &mut RequestTask,
+        batch_row_limit: usize,
+    ) -> Result<Response> {
+        let ctx = SelectContext::new(
+            sel,
+            self.snap.as_ref(),
+            &mut t.statistics,
+            &t.ctx,
+            batch_row_limit,
+        )?;
         let range = t.req.get_ranges().to_vec();
         ctx.handle_request(range)
     }
 
-    pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
+    pub fn handle_dag(
+        &self,
+        dag: DAGRequest,
+        t: &mut RequestTask,
+        batch_row_limit: usize,
+    ) -> Result<Response> {
         let ranges = t.req.get_ranges().to_vec();
         let eval_ctx = Rc::new(box_try!(EvalContext::new(
             dag.get_time_zone_offset(),
             dag.get_flags()
         )));
-        let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
+        let ctx = DAGContext::new(
+            dag,
+            ranges,
+            self.snap.as_ref(),
+            eval_ctx.clone(),
+            &t.ctx,
+            batch_row_limit,
+        );
         ctx.handle_request(&mut t.statistics)
     }
 
@@ -710,18 +744,6 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
-#[inline]
-pub fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
-    if chunks
-        .last()
-        .map_or(true, |chunk| chunk.get_rows_meta().len() >= BATCH_ROW_COUNT)
-    {
-        let chunk = Chunk::new();
-        chunks.push(chunk);
-    }
-    chunks.last_mut().unwrap()
-}
-
 pub const STR_REQ_TYPE_SELECT: &'static str = "select";
 pub const STR_REQ_TYPE_INDEX: &'static str = "index";
 pub const STR_REQ_PRI_LOW: &'static str = "low";
@@ -746,6 +768,9 @@ mod tests {
     use std::time::Duration;
 
     use kvproto::coprocessor::Request;
+    use tipb::select::DAGRequest;
+    use tipb::expression::Expr;
+    use tipb::executor::Executor;
 
     use util::worker::{FutureWorker, Worker};
     use util::time::Instant;
@@ -773,7 +798,11 @@ mod tests {
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut task = RequestTask::new(Request::new(), box move |msg| { tx.send(msg).unwrap(); });
+        let mut task = RequestTask::new(
+            Request::new(),
+            box move |msg| { tx.send(msg).unwrap(); },
+            1000,
+        );
         task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -802,10 +831,14 @@ mod tests {
             } else {
                 req.mut_context().set_priority(CommandPri::High);
             }
-            let task = RequestTask::new(req, box move |msg| {
-                thread::sleep(Duration::from_millis(100));
-                let _ = tx.send(msg);
-            });
+            let task = RequestTask::new(
+                req,
+                box move |msg| {
+                    thread::sleep(Duration::from_millis(100));
+                    let _ = tx.send(msg);
+                },
+                1000,
+            );
             worker.schedule(Task::Request(task)).unwrap();
         }
         for _ in 0..120 {
@@ -817,5 +850,35 @@ mod tests {
             return;
         }
         panic!("suppose to get ServerIsBusy error.");
+    }
+
+    #[test]
+    fn test_stack_guard() {
+        let mut expr = Expr::new();
+        for _ in 0..10 {
+            let mut e = Expr::new();
+            e.mut_children().push(expr);
+            expr = e;
+        }
+        let mut e = Executor::new();
+        e.mut_selection().mut_conditions().push(expr);
+        let mut dag = DAGRequest::new();
+        dag.mut_executors().push(e);
+        let mut req = Request::new();
+        req.set_tp(REQ_TYPE_DAG);
+        req.set_data(dag.write_to_bytes().unwrap());
+        RequestTask::new(req.clone(), box move |_| unreachable!(), 100);
+        RequestTask::new(
+            req,
+            box move |res| {
+                let s = format!("{:?}", res);
+                assert!(
+                    s.contains("Recursion"),
+                    "parse should fail due to recursion limit {}",
+                    s
+                );
+            },
+            5,
+        );
     }
 }

@@ -367,7 +367,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
             .direction(Direction::Send),
     ));
     // Make peer 2's msg won't be replicated when it becomes leader,
-    // so the uncommitted entries won't be applied immediatly.
+    // so the uncommitted entries won't be applied immediately.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 1)
             .msg_type(MessageType::MsgAppend)
@@ -540,7 +540,7 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     ));
 
     // Make peer 2's msg won't be replicated when it becomes leader,
-    // so the uncommitted entries won't be applied immediatly.
+    // so the uncommitted entries won't be applied immediately.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 2)
             .msg_type(MessageType::MsgAppend)
