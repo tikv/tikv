@@ -60,6 +60,7 @@ extern crate regex;
 extern crate grpcio as grpc;
 extern crate fnv;
 extern crate flat_map;
+extern crate ordermap;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate tokio_core;

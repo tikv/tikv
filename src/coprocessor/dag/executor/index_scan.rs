@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::vec::IntoIter;
 use byteorder::{BigEndian, ReadBytesExt};
 
 use kvproto::coprocessor::KeyRange;
@@ -18,31 +19,29 @@ use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::{datum, mysql, table};
-use coprocessor::endpoint::prefix_next;
 use coprocessor::metrics::*;
-use coprocessor::Result;
+use coprocessor::{Error, Result};
 use storage::{SnapshotStore, Statistics};
 
 use super::{Executor, Row};
-use super::scanner::Scanner;
+use super::scanner::{ScanOn, Scanner};
 
 
-pub struct IndexScanExecutor<'a> {
+pub struct IndexScanExecutor {
+    store: SnapshotStore,
     desc: bool,
     col_ids: Vec<i64>,
-    cursor: usize,
-    key_ranges: Vec<KeyRange>,
-    scanner: Scanner<'a>,
     pk_col: Option<ColumnInfo>,
+    key_ranges: IntoIter<KeyRange>,
+    scanner: Option<Scanner>,
 }
 
-impl<'a> IndexScanExecutor<'a> {
+impl IndexScanExecutor {
     pub fn new(
         mut meta: IndexScan,
         mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<'a>,
-        statistics: &'a mut Statistics,
-    ) -> IndexScanExecutor<'a> {
+        store: SnapshotStore,
+    ) -> IndexScanExecutor {
         let mut pk_col = None;
         let desc = meta.get_desc();
         if desc {
@@ -53,62 +52,51 @@ impl<'a> IndexScanExecutor<'a> {
             pk_col = Some(cols.pop().unwrap());
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
-        let scanner = Scanner::new(store, desc, false, statistics);
 
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
+            store: store,
             desc: desc,
             col_ids: col_ids,
-            scanner: scanner,
-            key_ranges: key_ranges,
-            cursor: Default::default(),
             pk_col: pk_col,
+            key_ranges: key_ranges.into_iter(),
+            scanner: None,
         }
     }
 
     pub fn new_with_cols_len(
         cols: i64,
         key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<'a>,
-        statistics: &'a mut Statistics,
-    ) -> IndexScanExecutor<'a> {
+        store: SnapshotStore,
+    ) -> IndexScanExecutor {
         let col_ids: Vec<i64> = (0..cols).collect();
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
-        let scanner = Scanner::new(store, false, false, statistics);
         IndexScanExecutor {
+            store: store,
             desc: false,
             col_ids: col_ids,
-            scanner: scanner,
-            key_ranges: key_ranges,
-            cursor: Default::default(),
             pk_col: None,
+            key_ranges: key_ranges.into_iter(),
+            scanner: None,
         }
     }
 
-    pub fn get_row_from_range(&mut self) -> Result<Option<Row>> {
-        let range = &self.key_ranges[self.cursor];
-        if range.get_start() > range.get_end() {
+    fn get_row_from_range_scanner(&mut self) -> Result<Option<Row>> {
+        if self.scanner.is_none() {
             return Ok(None);
         }
-        let kv = self.scanner.next_row(range)?;
-        let (key, value) = match kv {
+        COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+
+        let scanner = self.scanner.as_mut().unwrap();
+        let (key, value) = match scanner.next_row()? {
             Some((key, value)) => (key, value),
             None => return Ok(None),
         };
 
-        let seek_key = if self.desc {
-            key.clone()
-        } else {
-            prefix_next(&key)
-        };
-        self.scanner.set_seek_key(Some(seek_key));
-
-        let (mut values, handle) = { box_try!(table::cut_idx_key(key, &self.col_ids)) };
-
-        let handle = if handle.is_none() {
-            box_try!(value.as_slice().read_i64::<BigEndian>())
-        } else {
-            handle.unwrap()
+        let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
+        let handle = match handle {
+            None => box_try!(value.as_slice().read_i64::<BigEndian>()),
+            Some(h) => h,
         };
 
         if let Some(ref pk_col) = self.pk_col {
@@ -123,21 +111,36 @@ impl<'a> IndexScanExecutor<'a> {
         }
         Ok(Some(Row::new(handle, values)))
     }
+
+    fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
+        Scanner::new(&self.store, ScanOn::Index, self.desc, false, range).map_err(Error::from)
+    }
 }
 
-impl<'a> Executor for IndexScanExecutor<'a> {
+impl Executor for IndexScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        while self.cursor < self.key_ranges.len() {
-            let data = self.get_row_from_range()?;
-            if data.is_none() {
-                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-                self.scanner.set_seek_key(None);
-                self.cursor += 1;
+        loop {
+            if let Some(row) = self.get_row_from_range_scanner()? {
+                return Ok(Some(row));
+            }
+            if let Some(range) = self.key_ranges.next() {
+                self.scanner = match self.scanner.take() {
+                    Some(mut scanner) => {
+                        box_try!(scanner.reset_range(range, &self.store));
+                        Some(scanner)
+                    }
+                    None => Some(self.new_scanner(range)?),
+                };
                 continue;
             }
-            return Ok(data);
+            return Ok(None);
         }
-        Ok(None)
+    }
+
+    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        if let Some(scanner) = self.scanner.take() {
+            scanner.collect_statistics_into(statistics);
+        }
     }
 }
 
@@ -153,7 +156,7 @@ mod test {
     use coprocessor::codec::datum::{self, Datum};
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
-    use storage::{SnapshotStore, Statistics};
+    use storage::SnapshotStore;
 
     use super::*;
     use super::super::scanner::test::{new_col_info, Data, TestStore};
@@ -256,7 +259,6 @@ mod test {
 
     #[test]
     fn test_multiple_ranges() {
-        let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::default();
         let (ref start_key, _) = wrapper.data.kv_data[0];
         let (ref split_key, _) = wrapper.data.kv_data[KEY_NUMBER / 3];
@@ -271,8 +273,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
+        let mut scanner = IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store);
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap();
@@ -290,7 +291,6 @@ mod test {
 
     #[test]
     fn test_reverse_scan() {
-        let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::default();
         wrapper.scan.set_desc(true);
 
@@ -302,8 +302,7 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
+        let mut scanner = IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -322,13 +321,11 @@ mod test {
 
     #[test]
     fn test_include_pk() {
-        let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::include_pk_cols();
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut scanner =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, &mut statistics);
+        let mut scanner = IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store);
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();
