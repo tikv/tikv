@@ -78,12 +78,12 @@ impl TableScanExecutor {
         Ok(None)
     }
 
-    fn get_row_from_point(&mut self, mut range: KeyRange) -> Result<Option<Row>> {
-        let key = range.take_start();
-        let value = self.store.get(&Key::from_raw(&key), &mut self.statistics)?;
+    fn get_row_from_point(&mut self, range: KeyRange) -> Result<Option<Row>> {
+        let key = range.get_start();
+        let value = self.store.get(&Key::from_raw(key), &mut self.statistics)?;
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
-            let h = box_try!(table::decode_handle(&key));
+            let h = box_try!(table::decode_handle(key));
             return Ok(Some(Row::new(h, values)));
         }
         Ok(None)
@@ -98,13 +98,14 @@ impl Executor for TableScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
+                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 return Ok(Some(row));
             }
 
             if let Some(range) = self.key_ranges.next() {
                 if is_point(&range) {
-                    CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
                     if let Some(row) = self.get_row_from_point(range)? {
+                        CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
                         return Ok(Some(row));
                     }
                     continue;

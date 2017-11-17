@@ -81,7 +81,7 @@ impl IndexScanExecutor {
         }
     }
 
-    pub fn get_row_from_range_sanner(&mut self) -> Result<Option<Row>> {
+    fn get_row_from_range_scanner(&mut self) -> Result<Option<Row>> {
         if self.scanner.is_none() {
             return Ok(None);
         }
@@ -118,7 +118,8 @@ impl IndexScanExecutor {
 impl Executor for IndexScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
-            if let Some(row) = self.get_row_from_range_sanner()? {
+            if let Some(row) = self.get_row_from_range_scanner()? {
+                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
