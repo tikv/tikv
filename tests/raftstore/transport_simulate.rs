@@ -414,16 +414,16 @@ impl Filter<RaftMessage> for SnapshotFilter {
 /// more than 1 snapshots in this filter, all the snapshots will be dilivered at once.
 pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
-    active: Arc<AtomicBool>,
+    stale: AtomicBool,
     pending_msg: Mutex<HashMap<u64, StoreMsg>>,
     pending_count_sender: Mutex<Sender<usize>>,
 }
 
 impl CollectSnapshotFilter {
-    pub fn new(sender: Sender<usize>, active: Arc<AtomicBool>) -> CollectSnapshotFilter {
+    pub fn new(sender: Sender<usize>) -> CollectSnapshotFilter {
         CollectSnapshotFilter {
             dropped: AtomicBool::new(false),
-            active: active,
+            stale: AtomicBool::new(false),
             pending_msg: Mutex::new(HashMap::new()),
             pending_count_sender: Mutex::new(sender),
         }
@@ -432,7 +432,7 @@ impl CollectSnapshotFilter {
 
 impl Filter<StoreMsg> for CollectSnapshotFilter {
     fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
-        if !self.active.load(Ordering::Relaxed) {
+        if self.stale.load(Ordering::Relaxed) {
             return Ok(());
         }
         let mut to_send = vec![];
@@ -470,8 +470,7 @@ impl Filter<StoreMsg> for CollectSnapshotFilter {
             self.dropped
                 .compare_and_swap(true, false, Ordering::Relaxed);
             msgs.extend(pending_msg.drain().map(|(_, v)| v));
-            let sender = self.pending_count_sender.lock().unwrap();
-            sender.send(0).unwrap();
+            self.stale.compare_and_swap(false, true, Ordering::Relaxed);
         }
         msgs.extend(to_send);
         check_messages(msgs)
