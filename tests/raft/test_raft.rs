@@ -643,7 +643,7 @@ fn test_leader_election_with_config(pre_vote: bool) {
             1,
         ),
 
-        // three logs futher along than 0, but in the same term so rejection
+        // three logs further along than 0, but in the same term so rejection
         // are returned instead of the votes being ignored.
         (
             Network::new_with_config(
@@ -2163,7 +2163,7 @@ fn test_free_stuck_candidate_with_check_quorum() {
 }
 
 #[test]
-fn test_non_promotable_voter_wich_check_quorum() {
+fn test_non_promotable_voter_which_check_quorum() {
     let mut a = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
     let mut b = new_test_raft(2, vec![1], 10, 1, new_storage());
 

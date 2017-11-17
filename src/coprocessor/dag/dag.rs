@@ -138,7 +138,7 @@ impl<'s> DAGContext<'s> {
         Ok(())
     }
 
-    // seperate first exec build action from `build_dag`
+    // separate first exec build action from `build_dag`
     // since it will generte mutable conflict when putting together
     fn build_first(
         &'s self,

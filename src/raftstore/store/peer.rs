@@ -539,7 +539,7 @@ impl Peer {
                     // the old leader may be expired earlier than usual, since a new leader
                     // may be elected and the old leader doesn't step down due to
                     // network partition from the new leader.
-                    // For lease safty during leader transfer, mark `leader_lease_expired_time`
+                    // For lease safety during leader transfer, mark `leader_lease_expired_time`
                     // to be unsafe until next_lease_expired_time from now
                     self.leader_lease_expired_time = Some(Either::Right(
                         self.next_lease_expired_time(monotonic_raw_now()),
@@ -1428,7 +1428,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transfered = if self.is_transfer_leader_allowed(peer) {
+        let transferred = if self.is_transfer_leader_allowed(peer) {
             self.transfer_leader(peer);
             true
         } else {
@@ -1444,7 +1444,7 @@ impl Peer {
         // return immediately. Note that this command may fail, we can view it just as an advice
         cb(make_transfer_leader_response());
 
-        transfered
+        transferred
     }
 
     fn propose_conf_change(
