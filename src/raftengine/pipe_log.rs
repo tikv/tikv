@@ -1,9 +1,11 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::u64;
 use std::cmp;
+use std::collections::VecDeque;
+use std::sync::Mutex;
 
 use super::Result;
 use super::log_batch::LogBatch;
@@ -16,6 +18,7 @@ const FILE_NAME_LEN: usize = FILE_NUM_LEN + LOG_SUFFIX_LEN;
 pub const FILE_MAGIC_HEADER: &'static [u8] = b"RAFT-LOG-FILE-HEADER";
 pub const VERSION: &'static [u8] = b"v1.0.0";
 const INIT_FILE_NUM: u64 = 1;
+const DEFAULT_FILES_COUNT: usize = 32;
 
 pub struct PipeLog {
     first_file_num: u64,
@@ -30,8 +33,11 @@ pub struct PipeLog {
     bytes_per_sync: usize,
     last_sync_size: usize,
 
-    // Use to read.
+    // Used when recovering from disk.
     current_read_file_num: u64,
+
+    // Opened files for reading.
+    opened_files: VecDeque<Mutex<File>>,
 }
 
 impl PipeLog {
@@ -46,6 +52,7 @@ impl PipeLog {
             bytes_per_sync: bytes_per_sync,
             last_sync_size: 0,
             current_read_file_num: 0,
+            opened_files: VecDeque::with_capacity(DEFAULT_FILES_COUNT),
         }
     }
 
@@ -92,6 +99,7 @@ impl PipeLog {
             let file = pipe_log.new_log_file(pipe_log.active_file_num);
             pipe_log.active_log = Some(file);
             pipe_log.active_log_size = FILE_MAGIC_HEADER.len() + VERSION.len();
+            pipe_log.open_all_for_read()?;
             return Ok(pipe_log);
         }
 
@@ -104,7 +112,40 @@ impl PipeLog {
         pipe_log.first_file_num = min_file_num;
         pipe_log.active_file_num = max_file_num;
         pipe_log.open_active_log()?;
+        pipe_log.open_all_for_read()?;
         Ok(pipe_log)
+    }
+
+    fn open_all_for_read(&mut self) -> Result<()> {
+        let mut current_file = self.first_file_num;
+        while current_file <= self.active_file_num {
+            let mut path = PathBuf::from(&self.dir);
+            path.push(generate_file_name(current_file));
+            let file = File::open(path)?;
+            self.opened_files.push_back(Mutex::new(file));
+            current_file += 1;
+        }
+        Ok(())
+    }
+
+    // Todo: use libc::fread to supply atomic position read.
+    pub fn fread(&self, file_num: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
+        if file_num < self.first_file_num || file_num > self.active_file_num {
+            return Err(box_err!("File not exist, file number {}", file_num));
+        }
+
+        // Use mutex to guarantee `seek + read` is atomic.
+        let mut file = self.opened_files[(file_num - self.first_file_num) as usize]
+            .lock()
+            .unwrap();
+        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+            error!("Seek failed, err: {:?}", e);
+            return Err(e.into());
+        }
+        let mut buf: Vec<u8> = Vec::with_capacity(len as usize);
+        buf.resize(len as usize, 0x0);
+        file.read_exact(buf.as_mut_slice())?;
+        Ok(buf)
     }
 
     pub fn close(&mut self) -> Result<()> {
@@ -113,10 +154,11 @@ impl PipeLog {
         Ok(())
     }
 
-    pub fn append(&mut self, content: &[u8], sync: bool) -> Result<u64> {
+    pub fn append(&mut self, content: &[u8], sync: bool) -> Result<(u64, u64)> {
         let file_num = self.active_file_num;
 
-        PipeLog::write_all(self.active_log.as_mut().unwrap(), content)?;
+        self.active_log.as_mut().unwrap().write_all(content)?;
+        let offset = self.active_log_size as u64;
         self.active_log_size += content.len();
         if sync ||
             self.bytes_per_sync > 0 &&
@@ -131,25 +173,13 @@ impl PipeLog {
             self.rotate_log();
         }
 
-        Ok(file_num)
+        Ok((file_num, offset))
     }
 
-    fn write_all(f: &mut File, data: &[u8]) -> io::Result<()> {
-        while let Err(e) = f.write(data) {
-            if e.kind() == ErrorKind::Interrupted {
-                warn!("Write is interrupted, retry");
-                continue;
-            } else {
-                return Err(e);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn append_log_batch(&mut self, batch: &mut LogBatch, sync: bool) -> Result<u64> {
+    pub fn append_log_batch(&mut self, batch: &mut LogBatch, sync: bool) -> Result<(u64, u64)> {
         match batch.encode_to_bytes() {
             Some(content) => self.append(&content, sync),
-            None => Ok(0),
+            None => Ok((0, 0)),
         }
     }
 
@@ -170,12 +200,19 @@ impl PipeLog {
             if self.first_file_num >= file_num {
                 break;
             }
+
+            // Close the file.
+            // Todo: check file name
+            self.opened_files.pop_front().unwrap();
+
+            // Remove the file
             let mut path = PathBuf::from(&self.dir);
             path.push(generate_file_name(self.first_file_num));
             fs::remove_file(path)?;
 
             self.first_file_num += 1;
         }
+
         debug!(
             "purge {} expired files",
             self.first_file_num - old_first_file_num
@@ -224,6 +261,18 @@ impl PipeLog {
         self.active_log_size = FILE_MAGIC_HEADER.len() + VERSION.len();
         self.last_sync_size = self.active_log_size;
         self.active_file_num = next_file_num;
+
+        // Open for future reading.
+        let mut path = PathBuf::from(&self.dir);
+        path.push(generate_file_name(self.active_file_num));
+        let file = File::open(path).unwrap_or_else(|e| {
+            panic!(
+                "Open file {} for read failed, err {:?}",
+                self.active_file_num,
+                e
+            )
+        });
+        self.opened_files.push_back(Mutex::new(file));
     }
 
     fn open_active_log(&mut self) -> Result<()> {
@@ -259,7 +308,7 @@ impl PipeLog {
         let mut header = Vec::with_capacity(FILE_MAGIC_HEADER.len() + VERSION.len());
         header.extend_from_slice(FILE_MAGIC_HEADER);
         header.extend_from_slice(VERSION);
-        match PipeLog::write_all(&mut file, header.as_slice()) {
+        match file.write_all(header.as_slice()) {
             Err(e) => {
                 fs::remove_file(path).unwrap();
                 panic!("Write HEADER failed, error: {:?}", e)
@@ -269,6 +318,23 @@ impl PipeLog {
                 file
             }
         }
+    }
+
+    pub fn active_log_size(&self) -> usize {
+        self.active_log_size
+    }
+
+    pub fn active_file_num(&self) -> u64 {
+        self.active_file_num
+    }
+
+    pub fn first_file_num(&self) -> u64 {
+        self.first_file_num
+    }
+
+    pub fn total_size(&self) -> usize {
+        (self.active_file_num - self.first_file_num) as usize * self.rotate_size +
+            self.active_log_size
     }
 
     pub fn read_next_file(&mut self) -> Result<Option<Vec<u8>>> {
@@ -292,30 +358,13 @@ impl PipeLog {
         Ok(Some(vec))
     }
 
-    pub fn active_log_size(&self) -> usize {
-        self.active_log_size
-    }
-
-    pub fn active_file_num(&self) -> u64 {
-        self.active_file_num
-    }
-
-    pub fn first_file_num(&self) -> u64 {
-        self.first_file_num
-    }
-
-    pub fn total_size(&self) -> usize {
-        (self.active_file_num - self.first_file_num) as usize * self.rotate_size +
-            self.active_log_size
-    }
-
-    pub fn files_should_evict(&self, size_limit: usize) -> u64 {
+    pub fn files_before(&self, size: usize) -> u64 {
         let cur_size = self.total_size();
-        if cur_size > size_limit {
-            let count = (cur_size - size_limit) / self.rotate_size;
+        if cur_size > size {
+            let count = (cur_size - size) / self.rotate_size;
             self.first_file_num + count as u64
         } else {
-            self.first_file_num
+            0
         }
     }
 }
@@ -359,11 +408,19 @@ mod tests {
         assert_eq!(pipe_log.first_file_num(), INIT_FILE_NUM);
         assert_eq!(pipe_log.active_file_num(), INIT_FILE_NUM);
 
+        let header_size = (FILE_MAGIC_HEADER.len() + VERSION.len()) as u64;
+
         // generate file 1, 2, 3
         let content: Vec<u8> = vec![b'a'; 1024];
-        assert_eq!(pipe_log.append(content.as_slice(), false).unwrap(), 1);
+        assert_eq!(
+            pipe_log.append(content.as_slice(), false).unwrap(),
+            (1, header_size)
+        );
         assert_eq!(pipe_log.active_file_num(), 2);
-        assert_eq!(pipe_log.append(content.as_slice(), false).unwrap(), 2);
+        assert_eq!(
+            pipe_log.append(content.as_slice(), false).unwrap(),
+            (2, header_size)
+        );
         assert_eq!(pipe_log.active_file_num(), 3);
 
         // purge file 1
@@ -377,13 +434,28 @@ mod tests {
         // cannot purge active file
         assert!(pipe_log.purge_to(4).is_err());
 
-        // truncate file
+        // append position
         let s_content = b"short content";
-        assert_eq!(pipe_log.append(s_content.as_ref(), false).unwrap(), 3);
+        assert_eq!(
+            pipe_log.append(s_content.as_ref(), false).unwrap(),
+            (3, header_size)
+        );
+        assert_eq!(
+            pipe_log.append(s_content.as_ref(), false).unwrap(),
+            (3, header_size + s_content.len() as u64)
+        );
         assert_eq!(
             pipe_log.active_log_size(),
-            FILE_MAGIC_HEADER.len() + VERSION.len() + s_content.len()
+            FILE_MAGIC_HEADER.len() + VERSION.len() + 2 * s_content.len()
         );
+
+        // fread
+        let content_readed = pipe_log
+            .fread(3, header_size, s_content.len() as u64)
+            .unwrap();
+        assert_eq!(content_readed.as_slice(), s_content.as_ref());
+
+        // truncate file
         pipe_log
             .truncate_active_log((FILE_MAGIC_HEADER.len() + VERSION.len()) as u64)
             .unwrap();

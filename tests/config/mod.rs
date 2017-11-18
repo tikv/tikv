@@ -261,9 +261,11 @@ fn test_serde_custom_tikv_config() {
         recovery_mode: 1,
         bytes_per_sync: ReadableSize::kb(8),
         target_file_size: ReadableSize::mb(10),
+        cache_size_limit: ReadableSize::gb(1),
         total_size_limit: ReadableSize::gb(4),
         rewrite_size_threshold: ReadableSize::kb(18),
         compact_threshold: 0,
+        region_size: ReadableSize::kb(0),
     };
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),

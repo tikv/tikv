@@ -598,6 +598,7 @@ impl TiKvConfig {
 
         self.raftdb.dir = self.raft_store.raftdb_path.clone();
         self.raftdb.compact_threshold = self.raft_store.raft_log_gc_threshold as usize;
+        self.raftdb.region_size = self.raft_store.region_split_size;
 
         self.rocksdb.validate()?;
         self.server.validate()?;
