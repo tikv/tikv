@@ -15,7 +15,7 @@ use std::sync::Arc;
 use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use kvproto::metapb::Region;
 
-use raftstore::store::engine::{IterOption, Iterable, Peekable, Snapshot, SyncSnapshot};
+use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
 
@@ -148,8 +148,8 @@ impl Peekable for RegionSnapshot {
 /// `RegionIterator` wrap a rocksdb iterator and only allow it to
 /// iterate in the region. It behaves as if underlying
 /// db only contains one region.
-pub struct RegionIterator<'a> {
-    iter: DBIterator<&'a DB>,
+pub struct RegionIterator {
+    iter: DBIterator<Arc<DB>>,
     valid: bool,
     region: Arc<Region>,
     start_key: Vec<u8>,
@@ -165,14 +165,10 @@ fn set_upper_bound(iter_opt: IterOption, region: &Region) -> IterOption {
 }
 
 // we use rocksdb's style iterator, doesn't need to impl std iterator.
-impl<'a> RegionIterator<'a> {
-    pub fn new(
-        snap: &'a Snapshot,
-        region: Arc<Region>,
-        mut iter_opt: IterOption,
-    ) -> RegionIterator<'a> {
+impl RegionIterator {
+    pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
         iter_opt = set_upper_bound(iter_opt, &region);
-        let iter = snap.new_iterator(iter_opt);
+        let iter = snap.db_iterator(iter_opt);
         RegionIterator {
             iter: iter,
             valid: false,
@@ -183,13 +179,13 @@ impl<'a> RegionIterator<'a> {
     }
 
     pub fn new_cf(
-        snap: &'a Snapshot,
+        snap: &Snapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
         cf: &str,
-    ) -> RegionIterator<'a> {
+    ) -> RegionIterator {
         iter_opt = set_upper_bound(iter_opt, &region);
-        let iter = snap.new_iterator_cf(cf, iter_opt).unwrap();
+        let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
         RegionIterator {
             iter: iter,
             valid: false,
@@ -515,7 +511,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
-        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
+        let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
         assert!(!iter.reverse_seek(
             &Key::from_encoded(b"a2".to_vec()),
             &mut statistics
@@ -562,7 +558,7 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
+        let mut iter = Cursor::new(Box::new(snap.iter(IterOption::default())), ScanMode::Mixed);
         assert!(!iter.reverse_seek(
             &Key::from_encoded(b"a1".to_vec()),
             &mut statistics
