@@ -89,18 +89,12 @@ impl Default for SnapshotIOLimiter {
     }
 }
 
-pub struct LimiterWriter<'a, T: 'a>
-where
-    T: Write,
-{
+pub struct LimiterWriter<'a, T: Write + 'a> {
     pub limiter: Arc<SnapshotIOLimiter>,
     pub writer: &'a mut T,
 }
 
-impl<'a, T> Write for LimiterWriter<'a, T>
-where
-    T: Write,
-{
+impl<'a, T: Write + 'a> Write for LimiterWriter<'a, T> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let total = buf.len();
         let single = self.limiter.get_max_bytes_per_time() as usize;
