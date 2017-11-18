@@ -225,6 +225,5 @@ dir = "/var"
 recovery-mode = 1
 bytes-per-sync = "8KB"
 target-file-size = "10MB"
-cache-size-limit = "4GB"
+cache-size-limit = "1GB"
 total-size-limit = "4GB"
-rewrite-size-threshold = "18KB"
