@@ -285,7 +285,9 @@ where
     F: Fn(&PdClient) -> GrpcResult<R>,
 {
     for _ in 0..retry {
-        match func(&client.inner.rl().client).map_err(Error::Grpc) {
+        // DO NOT put any lock operation in match statement, or it will cause dead lock!
+        let ret = { func(&client.inner.rl().client).map_err(Error::Grpc) };
+        match ret {
             Ok(r) => {
                 return Ok(r);
             }
