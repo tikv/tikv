@@ -238,8 +238,6 @@ impl MemTable {
         }
 
         // Not in ache.
-        // cache_last_index must be equal to last_index, so don't compare to
-        // cache_last_index here.
         let cache_first_index = self.entries_cache.front().unwrap().get_index();
         if index < cache_first_index {
             return Some((None, Some(self.entries_index[ioffset].clone())));
@@ -855,6 +853,30 @@ mod tests {
         assert_eq!(memtable.entries_index[29].index, 29);
         assert_eq!(memtable.min_file_num().unwrap(), 1);
         assert_eq!(memtable.max_file_num().unwrap(), 3)
+    }
+
+    #[test]
+    fn test_memtable_get_entry() {
+        let region_id = 8;
+        let cache_limit = 10;
+        let mut memtable = MemTable::new(region_id, cache_limit);
+
+        // [5, 10) file_num = 1, not in cache
+        // [10, 20) file_num = 2, in cache
+        memtable.append(generate_ents(5, 10), generate_ents_index(5, 10, 1));
+        memtable.append(generate_ents(10, 20), generate_ents_index(10, 20, 2));
+
+        // Not in range.
+        assert_eq!(memtable.get_entry(2), None);
+        assert_eq!(memtable.get_entry(25), None);
+
+        // In cache.
+        let (entry, _) = memtable.get_entry(10).unwrap();
+        assert_eq!(entry.unwrap().get_index(), 10);
+
+        // Not in cache.
+        let (_, entry_idx) = memtable.get_entry(5).unwrap();
+        assert_eq!(entry_idx.unwrap().index, 5);
     }
 
     fn generate_ents(begin_idx: u64, end_idx: u64) -> Vec<Entry> {
