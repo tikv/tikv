@@ -32,6 +32,21 @@ impl EntryIndex {
     }
 }
 
+
+/*
+ * Each region has an individual `MemTable` to cache latest entries and all entries indices.
+ * `MemTable` also have a map to store all key value pairs for this region.
+ *
+ * Latest N entries                    [**************************]
+ *                                      ^                        ^
+ *                                      |                        |
+ *                             first entry in cache      last entry in cache
+ * All entries indices [******************************************]
+ *                      ^                                        ^
+ *                      |                                        |
+ *                 first entry                               last entry
+ */
+
 pub struct MemTable {
     region_id: u64,
 
@@ -74,25 +89,26 @@ impl MemTable {
             );
         }
 
-        // last_index in entries_cache is equal to last_index in entries_index
+        // `entries_cache` contains the latest N entries, and at lease has one entry
+        // when `entries_index` is not empty.
         if let Some(cache_last_index) = self.entries_cache.back().map(|e| e.get_index()) {
-            let add_first_index = entries[0].get_index();
+            let first_index_to_add = entries[0].get_index();
 
             // Unlikely to happen
-            if cache_last_index >= add_first_index {
-                if self.entries_cache.front().unwrap().get_index() >= add_first_index {
+            if cache_last_index >= first_index_to_add {
+                if first_index_to_add <= self.entries_cache.front().unwrap().get_index() {
                     // clear all cache
                     self.entries_cache.clear();
                     self.cache_size = 0;
 
                     let first_index = self.entries_index.front().unwrap().index;
-                    if first_index >= add_first_index {
+                    if first_index >= first_index_to_add {
                         // clear all indices
                         self.entries_index.clear();
                         self.total_size = 0;
                     } else {
                         // truncate tail indices
-                        let left = (add_first_index - first_index) as usize;
+                        let left = (first_index_to_add - first_index) as usize;
                         let delta_size = self.entries_index
                             .drain(left..)
                             .fold(0, |acc, i| acc + i.len);
@@ -100,22 +116,26 @@ impl MemTable {
                         self.total_size -= delta_size;
                     }
                 } else {
-                    // truncate tail entries
-                    let left = self.entries_cache.len() -
-                        (cache_last_index - add_first_index + 1) as usize;
-                    self.entries_cache.truncate(left);
+                    let truncate_count = (cache_last_index - first_index_to_add + 1) as usize;
+
+                    // truncate tail entries from cache
+                    let cache_left = self.entries_cache.len() - truncate_count;
+                    self.entries_cache.truncate(cache_left);
+
+                    // truncate tail entries from indices
+                    let index_left = self.entries_index.len() - truncate_count;
                     let delta_size = self.entries_index
-                        .drain(left..)
+                        .drain(index_left..)
                         .fold(0, |acc, i| acc + i.len);
                     self.cache_size -= delta_size;
                     self.total_size -= delta_size;
                 }
-            } else if cache_last_index + 1 < add_first_index {
+            } else if cache_last_index + 1 < first_index_to_add {
                 panic!(
                     "entry cache of region {} contains unexpected hole: {} < {}",
                     self.region_id,
                     cache_last_index,
-                    add_first_index
+                    first_index_to_add
                 );
             }
         }
@@ -126,7 +146,7 @@ impl MemTable {
         self.cache_size += delta_size;
         self.total_size += delta_size;
 
-        // Evict front entries from cache
+        // Evict front entries from cache when reaching cache size limitation.
         while self.cache_size > self.cache_limit && self.entries_cache.len() > 1 {
             let distance = self.entries_index.len() - self.entries_cache.len();
             let entry = self.entries_cache.pop_front().unwrap();
@@ -173,21 +193,22 @@ impl MemTable {
                 self.entries_index.shrink_to_fit();
             }
 
-            // Compact cache when needed.
-            if let Some(cache_first_index) = self.entries_cache.front().map(|i| i.get_index()) {
-                if idx > cache_first_index {
-                    self.entries_cache
-                        .drain(..(idx - cache_first_index) as usize);
-                    // All entries are in cache.
-                    self.cache_size = self.total_size;
+            // Compact cache when needed. When entries_index is not empty, there are
+            // at lease one entry in cache.
+            let cache_first_index = self.entries_cache.front().unwrap().get_index();
+            if idx > cache_first_index {
+                self.entries_cache
+                    .drain(..(idx - cache_first_index) as usize);
+                // All entries are in cache.
+                self.cache_size = self.total_size;
 
-                    if self.entries_cache.len() < SHRINK_CACHE_CAPACITY &&
-                        self.entries_cache.capacity() > SHRINK_CACHE_CAPACITY
-                    {
-                        self.entries_cache.shrink_to_fit();
-                    }
+                if self.entries_cache.len() < SHRINK_CACHE_CAPACITY &&
+                    self.entries_cache.capacity() > SHRINK_CACHE_CAPACITY
+                {
+                    self.entries_cache.shrink_to_fit();
                 }
             }
+
             return idx - first_index;
         }
         0
@@ -260,17 +281,15 @@ impl MemTable {
             ));
         }
 
-        // Check max size limitation.
         let start_pos = (begin - first_index) as usize;
         let mut end_pos = (end - begin) as usize + start_pos;
-        let count_limit = self.count_limit(
-            start_pos,
-            end_pos,
-            max_size.map_or(u64::MAX as usize, |max| max),
-        );
-        end_pos = start_pos + count_limit;
 
-        // Has some entries in cache.
+        // Check max size limitation.
+        if let Some(max_size) = max_size {
+            let count_limit = self.count_limit(start_pos, end_pos, max_size);
+            end_pos = start_pos + count_limit;
+        }
+
         let cache_first_index = self.entries_cache.front().unwrap().get_index();
         let cache_offset = (cache_first_index - first_index) as usize;
         if cache_offset < end_pos {
@@ -283,7 +302,7 @@ impl MemTable {
                 );
                 vec.extend_from_slice(first);
                 vec.extend_from_slice(second);
-                Ok(count_limit as u64)
+                Ok((end_pos - start_pos) as u64)
             } else {
                 // Partial needed entries are in cache.
                 let (first, second) =
@@ -377,10 +396,6 @@ impl MemTable {
         self.cache_size
     }
 
-    pub fn all_in_cache(&self) -> bool {
-        self.entries_cache.len() == self.entries_index.len()
-    }
-
     // Evict entries before `boundary_file_num` from cache.
     pub fn evict_old_from_cache(&mut self, boundary_file_num: u64) {
         if self.entries_index.is_empty() {
@@ -398,7 +413,7 @@ impl MemTable {
         let mut cache_offset = (cache_first_index - first_index) as usize;
 
         // At lease keep one entry in cache
-        while self.entries_cache.len() > 2 {
+        while self.entries_cache.len() > 1 {
             let idx = &self.entries_index[cache_offset];
             if idx.file_num >= boundary_file_num {
                 break;
@@ -473,177 +488,300 @@ mod tests {
     use kvproto::eraftpb::Entry;
 
     #[test]
-    fn test_memtable() {
-        let mut memtable = MemTable::new(8 /* region_id */, 100 * 1024 * 1024);
+    fn test_memtable_append() {
+        let region_id = 8;
+        let cache_limit = 15;
+        let mut memtable = MemTable::new(region_id, cache_limit);
 
-        // append entries [0, 10) file_num = 1
-        // append entries [10, 20) file_num = 1
-        // append entries [20, 30) file_num = 2
-        memtable.append(generate_ents(0, 10), generate_ents_index(0, 10, 1));
+        // Append entries [10, 20) file_num = 1 not over cache size limitation.
+        // after appending
+        // [10, 20) file_num = 1, in cache
         memtable.append(generate_ents(10, 20), generate_ents_index(10, 20, 1));
-        memtable.append(generate_ents(20, 30), generate_ents_index(20, 30, 2));
-        assert_eq!(memtable.entries_index.len(), 30);
-        assert_eq!(memtable.entries_index[0].index, 0);
-        assert_eq!(memtable.entries_index[29].index, 29);
-        assert_eq!(memtable.entries_index[0].file_num, 1);
-        assert_eq!(memtable.entries_index[29].file_num, 2);
-
-        assert_eq!(memtable.entries_cache.len(), 30);
-        assert_eq!(memtable.entries_cache[0].get_index(), 0);
-        assert_eq!(memtable.entries_cache[29].get_index(), 29);
+        assert_eq!(memtable.cache_size(), 10);
+        assert_eq!(memtable.entries_size(), 10);
         assert_eq!(memtable.min_file_num().unwrap(), 1);
-        assert_eq!(memtable.max_file_num().unwrap(), 2);
+        assert_eq!(memtable.max_file_num().unwrap(), 1);
 
-        assert_eq!(memtable.compact_to(15), 15);
-        assert_eq!(memtable.entries_index.len(), 15);
-        assert_eq!(memtable.entries_index[0].index, 15);
-        assert_eq!(memtable.entries_index[5].index, 20);
-        assert_eq!(memtable.entries_index[14].index, 29);
-        assert_eq!(memtable.entries_index[0].file_num, 1);
-        assert_eq!(memtable.entries_index[5].file_num, 2);
-        assert_eq!(memtable.entries_index[14].file_num, 2);
-
+        // Append entries [20, 30) file_num = 2, over cache size limitation 15,
+        // after appending:
+        // [10, 15) file_num = 1, not in cache
+        // [15, 20) file_num = 1, in cache
+        // [20, 30) file_num = 2, in cache
+        memtable.append(generate_ents(20, 30), generate_ents_index(20, 30, 2));
+        assert_eq!(memtable.cache_size(), 15);
+        assert_eq!(memtable.entries_size(), 20);
         assert_eq!(memtable.entries_cache.len(), 15);
+        assert_eq!(memtable.entries_index.len(), 20);
         assert_eq!(memtable.entries_cache[0].get_index(), 15);
         assert_eq!(memtable.entries_cache[14].get_index(), 29);
+        assert_eq!(memtable.entries_index[0].index, 10);
+        assert_eq!(memtable.entries_index[19].index, 29);
         assert_eq!(memtable.min_file_num().unwrap(), 1);
         assert_eq!(memtable.max_file_num().unwrap(), 2);
 
-        assert_eq!(memtable.compact_to(25), 10);
-        assert_eq!(memtable.entries_index.len(), 5);
-        assert_eq!(memtable.entries_index[0].index, 25);
-        assert_eq!(memtable.entries_index[4].index, 29);
-        assert_eq!(memtable.entries_index[0].file_num, 2);
-        assert_eq!(memtable.entries_index[4].file_num, 2);
-
-        assert_eq!(memtable.entries_cache.len(), 5);
-        assert_eq!(memtable.entries_cache[0].get_index(), 25);
-        assert_eq!(memtable.entries_cache[4].get_index(), 29);
-        assert_eq!(memtable.min_file_num().unwrap(), 2);
-        assert_eq!(memtable.max_file_num().unwrap(), 2);
-
-        assert_eq!(memtable.compact_to(24), 0);
-
-        // append entries [28, 38) file_num = 3
-        memtable.append(generate_ents(28, 38), generate_ents_index(28, 38, 3));
-        assert_eq!(memtable.entries_index.len(), 13);
-        assert_eq!(memtable.entries_index[0].index, 25);
-        assert_eq!(memtable.entries_index[12].index, 37);
-        assert_eq!(memtable.entries_index[0].file_num, 2);
-        assert_eq!(memtable.entries_index[3].file_num, 3);
-        assert_eq!(memtable.entries_index[12].file_num, 3);
-
-        assert_eq!(memtable.entries_cache.len(), 13);
-        assert_eq!(memtable.entries_cache[0].get_index(), 25);
-        assert_eq!(memtable.entries_cache[12].get_index(), 37);
-        assert_eq!(memtable.min_file_num().unwrap(), 2);
+        // Overlap Appending, partial overlap with cache.
+        // Append entries [25, 35) file_num = 3, will truncate
+        // tail entries from cache and indices.
+        // After appending:
+        // [10, 20) file_num = 1, not in cache
+        // [20, 25) file_num = 2, in cache
+        // [25, 35) file_num = 3, in cache
+        memtable.append(generate_ents(25, 35), generate_ents_index(25, 35, 3));
+        assert_eq!(memtable.cache_size(), 15);
+        assert_eq!(memtable.entries_size(), 25);
+        assert_eq!(memtable.entries_cache.len(), 15);
+        assert_eq!(memtable.entries_index.len(), 25);
+        assert_eq!(memtable.entries_cache[0].get_index(), 20);
+        assert_eq!(memtable.entries_cache[14].get_index(), 34);
+        assert_eq!(memtable.entries_index[0].index, 10);
+        assert_eq!(memtable.entries_index[24].index, 34);
+        assert_eq!(memtable.min_file_num().unwrap(), 1);
         assert_eq!(memtable.max_file_num().unwrap(), 3);
 
-        // has entries [25, 38), and all in cache.
+        // Overlap Appending, whole overlap with cache.
+        // Append entries [20, 40) file_num = 4.
+        // After appending:
+        // [10, 20) file_num = 1, not in cache
+        // [20, 25) file_num = 4, not in cache
+        // [25, 40) file_num = 4, in cache
+        memtable.append(generate_ents(20, 40), generate_ents_index(20, 40, 4));
+        assert_eq!(memtable.cache_size(), 15);
+        assert_eq!(memtable.entries_size(), 30);
+        assert_eq!(memtable.entries_cache.len(), 15);
+        assert_eq!(memtable.entries_index.len(), 30);
+        assert_eq!(memtable.entries_cache[0].get_index(), 25);
+        assert_eq!(memtable.entries_cache[14].get_index(), 39);
+        assert_eq!(memtable.entries_index[0].index, 10);
+        assert_eq!(memtable.entries_index[29].index, 39);
+        assert_eq!(memtable.min_file_num().unwrap(), 1);
+        assert_eq!(memtable.max_file_num().unwrap(), 4);
+
+        // Overlap Appending, whole overlap with index.
+        // Append entries [10, 30) file_num = 5.
+        // After appending:
+        // [10, 15) file_num = 5, not in cache
+        // [15, 30) file_num = 5, in cache
+        memtable.append(generate_ents(10, 30), generate_ents_index(10, 30, 5));
+        assert_eq!(memtable.cache_size(), 15);
+        assert_eq!(memtable.entries_size(), 20);
+        assert_eq!(memtable.entries_cache.len(), 15);
+        assert_eq!(memtable.entries_index.len(), 20);
+        assert_eq!(memtable.entries_cache[0].get_index(), 15);
+        assert_eq!(memtable.entries_cache[14].get_index(), 29);
+        assert_eq!(memtable.entries_index[0].index, 10);
+        assert_eq!(memtable.entries_index[19].index, 29);
+        assert_eq!(memtable.min_file_num().unwrap(), 5);
+        assert_eq!(memtable.max_file_num().unwrap(), 5);
+
+        // Cache at lease one entry.
+        let mut memtable = MemTable::new(region_id, 0);
+        memtable.append(generate_ents(10, 20), generate_ents_index(10, 20, 1));
+        assert_eq!(memtable.cache_size(), 1);
+        assert_eq!(memtable.entries_cache.len(), 1);
+        assert_eq!(memtable.entries_cache[0].get_index(), 19);
+        assert_eq!(memtable.entries_size(), 10);
+        assert_eq!(memtable.entries_index.len(), 10);
+        assert_eq!(memtable.entries_index[0].index, 10);
+        assert_eq!(memtable.entries_index[9].index, 19);
+    }
+
+    #[test]
+    fn test_memtable_compact() {
+        let region_id = 8;
+        let cache_limit = 10;
+        let mut memtable = MemTable::new(region_id, cache_limit);
+
+        // After appending:
+        // [0, 10) file_num = 1, not in cache
+        // [10, 15) file_num = 2, not in cache
+        // [15, 20) file_num = 2, in cache
+        // [20, 25) file_num = 3, in cache
+        memtable.append(generate_ents(0, 10), generate_ents_index(0, 10, 1));
+        memtable.append(generate_ents(10, 20), generate_ents_index(10, 20, 2));
+        memtable.append(generate_ents(20, 25), generate_ents_index(20, 25, 3));
+        assert_eq!(memtable.cache_size(), 10);
+        assert_eq!(memtable.entries_size(), 25);
+        assert_eq!(memtable.entries_cache.len(), 10);
+        assert_eq!(memtable.entries_index.len(), 25);
+        assert_eq!(memtable.entries_cache[0].get_index(), 15);
+        assert_eq!(memtable.entries_cache[9].get_index(), 24);
+        assert_eq!(memtable.entries_index[0].index, 0);
+        assert_eq!(memtable.entries_index[24].index, 24);
+        assert_eq!(memtable.min_file_num().unwrap(), 1);
+        assert_eq!(memtable.max_file_num().unwrap(), 3);
+
+        // Compact to 5.
+        // Only index is needed to compact.
+        assert_eq!(memtable.compact_to(5), 5);
+        assert_eq!(memtable.cache_size(), 10);
+        assert_eq!(memtable.entries_size(), 20);
+        assert_eq!(memtable.entries_cache.len(), 10);
+        assert_eq!(memtable.entries_index.len(), 20);
+        assert_eq!(memtable.entries_cache[0].get_index(), 15);
+        assert_eq!(memtable.entries_cache[9].get_index(), 24);
+        assert_eq!(memtable.entries_index[0].index, 5);
+        assert_eq!(memtable.entries_index[19].index, 24);
+        assert_eq!(memtable.min_file_num().unwrap(), 1);
+        assert_eq!(memtable.max_file_num().unwrap(), 3);
+
+        // Compact to 20.
+        // Both index and cache  need compaction.
+        assert_eq!(memtable.compact_to(20), 15);
+        assert_eq!(memtable.entries_size(), memtable.cache_size());
+        assert_eq!(memtable.entries_size(), 5);
+        assert_eq!(memtable.entries_cache.len(), 5);
+        assert_eq!(memtable.entries_index.len(), 5);
+        assert_eq!(memtable.entries_cache[0].get_index(), 20);
+        assert_eq!(memtable.entries_cache[4].get_index(), 24);
+        assert_eq!(memtable.entries_index[0].index, 20);
+        assert_eq!(memtable.entries_index[4].index, 24);
+        assert_eq!(memtable.min_file_num().unwrap(), 3);
+        assert_eq!(memtable.max_file_num().unwrap(), 3);
+
+        // Compact to 20 or smaller index, nothing happens.
+        assert_eq!(memtable.compact_to(20), 0);
+        assert_eq!(memtable.compact_to(15), 0);
+    }
+
+    #[test]
+    fn test_memtable_fetch() {
+        let region_id = 8;
+        let cache_limit = 10;
+        let mut memtable = MemTable::new(region_id, cache_limit);
+
+        // After appending:
+        // [0, 10) file_num = 1, not in cache
+        // [10, 15) file_num = 2, not in cache
+        // [15, 20) file_num = 2, in cache
+        // [20, 25) file_num = 3, in cache
+        memtable.append(generate_ents(0, 10), generate_ents_index(0, 10, 1));
+        memtable.append(generate_ents(10, 20), generate_ents_index(10, 20, 2));
+        memtable.append(generate_ents(20, 25), generate_ents_index(20, 25, 3));
+
+        // Fetching all
+        // Only latest 10 entries are in cache.
         let mut ents = vec![];
         let mut ents_idx = vec![];
         memtable.fetch_all(&mut ents, &mut ents_idx);
-        assert_eq!(ents.len(), 13);
-        assert_eq!(ents[0].get_index(), 25);
-        assert_eq!(ents[12].get_index(), 37);
-        assert!(ents_idx.is_empty());
+        assert_eq!(ents.len(), 10);
+        assert_eq!(ents[0].get_index(), 15);
+        assert_eq!(ents[9].get_index(), 24);
+        assert_eq!(ents_idx.len(), 15);
+        assert_eq!(ents_idx[0].index, 0);
+        assert_eq!(ents_idx[14].index, 14);
 
+        // After compact:
+        // [10, 15) file_num = 2, not in cache
+        // [15, 20) file_num = 2, in cache
+        // [20, 25) file_num = 3, in cache
+        assert_eq!(memtable.compact_to(10), 10);
+
+        // Out of range fetching
         ents.clear();
-        // out of range
+        ents_idx.clear();
         assert!(
             memtable
-                .fetch_entries_to(24, 37, None, &mut ents, &mut ents_idx)
+                .fetch_entries_to(5, 15, None, &mut ents, &mut ents_idx)
                 .is_err()
         );
-        // out of range
+
+        // Out of range fetching
+        ents.clear();
+        ents_idx.clear();
         assert!(
             memtable
-                .fetch_entries_to(35, 45, None, &mut ents, &mut ents_idx)
+                .fetch_entries_to(20, 30, None, &mut ents, &mut ents_idx)
                 .is_err()
         );
-        // no max size limitation
-        assert_eq!(
-            memtable
-                .fetch_entries_to(25, 38, None, &mut ents, &mut ents_idx)
-                .unwrap(),
-            13
-        );
-        assert_eq!(ents[0].get_index(), 25);
-        assert_eq!(ents[12].get_index(), 37);
-        assert!(ents_idx.is_empty());
 
-        // max size limit to 5
+        // All needed entries are in cache.
         ents.clear();
+        ents_idx.clear();
         assert_eq!(
             memtable
-                .fetch_entries_to(25, 38, Some(5), &mut ents, &mut ents_idx)
+                .fetch_entries_to(20, 25, None, &mut ents, &mut ents_idx)
                 .unwrap(),
             5
         );
-        assert_eq!(ents[0].get_index(), 25);
-        assert_eq!(ents[4].get_index(), 29);
+        assert_eq!(ents.len(), 5);
+        assert_eq!(ents[0].get_index(), 20);
+        assert_eq!(ents[4].get_index(), 24);
         assert!(ents_idx.is_empty());
 
-        // even max size limit is 0, the first entry should be return
+        // All needed entries are not in cache.
         ents.clear();
+        ents_idx.clear();
         assert_eq!(
             memtable
-                .fetch_entries_to(25, 38, Some(0), &mut ents, &mut ents_idx)
+                .fetch_entries_to(10, 15, None, &mut ents, &mut ents_idx)
                 .unwrap(),
-            1
+            0
         );
-        assert_eq!(ents[0].get_index(), 25);
-        assert!(ents_idx.is_empty());
+        assert!(ents.is_empty());
+        assert_eq!(ents_idx.len(), 5);
+        assert_eq!(ents_idx[0].index, 10);
+        assert_eq!(ents_idx[4].index, 14);
 
+        // Some needed entries are in cache, the others are not.
         ents.clear();
+        ents_idx.clear();
         assert_eq!(
             memtable
-                .fetch_entries_to(30, 38, None, &mut ents, &mut ents_idx)
-                .unwrap(),
-            8
-        );
-        assert_eq!(ents[0].get_index(), 30);
-        assert_eq!(ents[7].get_index(), 37);
-        assert!(ents_idx.is_empty());
-
-        // Evict entries that in file 2 from cache
-        assert!(memtable.all_in_cache());
-        ents.clear();
-        memtable.evict_old_from_cache(3);
-        assert!(!memtable.all_in_cache());
-        assert_eq!(memtable.entries_index.len(), 13);
-        assert_eq!(memtable.entries_index[0].index, 25);
-        assert_eq!(memtable.entries_index[12].index, 37);
-        assert_eq!(memtable.entries_cache.len(), 10);
-        assert_eq!(memtable.entries_cache[0].get_index(), 28);
-        assert_eq!(memtable.entries_cache[9].get_index(), 37);
-        assert_eq!(
-            memtable
-                .fetch_entries_to(25, 38, None, &mut ents, &mut ents_idx)
+                .fetch_entries_to(10, 25, None, &mut ents, &mut ents_idx)
                 .unwrap(),
             10
         );
         assert_eq!(ents.len(), 10);
-        assert_eq!(ents[0].get_index(), 28);
-        assert_eq!(ents[9].get_index(), 37);
-        assert_eq!(ents_idx.len(), 3);
-        assert_eq!(ents_idx[0].index, 25);
-        assert_eq!(ents_idx[0].file_num, 2);
-        assert_eq!(ents_idx[2].index, 27);
-        assert_eq!(ents_idx[2].file_num, 2);
+        assert_eq!(ents[0].get_index(), 15);
+        assert_eq!(ents[9].get_index(), 24);
+        assert_eq!(ents_idx.len(), 5);
+        assert_eq!(ents_idx[0].index, 10);
+        assert_eq!(ents_idx[4].index, 14);
 
-        // append entries [20, 40) file_num = 3
-        memtable.append(generate_ents(20, 40), generate_ents_index(20, 40, 3));
-        assert_eq!(memtable.entries_index.len(), 20);
-        assert_eq!(memtable.entries_index[0].index, 20);
-        assert_eq!(memtable.entries_index[19].index, 39);
-        assert_eq!(memtable.entries_cache.len(), 20);
-        assert_eq!(memtable.entries_cache[0].get_index(), 20);
-        assert_eq!(memtable.entries_cache[19].get_index(), 39);
-        assert_eq!(memtable.min_file_num().unwrap(), 3);
-        assert_eq!(memtable.max_file_num().unwrap(), 3);
+        // Max size limitation range fetching.
+        // Only can fetch [10, 20) because of size limitation,
+        // and [10, 15) is not in cache, [15, 20) is in cache.
+        ents.clear();
+        ents_idx.clear();
+        assert_eq!(
+            memtable
+                .fetch_entries_to(
+                    10,
+                    25,
+                    Some(10), /* max size limitation */
+                    &mut ents,
+                    &mut ents_idx
+                )
+                .unwrap(),
+            5
+        );
+        assert_eq!(ents.len(), 5);
+        assert_eq!(ents[0].get_index(), 15);
+        assert_eq!(ents[4].get_index(), 19);
+        assert_eq!(ents_idx.len(), 5);
+        assert_eq!(ents_idx[0].index, 10);
+        assert_eq!(ents_idx[4].index, 14);
 
-        // put key value pairs
+        // Even max size limitation is 0, at least fetch one entry.
+        ents.clear();
+        ents_idx.clear();
+        assert_eq!(
+            memtable
+                .fetch_entries_to(20, 25, Some(0), &mut ents, &mut ents_idx)
+                .unwrap(),
+            1
+        );
+        assert_eq!(ents.len(), 1);
+        assert_eq!(ents[0].get_index(), 20);
+        assert!(ents_idx.is_empty());
+    }
+
+    #[test]
+    fn test_memtable_kv_operations() {
+        let region_id = 8;
+        let cache_limit = 1024;
+        let mut memtable = MemTable::new(region_id, cache_limit);
+
         let (k1, v1) = (b"key1", b"value1");
         let (k5, v5) = (b"key5", b"value5");
         memtable.put(k1.to_vec(), v1.to_vec(), 1);
@@ -652,6 +790,71 @@ mod tests {
         assert_eq!(memtable.max_file_num().unwrap(), 5);
         assert_eq!(memtable.get(k1.as_ref()), Some(v1.to_vec()));
         assert_eq!(memtable.get(k5.as_ref()), Some(v5.to_vec()));
+
+        memtable.delete(k5.as_ref());
+        assert_eq!(memtable.get(k5.as_ref()), None);
+    }
+
+    #[test]
+    fn test_memtable_evict_old_from_cache() {
+        let region_id = 8;
+        let cache_limit = 1024;
+        let mut memtable = MemTable::new(region_id, cache_limit);
+
+        // [0, 10) file_num = 1, in cache
+        // [10, 20) file_num = 2, in cache
+        // [20, 30) file_num = 3, in cache
+        memtable.append(generate_ents(0, 10), generate_ents_index(0, 10, 1));
+        memtable.append(generate_ents(10, 20), generate_ents_index(10, 20, 2));
+        memtable.append(generate_ents(20, 30), generate_ents_index(20, 30, 3));
+        assert_eq!(memtable.cache_size(), 30);
+        assert_eq!(memtable.entries_size(), 30);
+        assert_eq!(memtable.entries_cache.len(), 30);
+        assert_eq!(memtable.entries_index.len(), 30);
+        assert_eq!(memtable.entries_cache[0].get_index(), 0);
+        assert_eq!(memtable.entries_cache[29].get_index(), 29);
+        assert_eq!(memtable.entries_index[0].index, 0);
+        assert_eq!(memtable.entries_index[29].index, 29);
+        assert_eq!(memtable.min_file_num().unwrap(), 1);
+        assert_eq!(memtable.max_file_num().unwrap(), 3);
+
+        // Evict all entries before file 2
+        memtable.evict_old_from_cache(2);
+        assert_eq!(memtable.cache_size(), 20);
+        assert_eq!(memtable.entries_size(), 30);
+        assert_eq!(memtable.entries_cache.len(), 20);
+        assert_eq!(memtable.entries_index.len(), 30);
+        assert_eq!(memtable.entries_cache[0].get_index(), 10);
+        assert_eq!(memtable.entries_cache[19].get_index(), 29);
+        assert_eq!(memtable.entries_index[0].index, 0);
+        assert_eq!(memtable.entries_index[29].index, 29);
+        assert_eq!(memtable.min_file_num().unwrap(), 1);
+        assert_eq!(memtable.max_file_num().unwrap(), 3);
+
+        // Evict all entries before file 3
+        memtable.evict_old_from_cache(3);
+        assert_eq!(memtable.cache_size(), 10);
+        assert_eq!(memtable.entries_size(), 30);
+        assert_eq!(memtable.entries_cache.len(), 10);
+        assert_eq!(memtable.entries_index.len(), 30);
+        assert_eq!(memtable.entries_cache[0].get_index(), 20);
+        assert_eq!(memtable.entries_cache[9].get_index(), 29);
+        assert_eq!(memtable.entries_index[0].index, 0);
+        assert_eq!(memtable.entries_index[29].index, 29);
+        assert_eq!(memtable.min_file_num().unwrap(), 1);
+        assert_eq!(memtable.max_file_num().unwrap(), 3);
+
+        // Evict all entries before file 4, at lease left one entry in cache.
+        memtable.evict_old_from_cache(4);
+        assert_eq!(memtable.cache_size(), 1);
+        assert_eq!(memtable.entries_size(), 30);
+        assert_eq!(memtable.entries_cache.len(), 1);
+        assert_eq!(memtable.entries_index.len(), 30);
+        assert_eq!(memtable.entries_cache[0].get_index(), 29);
+        assert_eq!(memtable.entries_index[0].index, 0);
+        assert_eq!(memtable.entries_index[29].index, 29);
+        assert_eq!(memtable.min_file_num().unwrap(), 1);
+        assert_eq!(memtable.max_file_num().unwrap(), 3)
     }
 
     fn generate_ents(begin_idx: u64, end_idx: u64) -> Vec<Entry> {

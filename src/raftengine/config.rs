@@ -24,7 +24,6 @@ pub struct Config {
     pub target_file_size: ReadableSize,
     pub cache_size_limit: ReadableSize,
     pub total_size_limit: ReadableSize,
-    pub rewrite_size_threshold: ReadableSize,
 
     // Use raftstore.cfg.raft_log_gc_threshold
     #[doc(hidden)]
@@ -46,7 +45,6 @@ impl Default for Config {
             target_file_size: ReadableSize::mb(128),
             cache_size_limit: ReadableSize::gb(2),
             total_size_limit: ReadableSize::gb(20),
-            rewrite_size_threshold: ReadableSize::kb(32),
             compact_threshold: 0,
             region_size: ReadableSize::mb(96),
         }
