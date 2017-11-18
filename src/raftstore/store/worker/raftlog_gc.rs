@@ -102,11 +102,13 @@ impl Runner {
     }
 
     fn gc_expired_files(&mut self, raft_engine: Arc<RaftEngine>) -> RaftEngineResult<()> {
+        // Rewrite inactive regions' entries to new file, so the old
+        // files can be dropped ASAP.
         if raft_engine.rewrite_inactive() {
             raft_engine.sync_data()?;
         }
 
-        // Collect regions which have entries exist for a long time.
+        // Collect regions that need force compact.
         if self.ch.is_some() {
             let regions = raft_engine.regions_need_compact();
             self.ch
@@ -118,6 +120,10 @@ impl Runner {
                 .unwrap();
         }
 
+        // Evict old entries from cache, keep cache below limited size.
+        raft_engine.evict_old_from_cache();
+
+        // Purge old files.
         raft_engine.purge_expired_files()
     }
 }

@@ -22,6 +22,7 @@ pub struct Config {
     pub recovery_mode: i32,
     pub bytes_per_sync: ReadableSize,
     pub target_file_size: ReadableSize,
+    pub cache_size_limit: ReadableSize,
     pub total_size_limit: ReadableSize,
     pub rewrite_size_threshold: ReadableSize,
 
@@ -29,6 +30,11 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub compact_threshold: usize,
+
+    // Use raftstore.cfg.region_split_size
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub region_size: ReadableSize,
 }
 
 impl Default for Config {
@@ -38,9 +44,11 @@ impl Default for Config {
             recovery_mode: 0,
             bytes_per_sync: ReadableSize::kb(256),
             target_file_size: ReadableSize::mb(128),
-            total_size_limit: ReadableSize::gb(2),
+            cache_size_limit: ReadableSize::gb(2),
+            total_size_limit: ReadableSize::gb(20),
             rewrite_size_threshold: ReadableSize::kb(32),
             compact_threshold: 0,
+            region_size: ReadableSize::mb(96),
         }
     }
 }
@@ -53,9 +61,25 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.total_size_limit.0 <= self.target_file_size.0 {
             return Err(box_err!(
-                "Total size limit {:?} less than log rotate size {:?}",
+                "Total size limit {:?} less than target file size {:?}",
                 self.total_size_limit,
                 self.target_file_size
+            ));
+        }
+
+        if self.cache_size_limit.0 < self.target_file_size.0 {
+            return Err(box_err!(
+                "Cache size limit {:?} less than target file size {:?}",
+                self.cache_size_limit,
+                self.target_file_size
+            ));
+        }
+
+        if self.total_size_limit.0 < self.cache_size_limit.0 {
+            return Err(box_err!(
+                "Total size limit {:?} is less than cache limit size {:?}",
+                self.total_size_limit,
+                self.cache_size_limit
             ));
         }
 
@@ -94,7 +118,12 @@ mod tests {
         cfg.total_size_limit = ReadableSize::kb(10);
         assert!(cfg.validate().is_err());
 
+        cfg.cache_size_limit = ReadableSize::mb(10);
         cfg.total_size_limit = ReadableSize::mb(1);
+        assert!(cfg.validate().is_err());
+
+        cfg.cache_size_limit = ReadableSize::mb(1);
+        cfg.total_size_limit = ReadableSize::mb(10);
         assert!(cfg.validate().is_ok());
     }
 }
