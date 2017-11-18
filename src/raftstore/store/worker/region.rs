@@ -109,6 +109,7 @@ impl SnapContext {
             &raw_snap,
             region_id
         ));
+        fail_point!("handle_gen", region_id == 1, |_| Ok(()));
         if let Err(e) = notifier.try_send(snap) {
             info!(
                 "[region {}] failed to notify snap result, maybe leadership has changed, \
