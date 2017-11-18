@@ -11,9 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::thread;
+use std::time::Duration;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kvproto::pdpb::*;
+use tikv::pd::RECONNECT_INTERVAL_SEC;
 
 use super::*;
 
@@ -32,16 +35,36 @@ impl Retry {
             count: AtomicUsize::new(0),
         }
     }
+
+    fn ok_or_error(&self) -> bool {
+        let count = self.count.fetch_add(1, Ordering::SeqCst);
+        if count != 0 && count % self.retry == 0 {
+            // it's ok.
+            return true;
+        }
+        // let's sleep awhile, so that client will update its connection.
+        thread::sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC));
+        false
+    }
 }
 
 impl PdMocker for Retry {
     fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
-        let count = self.count.fetch_add(1, Ordering::SeqCst);
-        if count != 0 && count % self.retry == 0 {
-            info!("[Retry] return Ok(_)");
+        if self.ok_or_error() {
+            info!("[Retry] get_region_by_id returns Ok(_)");
             Some(Ok(GetRegionResponse::new()))
         } else {
-            info!("[Retry] return Err(_)");
+            info!("[Retry] get_region_by_id returns Err(_)");
+            Some(Err("please retry".to_owned()))
+        }
+    }
+
+    fn get_store(&self, _: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
+        if self.ok_or_error() {
+            info!("[Retry] get_store returns Ok(_)");
+            Some(Ok(GetStoreResponse::new()))
+        } else {
+            info!("[Retry] get_store returns Err(_)");
             Some(Err("please retry".to_owned()))
         }
     }
