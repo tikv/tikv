@@ -606,10 +606,7 @@ impl RaftEngine {
                 LogItemType::Entries => {
                     // Update entries' physical position in file.
                     let mut entries_to_add = item.entries.unwrap();
-                    for i in &mut entries_to_add.entries_index {
-                        i.file_num = file_num;
-                        i.offset += offset;
-                    }
+                    entries_to_add.update_offset_when_needed(file_num, offset);
                     let region_id = entries_to_add.region_id;
                     let mut memtables = self.memtables[region_id as usize % SLOTS_COUNT]
                         .write()
