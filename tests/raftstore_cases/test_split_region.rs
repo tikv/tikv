@@ -177,7 +177,7 @@ fn test_server_split_region_twice() {
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-/// Keep puting random kvs until specified size limit is reached.
+/// Keep putting random kvs until specified size limit is reached.
 fn put_till_size<T: Simulator>(
     cluster: &mut Cluster<T>,
     limit: u64,
@@ -215,8 +215,8 @@ fn put_cf_till_size<T: Simulator>(
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.region_max_size = ReadableSize(REGION_MAX_SIZE);
-    cluster.cfg.raft_store.region_split_size = ReadableSize(REGION_SPLIT_SIZE);
+    cluster.cfg.coprocessor.region_max_size = ReadableSize(REGION_MAX_SIZE);
+    cluster.cfg.coprocessor.region_split_size = ReadableSize(REGION_SPLIT_SIZE);
 
     let check_size_diff = cluster.cfg.raft_store.region_split_check_diff.0;
     let mut range = 1..;
@@ -568,9 +568,9 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
     let region_split_size = 1000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.region_split_check_diff = ReadableSize(10);
-    cluster.cfg.raft_store.region_max_size = ReadableSize(region_max_size);
-    cluster.cfg.raft_store.region_split_size = ReadableSize(region_split_size);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
+    cluster.cfg.coprocessor.region_max_size = ReadableSize(region_max_size);
+    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
 
     let mut range = 1..;
 

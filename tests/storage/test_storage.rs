@@ -392,6 +392,34 @@ fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
 }
 
 #[test]
+fn test_txn_store_resolve_lock_in_a_batch() {
+    let store = AssertionStorage::default();
+
+    store.prewrite_ok(
+        vec![
+            Mutation::Put((make_key(b"p1"), b"v5".to_vec())),
+            Mutation::Put((make_key(b"s1"), b"v5".to_vec())),
+        ],
+        b"p1",
+        5,
+    );
+    store.prewrite_ok(
+        vec![
+            Mutation::Put((make_key(b"p2"), b"v10".to_vec())),
+            Mutation::Put((make_key(b"s2"), b"v10".to_vec())),
+        ],
+        b"p2",
+        10,
+    );
+    store.resolve_lock_batch_ok(5, 0, 10, 20);
+    store.get_none(b"p1", 30);
+    store.get_none(b"s1", 30);
+    store.get_ok(b"p2", 30, b"v10");
+    store.get_ok(b"s2", 30, b"v10");
+    store.scan_lock_ok(30, vec![]);
+}
+
+#[test]
 fn test_txn_store_resolve_lock2() {
     for &i in &[
         0,
@@ -404,8 +432,8 @@ fn test_txn_store_resolve_lock2() {
         test_txn_store_resolve_lock_batch(1, i);
     }
 
-    for &i in &[1, MAX_TXN_WRITE_SIZE / 2, MAX_TXN_WRITE_SIZE + 1] {
-        test_txn_store_resolve_lock_batch(i, 3);
+    for &i in &[1, 512, 1024] {
+        test_txn_store_resolve_lock_batch(i, 50);
     }
 }
 
@@ -506,7 +534,7 @@ fn test_txn_store_gc2_with_many_keys() {
 
 #[test]
 fn test_txn_store_gc2_with_long_key_prefix() {
-    test_txn_store_gc_multiple_keys(MAX_TXN_WRITE_SIZE + 1, 3);
+    test_txn_store_gc_multiple_keys(1024, MAX_TXN_WRITE_SIZE / 1024 * 3);
 }
 
 #[test]
@@ -543,6 +571,26 @@ fn test_txn_store_rawkv() {
     );
     store.raw_scan_ok(b"".to_vec(), 0, vec![]);
     store.raw_scan_ok(b"k5".to_vec(), 1, vec![]);
+}
+
+#[test]
+fn test_txn_storage_keysize() {
+    let store = AssertionStorage::default();
+    let long_key = vec![b'x'; 10240];
+    store.raw_put_ok(b"short_key".to_vec(), b"v".to_vec());
+    store.raw_put_err(long_key.clone(), b"v".to_vec());
+    store.raw_delete_ok(b"short_key".to_vec());
+    store.raw_delete_err(long_key.clone());
+    store.prewrite_ok(
+        vec![Mutation::Put((make_key(b"short_key"), b"v".to_vec()))],
+        b"short_key",
+        1,
+    );
+    store.prewrite_err(
+        vec![Mutation::Put((make_key(&long_key), b"v".to_vec()))],
+        b"short_key",
+        1,
+    );
 }
 
 #[test]

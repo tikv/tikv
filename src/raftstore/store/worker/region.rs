@@ -141,6 +141,7 @@ impl SnapContext {
 
     fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
+        fail_point!("apply_snap");
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =

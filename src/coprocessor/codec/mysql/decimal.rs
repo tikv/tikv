@@ -200,7 +200,7 @@ fn fix_word_cnt_err(int_word_cnt: u8, frac_word_cnt: u8, word_buf_len: u8) -> Re
     Res::Ok((int_word_cnt, frac_word_cnt))
 }
 
-/// `sub` substracts rhs and carry from lhs, store the diff and new carry.
+/// `sub` subtracts rhs and carry from lhs, store the diff and new carry.
 fn sub(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
     let diff = lhs as i32 - rhs as i32 - *carry;
     if diff < 0 {
@@ -212,7 +212,7 @@ fn sub(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
     }
 }
 
-/// `sub2` substracts rhs and carry from lhs, stores the diff and new carry.
+/// `sub2` subtracts rhs and carry from lhs, stores the diff and new carry.
 /// the new carry may be 2.
 fn sub2(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
     let mut diff = lhs as i32 - rhs as i32 - *carry;
@@ -231,7 +231,7 @@ fn sub2(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
 type SubTmp = (usize, usize, u8);
 
 /// calculate the carry for lhs - rhs, returns the carry and needed temporary results for
-/// begining a subtraction.
+/// beginning a subtraction.
 ///
 /// The new carry can be None if lhs is equals to rhs.
 #[inline]
@@ -591,7 +591,7 @@ fn do_div_mod(
     let mut buf = vec![0; l_len];
     (&mut buf[0..i]).copy_from_slice(&lhs.word_buf[l_idx..l_idx + i]);
     let mut l_idx = 0;
-    let (r_start, mut r_stop) = (r_idx, word_cnt!(r_idx + r_prec as usize, usize) - 1);
+    let (r_start, mut r_stop) = (r_idx, r_idx + word_cnt!(r_prec as usize, usize) - 1);
     while rhs.word_buf[r_stop] == 0 && r_stop >= r_start {
         r_stop -= 1;
     }
@@ -2969,6 +2969,27 @@ mod test {
             (0, "1", "2.0", Some("0.500000000"), Some("1.0")),
             (0, "1.0", "2", Some("0.500000000"), Some("1.0")),
             (0, "2.23", "3", Some("0.743333333"), Some("2.23")),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "51",
+                "0.003430",
+                Some("14868.804664723032069970"),
+                Some("0.002760"),
+            ),
+            (
+                5,
+                "51",
+                "0.003430",
+                Some("14868.804664723032069970"),
+                Some("0.002760"),
+            ),
+            (
+                0,
+                "51",
+                "0.003430",
+                Some("14868.804664723"),
+                Some("0.002760"),
+            ),
         ];
 
         for (frac_incr, lhs_str, rhs_str, div_exp, rem_exp) in cases {

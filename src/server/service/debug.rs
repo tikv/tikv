@@ -20,7 +20,7 @@ use kvproto::debugpb::*;
 use fail;
 
 use raftstore::store::Engines;
-use raftstore::store::debug::{Debugger, Error};
+use server::debug::{Debugger, Error};
 
 #[derive(Clone)]
 pub struct Service {

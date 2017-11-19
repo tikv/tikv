@@ -300,6 +300,12 @@ impl AssertionStorage {
             .unwrap();
     }
 
+    pub fn prewrite_err(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
+        self.store
+            .prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts)
+            .unwrap_err();
+    }
+
     pub fn prewrite_locked(
         &self,
         mutations: Vec<Mutation>,
@@ -389,6 +395,21 @@ impl AssertionStorage {
             .unwrap();
     }
 
+    pub fn resolve_lock_batch_ok(
+        &self,
+        start_ts_1: u64,
+        commit_ts_1: u64,
+        start_ts_2: u64,
+        commit_ts_2: u64,
+    ) {
+        self.store
+            .resolve_lock_batch(
+                self.ctx.clone(),
+                vec![(start_ts_1, commit_ts_1), (start_ts_2, commit_ts_2)],
+            )
+            .unwrap();
+    }
+
     pub fn resolve_lock_with_illegal_tso(&self, start_ts: u64, commit_ts: Option<u64>) {
         let resp = self.store
             .resolve_lock(self.ctx.clone(), start_ts, commit_ts);
@@ -425,8 +446,18 @@ impl AssertionStorage {
         self.store.raw_put(self.ctx.clone(), key, value).unwrap();
     }
 
+    pub fn raw_put_err(&self, key: Vec<u8>, value: Vec<u8>) {
+        self.store
+            .raw_put(self.ctx.clone(), key, value)
+            .unwrap_err();
+    }
+
     pub fn raw_delete_ok(&self, key: Vec<u8>) {
         self.store.raw_delete(self.ctx.clone(), key).unwrap()
+    }
+
+    pub fn raw_delete_err(&self, key: Vec<u8>) {
+        self.store.raw_delete(self.ctx.clone(), key).unwrap_err();
     }
 
     pub fn raw_scan_ok(&self, start_key: Vec<u8>, limit: usize, expect: Vec<(&[u8], &[u8])>) {
@@ -454,7 +485,7 @@ impl AssertionStorage {
 
     pub fn test_txn_store_gc3(&self, key_prefix: u8) {
         let key_len = 10_000;
-        let key = vec![key_prefix; 10_000];
+        let key = vec![key_prefix; 1024];
         for k in 1u64..(MAX_TXN_WRITE_SIZE / key_len * 2) as u64 {
             self.put_ok(&key, b"", k * 10, k * 10 + 5);
         }
@@ -470,7 +501,7 @@ impl AssertionStorage {
         key_prefix: u8,
     ) {
         let key_len = 10_000;
-        let key = vec![key_prefix; 10_000];
+        let key = vec![key_prefix; 1024];
         for k in 1u64..(MAX_TXN_WRITE_SIZE / key_len * 2) as u64 {
             self.put_ok_for_cluster(cluster, &key, b"", k * 10, k * 10 + 5);
         }

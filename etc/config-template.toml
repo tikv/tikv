@@ -37,6 +37,8 @@
 
 # stack size of endpoint, complicated tasks may involve very deep recursion.
 # end-point-stack-size = "10MB"
+# max recursion level allowed when decoding dag expression
+# end-point-recursion-limit = 1000
 
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
@@ -95,11 +97,6 @@
 # Store heartbeat tick interval for reporting to pd.
 # pd-store-heartbeat-tick-interval = "10s"
 
-# When the region's size exceeds region-max-size, we will split the region
-# into two which the left region's size will be region-split-size or a little
-# bit smaller.
-# region-max-size = "144MB"
-# region-split-size = "96MB"
 # When region size changes exceeds region-split-check-diff, we should check
 # whether the region should be split or not.
 # region-split-check-diff = "6MB"
@@ -140,6 +137,16 @@
 
 # Use delete range to drop a large number of continuous keys.
 # use-delete-range = false
+
+[coprocessor]
+# When it is true, it will try to split a region with table prefix if
+# that region crosses tables.
+# split-region-on-table = false
+# When the region's size exceeds region-max-size, we will split the region
+# into two which the left region's size will be region-split-size or a little
+# bit smaller.
+# region-max-size = "144MB"
+# region-split-size = "96MB"
 
 [rocksdb]
 # Maximum number of concurrent background jobs (compactions and flushes)
