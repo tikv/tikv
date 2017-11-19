@@ -14,6 +14,7 @@ end-point-concurrency = 12
 end-point-max-tasks = 12
 end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
+end-point-batch-row-limit = 64
 
 [server.labels]
 a = "b"
@@ -73,6 +74,7 @@ right-derive-when-split = false
 allow-remove-leader = true
 
 [coprocessor]
+split-region-on-table = true
 region-max-size = "12MB"
 region-split-size = "12MB"
 
