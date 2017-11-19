@@ -208,7 +208,7 @@ impl<T, C> Store<T, C> {
         // TODO load coprocessors from configuration
         coprocessor_host
             .registry
-            .register_observer(100, box SplitObserver);
+            .register_admin_observer(100, box SplitObserver);
 
         let mut s = Store {
             cfg: Rc::new(cfg),
@@ -247,7 +247,7 @@ impl<T, C> Store<T, C> {
     }
 
     /// Initialize this store. It scans the db engine, loads all regions
-    /// and their peers from it, and schedules snapshot worker if neccessary.
+    /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
     fn init(&mut self) -> Result<()> {
         // Scan region meta to get saved regions.
@@ -982,10 +982,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut job = None;
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
-            assert_eq!(peer.peer, *msg.get_to_peer());
-            // TODO: need checking peer id changed?
             let from_epoch = msg.get_region_epoch();
             if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
+                if peer.peer != *msg.get_to_peer() {
+                    info!("[region {}] receive stale gc message, ignore.", region_id);
+                    self.raft_metrics.message_dropped.stale_msg += 1;
+                    return;
+                }
                 // TODO: ask pd to guarantee we are stale now.
                 info!(
                     "[region {}] peer {:?} receives gc message, trying to remove",
@@ -1918,7 +1921,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         region_id,
                         self.store_id()
                     );
-                    return Err(Error::NotLeader(region_id, Some(peer.peer.clone())));
+                    return Err(Error::NotLeader(
+                        region_id,
+                        peer.get_peer_from_cache(peer.leader_id()),
+                    ));
                 }
                 peer
             }

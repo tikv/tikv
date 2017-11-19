@@ -32,9 +32,6 @@ name = "tikv-ctl"
 [[bin]]
 name = "tikv-fail"
 
-[[test]]
-name = "tests"
-
 [dependencies]
 log = "0.3"
 byteorder = "0.5"
@@ -60,6 +57,7 @@ regex = "0.1"
 fnv = "1.0"
 sys-info = "0.5.1"
 flat_map = "0.0.4"
+ordermap = "0.3"
 mio = "0.5"
 futures = "0.1"
 tokio-core = "0.1"

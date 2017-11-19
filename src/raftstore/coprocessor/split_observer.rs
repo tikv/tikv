@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Coprocessor, ObserverContext, RegionObserver, Result as CopResult};
+use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use coprocessor::codec::table;
 use util::codec::bytes::{encode_bytes, BytesDecoder};
 
@@ -39,9 +39,9 @@ impl SplitObserver {
         // format of a key is TABLE_PREFIX + table_id + RECORD_PREFIX_SEP + handle + column_id
         // + version or TABLE_PREFIX + table_id + INDEX_PREFIX_SEP + index_id + values + version
         // or meta_key + version
-        let table_prefix_len = table::TABLE_PREFIX.len() + table::ID_LEN;
-        if key.starts_with(table::TABLE_PREFIX) && key.len() > table::PREFIX_LEN + table::ID_LEN &&
-            key[table_prefix_len..].starts_with(table::RECORD_PREFIX_SEP)
+        // The length of TABLE_PREFIX + table_id is TABLE_PREFIX_KEY_LEN.
+        if key.starts_with(table::TABLE_PREFIX) && key.len() > table::TABLE_PREFIX_KEY_LEN &&
+            key[table::TABLE_PREFIX_KEY_LEN..].starts_with(table::RECORD_PREFIX_SEP)
         {
             // row key, truncate to handle
             key.truncate(table::PREFIX_LEN + table::ID_LEN);
@@ -61,8 +61,12 @@ impl SplitObserver {
 
 impl Coprocessor for SplitObserver {}
 
-impl RegionObserver for SplitObserver {
-    fn pre_admin(&self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> CopResult<()> {
+impl AdminObserver for SplitObserver {
+    fn pre_propose_admin(
+        &self,
+        ctx: &mut ObserverContext,
+        req: &mut AdminRequest,
+    ) -> CopResult<()> {
         if req.get_cmd_type() != AdminCmdType::Split {
             return Ok(());
         }
@@ -85,7 +89,7 @@ impl RegionObserver for SplitObserver {
 mod test {
     use super::*;
     use raftstore::coprocessor::ObserverContext;
-    use raftstore::coprocessor::RegionObserver;
+    use raftstore::coprocessor::AdminObserver;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
     use coprocessor::codec::{datum, table, Datum};
@@ -134,7 +138,7 @@ mod test {
         let observer = SplitObserver;
 
         let mut req = new_split_request(&key);
-        observer.pre_admin(&mut ctx, &mut req).unwrap();
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
         let expect_key = new_row_key(256, 2, 0, 0);
         let len = expect_key.len();
         assert_eq!(req.get_split().get_split_key(), &expect_key[..len - 8]);
@@ -148,47 +152,47 @@ mod test {
 
         let observer = SplitObserver;
 
-        let resp = observer.pre_admin(&mut ctx, &mut req);
+        let resp = observer.pre_propose_admin(&mut ctx, &mut req);
         // since no split is defined, actual coprocessor won't be invoke.
         assert!(resp.is_ok());
         assert!(!req.has_split(), "only split req should be handle.");
 
         req = new_split_request(b"test");
-        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), b"test");
 
         let mut key = encode_bytes(b"db:1");
         key.write_u64::<BigEndian>(0).unwrap();
         let mut expect_key = encode_bytes(b"db:1");
         req = new_split_request(&key);
-        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_row_key(1, 2, 0, 0);
         req = new_split_request(&key);
         expect_key = key[..key.len() - 8].to_vec();
-        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_row_key(1, 2, 1, 0);
         req = new_split_request(&key);
-        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_row_key(1, 2, 1, 1);
         req = new_split_request(&key);
-        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_index_key(1, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 0);
         req = new_split_request(&key);
         expect_key = key[..key.len() - 8].to_vec();
-        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_index_key(1, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 5);
         req = new_split_request(&key);
-        observer.pre_admin(&mut ctx, &mut req).unwrap();
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         expect_key = encode_bytes(
@@ -197,7 +201,13 @@ mod test {
         key = expect_key.clone();
         key.extend_from_slice(b"\x80\x00\x00\x00\x00\x00\x00\xd3");
         req = new_split_request(&key);
-        observer.pre_admin(&mut ctx, &mut req).unwrap();
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
+        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+
+        // Split at table prefix.
+        expect_key = encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea");
+        req = new_split_request(&expect_key);
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
     }
 }

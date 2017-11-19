@@ -54,6 +54,14 @@ fn row_cnt(chunks: &[Chunk]) -> usize {
     chunks.iter().fold(0, |l, r| l + r.get_rows_meta().len())
 }
 
+fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
+    let mut iter = chunks.iter();
+    let res = iter.any(|x| x.get_rows_data().decode().unwrap().len() != datum_limit);
+    if res {
+        assert!(iter.next().is_none());
+    }
+}
+
 struct Row {
     handle: i64,
     data: Vec<u8>,
@@ -665,6 +673,17 @@ fn init_data_with_engine_and_commit(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
 ) -> (Store, Worker<EndPointTask>) {
+    init_data_with_details(ctx, engine, tbl, vals, commit, Config::default())
+}
+
+fn init_data_with_details(
+    ctx: Context,
+    engine: Box<Engine>,
+    tbl: &ProductTable,
+    vals: &[(i64, Option<&str>, i64)],
+    commit: bool,
+    cfg: Config,
+) -> (Store, Worker<EndPointTask>) {
     let mut store = Store::new(engine);
 
     store.begin();
@@ -680,8 +699,6 @@ fn init_data_with_engine_and_commit(
         store.commit_with_ctx(ctx);
     }
     let mut end_point = Worker::new("test select worker");
-    let mut cfg = Config::default();
-    cfg.end_point_concurrency = 1;
     let pd_worker = FutureWorker::new("test pd worker");
     let runner = EndPointHost::new(
         store.get_engine(),
@@ -958,6 +975,55 @@ fn test_select() {
     // for dag selection
     let req = DAGSelect::from(&product.table).build();
     let mut resp = handle_select(&end_point, req);
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
+    for (row, (id, name, cnt)) in spliter.zip(data) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded =
+            datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(result_encoded, &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+
+#[test]
+fn test_batch_row_limit() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+    let batch_row_limit = 3;
+    let chunk_datum_limit = batch_row_limit * 3;
+    let product = ProductTable::new();
+    let (_, mut end_point) = {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_batch_row_limit = batch_row_limit;
+        init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
+    };
+
+    // for selection
+    let req = Select::from(&product.table).build();
+    let mut resp = handle_select(&end_point, req);
+    check_chunk_datum_count(resp.get_chunks(), chunk_datum_limit);
+    assert_eq!(row_cnt(resp.get_chunks()), data.len());
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded =
+            datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
+        assert_eq!(id, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
+    }
+
+    // for dag selection
+    let req = DAGSelect::from(&product.table).build();
+    let mut resp = handle_select(&end_point, req);
+    check_chunk_datum_count(resp.get_chunks(), chunk_datum_limit);
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();

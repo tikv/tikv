@@ -212,6 +212,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
 
     fn resolve(&self, store_id: u64, msg: RaftMessage) {
         let trans = self.clone();
+        let msg1 = msg.clone();
         let cb = box move |addr| {
             // clear resolving.
             trans.resolving.wl().remove(&store_id);
@@ -233,6 +234,10 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         };
         if let Err(e) = self.resolver.resolve(store_id, cb) {
             error!("try to resolve err {:?}", e);
+            self.resolving.wl().remove(&store_id);
+            RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
+            debug!("resolve store {} address failed {:?}", store_id, e);
+            self.report_unreachable(msg1);
         }
     }
 
