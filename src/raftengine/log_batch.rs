@@ -137,6 +137,15 @@ impl Entries {
         }
         Ok(())
     }
+
+    pub fn update_offset_when_needed(&mut self, file_num: u64, base: u64) {
+        for idx in &mut self.entries_index {
+            if idx.file_num == 0 {
+                idx.offset += base;
+                idx.file_num = file_num;
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -535,9 +544,10 @@ mod tests {
             assert_eq!(s.len(), 0);
 
             if item.item_type == LogItemType::Entries {
-                for idx in &mut item.entries.as_mut().unwrap().entries_index {
-                    idx.file_num = file_num;
-                }
+                item.entries
+                    .as_mut()
+                    .unwrap()
+                    .update_offset_when_needed(file_num, 0);
             }
             assert_eq!(item, decoded_item);
         }
@@ -565,9 +575,10 @@ mod tests {
 
         for item in &mut batch.items {
             if item.item_type == LogItemType::Entries {
-                for idx in &mut item.entries.as_mut().unwrap().entries_index {
-                    idx.file_num = file_num;
-                }
+                item.entries
+                    .as_mut()
+                    .unwrap()
+                    .update_offset_when_needed(file_num, 0);
             }
         }
 

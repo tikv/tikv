@@ -264,7 +264,7 @@ fn test_serde_custom_tikv_config() {
         cache_size_limit: ReadableSize::gb(1),
         total_size_limit: ReadableSize::gb(4),
         compact_threshold: 0,
-        region_size: ReadableSize::kb(0),
+        region_size: ReadableSize::kb(1),
     };
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
