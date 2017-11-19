@@ -1295,6 +1295,7 @@ pub fn do_snapshot(
         &mut snap_data,
         &mut stat,
         Box::new(mgr.clone()),
+        mgr.get_limiter(),
     )?;
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));
@@ -1396,7 +1397,7 @@ mod test {
     use raft::{Error as RaftError, StorageError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, Engines};
+    use raftstore::store::{bootstrap, Engines, SnapshotIOLimiter};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
     use raftstore::store::local_metrics::RaftMetrics;
@@ -1678,7 +1679,8 @@ mod test {
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let limiter = Arc::new(SnapshotIOLimiter::default());
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None, limiter.clone());
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
@@ -1961,7 +1963,8 @@ mod test {
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let limiter = Arc::new(SnapshotIOLimiter::default());
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None, limiter.clone());
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);

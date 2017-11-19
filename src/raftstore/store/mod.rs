@@ -27,6 +27,7 @@ mod snap;
 mod worker;
 mod metrics;
 mod local_metrics;
+mod snap_io_limiter;
 
 pub use self::msg::{BatchCallback, Callback, Msg, SignificantMsg, Tick};
 pub use self::store::{create_event_loop, Engines, Store, StoreChannel, StoreStat};
@@ -40,6 +41,7 @@ pub use self::peer_storage::{do_snapshot, write_peer_state, CacheQueryStats, Pee
                              SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
 pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, SnapEntry, SnapKey, SnapManager,
                      Snapshot, SnapshotDeleter, SnapshotStatistics};
+pub use self::snap_io_limiter::{LimiterWriter, SnapshotIOLimiter};
 
 // Only used in tests
 #[cfg(test)]

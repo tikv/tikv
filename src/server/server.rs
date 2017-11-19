@@ -259,6 +259,7 @@ mod tests {
         let addr = Arc::new(Mutex::new(None));
         let quick_fail = Arc::new(AtomicBool::new(false));
         let pd_worker = FutureWorker::new("pd worker");
+        let limiter = Arc::new(SnapshotIOLimiter::default());
         let mut server = Server::new(
             &cfg,
             1024,
@@ -268,7 +269,7 @@ mod tests {
                 quick_fail: quick_fail.clone(),
                 addr: addr.clone(),
             },
-            SnapManager::new("", None),
+            SnapManager::new("", None, limiter.clone()),
             pd_worker.scheduler(),
             None,
         ).unwrap();
