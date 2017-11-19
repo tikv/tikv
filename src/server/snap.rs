@@ -90,7 +90,8 @@ impl Stream for SnapChunk {
             n if n > SNAP_CHUNK_LEN => vec![0; SNAP_CHUNK_LEN],
             n => vec![0; n],
         };
-        match self.snap.wl().read_exact(buf.as_mut_slice()) {
+        let result = self.snap.wl().read_exact(buf.as_mut_slice());
+        match result {
             Ok(_) => {
                 self.remain_bytes -= buf.len();
                 let mut chunk = SnapshotChunk::new();
