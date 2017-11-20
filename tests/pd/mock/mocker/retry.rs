@@ -36,7 +36,7 @@ impl Retry {
         }
     }
 
-    fn ok_or_error(&self) -> bool {
+    fn is_ok(&self) -> bool {
         let count = self.count.fetch_add(1, Ordering::SeqCst);
         if count != 0 && count % self.retry == 0 {
             // it's ok.
@@ -50,7 +50,7 @@ impl Retry {
 
 impl PdMocker for Retry {
     fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
-        if self.ok_or_error() {
+        if self.is_ok() {
             info!("[Retry] get_region_by_id returns Ok(_)");
             Some(Ok(GetRegionResponse::new()))
         } else {
@@ -60,7 +60,7 @@ impl PdMocker for Retry {
     }
 
     fn get_store(&self, _: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
-        if self.ok_or_error() {
+        if self.is_ok() {
             info!("[Retry] get_store returns Ok(_)");
             Some(Ok(GetStoreResponse::new()))
         } else {
