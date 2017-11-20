@@ -766,9 +766,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     }
 
     fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
-        // TODO: add metrics.
+        let scheduler = &self.end_point_scheduler;
+        let recursion_limit = self.recursion_limit;
         if let Some((sink, error, code)) =
-            coprocessor_dispatch(&self.end_point_scheduler, req, self.recursion_limit, sink)
+            coprocessor_dispatch(scheduler, req, recursion_limit, sink, "coprocessor")
         {
             self.send_fail_status(ctx, sink, error, code);
         }
@@ -780,9 +781,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         req: Request,
         sink: ServerStreamingSink<Response>,
     ) {
-        // TODO: add metrics.
+        let scheduler = &self.end_point_scheduler;
+        let recursion_limit = self.recursion_limit;
         if let Some((sink, error, code)) =
-            coprocessor_dispatch(&self.end_point_scheduler, req, self.recursion_limit, sink)
+            coprocessor_dispatch(scheduler, req, recursion_limit, sink, "coprpcessor_stream")
         {
             self.send_fail_status_to_stream(ctx, sink, error, code);
         }
@@ -1146,23 +1148,32 @@ fn coprocessor_dispatch<S>(
     req: Request,
     recursion_limit: u32,
     sink: S,
+    metric_lable: &str,
 ) -> Option<(S, Error, RpcStatusCode)>
 where
     S: From<CopResponseSink>,
     CopResponseSink: From<S>,
 {
-    let mut sink_opt = Some(CopResponseSink::from(sink));
-    let req_task = match RequestTask::new(req, &mut sink_opt, recursion_limit) {
+    let timer = GRPC_MSG_HISTOGRAM_VEC
+        .with_label_values(&[metric_lable])
+        .start_coarse_timer();
+
+    let mut req_task = match RequestTask::new(req, recursion_limit) {
         Ok(req_task) => req_task,
         Err(e) => {
-            let sink: S = S::from(sink_opt.unwrap());
-            let error = box_err!(e);
-            return Some((sink, error, RpcStatusCode::InvalidArgument));
+            timer.observe_duration();
+            return Some((sink, box_err!(e), RpcStatusCode::InvalidArgument));
         }
     };
 
+    req_task.set_on_finish_sink(CopResponseSink::from(sink));
+    req_task.set_metric_callback(box move || timer.observe_duration());
+
     match scheduler.schedule(EndPointTask::Request(req_task)) {
         Err(Stopped(EndPointTask::Request(mut req_task))) => {
+            let metric_cb = req_task.take_metric_callback();
+            metric_cb();
+
             let sink = S::from(req_task.take_on_finish_sink());
             let error = Error::from(Stopped(EndPointTask::Request(req_task)));
             Some((sink, error, RpcStatusCode::ResourceExhausted))

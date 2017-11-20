@@ -15,6 +15,7 @@ use std::{mem, usize};
 use std::time::Duration;
 use std::cell::RefCell;
 use std::sync::Arc;
+use std::boxed::FnBox;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::fmt::{self, Debug, Display, Formatter};
 
@@ -362,9 +363,9 @@ impl ReqContext {
     }
 }
 
-#[derive(Debug)]
 struct OnRequestFinish {
     resp_sink: Option<CopResponseSink>,
+    metric_callback: Option<Box<FnBox() + Send>>,
     running_task_count: Option<Arc<AtomicUsize>>,
     region_id: u64,
     ranges_len: usize,
@@ -374,6 +375,17 @@ struct OnRequestFinish {
     timer: Instant,
     wait_time: f64,
     start_ts: u64,
+}
+
+impl Debug for OnRequestFinish {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "OnRequestFinish, region {}, resp_sink: {:?}",
+            self.region_id,
+            self.resp_sink
+        )
+    }
 }
 
 impl OnRequestFinish {
@@ -396,6 +408,12 @@ impl OnRequestFinish {
         }
     }
 
+    fn update_metric(&mut self) {
+        if let Some(cb) = self.metric_callback.take() {
+            cb();
+        }
+    }
+
     fn respond(
         mut self,
         resp: Response,
@@ -404,6 +422,7 @@ impl OnRequestFinish {
     ) -> Box<Future<Item = (), Error = GrpcError> + Send> {
         self.sub_task_count();
         self.stop_record_handling(statistics, cop_context);
+        self.update_metric();
         match self.resp_sink.take() {
             Some(CopResponseSink::Unary(sink)) => box sink.success(resp),
             Some(CopResponseSink::Streaming(sink)) => {
@@ -446,6 +465,7 @@ impl OnRequestFinish {
             .map(move |_| {
                 self.sub_task_count();
                 self.stop_record_handling(&statistics, cop_context);
+                self.update_metric();
             })
     }
 
@@ -505,13 +525,7 @@ pub struct RequestTask {
 }
 
 impl RequestTask {
-    /// create a new `RequestTask`. If success, take the `CopResponseSink`
-    /// from `resp_sink`, or keep it not changed.
-    pub fn new(
-        req: Request,
-        resp_sink: &mut Option<CopResponseSink>,
-        recursion_limit: u32,
-    ) -> Result<RequestTask> {
+    pub fn new(req: Request, recursion_limit: u32) -> Result<RequestTask> {
         let table_scan;
         let (start_ts, cop_req) = match req.get_tp() {
             tp @ REQ_TYPE_SELECT | tp @ REQ_TYPE_INDEX => {
@@ -553,7 +567,8 @@ impl RequestTask {
             table_scan: table_scan,
         };
         let on_finish = OnRequestFinish {
-            resp_sink: resp_sink.take(),
+            resp_sink: None,
+            metric_callback: None,
             running_task_count: None,
             region_id: req.get_context().get_region_id(),
             ranges_len: req.get_ranges().len(),
@@ -573,9 +588,20 @@ impl RequestTask {
         })
     }
 
+    pub fn set_on_finish_sink(&mut self, sink: CopResponseSink) {
+        self.on_finish.resp_sink = Some(sink);
+    }
 
     pub fn take_on_finish_sink(&mut self) -> CopResponseSink {
         self.on_finish.resp_sink.take().unwrap()
+    }
+
+    pub fn set_metric_callback(&mut self, cb: Box<FnBox() + Send>) {
+        self.on_finish.metric_callback = Some(cb);
+    }
+
+    pub fn take_metric_callback(&mut self) -> Box<FnBox() + Send> {
+        self.on_finish.metric_callback.take().unwrap()
     }
 
     #[inline]
@@ -888,8 +914,8 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
 
         let (tx, mut rx) = mpsc::channel(1);
-        let mut cop_resp_sink_opt = Some(CopResponseSink::TestChannel(tx));
-        let mut task = RequestTask::new(req, &mut cop_resp_sink_opt, 1000).unwrap();
+        let mut task = RequestTask::new(req, 1000).unwrap();
+        task.set_on_finish_sink(Some(CopResponseSink::TestChannel(tx)));
         task.ctx = ReqContext {
             deadline: task.ctx.deadline - Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS),
             isolation_level: task.ctx.isolation_level,
@@ -924,15 +950,12 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
 
-        let (tx, _) = mpsc::channel(10);
-        let mut cop_resp_sink_opt = Some(CopResponseSink::TestChannel(tx));
-        let err = RequestTask::new(req, &mut cop_resp_sink_opt, 5).unwrap_err();
+        let err = RequestTask::new(req, 5).unwrap_err();
         let s = format!("{:?}", err);
         assert!(
             s.contains("Recursion"),
             "parse should fail due to recursion limit {}",
             s
         );
-        assert!(cop_resp_sink_opt.is_some());
     }
 }
