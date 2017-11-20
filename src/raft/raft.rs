@@ -704,11 +704,13 @@ impl<T: Storage> Raft<T> {
         }
         self.raft_log.append(es);
 
-        self.prs
-            .get_mut(&self.id)
-            .or(self.learner_prs.get_mut(&self.id))
-            .unwrap()
-            .maybe_update(self.raft_log.last_index());
+        {
+            let pr = match self.prs.get_mut(&self.id) {
+                Some(pr) => pr,
+                None => self.learner_prs.get_mut(&self.id).unwrap(),
+            };
+            pr.maybe_update(self.raft_log.last_index());
+        }
 
         // Regardless of maybe_commit's return, our caller will call bcastAppend.
         self.maybe_commit();
@@ -1050,7 +1052,8 @@ impl<T: Storage> Raft<T> {
                 if self.is_learner {
                     // TODO: learner may need to vote, in case of node down when confchange.
                     info!(
-                        "{} [logterm: {}, index: {}, vote: {}] ignored {:?} from {} [logterm: {}, index: {}] at term {}: learner can not vote",
+                        r#"{} [logterm: {}, index: {}, vote: {}] ignored {:?} from {}
+ [logterm: {}, index: {}] at term {}: learner can not vote"#,
                         self.id,
                         self.raft_log.last_term(),
                         self.raft_log.last_index(),
