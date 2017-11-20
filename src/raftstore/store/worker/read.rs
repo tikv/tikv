@@ -263,24 +263,22 @@ impl<C: MsgSender> LocalReader<C> {
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // If the leader lease has expired, local read should not be performed.
-        if !status.leader_lease.has_lease() {
-            return Ok(RequestPolicy::ReadIndex);
+        // Local read should be performed, iff leader is in safe lease.
+        if status.leader_lease.has_safe_lease() {
+            if status.leader_lease.in_safe_lease() {
+                return Ok(RequestPolicy::ReadLocal);
+            } else {
+                debug!(
+                    "{} leader lease expired time {:?} is outdated",
+                    status.tag,
+                    status.leader_lease.expired_time(),
+                );
+                // TODO: Reset leader lease expiring time.
+                // status.leader_lease.clear();
+            }
         }
-
-        if status.leader_lease.in_safe_lease() {
-            Ok(RequestPolicy::ReadLocal)
-        } else {
-
-            debug!(
-                "{} leader lease expired time {:?} is outdated",
-                status.tag,
-                status.leader_lease.expired_time().unwrap(),
-            );
-            // TODO: Reset leader lease expiring time.
-            // Perform a consistent read to Raft quorum and try to renew the leader lease.
-            Ok(RequestPolicy::ReadIndex)
-        }
+        // Perform a consistent read to Raft quorum and try to renew the leader lease.
+        Ok(RequestPolicy::ReadIndex)
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> RaftCmdResponse {
