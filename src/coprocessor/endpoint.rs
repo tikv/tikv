@@ -915,7 +915,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(1);
         let mut task = RequestTask::new(req, 1000).unwrap();
-        task.set_on_finish_sink(Some(CopResponseSink::TestChannel(tx)));
+        task.set_on_finish_sink(CopResponseSink::TestChannel(tx));
         task.ctx = ReqContext {
             deadline: task.ctx.deadline - Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS),
             isolation_level: task.ctx.isolation_level,
