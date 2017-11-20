@@ -22,10 +22,12 @@ use std::thread::{self, Builder, JoinHandle};
 use std::io;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SendError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender};
 use std::error::Error;
+use std::time::Duration;
 
-use util::time::SlowTimer;
+use util::Either;
+use util::time::{Instant, SlowTimer};
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
@@ -58,10 +60,12 @@ pub trait Runnable<T: Display> {
 }
 
 pub trait BatchRunnable<T: Display> {
-    /// run a batch of tasks.
+    /// Run a batch of tasks.
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
+    /// Run a periodic task if the worker running the runner is timeout.
+    fn run_periodic(&mut self) {}
     fn shutdown(&mut self) {}
 }
 
@@ -145,22 +149,37 @@ pub struct Worker<T: Display> {
     scheduler: Scheduler<T>,
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
+    periodic_interval: Option<Duration>,
 }
 
-fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
-where
+fn poll<R, T>(
+    mut runner: R,
+    rx: Receiver<Option<T>>,
+    counter: Arc<AtomicUsize>,
+    batch_size: usize,
+    periodic_interval: Option<Duration>,
+) where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut keep_going = true;
     let mut buffer = Vec::with_capacity(batch_size);
+    let mut timer = Instant::now_coarse();
     while keep_going {
-        let t = rx.recv();
+        let t = match periodic_interval {
+            Some(dur) => rx.recv_timeout(dur).map_err(Either::Left),
+            None => rx.recv().map_err(Either::Right),
+        };
         match t {
             Ok(Some(t)) => buffer.push(t),
+            Err(Either::Left(RecvTimeoutError::Timeout)) => {
+                runner.run_periodic();
+                continue;
+            }
             _ => break,
         }
+
         while buffer.len() < batch_size {
             match rx.try_recv() {
                 Ok(None) => {
@@ -181,6 +200,13 @@ where
             .unwrap();
         runner.run_batch(&mut buffer);
         buffer.clear();
+        match periodic_interval {
+            Some(dur) if timer.elapsed() > dur => {
+                runner.run_periodic();
+                timer = Instant::now_coarse();
+            }
+            _ => {}
+        }
     }
     runner.shutdown();
 }
@@ -193,7 +219,13 @@ impl<T: Display + Send + 'static> Worker<T> {
             scheduler: Scheduler::new(name, AtomicUsize::new(0), tx),
             receiver: Mutex::new(Some(rx)),
             handle: None,
+            periodic_interval: None,
         }
+    }
+
+    /// Set the time interval of periodic tasks.
+    pub fn set_periodic_interval(&mut self, dur: Duration) {
+        self.periodic_interval = Some(dur);
     }
 
     /// Start the worker.
@@ -214,9 +246,12 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
+        let periodic_interval = self.periodic_interval;
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size))?;
+            .spawn(move || {
+                poll(runner, rx, counter, batch_size, periodic_interval)
+            })?;
         self.handle = Some(h);
         Ok(())
     }

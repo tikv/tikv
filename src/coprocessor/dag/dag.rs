@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
@@ -34,6 +35,8 @@ pub struct DAGContext {
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
+    chunks_per_stream: usize,
+    chunks: Vec<Chunk>,
 }
 
 impl DAGContext {
@@ -43,6 +46,7 @@ impl DAGContext {
         snap: Box<Snapshot>,
         req_ctx: Arc<ReqContext>,
         batch_row_limit: usize,
+        chunks_per_stream: usize,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
@@ -63,45 +67,46 @@ impl DAGContext {
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
+            chunks_per_stream: chunks_per_stream,
+            chunks: Vec::new(),
         })
     }
 
-    pub fn handle_request(&mut self) -> Result<Response> {
+    pub fn handle_request(&mut self, streaming: bool) -> Result<(Response, bool)> {
         let mut record_cnt = 0;
-        let mut chunks = Vec::new();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
-                        let chunk = Chunk::new();
-                        chunks.push(chunk);
+                    let mut stream_result = None;
+                    if self.chunks.is_empty() || record_cnt >= self.batch_row_limit {
+                        if streaming && self.chunks.len() >= self.chunks_per_stream {
+                            stream_result = Some(self.make_response(true));
+                        }
+                        self.chunks.push(Chunk::new());
                         record_cnt = 0;
                     }
-                    let chunk = chunks.last_mut().unwrap();
                     record_cnt += 1;
+
+                    let chunk = self.chunks.last_mut().unwrap();
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
                         let value = inflate_cols(&row, &self.columns, &self.output_offsets)?;
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
+                    if let Some(stream_result) = stream_result {
+                        return stream_result;
+                    }
                 }
-                Ok(None) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
-                    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-                    let data = box_try!(sel_resp.write_to_bytes());
-                    resp.set_data(data);
-                    return Ok(resp);
-                }
+                Ok(None) => return self.make_response(false),
                 Err(e) => if let Error::Other(_) = e {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_error(to_pb_error(&e));
                     resp.set_data(box_try!(sel_resp.write_to_bytes()));
                     resp.set_other_error(format!("{}", e));
-                    return Ok(resp);
+                    return Ok((resp, false));
                 } else {
                     return Err(e);
                 },
@@ -109,10 +114,21 @@ impl DAGContext {
         }
     }
 
-    pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+    fn make_response(&mut self, remain: bool) -> Result<(Response, bool)> {
+        let chunks = mem::replace(&mut self.chunks, Vec::new());
+        let mut resp = Response::new();
+        let mut sel_resp = SelectResponse::new();
+        sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+        let data = box_try!(sel_resp.write_to_bytes());
+        resp.set_data(data);
+        Ok((resp, remain))
+    }
+
+    pub fn collect_statistics_into(&mut self, statistics: &Statistics) {
         self.exec.collect_statistics_into(statistics);
     }
 }
+
 
 #[inline]
 fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Result<Vec<u8>> {

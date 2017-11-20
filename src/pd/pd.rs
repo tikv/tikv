@@ -445,10 +445,10 @@ impl<T: PdClient> Runner<T> {
             let peer_stat = self.region_peers
                 .entry(region_id)
                 .or_insert_with(PeerStat::default);
-            peer_stat.read_bytes += stats.read_bytes as u64;
-            peer_stat.read_keys += stats.read_keys as u64;
-            self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
-            self.store_stat.engine_total_keys_read += stats.read_keys as u64;
+            peer_stat.read_bytes += atomic_load!(stats.read_bytes) as u64;
+            peer_stat.read_keys += atomic_load!(stats.read_keys) as u64;
+            self.store_stat.engine_total_bytes_read += atomic_load!(stats.read_bytes) as u64;
+            self.store_stat.engine_total_keys_read += atomic_load!(stats.read_keys) as u64;
         }
     }
 

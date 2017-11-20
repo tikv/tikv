@@ -14,6 +14,7 @@
 use std::sync::{Arc, RwLock};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::time::Duration;
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb_grpc::*;
@@ -72,7 +73,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .build(),
         );
         let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.clone())));
-        let end_point_worker = Worker::new("end-point-worker");
+        let mut end_point_worker = Worker::new("end-point-worker");
+        end_point_worker.set_periodic_interval(Duration::from_secs(1));
         let snap_worker = Worker::new("snap-handler");
 
         let kv_service = KvService::new(

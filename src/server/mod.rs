@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed::FnBox;
-use kvproto::coprocessor::Response;
 mod metrics;
 mod service;
 mod raft_client;
@@ -26,6 +24,14 @@ pub mod resolve;
 pub mod snap;
 pub mod debug;
 
+use std::fmt;
+
+use grpc::{ServerStreamingSink, UnarySink};
+#[cfg(test)]
+use futures::sync::mpsc::Sender;
+
+use kvproto::coprocessor::Response;
+
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
 pub use self::server::Server;
@@ -34,4 +40,59 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
-pub type OnResponse = Box<FnBox(Response) + Send>;
+pub enum CopResponseSink {
+    Unary(UnarySink<Response>),
+    Streaming(ServerStreamingSink<Response>),
+    #[cfg(test)]
+    TestChannel(Sender<Response>),
+}
+
+impl CopResponseSink {
+    pub fn is_streaming(&self) -> bool {
+        match *self {
+            CopResponseSink::Unary(_) => false,
+            _ => true,
+        }
+    }
+}
+
+impl From<UnarySink<Response>> for CopResponseSink {
+    fn from(s: UnarySink<Response>) -> CopResponseSink {
+        CopResponseSink::Unary(s)
+    }
+}
+
+impl From<ServerStreamingSink<Response>> for CopResponseSink {
+    fn from(s: ServerStreamingSink<Response>) -> CopResponseSink {
+        CopResponseSink::Streaming(s)
+    }
+}
+
+impl From<CopResponseSink> for UnarySink<Response> {
+    fn from(s: CopResponseSink) -> UnarySink<Response> {
+        match s {
+            CopResponseSink::Unary(sink) => sink,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<CopResponseSink> for ServerStreamingSink<Response> {
+    fn from(s: CopResponseSink) -> ServerStreamingSink<Response> {
+        match s {
+            CopResponseSink::Streaming(sink) => sink,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl fmt::Debug for CopResponseSink {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            CopResponseSink::Unary(_) => write!(f, "Grpc UnarySink"),
+            CopResponseSink::Streaming(_) => write!(f, "Grpc ServerStreamingSink"),
+            #[cfg(test)]
+            CopResponseSink::TestChannel(_) => write!(f, "Test Sender"),
+        }
+    }
+}

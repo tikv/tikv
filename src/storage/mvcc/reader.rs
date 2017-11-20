@@ -85,16 +85,19 @@ impl MvccReader {
                 Some(v) => v.to_vec(),
             }
         } else {
-            self.statistics.data.get += 1;
+            atomic_add!(self.statistics.data.get, 1);
             match self.snapshot.get(&k)? {
                 None => panic!("key {} not found, ts: {}", key, ts),
                 Some(v) => v,
             }
         };
 
-        self.statistics.data.processed += 1;
-        self.statistics.data.flow_stats.read_bytes += k.raw().unwrap_or_default().len() + res.len();
-        self.statistics.data.flow_stats.read_keys += 1;
+        atomic_add!(self.statistics.data.processed, 1);
+        atomic_add!(
+            self.statistics.data.flow_stats.read_bytes,
+            k.raw().unwrap_or_default().len() + res.len()
+        );
+        atomic_add!(self.statistics.data.flow_stats.read_keys, 1);
         Ok(res)
     }
 
@@ -112,7 +115,7 @@ impl MvccReader {
                 None => None,
             }
         } else {
-            self.statistics.lock.get += 1;
+            atomic_add!(self.statistics.lock.get, 1);
             match self.snapshot.get_cf(CF_LOCK, key)? {
                 Some(v) => Some(Lock::parse(&v)?),
                 None => None,
@@ -120,7 +123,7 @@ impl MvccReader {
         };
 
         if res.is_some() {
-            self.statistics.lock.processed += 1;
+            atomic_add!(self.statistics.lock.processed, 1);
         }
 
         Ok(res)
@@ -182,9 +185,12 @@ impl MvccReader {
             return Ok(None);
         }
         let write = Write::parse(cursor.value())?;
-        self.statistics.write.processed += 1;
-        self.statistics.write.flow_stats.read_bytes += cursor.key().len() + cursor.value().len();
-        self.statistics.write.flow_stats.read_keys += 1;
+        atomic_add!(self.statistics.write.processed, 1);
+        atomic_add!(
+            self.statistics.write.flow_stats.read_bytes,
+            cursor.key().len() + cursor.value().len()
+        );
+        atomic_add!(self.statistics.write.flow_stats.read_bytes, 1);
         Ok(Some((commit_ts, write)))
     }
 
@@ -428,7 +434,7 @@ impl MvccReader {
             }
             cursor.next(&mut self.statistics.lock);
         }
-        self.statistics.lock.processed += locks.len();
+        atomic_add!(self.statistics.lock.processed, locks.len());
         Ok((locks, None))
     }
 
@@ -450,7 +456,7 @@ impl MvccReader {
                 return Ok((keys, None));
             }
             if keys.len() >= limit {
-                self.statistics.write.processed += keys.len();
+                atomic_add!(self.statistics.write.processed, keys.len());
                 return Ok((keys, start));
             }
             let key = Key::from_encoded(cursor.key().to_vec()).truncate_ts()?;
@@ -592,7 +598,6 @@ mod tests {
             let snap = RegionSnapshot::from_raw(self.db.clone(), self.region.clone());
             let mut txn = MvccTxn::new(Box::new(snap), start_ts, None, IsolationLevel::SI, true);
             txn.prewrite(m, pk, &Options::default()).unwrap();
-
             self.write(txn.into_modifies());
         }
 

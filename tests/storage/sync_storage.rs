@@ -58,6 +58,7 @@ impl SyncStorage {
         self.store.clone()
     }
 
+    #[allow(dead_code)]
     pub fn get_engine(&self) -> Box<Engine> {
         self.store.get_engine()
     }

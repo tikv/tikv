@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::cmp::Ordering;
 use std::boxed::FnBox;
 use std::time::Duration;
+use std::sync::atomic::AtomicUsize;
 
 pub use self::rocksdb::EngineRocksdb;
 use rocksdb::TablePropertiesCollection;
@@ -133,7 +134,7 @@ pub trait Snapshot: Send {
     fn clone(&self) -> Box<Snapshot>;
 }
 
-pub trait Iterator {
+pub trait Iterator: Send {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn seek(&mut self, key: &Key) -> Result<bool>;
@@ -156,7 +157,7 @@ macro_rules! near_loop {
         while $cond {
             cnt += 1;
             if cnt >= SEEK_BOUND {
-                $st.over_seek_bound += 1;
+                atomic_add!($st.over_seek_bound, 1);
                 return $fallback;
             }
         }
@@ -171,65 +172,86 @@ pub enum ScanMode {
 }
 
 /// Statistics collects the ops taken when fetching data.
-#[derive(Default, Copy, Clone)]
+#[derive(Default)]
 pub struct CFStatistics {
     // How many keys that's effective to user. This counter should be increased
     // by the caller.
-    pub processed: usize,
-    pub get: usize,
-    pub next: usize,
-    pub prev: usize,
-    pub seek: usize,
-    pub seek_for_prev: usize,
-    pub over_seek_bound: usize,
+    pub processed: AtomicUsize,
+    pub get: AtomicUsize,
+    pub next: AtomicUsize,
+    pub prev: AtomicUsize,
+    pub seek: AtomicUsize,
+    pub seek_for_prev: AtomicUsize,
+    pub over_seek_bound: AtomicUsize,
     pub flow_stats: FlowStatistics,
 }
 
-#[derive(Default, Clone, Debug, Copy)]
+#[derive(Default, Debug)]
 pub struct FlowStatistics {
-    pub read_keys: usize,
-    pub read_bytes: usize,
+    pub read_keys: AtomicUsize,
+    pub read_bytes: AtomicUsize,
 }
 
 impl FlowStatistics {
-    pub fn add(&mut self, other: &Self) {
-        self.read_bytes = self.read_keys.saturating_add(other.read_bytes);
-        self.read_keys = self.read_keys.saturating_add(other.read_keys);
+    pub fn add(&self, other: &Self) {
+        atomic_add!(self.read_keys, atomic_load!(other.read_keys));
+        atomic_add!(self.read_bytes, atomic_load!(other.read_bytes));
     }
 }
 
 impl CFStatistics {
     #[inline]
     pub fn total_op_count(&self) -> usize {
-        self.get + self.next + self.prev + self.seek + self.seek_for_prev
+        atomic_load!(self.get) + atomic_load!(self.next) + atomic_load!(self.seek) +
+            atomic_load!(self.seek_for_prev)
     }
 
     pub fn details(&self) -> Vec<(&str, usize)> {
         vec![
             (STAT_TOTAL, self.total_op_count()),
-            (STAT_PROCESSED, self.processed),
-            (STAT_GET, self.get),
-            (STAT_NEXT, self.next),
-            (STAT_PREV, self.prev),
-            (STAT_SEEK, self.seek),
-            (STAT_SEEK_FOR_PREV, self.seek_for_prev),
-            (STAT_OVER_SEEK_BOUND, self.over_seek_bound),
+            (STAT_PROCESSED, atomic_load!(self.processed)),
+            (STAT_GET, atomic_load!(self.get)),
+            (STAT_NEXT, atomic_load!(self.next)),
+            (STAT_PREV, atomic_load!(self.prev)),
+            (STAT_SEEK, atomic_load!(self.seek)),
+            (STAT_SEEK_FOR_PREV, atomic_load!(self.seek_for_prev)),
+            (STAT_OVER_SEEK_BOUND, atomic_load!(self.over_seek_bound)),
         ]
     }
 
-    pub fn add(&mut self, other: &Self) {
-        self.processed = self.processed.saturating_add(other.processed);
-        self.get = self.get.saturating_add(other.get);
-        self.next = self.next.saturating_add(other.next);
-        self.prev = self.prev.saturating_add(other.prev);
-        self.seek = self.seek.saturating_add(other.seek);
-        self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
-        self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
+    /// Take the total op count and reset them to default.
+    pub fn take_total_op_count(&self) -> usize {
+        atomic_swap!(self.get, 0) + atomic_swap!(self.next, 0) + atomic_swap!(self.seek, 0) +
+            atomic_swap!(self.seek_for_prev, 0)
+    }
+
+    /// Take the details and reset them to default.
+    pub fn take_details(&self) -> Vec<(&str, usize)> {
+        vec![
+            (STAT_TOTAL, self.take_total_op_count()),
+            (STAT_PROCESSED, atomic_swap!(self.processed, 0)),
+            (STAT_GET, atomic_swap!(self.get, 0)),
+            (STAT_NEXT, atomic_swap!(self.next, 0)),
+            (STAT_PREV, atomic_swap!(self.prev, 0)),
+            (STAT_SEEK, atomic_swap!(self.seek, 0)),
+            (STAT_SEEK_FOR_PREV, atomic_swap!(self.seek_for_prev, 0)),
+            (STAT_OVER_SEEK_BOUND, atomic_swap!(self.over_seek_bound, 0)),
+        ]
+    }
+
+    pub fn add(&self, other: &Self) {
+        atomic_add!(self.processed, atomic_load!(other.processed));
+        atomic_add!(self.get, atomic_load!(other.get));
+        atomic_add!(self.next, atomic_load!(other.next));
+        atomic_add!(self.prev, atomic_load!(other.prev));
+        atomic_add!(self.seek, atomic_load!(other.seek));
+        atomic_add!(self.seek_for_prev, atomic_load!(other.seek_for_prev));
+        atomic_add!(self.over_seek_bound, atomic_load!(other.over_seek_bound));
         self.flow_stats.add(&other.flow_stats);
     }
 }
 
-#[derive(Default, Copy, Clone)]
+#[derive(Default)]
 pub struct Statistics {
     pub lock: CFStatistics,
     pub write: CFStatistics,
@@ -242,7 +264,8 @@ impl Statistics {
     }
 
     pub fn total_processed(&self) -> usize {
-        self.lock.processed + self.write.processed + self.data.processed
+        atomic_load!(self.lock.processed) + atomic_load!(self.write.processed) +
+            atomic_load!(self.data.processed)
     }
 
     pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {
@@ -253,7 +276,15 @@ impl Statistics {
         ]
     }
 
-    pub fn add(&mut self, other: &Self) {
+    pub fn take_details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {
+        vec![
+            (CF_DEFAULT, self.data.take_details()),
+            (CF_LOCK, self.lock.take_details()),
+            (CF_WRITE, self.write.take_details()),
+        ]
+    }
+
+    pub fn add(&self, other: &Self) {
         self.lock.add(&other.lock);
         self.write.add(&other.write);
         self.data.add(&other.data);
@@ -263,13 +294,13 @@ impl Statistics {
 #[derive(Default)]
 pub struct StatisticsSummary {
     pub stat: Statistics,
-    pub count: u64,
+    pub count: AtomicUsize,
 }
 
 impl StatisticsSummary {
-    pub fn add_statistics(&mut self, v: &Statistics) {
+    pub fn add_statistics(&self, v: &Statistics) {
         self.stat.add(v);
-        self.count += 1;
+        atomic_add!(self.count, 1);
     }
 }
 
@@ -304,7 +335,7 @@ impl Cursor {
             return Ok(true);
         }
 
-        statistics.seek += 1;
+        atomic_add!(statistics.seek, 1);
 
         if !self.iter.seek(key)? {
             self.max_key = Some(key.encoded().to_owned());
@@ -391,7 +422,7 @@ impl Cursor {
             return Ok(true);
         }
 
-        statistics.seek_for_prev += 1;
+        atomic_add!(statistics.seek_for_prev, 1);
         if !self.iter.seek_for_prev(key)? {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);
@@ -488,25 +519,25 @@ impl Cursor {
 
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
-        statistics.seek += 1;
+        atomic_add!(statistics.seek, 1);
         self.iter.seek_to_first()
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
-        statistics.seek += 1;
+        atomic_add!(statistics.seek, 1);
         self.iter.seek_to_last()
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
-        statistics.next += 1;
+        atomic_add!(statistics.next, 1);
         self.iter.next()
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
-        statistics.prev += 1;
+        atomic_add!(statistics.prev, 1);
         self.iter.prev()
     }
 

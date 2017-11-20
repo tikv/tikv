@@ -127,9 +127,9 @@ impl Row {
     }
 }
 
-pub trait Executor {
+pub trait Executor: Send {
     fn next(&mut self) -> Result<Option<Row>>;
-    fn collect_statistics_into(&mut self, stats: &mut Statistics);
+    fn collect_statistics_into(&mut self, stats: &Statistics);
 }
 
 pub struct DAGExecutor {

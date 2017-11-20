@@ -123,7 +123,7 @@ impl Executor for TableScanExecutor {
         }
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+    fn collect_statistics_into(&mut self, statistics: &Statistics) {
         statistics.add(&self.statistics);
         self.statistics = Statistics::default();
         if let Some(scanner) = self.scanner.take() {
