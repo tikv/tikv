@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use super::Result;
-use super::log_batch::LogBatch;
+use super::log_batch::{LogBatch, LogItemType};
 use super::metrics::*;
 
 const LOG_SUFFIX: &'static str = ".log";
@@ -176,10 +176,21 @@ impl PipeLog {
         Ok((file_num, offset))
     }
 
-    pub fn append_log_batch(&mut self, batch: &mut LogBatch, sync: bool) -> Result<(u64, u64)> {
-        match batch.encode_to_bytes() {
-            Some(content) => self.append(&content, sync),
-            None => Ok((0, 0)),
+    pub fn append_log_batch(&mut self, batch: &mut LogBatch, sync: bool) -> Result<u64> {
+        if let Some(content) = batch.encode_to_bytes() {
+            let (file_num, offset) = self.append(&content, sync)?;
+            for item in &mut batch.items {
+                match item.item_type {
+                    LogItemType::Entries => item.entries
+                        .as_mut()
+                        .unwrap()
+                        .update_offset_when_needed(file_num, offset),
+                    LogItemType::KV | LogItemType::CMD => {}
+                }
+            }
+            Ok(file_num)
+        } else {
+            Ok(0)
         }
     }
 
