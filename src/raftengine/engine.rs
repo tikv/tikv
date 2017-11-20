@@ -208,9 +208,12 @@ impl RaftEngine {
         }
 
         let mut has_write = false;
+        let mut memory_usage = 0;
         for slot in 0..SLOTS_COUNT {
             let mut memtables = self.memtables[slot].write().unwrap();
             for memtable in memtables.values_mut() {
+                memory_usage += memtable.entries_size();
+
                 let min_file_num = match memtable.min_file_num() {
                     Some(file_num) => file_num,
                     None => continue,
@@ -301,6 +304,8 @@ impl RaftEngine {
                 }
             }
         }
+        RAFTENGINE_MEMORY_USAGE_GAUGE.set(memory_usage as f64);
+
         has_write
     }
 
