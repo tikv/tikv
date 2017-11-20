@@ -41,15 +41,21 @@ fn test_overlap_cleanup() {
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
+    // This will only pause the bootstrapped region, so the split region
+    // can still work as expected.
     fail::cfg(gen_snapshot_fp, "pause").unwrap();
     pd_client.must_add_peer(region_id, new_peer(3, 3));
     cluster.must_put(b"k3", b"v3");
     let region1 = cluster.get_region(b"k1");
     cluster.must_split(&region1, b"k2");
+    // Wait till the snapshot of split region is applied, whose range is ["", "k2").
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    // Resume the fail point and pause it again. So only the paused snapshot is generated.
+    // And the paused snapshot's range is ["", ""), hence overlap.
     fail::cfg(gen_snapshot_fp, "pause").unwrap();
+    // Wait a little bit for the message being sent out.
     thread::sleep(Duration::from_secs(1));
-    // Stale snapshot should be deleted.
+    // Overlap snapshot should be deleted.
     let snap_dir = cluster.get_snap_dir(3);
     for p in fs::read_dir(&snap_dir).unwrap() {
         let name = p.unwrap().file_name().into_string().unwrap();

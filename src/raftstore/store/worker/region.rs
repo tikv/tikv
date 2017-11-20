@@ -109,6 +109,8 @@ impl SnapContext {
             &raw_snap,
             region_id
         ));
+        // Only enable the fail point when the region id is equal to 1, which is
+        // the id of bootstrapped region in tests.
         fail_point!("handle_gen", region_id == 1, |_| Ok(()));
         if let Err(e) = notifier.try_send(snap) {
             info!(
