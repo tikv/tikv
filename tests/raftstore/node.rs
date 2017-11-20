@@ -33,6 +33,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 use tikv::util::transport::SendCh;
+use tikv::util::io_limiter::IOLimiter;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
 use super::pd::TestPdClient;
@@ -167,7 +168,7 @@ impl Simulator for NodeCluster {
             self.pd_client.clone(),
         );
 
-        let limiter = Arc::new(SnapshotIOLimiter::default());
+        let limiter = Arc::new(IOLimiter::default());
         let (snap_mgr, tmp) =
             if node_id == 0 || !self.trans.rl().snap_paths.contains_key(&node_id) {
                 let tmp = TempDir::new("test_cluster").unwrap();

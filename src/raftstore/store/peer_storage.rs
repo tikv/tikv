@@ -1397,12 +1397,13 @@ mod test {
     use raft::{Error as RaftError, StorageError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, Engines, SnapshotIOLimiter};
+    use raftstore::store::{bootstrap, Engines};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
     use raftstore::store::local_metrics::RaftMetrics;
     use util::worker::{Scheduler, Worker};
     use util::rocksdb::new_engine;
+    use util::io_limiter::IOLimiter;
     use storage::{ALL_CFS, CF_DEFAULT};
     use kvproto::eraftpb::HardState;
     use rocksdb::WriteBatch;
@@ -1679,7 +1680,7 @@ mod test {
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let limiter = Arc::new(SnapshotIOLimiter::default());
+        let limiter = Arc::new(IOLimiter::default());
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None, limiter.clone());
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
@@ -1963,7 +1964,7 @@ mod test {
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let limiter = Arc::new(SnapshotIOLimiter::default());
+        let limiter = Arc::new(IOLimiter::default());
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None, limiter.clone());
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();

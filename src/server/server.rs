@@ -193,6 +193,7 @@ mod tests {
     use raftstore::store::*;
     use raftstore::store::transport::Transport;
     use util::worker::FutureWorker;
+    use util::io_limiter::IOLimiter;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -259,7 +260,7 @@ mod tests {
         let addr = Arc::new(Mutex::new(None));
         let quick_fail = Arc::new(AtomicBool::new(false));
         let pd_worker = FutureWorker::new("pd worker");
-        let limiter = Arc::new(SnapshotIOLimiter::default());
+        let limiter = Arc::new(IOLimiter::default());
         let mut server = Server::new(
             &cfg,
             1024,

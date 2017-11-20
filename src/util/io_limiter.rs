@@ -16,25 +16,21 @@ use std::io::{Result, Write};
 
 use rocksdb::RateLimiter;
 
-use server::config::{DEFAULT_SNAP_MAX_BYTES_PER_SEC, DEFAULT_SNAP_MAX_BYTES_PER_TIME,
-                     DEFAULT_SNAP_MIN_BYTES_PER_TIME};
-
 const REFILL_PERIOD: i64 = 100 * 1000;
 const FARENESS: i32 = 10;
+pub const DEFAULT_SNAP_MIN_BYTES_PER_TIME: u64 = 128 * 1024;
+pub const DEFAULT_SNAP_MAX_BYTES_PER_TIME: u64 = 2 * 1024 * 1024;
+pub const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 20 * 1024 * 1024;
 
-pub struct SnapshotIOLimiter {
+pub struct IOLimiter {
     inner: RateLimiter,
     min_bytes_per_time: i64,
     max_bytes_per_time: i64,
 }
 
-impl SnapshotIOLimiter {
-    pub fn new(
-        min_bytes_per_time: u64,
-        max_bytes_per_time: u64,
-        bytes_per_sec: u64,
-    ) -> SnapshotIOLimiter {
-        SnapshotIOLimiter {
+impl IOLimiter {
+    pub fn new(min_bytes_per_time: u64, max_bytes_per_time: u64, bytes_per_sec: u64) -> IOLimiter {
+        IOLimiter {
             inner: RateLimiter::new(bytes_per_sec as i64, REFILL_PERIOD, FARENESS),
             min_bytes_per_time: min_bytes_per_time as i64,
             max_bytes_per_time: max_bytes_per_time as i64,
@@ -75,9 +71,9 @@ impl SnapshotIOLimiter {
     }
 }
 
-impl Default for SnapshotIOLimiter {
-    fn default() -> SnapshotIOLimiter {
-        SnapshotIOLimiter {
+impl Default for IOLimiter {
+    fn default() -> IOLimiter {
+        IOLimiter {
             inner: RateLimiter::new(
                 DEFAULT_SNAP_MAX_BYTES_PER_SEC as i64,
                 REFILL_PERIOD,
@@ -90,7 +86,7 @@ impl Default for SnapshotIOLimiter {
 }
 
 pub struct LimiterWriter<'a, T: Write + 'a> {
-    pub limiter: Arc<SnapshotIOLimiter>,
+    pub limiter: Arc<IOLimiter>,
     pub writer: &'a mut T,
 }
 
@@ -126,14 +122,12 @@ mod test {
     use std::io::{Read, Write};
     use std::sync::Arc;
 
-    use server::config::{DEFAULT_SNAP_MAX_BYTES_PER_SEC, DEFAULT_SNAP_MAX_BYTES_PER_TIME,
-                         DEFAULT_SNAP_MIN_BYTES_PER_TIME};
-
-    use super::{LimiterWriter, SnapshotIOLimiter};
+    use super::{IOLimiter, LimiterWriter, DEFAULT_SNAP_MAX_BYTES_PER_SEC,
+                DEFAULT_SNAP_MAX_BYTES_PER_TIME, DEFAULT_SNAP_MIN_BYTES_PER_TIME};
 
     #[test]
     fn test_default_snapshot_io_limiter() {
-        let limiter = SnapshotIOLimiter::default();
+        let limiter = IOLimiter::default();
         assert_eq!(
             limiter.get_min_bytes_per_time(),
             DEFAULT_SNAP_MIN_BYTES_PER_TIME as i64
@@ -147,7 +141,7 @@ mod test {
 
     #[test]
     fn test_snapshot_io_limiter() {
-        let limiter = SnapshotIOLimiter::new(64 * 1024, 1024 * 1024, 10 * 1024 * 1024);
+        let limiter = IOLimiter::new(64 * 1024, 1024 * 1024, 10 * 1024 * 1024);
         assert_eq!(limiter.get_min_bytes_per_time(), 64 * 1024);
         assert!(limiter.get_max_bytes_per_time() <= 1024 * 1024);
 
@@ -166,7 +160,7 @@ mod test {
     fn test_limiter_writer() {
         let mut file = File::create("./test_limiter_writer.txt").unwrap();
         let mut limiter_writer = LimiterWriter {
-            limiter: Arc::new(SnapshotIOLimiter::default()),
+            limiter: Arc::new(IOLimiter::default()),
             writer: &mut file,
         };
         limiter_writer.write_all(b"Hello, World!").unwrap();

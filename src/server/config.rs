@@ -17,7 +17,8 @@ use sys_info;
 
 use util::collections::HashMap;
 use util::config::{self, ReadableSize};
-
+use util::io_limiter::{DEFAULT_SNAP_MAX_BYTES_PER_SEC, DEFAULT_SNAP_MAX_BYTES_PER_TIME,
+                       DEFAULT_SNAP_MIN_BYTES_PER_TIME};
 use super::Result;
 
 pub use raftstore::store::Config as RaftStoreConfig;
@@ -35,9 +36,6 @@ const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 // Enpoints may occur very deep recursion,
 // so enlarge their stack size to 10 MB.
 const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
-pub const DEFAULT_SNAP_MIN_BYTES_PER_TIME: u64 = 128 * 1024;
-pub const DEFAULT_SNAP_MAX_BYTES_PER_TIME: u64 = 2 * 1024 * 1024;
-pub const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 20 * 1024 * 1024;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
