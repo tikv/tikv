@@ -257,8 +257,9 @@ impl Host {
                                 Some(future::ok::<_, _>((resp, None)))
                             }
                             Err(e) => {
+                                let resp = err_resp(e);
                                 ctx.collect_statistics_into(&statistics_in_stream);
-                                Some(future::err::<_, _>(e))
+                                Some(future::ok::<_, _>((resp, None)))
                             }
                         })
                     });
@@ -450,7 +451,7 @@ impl OnRequestFinish {
 
     fn respond_stream(
         mut self,
-        stream: Box<Stream<Item = Response, Error = Error> + Send>,
+        stream: Box<Stream<Item = Response, Error = GrpcError> + Send>,
         statistics: Arc<Statistics>,
         cop_context: Arc<CopContext>,
     ) -> Box<Future<Item = (), Error = GrpcError> + Send> {
@@ -459,7 +460,6 @@ impl OnRequestFinish {
             _ => unreachable!(),
         };
         box stream
-            .or_else(|e| future::ok::<_, GrpcError>(err_resp(e)))
             .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .forward(sink)
             .map(move |_| {
