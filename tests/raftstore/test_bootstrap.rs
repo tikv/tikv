@@ -106,6 +106,7 @@ fn test_node_bootstrap_with_prepared_data() {
         snap_mgr,
         snapshot_status_receiver,
         pd_worker,
+        None,
         coprocessor_host,
     ).unwrap();
     assert!(

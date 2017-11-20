@@ -128,7 +128,7 @@ where
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
-        local_read_worker: Worker<LocalReadTask>,
+        local_read_worker: Option<Worker<LocalReadTask>>,
         coprocessor_host: CoprocessorHost,
     ) -> Result<()>
     where
@@ -323,7 +323,7 @@ where
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
-        local_read_worker: Worker<LocalReadTask>,
+        local_read_worker: Option<Worker<LocalReadTask>>,
         coprocessor_host: CoprocessorHost,
     ) -> Result<()>
     where

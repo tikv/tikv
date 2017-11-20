@@ -233,7 +233,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
         snap_mgr,
         significant_msg_receiver,
         pd_worker,
-        local_reader,
+        Some(local_reader),
         coprocessor_host,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));

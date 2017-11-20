@@ -189,6 +189,7 @@ impl Simulator for NodeCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            None,
             coprocessor_host,
         ).unwrap();
         assert!(
@@ -213,7 +214,8 @@ impl Simulator for NodeCluster {
         }
 
         let node_id = node.id();
-        let router = ServerRaftStoreRouter::new(node.get_sendch(), snap_status_sender.clone());
+        let router =
+            ServerRaftStoreRouter::new(node.get_sendch(), snap_status_sender.clone(), None);
         self.trans
             .wl()
             .routers

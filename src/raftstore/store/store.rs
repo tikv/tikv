@@ -146,7 +146,7 @@ pub struct Store<T, C: 'static> {
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
-    local_read_worker: Worker<LocalReadTask>,
+    local_read_worker: Option<Worker<LocalReadTask>>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
@@ -196,7 +196,7 @@ impl<T, C> Store<T, C> {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        local_read_worker: Worker<LocalReadTask>,
+        local_read_worker: Option<Worker<LocalReadTask>>,
         mut coprocessor_host: CoprocessorHost,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
@@ -407,6 +407,12 @@ impl<T, C> Store<T, C> {
         self.region_worker.scheduler()
     }
 
+    pub fn local_read_scheduler(&self) -> Option<Scheduler<LocalReadTask>> {
+        self.local_read_worker
+            .as_ref()
+            .map(|local_read_worker| local_read_worker.scheduler())
+    }
+
     pub fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
         self.apply_worker.scheduler()
     }
@@ -535,12 +541,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
         box_try!(self.pd_worker.start(pd_runner));
 
-        let local_reader = LocalReader::new(
-            self.kv_engine.clone(),
-            self.store.clone(),
-            self.sendch.clone(),
-        );
-        box_try!(self.local_read_worker.start(local_reader));
+        {
+            let kv_engine = &self.kv_engine;
+            let store = &self.store;
+            let sendch = &self.sendch;
+
+            if let Some(result) = self.local_read_worker.as_mut().map(|worker| {
+                let local_reader =
+                    LocalReader::new(kv_engine.clone(), store.clone(), sendch.clone());
+                worker.start(local_reader)
+            }) {
+                box_try!(result);
+            }
+        }
 
         let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
         box_try!(

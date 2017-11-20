@@ -109,7 +109,8 @@ impl Simulator for ServerCluster {
         let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
         let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
-        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender);
+        let raft_router =
+            ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender, None);
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create storage.
@@ -156,6 +157,7 @@ impl Simulator for ServerCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            None,
             coprocessor_host,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
