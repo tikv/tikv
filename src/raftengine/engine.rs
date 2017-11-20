@@ -125,7 +125,7 @@ impl RaftEngine {
             loop {
                 match LogBatch::from_bytes(&mut buf, current_read_file, start_ptr) {
                     Ok(Some(log_batch)) => {
-                        self.apply_to_memtable(log_batch, current_read_file, offset);
+                        self.apply_to_memtable(log_batch, current_read_file);
                         offset = start_ptr.offset_to(buf.as_ptr()).unwrap() as u64;
                     }
                     Ok(None) => {
@@ -269,15 +269,11 @@ impl RaftEngine {
                     // Apply to memtable
                     match write_res {
                         // Using slef.apply_to_memtable here will cause deadlock.
-                        Ok((file_num, offset)) => for item in log_batch.items.drain(..) {
+                        Ok(file_num) => for item in log_batch.items.drain(..) {
                             match item.item_type {
                                 LogItemType::Entries => {
-                                    let mut entries_to_add = item.entries.unwrap();
+                                    let entries_to_add = item.entries.unwrap();
                                     assert_eq!(entries_to_add.region_id, memtable.region_id());
-                                    for i in &mut entries_to_add.entries_index {
-                                        i.file_num = file_num;
-                                        i.len += offset;
-                                    }
                                     memtable.append(
                                         entries_to_add.entries,
                                         entries_to_add.entries_index,
@@ -341,6 +337,10 @@ impl RaftEngine {
                 if min_file_num < gc_file_num ||
                     memtable.entries_size() > self.cfg.region_size.0 * 2 / 3
                 {
+                    info!(
+                        "region {}'s raft log need force compaction",
+                        memtable.region_id()
+                    );
                     regions.insert(memtable.region_id());
                 }
             }
@@ -401,8 +401,8 @@ impl RaftEngine {
             pipe_log.append_log_batch(&mut log_batch, sync)
         };
         match write_res {
-            Ok((file_num, offset)) => {
-                self.post_append_to_file(log_batch, file_num, offset);
+            Ok(file_num) => {
+                self.post_append_to_file(log_batch, file_num);
                 Ok(())
             }
             Err(e) => panic!("Append log batch to pipe log failed, error: {:?}", e),
@@ -592,21 +592,19 @@ impl RaftEngine {
         memtables.get(&region_id).is_none()
     }
 
-    fn post_append_to_file(&self, log_batch: LogBatch, file_num: u64, offset: u64) {
+    fn post_append_to_file(&self, log_batch: LogBatch, file_num: u64) {
         // 0 means write nothing.
         if file_num == 0 {
             return;
         }
-        self.apply_to_memtable(log_batch, file_num, offset);
+        self.apply_to_memtable(log_batch, file_num);
     }
 
-    fn apply_to_memtable(&self, mut log_batch: LogBatch, file_num: u64, offset: u64) {
+    fn apply_to_memtable(&self, mut log_batch: LogBatch, file_num: u64) {
         for item in log_batch.items.drain(..) {
             match item.item_type {
                 LogItemType::Entries => {
-                    // Update entries' physical position in file.
-                    let mut entries_to_add = item.entries.unwrap();
-                    entries_to_add.update_offset_when_needed(file_num, offset);
+                    let entries_to_add = item.entries.unwrap();
                     let region_id = entries_to_add.region_id;
                     let mut memtables = self.memtables[region_id as usize % SLOTS_COUNT]
                         .write()

@@ -46,7 +46,7 @@ impl Default for Config {
             cache_size_limit: ReadableSize::gb(2),
             total_size_limit: ReadableSize::gb(20),
             compact_threshold: 0,
-            region_size: ReadableSize::mb(96),
+            region_size: ReadableSize::mb(0),
         }
     }
 }
