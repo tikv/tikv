@@ -376,7 +376,7 @@ impl Sub<Instant> for Instant {
 #[derive(Debug)]
 pub struct Lease {
     lease_expired_time: Option<Either<Timespec, Timespec>>,
-    remote: Option<Arc<Mutex<Lease>>>,
+    remote: Option<RemoteLease>,
 }
 
 impl Lease {
@@ -387,7 +387,11 @@ impl Lease {
         }
     }
 
-    pub fn remote(&mut self) -> Arc<Mutex<Lease>> {
+    pub fn has_remote(&self) -> bool {
+        self.remote.is_some()
+    }
+
+    pub fn remote(&mut self) -> RemoteLease {
         assert!(self.remote.is_none(), "Already derived a remote");
         let remote = Arc::new(Mutex::new(Lease::new()));
         self.remote = Some(remote.clone());
@@ -467,6 +471,8 @@ impl Drop for Lease {
         self.clear_local();
     }
 }
+
+pub type RemoteLease = Arc<Mutex<Lease>>;
 
 #[cfg(test)]
 mod tests {

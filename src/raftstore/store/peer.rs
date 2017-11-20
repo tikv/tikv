@@ -35,7 +35,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::Config;
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
-use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
+use raftstore::store::worker::{Apply, ApplyRes, ApplyTask, LocalReadTask};
 
 use util::worker::{FutureWorker, Scheduler};
 use util::time::{monotonic_raw_now, Lease};
@@ -228,6 +228,7 @@ pub struct Peer {
     // When entry exceed max size, reject to propose the entry.
     pub raft_entry_max_size: u64,
 
+    local_read_scheduler: Option<Scheduler<LocalReadTask>>,
     apply_scheduler: Scheduler<ApplyTask>,
 
     pub pending_remove: bool,
@@ -348,6 +349,7 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
+            local_read_scheduler: store.local_read_scheduler(),
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
@@ -546,8 +548,7 @@ impl Peer {
                     // For lease safty during leader transfer, mark `leader_lease_expired_time`
                     // to be unsafe until next_lease_expired_time from now
                     let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
-                    self.leader_lease_expired_time
-                        .update_unsafe(next_expired_time);
+                    self.update_leader_lease(next_expired_time, false);
 
                     metrics.timeout_now += 1;
                 }
@@ -670,8 +671,7 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
-                    self.leader_lease_expired_time
-                        .update_safe(next_expired_time);
+                    self.update_leader_lease(next_expired_time, true);
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
                         self.tag,
@@ -945,12 +945,54 @@ impl Peer {
         }
     }
 
+    // All updates about leader_lease must be done by this method.
+    // And only leader can call it.
+    fn update_leader_lease(&mut self, expired_time: Timespec, safe: bool) {
+        assert!(
+            self.is_leader(),
+            "[{}] non-leader peer {} try to update leader lease",
+            self.tag,
+            self.peer.get_id()
+        );
+        if safe {
+            self.leader_lease_expired_time.update_safe(expired_time);
+        } else {
+            self.leader_lease_expired_time.update_unsafe(expired_time);
+        }
+        if !self.leader_lease_expired_time.has_remote() {
+            let local_read_scheduler = self.local_read_scheduler.as_ref();
+            let region = self.region().clone();
+            let peer = &self.peer;
+            let term = self.term();
+            let applied_index_term = self.get_store().applied_index_term;
+            let leader_lease_expired_time = &mut self.leader_lease_expired_time;
+
+            local_read_scheduler.as_ref().map(|local_read_scheduler| {
+                local_read_scheduler
+                    .schedule(LocalReadTask::update(
+                        region,
+                        peer.clone(),
+                        term,
+                        applied_index_term,
+                        leader_lease_expired_time.remote(),
+                    ))
+                    .unwrap();
+            });
+        }
+    }
+
     fn clear_lease(&mut self) {
         let empty_lease = Lease::new();
         let old_lease = mem::replace(&mut self.leader_lease_expired_time, empty_lease);
         old_lease.clear();
 
-        // TODO(stn): Send update to local reader.
+        self.local_read_scheduler.as_ref().map(
+            |local_read_scheduler| {
+                local_read_scheduler
+                    .schedule(LocalReadTask::delete(self.region().get_id()))
+                    .unwrap();
+            },
+        );
     }
 
     fn update_lease_with(&mut self, propose_time: Timespec) {
@@ -969,8 +1011,7 @@ impl Peer {
                     current_expired_time,
                     next_expired_time
                 );
-                self.leader_lease_expired_time
-                    .update_safe(next_expired_time);
+                self.update_leader_lease(next_expired_time, true);
             }
         } else if self.is_leader() {
             // This peer is leader but its leader lease has expired.
@@ -982,8 +1023,7 @@ impl Peer {
                 self.tag,
                 next_expired_time
             );
-            self.leader_lease_expired_time
-                .update_safe(next_expired_time);
+            self.update_leader_lease(next_expired_time, true);
         }
     }
 
