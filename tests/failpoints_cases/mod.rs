@@ -12,3 +12,4 @@
 // limitations under the License.
 
 mod test_pending_peers;
+mod test_snap;
