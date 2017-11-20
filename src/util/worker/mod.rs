@@ -175,6 +175,7 @@ fn poll<R, T>(
             Ok(Some(t)) => buffer.push(t),
             Err(Either::Left(RecvTimeoutError::Timeout)) => {
                 runner.run_periodic();
+                timer = Instant::now_coarse();
                 continue;
             }
             _ => break,

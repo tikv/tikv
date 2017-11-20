@@ -129,7 +129,6 @@ impl DAGContext {
     }
 }
 
-
 #[inline]
 fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Result<Vec<u8>> {
     let data = &row.data;
