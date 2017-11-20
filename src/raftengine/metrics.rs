@@ -14,6 +14,12 @@
 use prometheus::{exponential_buckets, Counter, Gauge, Histogram};
 
 lazy_static! {
+    pub static ref RAFTENGINE_MEMORY_USAGE_GAUGE: Gauge =
+        register_gauge!(
+            "tikv_raftengine_memory_usage_bytes",
+            "Total bytes of all memtables."
+        ).unwrap();
+
     pub static ref REWRITE_ENTRIES_COUNT_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftengine_rewrite_entries_count",
