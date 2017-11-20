@@ -79,6 +79,9 @@ pub struct Progress {
     // When a leader receives a reply, the previous inflights should
     // be freed by calling inflights.freeTo.
     pub ins: Inflights,
+
+    // Indicates the Progress is a learner or not.
+    pub is_learner: bool,
 }
 
 

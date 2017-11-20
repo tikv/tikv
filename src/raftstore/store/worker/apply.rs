@@ -801,6 +801,7 @@ impl ApplyDelegate {
                     self.region
                 );
             }
+            _ => unimplemented!(),
         }
 
         let state = if self.pending_remove {

@@ -293,6 +293,7 @@ impl<T: Storage> RawNode<T> {
         assert!(cc.has_change_type(), "unexpected conf type");
         match cc.get_change_type() {
             ConfChangeType::AddNode => self.raft.add_node(nid),
+            ConfChangeType::AddLearnerNode => self.raft.add_learner(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
         }
         let mut cs = ConfState::new();

@@ -40,6 +40,7 @@ pub struct Status {
     pub ss: SoftState,
     pub applied: u64,
     pub progress: FlatMap<u64, Progress>,
+    pub learner_progress: FlatMap<u64, Progress>,
 }
 
 impl Status {

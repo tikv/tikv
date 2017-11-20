@@ -416,7 +416,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git#7a1f6ad948f19de9d8e829f10f3efffc978a01d2"
+source = "git+https://github.com/pingcap/kvproto.git#c2232b3dc839042988c350b3a8ec87982eed6f38"
 dependencies = [
  "futures 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",

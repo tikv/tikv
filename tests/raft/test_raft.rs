@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::cmp;
+use std::{cmp, mem};
 
 use protobuf::{self, RepeatedField};
 use kvproto::eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState,
@@ -193,13 +193,24 @@ impl Interface {
         if self.raft.is_some() {
             self.id = id;
             self.prs = RaftFlatMap::with_capacity(ids.len());
+            let learners_count = self.learner_prs.len();
+            let learners = mem::replace(
+                &mut self.learner_prs,
+                RaftFlatMap::with_capacity(learners_count),
+            );
             for id in ids {
-                self.prs.insert(
-                    *id,
-                    Progress {
+                if learners.get(id).is_some() {
+                    let progress = Progress {
+                        is_learner: true,
                         ..Default::default()
-                    },
-                );
+                    };
+                    self.learner_prs.insert(*id, progress);
+                } else {
+                    let progress = Progress {
+                        ..Default::default()
+                    };
+                    self.prs.insert(*id, progress);
+                }
             }
             let term = self.term;
             self.reset(term);
@@ -1415,7 +1426,7 @@ fn test_commit() {
 
         let mut sm = new_test_raft(1, vec![1], 5, 1, store);
         for (j, &v) in matches.iter().enumerate() {
-            sm.set_progress(j as u64 + 1, v, v + 1);
+            sm.set_progress(j as u64 + 1, v, v + 1, false);
         }
         sm.maybe_commit();
         if sm.raft_log.committed != w {
@@ -3401,4 +3412,268 @@ fn test_transfer_non_member() {
     raft.step(new_message(3, 1, MessageType::MsgRequestVoteResponse, 0))
         .expect("");;
     assert_eq!(raft.state, StateRole::Follower);
+}
+
+pub fn new_test_learner_raft(
+    id: u64,
+    peers: Vec<u64>,
+    learners: Vec<u64>,
+    election: usize,
+    heartbeat: usize,
+    storage: MemStorage,
+) -> Interface {
+    let mut cfg = new_test_config(id, peers, election, heartbeat);
+    cfg.learners = learners;
+    Interface::new(Raft::new(&cfg, storage))
+}
+
+#[test]
+fn test_learner_election_timeout() {
+    let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
+    n1.become_follower(1, INVALID_ID);
+
+    let mut n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, new_storage());
+    n2.become_follower(1, INVALID_ID);
+
+    let timeout = n2.get_election_timeout();
+    n2.set_randomized_election_timeout(timeout);
+
+    // n2 is a learner. Learner should not start election even when time out.
+    for _ in 0..timeout {
+        n2.tick();
+    }
+    assert_eq!(n2.state, StateRole::Follower);
+}
+
+#[test]
+fn test_learner_promotion() {
+    let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
+    n1.become_follower(1, INVALID_ID);
+
+    let mut n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, new_storage());
+    n2.become_follower(1, INVALID_ID);
+
+    let mut network = Network::new(vec![Some(n1), Some(n2)]);
+    assert_eq!(network.peers[&1].state, StateRole::Follower);
+
+    // n1 should become leader.
+    let timeout = network.peers[&1].get_election_timeout();
+    network
+        .peers
+        .get_mut(&1)
+        .unwrap()
+        .set_randomized_election_timeout(timeout);
+    for _ in 0..timeout {
+        network.peers.get_mut(&1).unwrap().tick();
+    }
+    assert_eq!(network.peers[&1].state, StateRole::Leader);
+    assert_eq!(network.peers[&2].state, StateRole::Follower);
+
+    let mut heart_beat = Message::new();
+    heart_beat.set_to(1);
+    heart_beat.set_from(1);
+    heart_beat.set_msg_type(MessageType::MsgBeat);
+    network.send(vec![heart_beat.clone()]);
+
+    // Promote n2 from learner to follower.
+    network.peers.get_mut(&1).unwrap().add_node(2);
+    network.peers.get_mut(&2).unwrap().add_node(2);
+    assert_eq!(network.peers[&2].state, StateRole::Follower);
+
+    let timeout = network.peers[&2].get_election_timeout();
+    network
+        .peers
+        .get_mut(&2)
+        .unwrap()
+        .set_randomized_election_timeout(timeout);
+    for _ in 0..timeout {
+        network.peers.get_mut(&2).unwrap().tick();
+    }
+
+    heart_beat.set_to(2);
+    heart_beat.set_from(2);
+    network.send(vec![heart_beat]);
+    assert_eq!(network.peers[&1].state, StateRole::Follower);
+    assert_eq!(network.peers[&2].state, StateRole::Leader);
+}
+
+#[test]
+fn test_learner_cannot_vote() {
+    let mut n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, new_storage());
+    n2.become_follower(1, INVALID_ID);
+
+    let mut msg_vote = Message::new();
+    msg_vote.set_from(1);
+    msg_vote.set_to(2);
+    msg_vote.set_term(2);
+    msg_vote.set_msg_type(MessageType::MsgRequestVote);
+    msg_vote.set_log_term(11);
+    msg_vote.set_index(11);
+    n2.step(msg_vote).unwrap();
+
+    assert_eq!(n2.msgs.len(), 0);
+}
+
+#[test]
+fn test_learner_log_replication() {
+    let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
+    n1.become_follower(1, INVALID_ID);
+
+    let mut n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, new_storage());
+    n2.become_follower(1, INVALID_ID);
+
+    let timeout = n1.get_election_timeout();
+    n1.set_randomized_election_timeout(timeout);
+    n2.set_randomized_election_timeout(timeout);
+
+    for _ in 0..timeout {
+        n1.tick();
+    }
+
+    let mut heart_beat = Message::new();
+    heart_beat.set_to(1);
+    heart_beat.set_from(1);
+    heart_beat.set_msg_type(MessageType::MsgBeat);
+
+    let mut network = Network::new(vec![Some(n1), Some(n2)]);
+    network.send(vec![heart_beat.clone()]);
+    assert_eq!(network.peers[&1].state, StateRole::Leader);
+    assert_eq!(network.peers[&2].state, StateRole::Follower);
+    assert!(network.peers[&2].is_learner);
+
+    let next_committed = network.peers[&1].raft_log.committed + 1;
+
+    let mut msg = Message::new();
+    msg.set_to(1);
+    msg.set_from(1);
+    msg.set_msg_type(MessageType::MsgPropose);
+    msg.mut_entries().push(Entry::new());
+    network.send(vec![msg]);
+
+    assert_eq!(network.peers[&2].raft_log.committed, next_committed);
+
+    let matched = network.peers[&1].get_progress_by_id(2).unwrap().matched;
+    assert_eq!(matched, network.peers[&2].raft_log.committed);
+}
+
+#[test]
+fn test_restore_with_learner() {
+    let mut s = Snapshot::new();
+    s.mut_metadata().set_index(11);
+    s.mut_metadata().set_term(11);
+    s.mut_metadata().mut_conf_state().mut_nodes().push(1);
+    s.mut_metadata().mut_conf_state().mut_nodes().push(2);
+    s.mut_metadata().mut_conf_state().mut_learners().push(3);
+
+    let mut sm = new_test_learner_raft(3, vec![1, 2], vec![3], 10, 1, new_storage());
+    assert!(sm.is_learner);
+    assert!(sm.restore(s.clone()));
+    assert_eq!(sm.raft_log.last_index(), 11);
+    assert_eq!(sm.raft_log.term(11).unwrap(), 11);
+    assert_eq!(sm.nodes().len(), 3);
+    println!("{:?}", sm.prs);
+
+    for node in s.get_metadata().get_conf_state().get_nodes() {
+        assert!(sm.prs.get(node).is_some());
+        assert!(!sm.prs[node].is_learner);
+    }
+
+    for node in s.get_metadata().get_conf_state().get_learners() {
+        assert!(sm.learner_prs.get(node).is_some());
+        assert!(sm.learner_prs[node].is_learner);
+    }
+
+    assert!(!sm.restore(s));
+}
+
+#[test]
+fn test_restore_invalid_learner() {
+    let mut s = Snapshot::new();
+    s.mut_metadata().set_index(11);
+    s.mut_metadata().set_term(11);
+    s.mut_metadata().mut_conf_state().mut_nodes().push(1);
+    s.mut_metadata().mut_conf_state().mut_nodes().push(2);
+    s.mut_metadata().mut_conf_state().mut_learners().push(3);
+
+    let mut sm = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+    assert!(!sm.is_learner);
+    assert!(!sm.restore(s));
+}
+
+#[test]
+fn test_restore_learner_promotion() {
+    let mut s = Snapshot::new();
+    s.mut_metadata().set_index(11);
+    s.mut_metadata().set_term(11);
+    s.mut_metadata().mut_conf_state().mut_nodes().push(1);
+    s.mut_metadata().mut_conf_state().mut_nodes().push(2);
+    s.mut_metadata().mut_conf_state().mut_nodes().push(3);
+
+    let mut sm = new_test_learner_raft(3, vec![1, 2], vec![3], 10, 1, new_storage());
+    assert!(sm.is_learner);
+    assert!(sm.restore(s));
+    assert!(!sm.is_learner);
+}
+
+#[test]
+fn test_learner_receive_snapshot() {
+    let mut s = Snapshot::new();
+    s.mut_metadata().set_index(11);
+    s.mut_metadata().set_term(11);
+    s.mut_metadata().mut_conf_state().mut_nodes().push(1);
+    s.mut_metadata().mut_conf_state().mut_learners().push(2);
+
+    let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
+    let n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, new_storage());
+
+    n1.restore(s);
+    let committed = n1.raft_log.committed;
+    n1.raft_log.applied_to(committed);
+
+
+    let mut network = Network::new(vec![Some(n1), Some(n2)]);
+
+    let timeout = network.peers[&1].get_election_timeout();
+    network
+        .peers
+        .get_mut(&1)
+        .unwrap()
+        .set_randomized_election_timeout(timeout);
+
+    for _ in 0..timeout {
+        network.peers.get_mut(&1).unwrap().tick();
+    }
+
+    let mut msg = Message::new();
+    msg.set_from(1);
+    msg.set_to(1);
+    msg.set_msg_type(MessageType::MsgBeat);
+    network.send(vec![msg]);
+
+    let n1_committed = network.peers[&1].raft_log.committed;
+    let n2_committed = network.peers[&2].raft_log.committed;
+    assert_eq!(n1_committed, n2_committed);
+}
+
+#[test]
+fn test_add_learner() {
+    let mut n1 = new_test_raft(1, vec![1], 10, 1, new_storage());
+    n1.pending_conf = true;
+    n1.add_learner(2);
+    assert!(!n1.pending_conf);
+
+    assert_eq!(n1.nodes(), vec![1, 2]);
+    assert!(n1.learner_prs[&2].is_learner);
+}
+
+#[test]
+fn test_remove_learner() {
+    let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
+    n1.pending_conf = true;
+    n1.remove_node(2);
+    assert!(!n1.pending_conf);
+    assert_eq!(n1.nodes(), vec![1]);
+
+    n1.remove_node(1);
+    assert!(n1.nodes().is_empty());
 }
