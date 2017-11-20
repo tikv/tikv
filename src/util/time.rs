@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::thread::{self, Builder, JoinHandle};
 use std::sync::mpsc::{self, Sender};
@@ -372,19 +373,42 @@ impl Sub<Instant> for Instant {
 
 /// Lease records a expired time, for examining the current moment is in lease or not.
 /// A lease may be safe or be unsafe.
+#[derive(Debug)]
 pub struct Lease {
     lease_expired_time: Option<Either<Timespec, Timespec>>,
+    remote: Option<Arc<Mutex<Lease>>>,
 }
 
 impl Lease {
     pub fn new() -> Lease {
         Lease {
             lease_expired_time: None,
+            remote: None,
         }
     }
 
+    pub fn remote(&mut self) -> Arc<Mutex<Lease>> {
+        assert!(self.remote.is_none(), "Already derived a remote");
+        let remote = Arc::new(Mutex::new(Lease::new()));
+        self.remote = Some(remote.clone());
+        remote
+    }
+
     pub fn update_safe(&mut self, lease_expired_time: Timespec) {
+        let max_drift = TimeDuration::from_std(Duration::new(2, 0)).unwrap();
+        let last_expired_time = self.expired_time();
         self.lease_expired_time = Some(Either::Left(lease_expired_time));
+        if let Some(expired_time) = last_expired_time {
+            if lease_expired_time - expired_time > max_drift {
+                self.remote.as_ref().map(|lease| {
+                    lease.lock().unwrap().update_safe(lease_expired_time)
+                });
+            }
+        } else {
+            self.remote.as_ref().map(|lease| {
+                lease.lock().unwrap().update_safe(lease_expired_time)
+            });
+        }
     }
 
     pub fn update_unsafe(&mut self, lease_expired_time: Timespec) {
@@ -421,8 +445,26 @@ impl Lease {
         }
     }
 
-    pub fn clear(&mut self) {
+    fn clear_remote(&mut self) {
+        self.remote
+            .as_ref()
+            .map(|lease| lease.lock().unwrap().clear_local());
+    }
+
+    fn clear_local(&mut self) {
         self.lease_expired_time = None;
+    }
+
+    /// Comsume self, clean self and remote lease.
+    pub fn clear(self) {
+        drop(self);
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        self.clear_remote();
+        self.clear_local();
     }
 }
 

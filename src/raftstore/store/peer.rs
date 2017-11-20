@@ -680,7 +680,7 @@ impl Peer {
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
-                    self.leader_lease_expired_time.clear();
+                    self.clear_lease();
                 }
                 _ => {}
             }
@@ -945,6 +945,14 @@ impl Peer {
         }
     }
 
+    fn clear_lease(&mut self) {
+        let empty_lease = Lease::new();
+        let old_lease = mem::replace(&mut self.leader_lease_expired_time, empty_lease);
+        old_lease.clear();
+
+        // TODO(stn): Send update to local reader.
+    }
+
     fn update_lease_with(&mut self, propose_time: Timespec) {
         // Try to renew the leader lease as this command asks to.
         if let Some(current_expired_time) = self.leader_lease_expired_time.expired_time() {
@@ -1178,7 +1186,7 @@ impl Peer {
                     self.leader_lease_expired_time.expired_time().unwrap(),
                 );
                 // Reset leader lease expiring time.
-                self.leader_lease_expired_time.clear();
+                self.clear_lease();
             }
         }
 
