@@ -915,6 +915,26 @@ impl Peer {
         self.raft_group
             .advance_apply(res.apply_state.get_applied_index());
         self.mut_store().apply_state = res.apply_state.clone();
+        if self.mut_store().applied_index_term != res.applied_index_term {
+            // TODO(stn): unify update.
+            let local_read_scheduler = self.local_read_scheduler.as_ref();
+            let region = self.region();
+            let peer = &self.peer;
+            let term = self.term();
+            let applied_index_term = self.get_store().applied_index_term;
+
+            local_read_scheduler.as_ref().map(|local_read_scheduler| {
+                local_read_scheduler
+                    .schedule(LocalReadTask::update(
+                        region.clone(),
+                        peer.clone(),
+                        term,
+                        applied_index_term,
+                        None,
+                    ))
+                    .unwrap();
+            });
+        }
         self.mut_store().applied_index_term = res.applied_index_term;
         self.peer_stat.written_keys += res.metrics.written_keys;
         self.peer_stat.written_bytes += res.metrics.written_bytes;
@@ -974,7 +994,7 @@ impl Peer {
                         peer.clone(),
                         term,
                         applied_index_term,
-                        leader_lease_expired_time.remote(),
+                        Some(leader_lease_expired_time.remote()),
                     ))
                     .unwrap();
             });

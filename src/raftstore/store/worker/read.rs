@@ -35,12 +35,11 @@ use super::super::super::store::{check_epoch, Callback, Msg as StoreMsg, Request
 pub struct LeaderStatus {
     region: Region,
     leader: Peer,
-
     term: u64,
-    applied_index_term: u64,
-    leader_lease: RemoteLease,
-
     tag: String,
+
+    applied_index_term: u64,
+    leader_lease: Option<RemoteLease>,
 }
 
 pub enum Task {
@@ -55,7 +54,7 @@ impl Task {
         leader: Peer,
         term: u64,
         applied_index_term: u64,
-        leader_lease: RemoteLease,
+        leader_lease: Option<RemoteLease>,
     ) -> Task {
         let tag = format!("[region {}]", region.get_id());
         Task::Update(LeaderStatus {
@@ -261,27 +260,28 @@ impl<C: MsgSender> LocalReader<C> {
 
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
-        if status.applied_index_term != status.term {
-            // TODO(stn): add it in queue directly.
-            return Ok(RequestPolicy::ReadIndex);
-        }
-
-        // Local read should be performed, iff leader is in safe lease.
-        if status.leader_lease.lock().unwrap().has_safe_lease() {
-            if status.leader_lease.lock().unwrap().in_safe_lease() {
-                return Ok(RequestPolicy::ReadLocal);
+        if status.applied_index_term != status.term || status.leader_lease.is_none() {
+            Ok(RequestPolicy::ReadIndex)
+        } else {
+            let leader_lease = status.leader_lease.as_ref().unwrap().lock().unwrap();
+            if leader_lease.in_safe_lease() {
+                // Local read should be performed, iff leader is in safe lease.
+                Ok(RequestPolicy::ReadLocal)
             } else {
                 debug!(
                     "{} leader lease expired time {:?} is outdated",
                     status.tag,
-                    status.leader_lease.lock().unwrap().expired_time(),
+                    status
+                        .leader_lease
+                        .as_ref()
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .expired_time(),
                 );
-                // TODO(stn): Reset leader lease expiring time.
-                // status.leader_lease.lock().unwrap().clear();
+                Ok(RequestPolicy::ReadIndex)
             }
         }
-        // Perform a consistent read to Raft quorum and try to renew the leader lease.
-        Ok(RequestPolicy::ReadIndex)
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> RaftCmdResponse {
