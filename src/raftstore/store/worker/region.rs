@@ -109,6 +109,9 @@ impl SnapContext {
             &raw_snap,
             region_id
         ));
+        // Only enable the fail point when the region id is equal to 1, which is
+        // the id of bootstrapped region in tests.
+        fail_point!("handle_gen", region_id == 1, |_| Ok(()));
         if let Err(e) = notifier.try_send(snap) {
             info!(
                 "[region {}] failed to notify snap result, maybe leadership has changed, \
@@ -140,6 +143,7 @@ impl SnapContext {
 
     fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
+        fail_point!("apply_snap");
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =

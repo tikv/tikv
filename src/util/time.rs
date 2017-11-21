@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(late_raw - zero, late_raw);
         assert_eq!(late_coarse - zero, late_coarse);
 
-        // Sub asign Duration
+        // Sub assign Duration
         let mut tmp_late_row = late_raw;
         tmp_late_row -= zero;
         assert_eq!(tmp_late_row, late_raw);
@@ -583,7 +583,7 @@ mod tests {
         assert_eq!(late_raw + zero, late_raw);
         assert_eq!(late_coarse + zero, late_coarse);
 
-        // add asign
+        // add assign
         let mut tmp_late_row = late_raw;
         tmp_late_row += zero;
         assert_eq!(tmp_late_row, late_raw);

@@ -37,6 +37,7 @@ use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask, LocalReadTask};
 
+use util::MustConsumeVec;
 use util::worker::{FutureWorker, Scheduler};
 use util::time::{monotonic_raw_now, Lease};
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
@@ -58,7 +59,7 @@ const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
 struct ReadIndexRequest {
     id: u64,
-    cmds: Vec<(RaftCmdRequest, Callback)>,
+    cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
 }
 
@@ -67,14 +68,6 @@ impl ReadIndexRequest {
         unsafe {
             let id = &self.id as *const u64 as *const u8;
             slice::from_raw_parts(id, 8)
-        }
-    }
-}
-
-impl Drop for ReadIndexRequest {
-    fn drop(&mut self) {
-        if !self.cmds.is_empty() {
-            panic!("callback of index read at {} is leak.", self.id);
         }
     }
 }
@@ -255,6 +248,9 @@ pub struct Peer {
     //      locally.
     leader_lease_expired_time: Lease,
 
+    // If a snapshot is being applied asynchronously, messages should not be sent.
+    pending_messages: Vec<eraftpb::Message>,
+
     pub peer_stat: PeerStat,
 }
 
@@ -366,6 +362,7 @@ impl Peer {
             raft_entry_max_size: cfg.raft_entry_max_size.0,
             cfg: cfg,
             leader_lease_expired_time: Lease::new(),
+            pending_messages: vec![],
             peer_stat: PeerStat::default(),
         };
 
@@ -545,7 +542,7 @@ impl Peer {
                     // the old leader may be expired earlier than usual, since a new leader
                     // may be elected and the old leader doesn't step down due to
                     // network partition from the new leader.
-                    // For lease safty during leader transfer, mark `leader_lease_expired_time`
+                    // For lease safety during leader transfer, mark `leader_lease_expired_time`
                     // to be unsafe until next_lease_expired_time from now
                     let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
                     self.update_leader_lease(next_expired_time, false);
@@ -735,6 +732,15 @@ impl Peer {
             return;
         }
 
+        if !self.pending_messages.is_empty() {
+            fail_point!("raft_before_follower_send");
+            let messages = mem::replace(&mut self.pending_messages, vec![]);
+            self.send(ctx.trans, messages, &mut ctx.metrics.message)
+                .unwrap_or_else(|e| {
+                    warn!("{} clear snapshot pending messages err {:?}", self.tag, e);
+                });
+        }
+
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
             debug!(
                 "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
@@ -799,10 +805,14 @@ impl Peer {
 
         if !self.is_leader() {
             fail_point!("raft_before_follower_send");
-            self.send(trans, ready.messages.drain(..), &mut metrics.message)
-                .unwrap_or_else(|e| {
-                    warn!("{} follower send messages err {:?}", self.tag, e);
-                });
+            if self.is_applying_snapshot() {
+                self.pending_messages = mem::replace(&mut ready.messages, vec![]);
+            } else {
+                self.send(trans, ready.messages.drain(..), &mut metrics.message)
+                    .unwrap_or_else(|e| {
+                        warn!("{} follower send messages err {:?}", self.tag, e);
+                    });
+            }
         }
 
         if apply_snap_result.is_some() {
@@ -1409,9 +1419,11 @@ impl Peer {
             return false;
         }
 
+        let mut v = MustConsumeVec::with_capacity("callback of index read", 1);
+        v.push((req, cb));
         self.pending_reads.reads.push_back(ReadIndexRequest {
             id: id,
-            cmds: vec![(req, cb)],
+            cmds: v,
             renew_lease_time: renew_lease_time,
         });
 
@@ -1478,7 +1490,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transfered = if self.is_transfer_leader_allowed(peer) {
+        let transferred = if self.is_transfer_leader_allowed(peer) {
             self.transfer_leader(peer);
             true
         } else {
@@ -1494,7 +1506,7 @@ impl Peer {
         // return immediately. Note that this command may fail, we can view it just as an advice
         cb(make_transfer_leader_response());
 
-        transfered
+        transferred
     }
 
     fn propose_conf_change(

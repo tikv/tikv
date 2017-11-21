@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,22 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(stable_features)]
-#![feature(mpsc_recv_timeout)]
-#![feature(plugin)]
-#![feature(test)]
+
+#![feature(fnbox)]
+#![feature(slice_patterns)]
+#![feature(box_syntax)]
+#![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![feature(btree_range, collections_bound)]
-#![feature(box_syntax)]
-#![feature(fnbox)]
-#![allow(new_without_default)]
-#![feature(const_fn)]
+#![cfg_attr(feature = "no-fail", allow(dead_code))]
+#![recursion_limit = "100"]
+#![allow(module_inception)]
+#![allow(should_implement_trait)]
+#![allow(large_enum_variant)]
 #![allow(needless_pass_by_value)]
 #![allow(unreadable_literal)]
+#![allow(new_without_default_derive)]
+#![allow(verbose_bit_mask)]
 
-#[cfg(feature = "mem-profiling")]
-extern crate jemallocator;
 #[macro_use]
 extern crate log;
 extern crate protobuf;
@@ -37,38 +38,30 @@ extern crate rocksdb;
 extern crate tempdir;
 extern crate kvproto;
 extern crate tipb;
-extern crate test;
 extern crate grpcio as grpc;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate toml;
+extern crate fail;
+#[macro_use]
+extern crate lazy_static;
 
-mod raft;
+#[allow(dead_code)]
 mod raftstore;
-mod coprocessor;
-mod storage;
-mod util;
-mod pd;
-mod config;
+#[cfg(not(feature = "no-fail"))]
+mod failpoints_cases;
 
-use std::env;
+use std::sync::*;
 
-#[test]
-fn _0_ci_setup() {
-    // Set up ci test fail case log.
-    // The prefix "_" here is to guarantee running this case first.
-    if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
-        self::util::init_log();
-    }
+lazy_static! {
+    /// Failpoints are global structs, hence rules set in different cases
+    /// may affect each other. So use a global lock to synchronize them.
+    static ref LOCK: Mutex<()> = Mutex::new(());
 }
 
-#[test]
-fn _1_check_system_requirement() {
-    if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
-        panic!(
-            "To run test, please make sure the maximum number of open file descriptors not \
-             less than 2000: {:?}",
-            e
-        );
-    }
+fn setup<'a>() -> MutexGuard<'a, ()> {
+    let guard = LOCK.lock().unwrap();
+    fail::teardown();
+    fail::setup();
+    guard
 }

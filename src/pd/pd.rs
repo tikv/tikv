@@ -452,7 +452,7 @@ impl<T: PdClient> Runner<T> {
         }
     }
 
-    fn handle_destory_peer(&mut self, region_id: u64) {
+    fn handle_destroy_peer(&mut self, region_id: u64) {
         match self.region_peers.remove(&region_id) {
             None => return,
             Some(_) => info!("[region {}] remove peer statistic record in pd", region_id),
@@ -529,7 +529,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
-            Task::DestroyPeer { region_id } => self.handle_destory_peer(region_id),
+            Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
         };
     }
 }
