@@ -29,7 +29,8 @@ use util::Either;
 
 use super::{apply, MsgSender};
 use super::super::engine::Snapshot;
-use super::super::super::store::{check_epoch, Callback, Msg as StoreMsg, RequestPolicy};
+use super::super::super::store::{check_epoch, BatchCallback, Callback, Msg as StoreMsg,
+                                 RequestPolicy};
 
 /// Status for leaders
 pub struct LeaderStatus {
@@ -53,6 +54,20 @@ impl LeaderStatus {
         if let Some(lease) = status.leader_lease {
             self.leader_lease = Some(lease);
         }
+    }
+}
+
+impl Display for LeaderStatus {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "LeaderStatus for region {},\
+             leader {} at term {}, applied_index_term {}",
+            self.region.get_id(),
+            self.leader.get_id(),
+            self.term,
+            self.applied_index_term
+        )
     }
 }
 
@@ -113,23 +128,9 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Msg(ref msg) => write!(f, "LocalRead task Msg {:?}", msg),
-            Task::Update(LeaderStatus {
-                ref region,
-                ref leader,
-                term,
-                applied_index_term,
-                ..
-            }) => write!(
-                f,
-                "LocalRead task Update cache for region {},\
-                 leader {} at term {}, applied_index_term {}",
-                region.get_id(),
-                leader.get_id(),
-                term,
-                applied_index_term
-            ),
-            Task::Delete(region_id) => write!(f, "LocalRead task Delete region {}", region_id),
+            Task::Msg(ref msg) => write!(f, "local reader Task::Msg {:?}", msg),
+            Task::Update(ref status) => write!(f, "local reader Task::Update {}", status),
+            Task::Delete(region_id) => write!(f, "local reader Task::Delete region {}", region_id),
         }
     }
 }
@@ -177,6 +178,7 @@ impl<C: MsgSender> LocalReader<C> {
 
     fn update(&mut self, status: LeaderStatus) {
         // TODO(stn): check status?
+        info!("local reader update {}", status);
         match self.region_leaders.entry(status.region.get_id()) {
             HashMapEntry::Vacant(entry) => {
                 entry.insert(status);
@@ -189,17 +191,33 @@ impl<C: MsgSender> LocalReader<C> {
     }
 
     fn delete(&mut self, region_id: u64) {
+        info!("local reader delete region {}", region_id);
         self.region_leaders.remove(&region_id);
     }
 
-    fn redirect(&self, send_time: Instant, request: RaftCmdRequest, callback: Callback) {
-        self.ch
-            .send(StoreMsg::RaftCmd {
-                send_time,
-                request,
-                callback,
-            })
-            .unwrap()
+    fn redirect_cmd(&self, send_time: Instant, request: RaftCmdRequest, callback: Callback) {
+        let msg = StoreMsg::RaftCmd {
+            send_time,
+            request,
+            callback,
+        };
+        info!("local reader redirect {:?}", msg);
+        self.ch.send(msg).unwrap()
+    }
+
+    fn redirect_batch_cmds(
+        &self,
+        send_time: Instant,
+        batch: Vec<RaftCmdRequest>,
+        on_finished: BatchCallback,
+    ) {
+        let msg = StoreMsg::BatchRaftSnapCmds {
+            send_time,
+            batch,
+            on_finished,
+        };
+        info!("local reader redirect {:?}", msg);
+        self.ch.send(msg).unwrap();
     }
 
     fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
@@ -350,14 +368,14 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                     Ok(RequestPolicy::ReadLocal) => {
                         callback(self.exec_read(&request));
                     }
-                    Ok(RequestPolicy::ReadIndex) => self.redirect(send_time, request, callback),
+                    Ok(RequestPolicy::ReadIndex) => self.redirect_cmd(send_time, request, callback),
                     Ok(policy) => unimplemented!("unsuppoted policy {:?}", policy),
                     Err(_) => {
-                        self.redirect(send_time, request, callback);
+                        self.redirect_cmd(send_time, request, callback);
                     }
                 },
                 Err(_) => {
-                    self.redirect(send_time, request, callback);
+                    self.redirect_cmd(send_time, request, callback);
                 }
             },
             Task::Msg(StoreMsg::BatchRaftSnapCmds {
@@ -391,13 +409,7 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                     }
                     on_finished(resps);
                 } else {
-                    self.ch
-                        .send(StoreMsg::BatchRaftSnapCmds {
-                            send_time,
-                            batch,
-                            on_finished,
-                        })
-                        .unwrap();
+                    self.redirect_batch_cmds(send_time, batch, on_finished)
                 }
             }
             Task::Msg(other) => {

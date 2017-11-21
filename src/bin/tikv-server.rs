@@ -168,7 +168,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
 
     // Create Local Reader.
-    let local_reader = Worker::new("local reader");
+    let local_reader = Worker::new("local-reader");
     let local_ch = local_reader.scheduler();
 
     // Create router.
