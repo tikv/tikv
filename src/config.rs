@@ -62,6 +62,9 @@ macro_rules! cf_config {
         pub struct $name {
             pub block_size: ReadableSize,
             pub block_cache_size: ReadableSize,
+            pub num_shard_bits: i32,
+            pub strict_capacity_limit: bool,
+            pub high_pri_pool_ratio: f64,
             pub cache_index_and_filter_blocks: bool,
             pub pin_l0_filter_and_index_blocks: bool,
             pub use_bloom_filter: bool,
@@ -90,6 +93,8 @@ macro_rules! build_cf_opt {
     ($opt:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
+        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, $opt.num_shard_bits,
+            $opt.strict_capacity_limit as u8, $opt.high_pri_pool_ratio);
         block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
         block_base_opts.set_pin_l0_filter_and_index_blocks_in_cache(
@@ -124,6 +129,9 @@ impl Default for DefaultCfConfig {
         DefaultCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_DEFAULT) as u64),
+            num_shard_bits: -1,
+            strict_capacity_limit: false,
+            high_pri_pool_ratio: 0.0,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
@@ -170,6 +178,9 @@ impl Default for WriteCfConfig {
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
+            num_shard_bits: -1,
+            strict_capacity_limit: false,
+            high_pri_pool_ratio: 0.0,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
@@ -226,6 +237,9 @@ impl Default for LockCfConfig {
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
+            num_shard_bits: -1,
+            strict_capacity_limit: false,
+            high_pri_pool_ratio: 0.0,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
@@ -267,6 +281,9 @@ impl Default for RaftCfConfig {
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
+            num_shard_bits: -1,
+            strict_capacity_limit: false,
+            high_pri_pool_ratio: 0.0,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
@@ -437,6 +454,9 @@ impl Default for RaftDefaultCfConfig {
         RaftDefaultCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(true, CF_DEFAULT) as u64),
+            num_shard_bits: -1,
+            strict_capacity_limit: false,
+            high_pri_pool_ratio: 0.0,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: false,

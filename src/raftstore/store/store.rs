@@ -514,6 +514,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.raft_engine.clone(),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
+            self.cfg.use_delete_range,
         );
         box_try!(self.region_worker.start(runner));
 
@@ -538,7 +539,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
 
         let (tx, rx) = mpsc::channel();
-        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log);
+        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log, self.cfg.use_delete_range);
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 

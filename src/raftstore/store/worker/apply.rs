@@ -282,6 +282,8 @@ pub struct ApplyDelegate {
     term: u64,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
+
+    use_delete_range: bool,
 }
 
 impl ApplyDelegate {
@@ -293,12 +295,12 @@ impl ApplyDelegate {
         self.id
     }
 
-    fn from_peer(peer: &Peer) -> ApplyDelegate {
+    fn from_peer(peer: &Peer, use_delete_range: bool) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), reg)
+        ApplyDelegate::from_registration(peer.kv_engine(), reg, use_delete_range)
     }
 
-    fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
+    fn from_registration(db: Arc<DB>, reg: Registration, use_delete_range: bool) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -310,6 +312,7 @@ impl ApplyDelegate {
             term: reg.term,
             pending_cmds: Default::default(),
             metrics: Default::default(),
+            use_delete_range: use_delete_range,
         }
     }
 
@@ -1161,7 +1164,13 @@ impl ApplyDelegate {
             });
 
         // Delete all remaining keys.
-        util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key).unwrap_or_else(|e| {
+        util::delete_all_in_range_cf(
+            &self.engine,
+            cf,
+            &start_key,
+            &end_key,
+            self.use_delete_range,
+        ).unwrap_or_else(|e| {
             panic!(
                 "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                 self.tag,
@@ -1421,15 +1430,21 @@ pub struct Runner {
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
     sync_log: bool,
+    use_delete_range: bool,
     tag: String,
 }
 
 impl Runner {
-    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>, sync_log: bool) -> Runner {
+    pub fn new<T, C>(
+        store: &Store<T, C>,
+        notifier: Sender<TaskRes>,
+        sync_log: bool,
+        use_delete_range: bool,
+    ) -> Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
-            delegates.insert(region_id, ApplyDelegate::from_peer(p));
+            delegates.insert(region_id, ApplyDelegate::from_peer(p, use_delete_range));
         }
         Runner {
             db: store.kv_engine(),
@@ -1437,6 +1452,7 @@ impl Runner {
             delegates: delegates,
             notifier: notifier,
             sync_log: sync_log,
+            use_delete_range: use_delete_range,
             tag: format!("[store {}]", store.store_id()),
         }
     }
@@ -1552,7 +1568,7 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
+        let delegate = ApplyDelegate::from_registration(self.db.clone(), s, self.use_delete_range);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag,
@@ -1627,6 +1643,7 @@ mod tests {
             notifier: tx,
             sync_log: false,
             tag: "".to_owned(),
+            use_delete_range: true,
         }
     }
 
@@ -1900,7 +1917,7 @@ mod tests {
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
+        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg, true);
         let (tx, rx) = mpsc::channel();
 
         let put_entry = EntryBuilder::new(1, 1)

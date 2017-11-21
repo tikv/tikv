@@ -73,6 +73,7 @@ report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
+use-delete-range = true
 
 [coprocessor]
 split-region-on-table = true
@@ -106,6 +107,9 @@ backup-dir = "/var"
 [rocksdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+num-shard-bits = 16
+strict-capacity-limit = true
+high-pri-pool-ratio = 0.1
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -136,6 +140,9 @@ compaction-pri = 3
 [rocksdb.writecf]
 block-size = "12KB"
 block-cache-size = "12GB"
+num-shard-bits = 16
+strict-capacity-limit = true
+high-pri-pool-ratio = 0.1
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -166,6 +173,9 @@ compaction-pri = 3
 [rocksdb.lockcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+num-shard-bits = 16
+strict-capacity-limit = true
+high-pri-pool-ratio = 0.1
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -196,6 +206,9 @@ compaction-pri = 3
 [rocksdb.raftcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+num-shard-bits = 16
+strict-capacity-limit = true
+high-pri-pool-ratio = 0.1
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -248,6 +261,9 @@ wal-bytes-per-sync = "1MB"
 [raftdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+num-shard-bits = 16
+strict-capacity-limit = true
+high-pri-pool-ratio = 0.1
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
