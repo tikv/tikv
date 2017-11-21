@@ -177,7 +177,7 @@ fn test_server_split_region_twice() {
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-/// Keep puting random kvs until specified size limit is reached.
+/// Keep putting random kvs until specified size limit is reached.
 fn put_till_size<T: Simulator>(
     cluster: &mut Cluster<T>,
     limit: u64,

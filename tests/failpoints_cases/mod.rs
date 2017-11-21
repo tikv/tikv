@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,9 +11,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod util;
-pub mod cluster;
-pub mod node;
-pub mod server;
-pub mod pd;
-pub mod transport_simulate;
+mod test_pending_peers;
+mod test_snap;

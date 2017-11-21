@@ -177,7 +177,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     let put = new_request(1, epoch, vec![new_put_cmd(b"k1", b"v1")], false);
     cluster.transfer_leader(r1, new_peer(2, 2));
     let resp = cluster.call_command_on_leader(put, Duration::from_secs(5));
-    // if it's transfering leader, resp will timeout.
+    // if it's transferring leader, resp will timeout.
     assert!(resp.is_ok(), "{:?}", resp);
 }
 
