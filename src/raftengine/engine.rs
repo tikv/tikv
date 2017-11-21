@@ -327,23 +327,37 @@ impl RaftEngine {
             return regions;
         }
 
+        let region_entries_size_limit = self.cfg.region_size.0 * 2 / 3;
         for slot in 0..SLOTS_COUNT {
             let memtables = self.memtables[slot].read().unwrap();
             for memtable in memtables.values() {
+                // Total size of entries for this region exceed limit.
+                if memtable.entries_size() > region_entries_size_limit {
+                    info!(
+                        "region {}'s total raft log size {} exceed limit \
+                         need force compaction",
+                        memtable.region_id(),
+                        memtable.entries_size(),
+                    );
+                    regions.insert(memtable.region_id());
+                    continue;
+                }
+
+                if inactive_file_num == 0 || gc_file_num == 0 {
+                    continue;
+                }
+
                 let min_file_num = match memtable.min_file_num() {
                     Some(file_num) => file_num,
                     None => continue,
                 };
 
-                // There are two situations we should force compact entries:
-                // 1) Has entries left behind too far, this happens when
-                //    some followers left behind for a long time.
-                // 2) Total size of entries for this region exceed limit.
-                if min_file_num < gc_file_num ||
-                    memtable.entries_size() > self.cfg.region_size.0 * 2 / 3
-                {
+                // Has entries left behind too far, this happens when
+                // some followers left behind for a long time.
+                if min_file_num < gc_file_num {
                     info!(
-                        "region {}'s raft log need force compaction",
+                        "region {}'s some followers left behind too far, \
+                         need force compaction",
                         memtable.region_id()
                     );
                     regions.insert(memtable.region_id());
