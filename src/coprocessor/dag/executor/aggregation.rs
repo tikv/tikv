@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
-use util::collections::{HashMap, HashMapEntry as Entry};
 
+use util::collections::{OrderMap, OrderMapEntry};
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
@@ -26,6 +26,7 @@ use coprocessor::select::xeval::EvalContext;
 use coprocessor::dag::expr::Expression;
 use coprocessor::metrics::*;
 use coprocessor::Result;
+use storage::Statistics;
 
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
@@ -69,26 +70,25 @@ impl AggrFunc {
     }
 }
 
-pub struct AggregationExecutor<'a> {
+pub struct AggregationExecutor {
     group_by: Vec<Expression>,
     aggr_func: Vec<AggrFuncExpr>,
-    group_keys: Vec<Rc<Vec<u8>>>,
-    group_key_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
+    group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<AggrFunc>>>,
     cursor: usize,
     executed: bool,
-    ctx: Rc<EvalContext>,
-    cols: Rc<Vec<ColumnInfo>>,
+    ctx: Arc<EvalContext>,
+    cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
-    src: Box<Executor + 'a>,
+    src: Box<Executor>,
 }
 
-impl<'a> AggregationExecutor<'a> {
+impl AggregationExecutor {
     pub fn new(
         mut meta: Aggregation,
-        ctx: Rc<EvalContext>,
-        columns: Rc<Vec<ColumnInfo>>,
-        src: Box<Executor + 'a>,
-    ) -> Result<AggregationExecutor<'a>> {
+        ctx: Arc<EvalContext>,
+        columns: Arc<Vec<ColumnInfo>>,
+        src: Box<Executor>,
+    ) -> Result<AggregationExecutor> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(columns.len());
         let group_by = meta.take_group_by().into_vec();
@@ -99,10 +99,9 @@ impl<'a> AggregationExecutor<'a> {
             .with_label_values(&["aggregation"])
             .inc();
         Ok(AggregationExecutor {
-            group_by: box_try!(Expression::batch_build(ctx.as_ref(), group_by)),
-            aggr_func: AggrFuncExpr::batch_build(ctx.as_ref(), aggr_func)?,
-            group_keys: vec![],
-            group_key_aggrs: map![],
+            group_by: box_try!(Expression::batch_build(&ctx, group_by)),
+            aggr_func: AggrFuncExpr::batch_build(&ctx, aggr_func)?,
+            group_key_aggrs: OrderMap::new(),
             cursor: 0,
             executed: false,
             ctx: ctx,
@@ -131,23 +130,22 @@ impl<'a> AggregationExecutor<'a> {
             let cols = inflate_with_col_for_dag(
                 &self.ctx,
                 &row.data,
-                self.cols.clone(),
+                &self.cols,
                 &self.related_cols_offset,
                 row.handle,
             )?;
-            let group_key = Rc::new(self.get_group_key(&cols)?);
-            match self.group_key_aggrs.entry(group_key.clone()) {
-                Entry::Vacant(e) => {
+            let group_key = self.get_group_key(&cols)?;
+            match self.group_key_aggrs.entry(group_key) {
+                OrderMapEntry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
                     for expr in &self.aggr_func {
                         let mut aggr = aggregate::build_aggr_func(expr.tp)?;
                         aggr.update_with_expr(&self.ctx, expr, &cols)?;
                         aggrs.push(aggr);
                     }
-                    self.group_keys.push(group_key);
                     e.insert(aggrs);
                 }
-                Entry::Occupied(e) => {
+                OrderMapEntry::Occupied(e) => {
                     let aggrs = e.into_mut();
                     for (expr, aggr) in self.aggr_func.iter().zip(aggrs) {
                         aggr.update_with_expr(&self.ctx, expr, &cols)?;
@@ -159,35 +157,41 @@ impl<'a> AggregationExecutor<'a> {
     }
 }
 
-impl<'a> Executor for AggregationExecutor<'a> {
+impl Executor for AggregationExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         if !self.executed {
             self.aggregate()?;
             self.executed = true;
         }
 
-        if self.cursor >= self.group_keys.len() {
-            return Ok(None);
+        match self.group_key_aggrs.get_index_mut(self.cursor) {
+            Some((group_key, aggrs)) => {
+                self.cursor += 1;
+                let mut aggr_cols = Vec::with_capacity(2 * self.aggr_func.len());
+
+                // calc all aggr func
+                for aggr in aggrs {
+                    aggr.calc(&mut aggr_cols)?;
+                }
+
+                // construct row data
+                let value_size = group_key.len() + approximate_size(&aggr_cols, false);
+                let mut value = Vec::with_capacity(value_size);
+                box_try!(value.encode(aggr_cols.as_slice(), false));
+                if !self.group_by.is_empty() {
+                    value.extend_from_slice(group_key);
+                }
+                Ok(Some(Row {
+                    handle: 0,
+                    data: RowColsDict::new(map![], value),
+                }))
+            }
+            None => Ok(None),
         }
-        // calc all aggr func
-        let mut aggr_cols = Vec::with_capacity(2 * self.aggr_func.len());
-        let group_key = &self.group_keys[self.cursor];
-        let mut aggrs = self.group_key_aggrs.remove(group_key).unwrap();
-        for aggr in &mut aggrs {
-            aggr.calc(&mut aggr_cols)?;
-        }
-        // construct row data
-        let value_size = group_key.len() + approximate_size(&aggr_cols, false);
-        let mut value = Vec::with_capacity(value_size);
-        box_try!(value.encode(aggr_cols.as_slice(), false));
-        if !self.group_by.is_empty() {
-            value.extend_from_slice(group_key);
-        }
-        self.cursor += 1;
-        Ok(Some(Row {
-            handle: 0,
-            data: RowColsDict::new(map![], value),
-        }))
+    }
+
+    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        self.src.collect_statistics_into(statistics);
     }
 }
 
@@ -203,7 +207,7 @@ mod test {
     use coprocessor::codec::datum::{Datum, DatumDecoder};
     use coprocessor::codec::mysql::decimal::Decimal;
     use coprocessor::codec::mysql::types;
-    use storage::{SnapshotStore, Statistics};
+    use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
 
     use super::*;
@@ -297,9 +301,7 @@ mod test {
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-
-        let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store);
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -312,8 +314,8 @@ mod test {
         // init Aggregation Executor
         let mut aggr_ect = AggregationExecutor::new(
             aggregation,
-            Rc::new(EvalContext::default()),
-            Rc::new(cis),
+            Arc::new(EvalContext::default()),
+            Arc::new(cis),
             Box::new(ts_ect),
         ).unwrap();
         let expect_row_cnt = 4;

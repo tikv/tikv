@@ -18,8 +18,8 @@ use tipb::executor::Limit;
 
 use coprocessor::Result;
 use coprocessor::metrics::*;
-
-use super::{Executor, Row};
+use coprocessor::dag::executor::{Executor, Row};
+use storage::Statistics;
 
 pub struct LimitExecutor<'a> {
     limit: u64,
@@ -50,6 +50,10 @@ impl<'a> Executor for LimitExecutor<'a> {
             Ok(None)
         }
     }
+
+    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        self.src.collect_statistics_into(statistics);
+    }
 }
 
 #[cfg(test)]
@@ -60,7 +64,7 @@ mod test {
 
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::Datum;
-    use storage::{SnapshotStore, Statistics};
+    use storage::SnapshotStore;
 
     use super::*;
     use super::super::table_scan::TableScanExecutor;
@@ -97,8 +101,7 @@ mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut statistics = Statistics::default();
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, &mut statistics);
+        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store);
 
         // init Limit meta
         let mut limit_meta = Limit::default();

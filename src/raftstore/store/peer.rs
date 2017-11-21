@@ -246,6 +246,9 @@ pub struct Peer {
     //      locally.
     leader_lease_expired_time: Option<Either<Timespec, Timespec>>,
 
+    // If a snapshot is being applied asynchronously, messages should not be sent.
+    pending_messages: Vec<eraftpb::Message>,
+
     pub peer_stat: PeerStat,
 }
 
@@ -356,6 +359,7 @@ impl Peer {
             raft_entry_max_size: cfg.raft_entry_max_size.0,
             cfg: cfg,
             leader_lease_expired_time: None,
+            pending_messages: vec![],
             peer_stat: PeerStat::default(),
         };
 
@@ -726,6 +730,15 @@ impl Peer {
             return;
         }
 
+        if !self.pending_messages.is_empty() {
+            fail_point!("raft_before_follower_send");
+            let messages = mem::replace(&mut self.pending_messages, vec![]);
+            self.send(ctx.trans, messages, &mut ctx.metrics.message)
+                .unwrap_or_else(|e| {
+                    warn!("{} clear snapshot pending messages err {:?}", self.tag, e);
+                });
+        }
+
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
             debug!(
                 "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
@@ -790,10 +803,14 @@ impl Peer {
 
         if !self.is_leader() {
             fail_point!("raft_before_follower_send");
-            self.send(trans, ready.messages.drain(..), &mut metrics.message)
-                .unwrap_or_else(|e| {
-                    warn!("{} follower send messages err {:?}", self.tag, e);
-                });
+            if self.is_applying_snapshot() {
+                self.pending_messages = mem::replace(&mut ready.messages, vec![]);
+            } else {
+                self.send(trans, ready.messages.drain(..), &mut metrics.message)
+                    .unwrap_or_else(|e| {
+                        warn!("{} follower send messages err {:?}", self.tag, e);
+                    });
+            }
         }
 
         if apply_snap_result.is_some() {
