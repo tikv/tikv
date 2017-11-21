@@ -245,14 +245,16 @@ impl ImportSSTJob {
     fn prepare(&self) -> Result<Region> {
         let mut region = self.get_region()?;
 
-        if self.sst.meta.get_length() < self.cfg.region_split_size / 2 {
-            // Don't need to split if the file is small.
-            return Ok(region);
-        }
-
-        let range = self.sst.meta.get_range();
-        if region.get_start_key() != range.get_start() {
-            region = self.split_region(&region, range.get_start())?;
+        if self.sst.meta.get_length() > self.cfg.region_split_size / 2 {
+            let range = self.sst.meta.get_range();
+            if region.get_start_key() != range.get_start() {
+                let (_, right) = self.split_region(&region, range.get_start())?;
+                region = right;
+            }
+            if region.get_end_key() != range.get_end() {
+                let (left, _) = self.split_region(&region, range.get_end())?;
+                region = left;
+            }
         }
 
         // TODO: Relocate region
@@ -349,7 +351,7 @@ impl ImportSSTJob {
         ctx
     }
 
-    fn split_region(&self, region: &Region, split_key: &[u8]) -> Result<Region> {
+    fn split_region(&self, region: &Region, split_key: &[u8]) -> Result<(Region, Region)> {
         let ctx = self.new_context(region);
         let peer = ctx.get_peer().clone();
         let mut req = SplitRegionRequest::new();
@@ -375,7 +377,7 @@ impl ImportSSTJob {
                     resp.get_left(),
                     resp.get_right(),
                 );
-                Ok(resp.take_right())
+                Ok((resp.take_left(), resp.take_right()))
             }
             Err(e) => {
                 error!(
