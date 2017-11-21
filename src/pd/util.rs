@@ -180,7 +180,7 @@ impl LeaderClient {
     }
 }
 
-const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
+pub const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 
 /// The context of sending requets.
 pub struct Request<Req, Resp, F> {
@@ -285,7 +285,9 @@ where
     F: Fn(&PdClient) -> GrpcResult<R>,
 {
     for _ in 0..retry {
-        match func(&client.inner.rl().client).map_err(Error::Grpc) {
+        // DO NOT put any lock operation in match statement, or it will cause dead lock!
+        let ret = { func(&client.inner.rl().client).map_err(Error::Grpc) };
+        match ret {
             Ok(r) => {
                 return Ok(r);
             }

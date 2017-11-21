@@ -57,9 +57,7 @@ static_fail_release:
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
-	export CI=true && \
-	export SKIP_FORMAT_CHECK=true && \
-	${PROJECT_DIR}/ci-build/test.sh
+	env CI=true SKIP_FORMAT_CHECK=true FAIL_POINT=1 ${PROJECT_DIR}/ci-build/test.sh
 
 test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
