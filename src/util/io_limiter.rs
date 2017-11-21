@@ -31,14 +31,15 @@ pub struct IOLimiter {
 
 impl IOLimiter {
     pub fn new(min_bytes_per_time: u64, max_bytes_per_time: u64, bytes_per_sec: u64) -> IOLimiter {
-        let mut limiter: Option<RateLimiter> = None;
-        if bytes_per_sec > 0 {
-            limiter = Some(RateLimiter::new(
+        let limiter = if bytes_per_sec > 0 {
+            Some(RateLimiter::new(
                 bytes_per_sec as i64,
                 REFILL_PERIOD,
                 FARENESS,
-            ));
-        }
+            ))
+        } else {
+            None
+        };
         IOLimiter {
             inner: limiter,
             min_bytes_per_time: min_bytes_per_time as i64,
@@ -47,16 +48,14 @@ impl IOLimiter {
     }
 
     pub fn set_bytes_per_second(&self, bytes_per_sec: i64) {
-        match self.inner {
-            Some(ref limiter) => limiter.set_bytes_per_second(bytes_per_sec),
-            None => {}
+        if let Some(ref limiter) = self.inner {
+            limiter.set_bytes_per_second(bytes_per_sec)
         }
     }
 
     pub fn request(&self, bytes: i64) {
-        match self.inner {
-            Some(ref limiter) => limiter.request(bytes, 1),
-            None => {}
+        if let Some(ref limiter) = self.inner {
+            limiter.request(bytes, 1)
         }
     }
 
