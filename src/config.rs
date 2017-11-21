@@ -20,6 +20,7 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
               DBOptions, DBRecoveryMode};
 use sys_info;
 
+use import::Config as ImportConfig;
 use server::Config as ServerConfig;
 use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -670,6 +671,7 @@ pub struct TiKvConfig {
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,
     pub security: SecurityConfig,
+    pub import: ImportConfig,
 }
 
 impl Default for TiKvConfig {
@@ -686,6 +688,7 @@ impl Default for TiKvConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
+            import: ImportConfig::default(),
         }
     }
 }
@@ -721,6 +724,8 @@ impl TiKvConfig {
         if !db_exist(&kv_db_path) && db_exist(&self.raft_store.raftdb_path) {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
+
+        self.import.region_split_size = self.coprocessor.region_split_size.0;
 
         self.rocksdb.validate()?;
         self.server.validate()?;

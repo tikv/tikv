@@ -33,6 +33,7 @@ use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{CfName, Engine};
+use tikv::import::SSTImporter;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
@@ -120,6 +121,9 @@ impl Simulator for ServerCluster {
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
+        let import_path = TempDir::new("test-import").unwrap().into_path();
+        let sst_importer = Arc::new(SSTImporter::new(import_path).unwrap());
+
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
@@ -136,6 +140,7 @@ impl Simulator for ServerCluster {
             snap_mgr.clone(),
             pd_worker.scheduler(),
             Some(engines.clone()),
+            Some(sst_importer.clone()),
         ).unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
@@ -162,6 +167,7 @@ impl Simulator for ServerCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
+            sst_importer,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

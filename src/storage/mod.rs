@@ -22,6 +22,7 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, LockInfo};
 use kvproto::errorpb;
 use util::collections::HashMap;
+use kvproto::importpb::SSTMeta;
 use self::metrics::*;
 
 pub mod engine;
@@ -906,6 +907,15 @@ impl Storage {
         let tag = cmd.tag();
         self.send(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        Ok(())
+    }
+
+    pub fn async_ingest(&self, ctx: Context, sst: SSTMeta, callback: Callback<()>) -> Result<()> {
+        self.engine.async_ingest(
+            &ctx,
+            sst,
+            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+        )?;
         Ok(())
     }
 }

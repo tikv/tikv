@@ -19,10 +19,10 @@ use raftstore::coprocessor::{RegionIterator, RegionSnapshot};
 use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
 use rocksdb::TablePropertiesCollection;
 use storage;
-use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
-                          RaftCmdResponse, RaftRequestHeader, Request, Response};
+use kvproto::raft_cmdpb::*;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
+use kvproto::importpb::SSTMeta;
 
 use std::sync::Arc;
 use std::fmt::{self, Debug, Formatter};
@@ -354,6 +354,49 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 let tag = get_tag_from_error(&e);
                 ASYNC_REQUESTS_COUNTER_VEC
                     .with_label_values(&["write", tag])
+                    .inc();
+                e.into()
+            })
+    }
+
+    fn async_ingest(&self, ctx: &Context, sst: SSTMeta, cb: Callback<()>) -> engine::Result<()> {
+        let label = "ingest";
+        let timer = ASYNC_REQUESTS_DURATIONS_VEC
+            .with_label_values(&[label])
+            .start_coarse_timer();
+        ASYNC_REQUESTS_COUNTER_VEC
+            .with_label_values(&[label, "all"])
+            .inc();
+
+        let mut ingest = IngestSSTRequest::new();
+        ingest.set_sst(sst);
+        let mut req = Request::new();
+        req.set_cmd_type(CmdType::IngestSST);
+        req.set_ingest_sst(ingest);
+
+        self.exec_requests(ctx, vec![req], box move |(cb_ctx, res)| match res {
+            Ok(CmdRes::Resp(_)) => {
+                timer.observe_duration();
+                ASYNC_REQUESTS_COUNTER_VEC
+                    .with_label_values(&[label, "success"])
+                    .inc();
+                cb((cb_ctx, Ok(())))
+            }
+            Ok(CmdRes::Snap(_)) => cb((
+                cb_ctx,
+                Err(box_err!("unexpect snapshot for ingest requests.")),
+            )),
+            Err(e) => {
+                let tag = get_tag_from_engine_error(&e);
+                ASYNC_REQUESTS_COUNTER_VEC
+                    .with_label_values(&[label, tag])
+                    .inc();
+                cb((cb_ctx, Err(e)))
+            }
+        }).map_err(|e| {
+                let tag = get_tag_from_error(&e);
+                ASYNC_REQUESTS_COUNTER_VEC
+                    .with_label_values(&[label, tag])
                     .inc();
                 e.into()
             })

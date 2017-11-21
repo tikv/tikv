@@ -44,6 +44,9 @@
 # should be set based on your disk performance
 # snap_max_write_bytes_per_sec = "30MB"
 
+# size of thread pool for import server.
+# import-concurrency = 2
+
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
 
@@ -424,3 +427,10 @@
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
+
+[import]
+# import-dir = "/tmp/tikv/import"
+# number of threads to handle RPC requests, default to number of CPU cores.
+# num-threads =
+# maximum concurrent import jobs, default to number of CPU cores.
+# max-import-jobs =

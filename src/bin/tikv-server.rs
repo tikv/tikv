@@ -74,6 +74,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use tikv::import::{SSTImporter, Server as ImportServer};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -152,6 +153,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
+    let import_path = store_path.join("import");
 
     let f = File::create(lock_path.as_path()).unwrap_or_else(|e| {
         fatal!("failed to create lock at {}: {:?}", lock_path.display(), e)
@@ -211,6 +213,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
 
     let server_cfg = Arc::new(cfg.server.clone());
+    let sst_importer = Arc::new(SSTImporter::new(import_path).unwrap());
+
     // Create server
     let mut server = Server::new(
         &server_cfg,
@@ -222,6 +226,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         pd_worker.scheduler(),
         Some(engines.clone()),
+        Some(sst_importer.clone()),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
@@ -239,6 +244,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         significant_msg_receiver,
         pd_worker,
         coprocessor_host,
+        sst_importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
@@ -262,7 +268,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
-    signal_handler::handle_signal(engines, &cfg.rocksdb.backup_dir);
+    signal_handler::handle_signal(Some(engines), &cfg.rocksdb.backup_dir);
 
     // Stop.
     server
@@ -276,6 +282,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!("ignore failure when stopping resolver: {:?}", e);
     }
+}
+
+fn run_import_server(cfg: &TiKvConfig) {
+    let mut server = ImportServer::new(cfg);
+    server.start();
+    info!("import server started");
+    signal_handler::handle_signal(None, "");
+    server.shutdown();
+    info!("import server shutdown");
 }
 
 fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
@@ -451,6 +466,11 @@ fn main() {
                     "Sets server labels. Uses `,` to separate kv pairs, like \
                      `zone=cn,disk=ssd`",
                 ),
+        )
+        .arg(
+            Arg::with_name("import")
+                .long("import")
+                .help("Run as an import server"),
         )
         .arg(
             Arg::with_name("print-sample-config")

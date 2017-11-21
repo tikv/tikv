@@ -1,0 +1,39 @@
+// Copyright 2017 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use sys_info;
+
+use util::config::ReadableSize;
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct Config {
+    pub import_dir: String,
+    pub num_threads: usize,
+    pub max_import_jobs: usize,
+    #[serde(skip)]
+    pub region_split_size: u64,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        let cpu_num = sys_info::cpu_num().unwrap() as usize;
+        Config {
+            import_dir: "/tmp/tikv/import".to_owned(),
+            num_threads: cpu_num,
+            max_import_jobs: cpu_num,
+            region_split_size: ReadableSize::mb(96).0,
+        }
+    }
+}

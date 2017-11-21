@@ -58,7 +58,7 @@ mod imp {
     }
 
     // TODO: remove backup_path from configuration
-    pub fn handle_signal(engines: Engines, _: &str) {
+    pub fn handle_signal(engines: Option<Engines>, _: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
@@ -76,9 +76,11 @@ mod imp {
                     encoder.encode(&metric_familys, &mut buffer).unwrap();
                     info!("{}", String::from_utf8(buffer).unwrap());
 
-                    print_rocksdb_stats(&engines.kv_engine);
-                    print_rocksdb_stats(&engines.raft_engine);
                     print_malloc_stats();
+                    if let Some(ref engines) = engines {
+                        print_rocksdb_stats(&engines.kv_engine);
+                        print_rocksdb_stats(&engines.raft_engine);
+                    }
                 }
                 SIGUSR2 => profiling::dump_prof(None),
                 // TODO: handle more signal

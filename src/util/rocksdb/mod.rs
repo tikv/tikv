@@ -23,6 +23,7 @@ use std::fs::{self, File};
 use std::path::Path;
 use std::sync::Arc;
 use std::str::FromStr;
+use std::ops::{Deref, DerefMut};
 
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK};
 use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, ReadOptions,

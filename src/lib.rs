@@ -82,6 +82,7 @@ extern crate sys_info;
 extern crate utime;
 #[macro_use]
 extern crate fail;
+extern crate uuid;
 
 #[macro_use]
 pub mod util;
@@ -92,5 +93,6 @@ pub mod raftstore;
 pub mod pd;
 pub mod server;
 pub mod coprocessor;
+pub mod import;
 
 pub use storage::Storage;

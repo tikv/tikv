@@ -23,6 +23,7 @@ use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
+use tikv::import::Config as ImportConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
 
@@ -70,6 +71,7 @@ fn test_serde_custom_tikv_config() {
         end_point_recursion_limit: 100,
         end_point_batch_row_limit: 64,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
+        import_concurrency: 123,
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -356,6 +358,11 @@ fn test_serde_custom_tikv_config() {
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
+    value.import = ImportConfig {
+        import_dir: "/tmp/test/import".to_owned(),
+        num_threads: 123,
+        max_import_jobs: 123,
+        region_split_size: 123,
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");
