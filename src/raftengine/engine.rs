@@ -323,10 +323,6 @@ impl RaftEngine {
         };
 
         let mut regions = HashSet::default();
-        if inactive_file_num == 0 {
-            return regions;
-        }
-
         let region_entries_size_limit = self.cfg.region_size.0 * 2 / 3;
         for slot in 0..SLOTS_COUNT {
             let memtables = self.memtables[slot].read().unwrap();
