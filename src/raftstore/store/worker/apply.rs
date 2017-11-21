@@ -801,6 +801,7 @@ impl ApplyDelegate {
                     self.region
                 );
             }
+            ConfChangeType::AddLearnerNode => unimplemented!(),
         }
 
         let state = if self.pending_remove {

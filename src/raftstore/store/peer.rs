@@ -1245,6 +1245,7 @@ impl Peer {
                     return Ok(());
                 }
             }
+            ConfChangeType::AddLearnerNode => unimplemented!(),
         }
         let healthy = self.count_healthy_node(status.progress.values());
         let quorum_after_change = raft::quorum(status.progress.len());
