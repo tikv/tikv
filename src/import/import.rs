@@ -102,7 +102,7 @@ impl ImportCFJob {
         for i in 0..Self::MAX_RETRY_TIMES {
             if i != 0 {
                 info!("{} run #{}", self.tag, i);
-                thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_secs(8));
             }
 
             // TODO: Record finished jobs and only retry the unfinished.
@@ -245,8 +245,6 @@ impl ImportSSTJob {
     fn prepare(&self) -> Result<Region> {
         let mut region = self.get_region()?;
 
-        // TODO: Relocate region
-
         if self.sst.meta.get_length() < self.cfg.region_split_size / 2 {
             // Don't need to split if the file is small.
             return Ok(region);
@@ -256,9 +254,8 @@ impl ImportSSTJob {
         if region.get_start_key() != range.get_start() {
             region = self.split_region(&region, range.get_start())?;
         }
-        if region.get_end_key() != range.get_end() {
-            region = self.split_region(&region, range.get_end())?;
-        }
+
+        // TODO: Relocate region
 
         Ok(region)
     }
