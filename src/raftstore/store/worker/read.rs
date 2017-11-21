@@ -360,9 +360,45 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                     self.redirect(send_time, request, callback);
                 }
             },
-            Task::Msg(msg @ StoreMsg::BatchRaftSnapCmds { .. }) => {
-                // TODO(stn): support BatchRaftSnapCmds
-                self.ch.send(msg).unwrap();
+            Task::Msg(StoreMsg::BatchRaftSnapCmds {
+                send_time,
+                batch,
+                on_finished,
+            }) => {
+                // Pessimistic check
+                let mut pass = true;
+                'out: for request in &batch {
+                    match self.pre_propose_raft_command(request) {
+                        Ok(_) => match self.get_handle_policy(request) {
+                            Ok(RequestPolicy::ReadLocal) => {}
+                            Ok(RequestPolicy::ReadIndex) | Err(_) => {
+                                pass = false;
+                                break 'out;
+                            }
+                            Ok(policy) => unimplemented!("unsuppoted policy {:?}", policy),
+                        },
+                        Err(_) => {
+                            pass = false;
+                            break 'out;
+                        }
+                    }
+                }
+
+                if pass {
+                    let mut resps = Vec::with_capacity(batch.len());
+                    for request in &batch {
+                        resps.push(Some(self.exec_read(request)))
+                    }
+                    on_finished(resps);
+                } else {
+                    self.ch
+                        .send(StoreMsg::BatchRaftSnapCmds {
+                            send_time,
+                            batch,
+                            on_finished,
+                        })
+                        .unwrap();
+                }
             }
             Task::Msg(other) => {
                 unimplemented!("unsupported Msg {:?}", other);
