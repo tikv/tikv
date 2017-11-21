@@ -151,6 +151,16 @@ impl Config {
             validate_label(v, "value")?;
         }
 
+        if (self.snap_min_write_bytes_per_time.0 == 0 ||
+            self.snap_max_write_bytes_per_time.0 == 0) &&
+            self.snap_max_write_bytes_per_sec.0 > 0
+        {
+            return Err(box_err!(
+                "snap_min_write_bytes_per_time or snap_max_write_bytes_per_time must not be 0 \
+                 if snap_max_write_bytes_per_sec is greater than 0"
+            ));
+        }
+
         if self.snap_max_write_bytes_per_time.0 > self.snap_max_write_bytes_per_sec.0 / 10 {
             return Err(box_err!(
                 "snap_max_write_bytes_per_time {} should be much smaller than \
