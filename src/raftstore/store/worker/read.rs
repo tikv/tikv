@@ -24,7 +24,7 @@ use rocksdb::DB;
 use raftstore::{Error, Result};
 use util::worker::Runnable;
 use util::time::RemoteLease;
-use util::collections::HashMap;
+use util::collections::{HashMap, HashMapEntry};
 use util::Either;
 
 use super::{apply, MsgSender};
@@ -40,6 +40,20 @@ pub struct LeaderStatus {
 
     applied_index_term: u64,
     leader_lease: Option<RemoteLease>,
+}
+
+impl LeaderStatus {
+    fn merge(&mut self, status: LeaderStatus) {
+        self.region = status.region;
+        self.leader = status.leader;
+        self.term = status.term;
+        self.tag = status.tag;
+
+        self.applied_index_term = status.applied_index_term;
+        if let Some(lease) = status.leader_lease {
+            self.leader_lease = Some(lease);
+        }
+    }
 }
 
 pub enum Task {
@@ -163,7 +177,15 @@ impl<C: MsgSender> LocalReader<C> {
 
     fn update(&mut self, status: LeaderStatus) {
         // TODO(stn): check status?
-        self.region_leaders.insert(status.region.get_id(), status);
+        match self.region_leaders.entry(status.region.get_id()) {
+            HashMapEntry::Vacant(entry) => {
+                entry.insert(status);
+            }
+            HashMapEntry::Occupied(mut entry) => {
+                let entry = entry.get_mut();
+                entry.merge(status);
+            }
+        }
     }
 
     fn delete(&mut self, region_id: u64) {
