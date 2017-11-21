@@ -373,6 +373,7 @@ impl Sub<Instant> for Instant {
 
 /// Lease records a expired time, for examining the current moment is in lease or not.
 /// A lease may be safe or be unsafe.
+// TODO: use AtomicI64 for RemoteLease, `Timespec` fits in i64, if we ignore `Timespec.nesec`.
 #[derive(Debug)]
 pub struct Lease {
     lease_expired_time: Option<Either<Timespec, Timespec>>,
@@ -393,22 +394,23 @@ impl Lease {
 
     pub fn remote(&mut self) -> RemoteLease {
         assert!(self.remote.is_none(), "Already derived a remote");
-        let remote = Arc::new(Mutex::new(Lease::new()));
+        let remote = Arc::new(Mutex::new(Lease {
+            lease_expired_time: self.lease_expired_time.clone(),
+            remote: None,
+        }));
         self.remote = Some(remote.clone());
         remote
     }
 
     pub fn update_safe(&mut self, lease_expired_time: Timespec) {
         let max_drift = TimeDuration::from_std(Duration::new(2, 0)).unwrap();
-        let last_expired_time = self.expired_time();
+        let mut sync = !self.has_safe_lease();
+        sync |= self.expired_time().map_or(true, |expired_time| {
+            lease_expired_time - expired_time > max_drift
+        });
+
         self.lease_expired_time = Some(Either::Left(lease_expired_time));
-        if let Some(expired_time) = last_expired_time {
-            if lease_expired_time - expired_time > max_drift {
-                self.remote.as_ref().map(|lease| {
-                    lease.lock().unwrap().update_safe(lease_expired_time)
-                });
-            }
-        } else {
+        if sync {
             self.remote.as_ref().map(|lease| {
                 lease.lock().unwrap().update_safe(lease_expired_time)
             });
@@ -417,6 +419,9 @@ impl Lease {
 
     pub fn update_unsafe(&mut self, lease_expired_time: Timespec) {
         self.lease_expired_time = Some(Either::Right(lease_expired_time));
+        self.remote.as_ref().map(|lease| {
+            lease.lock().unwrap().update_unsafe(lease_expired_time)
+        });
     }
 
     pub fn has_safe_lease(&self) -> bool {
