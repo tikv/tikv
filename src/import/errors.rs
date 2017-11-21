@@ -83,6 +83,7 @@ quick_error! {
         }
         ChannelClosed {}
         ThreadPanicked {}
+        RegionNotFound {}
         SSTFileOutOfRange {}
     }
 }

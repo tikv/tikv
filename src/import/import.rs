@@ -27,11 +27,9 @@ use uuid::Uuid;
 
 use rocksdb::{DBIterator, EnvOptions, SeekKey, SstFileWriter, DB};
 use rocksdb::rocksdb::ExternalSstFileInfo;
-use kvproto::metapb::Region;
+use kvproto::metapb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::importpb::*;
-
-use pd::PdClient;
 
 use super::{Client, Config, Engine, Error, Result, UploadStream};
 
@@ -103,7 +101,7 @@ impl ImportCFJob {
 
         for i in 0..Self::MAX_RETRY_TIMES {
             if i != 0 {
-                info!("{} retried #{}", self.tag, i);
+                info!("{} run #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(3));
             }
 
@@ -208,24 +206,21 @@ impl ImportSSTJob {
     }
 
     fn run(&mut self) -> Result<SSTMeta> {
-        // Prepare does some optimizations, it's fine to go on even it failed.
-        match self.prepare() {
-            Ok(_) => info!("{} prepare to import", self.tag),
-            Err(e) => error!("{} prepare to import: {:?}", self.tag, e),
-        }
-
         let mut error = None;
 
         for i in 0..Self::MAX_RETRY_TIMES {
             if i != 0 {
-                info!("{} retried #{}", self.tag, i);
+                info!("{} run #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(3));
             }
 
-            let region = match self.get_region() {
-                Ok(region) => region,
+            let region = match self.prepare() {
+                Ok(region) => {
+                    info!("{} prepare", self.tag);
+                    region
+                }
                 Err(e) => {
-                    error!("{} region: {:?}", self.tag, e);
+                    error!("{} prepare: {:?}", self.tag, e);
                     error = Some(e);
                     continue;
                 }
@@ -247,25 +242,25 @@ impl ImportSSTJob {
         Err(error.unwrap())
     }
 
-    fn prepare(&self) -> Result<()> {
+    fn prepare(&self) -> Result<Region> {
+        let mut region = self.get_region()?;
+
         // TODO: Relocate region
 
         if self.sst.meta.get_length() < self.cfg.region_split_size / 2 {
             // Don't need to split if the file is small.
-            return Ok(());
+            return Ok(region);
         }
 
         let range = self.sst.meta.get_range();
-        let region = self.get_region()?;
         if region.get_start_key() != range.get_start() {
-            self.split_region(&region, range.get_start())?;
+            region = self.split_region(&region, range.get_start())?;
         }
-        let region = self.get_region()?;
         if region.get_end_key() != range.get_end() {
-            self.split_region(&region, range.get_end())?;
+            region = self.split_region(&region, range.get_end())?;
         }
 
-        Ok(())
+        Ok(region)
     }
 
     fn import(&mut self, region: &Region) -> Result<()> {
@@ -357,7 +352,7 @@ impl ImportSSTJob {
         ctx
     }
 
-    fn split_region(&self, region: &Region, split_key: &[u8]) -> Result<()> {
+    fn split_region(&self, region: &Region, split_key: &[u8]) -> Result<Region> {
         let ctx = self.new_context(region);
         let peer = ctx.get_peer().clone();
         let mut req = SplitRegionRequest::new();
@@ -374,20 +369,20 @@ impl ImportSSTJob {
         };
 
         match res {
-            Ok(resp) => {
+            Ok(mut resp) => {
                 info!(
-                    "{} split {:?} at {:?} to {:?} and {:?}",
+                    "{} split region {:?} at {:?} to left {:?} and right {:?}",
                     self.tag,
                     region,
                     split_key,
                     resp.get_left(),
                     resp.get_right(),
                 );
-                Ok(())
+                Ok(resp.take_right())
             }
             Err(e) => {
                 error!(
-                    "{} split {:?} at {:?}: {:?}",
+                    "{} split region {:?} at {:?}: {:?}",
                     self.tag,
                     region,
                     split_key,
