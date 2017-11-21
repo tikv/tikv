@@ -23,14 +23,13 @@ use protobuf;
 use rocksdb::DB;
 use raftstore::{Error, Result};
 use util::worker::Runnable;
-use util::time::Lease;
+use util::time::RemoteLease;
 use util::collections::HashMap;
 use util::Either;
 
 use super::{apply, MsgSender};
 use super::super::engine::Snapshot;
-use super::super::super::store::{check_epoch, BatchCallback, Callback, Msg as StoreMsg,
-                                 RequestPolicy};
+use super::super::super::store::{check_epoch, Callback, Msg as StoreMsg, RequestPolicy};
 
 /// Status for leaders
 pub struct LeaderStatus {
@@ -39,7 +38,7 @@ pub struct LeaderStatus {
 
     term: u64,
     applied_index_term: u64,
-    leader_lease: Lease,
+    leader_lease: RemoteLease,
 
     tag: String,
 }
@@ -56,7 +55,7 @@ impl Task {
         leader: Peer,
         term: u64,
         applied_index_term: u64,
-        leader_lease: Lease,
+        leader_lease: RemoteLease,
     ) -> Task {
         let tag = format!("[region {}]", region.get_id());
         Task::Update(LeaderStatus {
@@ -67,6 +66,10 @@ impl Task {
             tag,
             leader_lease,
         })
+    }
+
+    pub fn delete(region_id: u64) -> Task {
+        Task::Delete(region_id)
     }
 
     pub fn accept(msg: StoreMsg) -> Either<Task, StoreMsg> {
@@ -160,7 +163,7 @@ impl<C: MsgSender> LocalReader<C> {
     }
 
     fn update(&mut self, status: LeaderStatus) {
-        // TODO: check status?
+        // TODO(stn): check status?
         self.region_leaders.insert(status.region.get_id(), status);
     }
 
@@ -210,7 +213,7 @@ impl<C: MsgSender> LocalReader<C> {
         check_epoch(&status.region, req)
     }
 
-    // TODO: return true or false.
+    // TODO(stn): return true or false.
     fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
@@ -259,22 +262,22 @@ impl<C: MsgSender> LocalReader<C> {
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
         if status.applied_index_term != status.term {
-            // TODO: add it in queue directly.
+            // TODO(stn): add it in queue directly.
             return Ok(RequestPolicy::ReadIndex);
         }
 
         // Local read should be performed, iff leader is in safe lease.
-        if status.leader_lease.has_safe_lease() {
-            if status.leader_lease.in_safe_lease() {
+        if status.leader_lease.lock().unwrap().has_safe_lease() {
+            if status.leader_lease.lock().unwrap().in_safe_lease() {
                 return Ok(RequestPolicy::ReadLocal);
             } else {
                 debug!(
                     "{} leader lease expired time {:?} is outdated",
                     status.tag,
-                    status.leader_lease.expired_time(),
+                    status.leader_lease.lock().unwrap().expired_time(),
                 );
-                // TODO: Reset leader lease expiring time.
-                // status.leader_lease.clear();
+                // TODO(stn): Reset leader lease expiring time.
+                // status.leader_lease.lock().unwrap().clear();
             }
         }
         // Perform a consistent read to Raft quorum and try to renew the leader lease.
@@ -336,7 +339,7 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                 }
             },
             Task::Msg(msg @ StoreMsg::BatchRaftSnapCmds { .. }) => {
-                // TODO: support BatchRaftSnapCmds
+                // TODO(stn): support BatchRaftSnapCmds
                 self.ch.send(msg).unwrap();
             }
             Task::Msg(other) => {
