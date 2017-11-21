@@ -61,12 +61,13 @@ impl Display for LeaderStatus {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "LeaderStatus for region {},\
-             leader {} at term {}, applied_index_term {}",
+            "LeaderStatus for region {}, \
+             leader {} at term {}, applied_index_term {}, has lease {}",
             self.region.get_id(),
             self.leader.get_id(),
             self.term,
-            self.applied_index_term
+            self.applied_index_term,
+            self.leader_lease.is_some(),
         )
     }
 }
@@ -220,44 +221,14 @@ impl<C: MsgSender> LocalReader<C> {
         self.ch.send(msg).unwrap();
     }
 
-    fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
-        let store_id = msg.get_header().get_peer().get_store_id();
+    fn pre_propose_raft_command(&mut self, req: &RaftCmdRequest) -> bool {
+        // Check store id.
+        let store_id = req.get_header().get_peer().get_store_id();
         if store_id != self.store.get_id() {
-            return Err(Error::StoreNotMatch(store_id, self.store.get_id()));
-        }
-        Ok(())
-    }
-
-    fn validate_region(&self, req: &RaftCmdRequest) -> Result<()> {
-        let region_id = req.get_header().get_region_id();
-        let peer_id = req.get_header().get_peer().get_id();
-        let status = match self.region_leaders.get(&region_id) {
-            Some(status) => status,
-            None => return Err(Error::RegionNotFound(region_id)),
-        };
-        if status.leader.get_id() != peer_id {
-            return Err(box_err!(
-                "mismatch peer id {} != {}",
-                status.leader.get_id(),
-                peer_id
-            ));
+            return false;
         }
 
-        let header = req.get_header();
-        // If header's term is 2 verions behind current term, leadership may have been changed away.
-        if status.term != header.get_term() {
-            return Err(Error::StaleCommand);
-        }
-
-        check_epoch(&status.region, req)
-    }
-
-    // TODO(stn): return true or false.
-    fn pre_propose_raft_command(
-        &mut self,
-        req: &RaftCmdRequest,
-    ) -> Result<Option<RaftCmdResponse>> {
-        self.validate_store_id(req)?;
+        // Check other requests.
         assert!(
             !req.has_status_request(),
             "LocalReader can not serve status requests {:?}",
@@ -268,8 +239,39 @@ impl<C: MsgSender> LocalReader<C> {
             "LocalReader can not serve admin requests {:?}",
             req
         );
-        self.validate_region(req)?;
-        Ok(None)
+
+        // Check region id.
+        let region_id = req.get_header().get_region_id();
+        let status = match self.region_leaders.get(&region_id) {
+            Some(status) => status,
+            None => {
+                return false;
+            }
+        };
+
+        // Check peer id.
+        let peer_id = req.get_header().get_peer().get_id();
+        if status.leader.get_id() != peer_id {
+            return false;
+        }
+
+        // Check term.
+        let header = req.get_header();
+        // If header's term is 2 verions behind current term, leadership may have been changed away.
+        if header.get_term() > 0 && status.term > header.get_term() + 1 {
+            info!(
+                "status.term {}, header.term {}",
+                status.term,
+                header.get_term()
+            );
+            return false;
+        }
+
+        if let Err(_) = check_epoch(&status.region, req) {
+            return false;
+        }
+
+        true
     }
 
     fn get_handle_policy(&self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
@@ -295,7 +297,9 @@ impl<C: MsgSender> LocalReader<C> {
         let region_id = req.get_header().get_region_id();
         let status = match self.region_leaders.get(&region_id) {
             Some(status) => status,
-            None => return Err(Error::RegionNotFound(region_id)),
+            None => {
+                return Err(Error::RegionNotFound(region_id));
+            }
         };
 
         // If applied index's term is differ from current raft's term, leader transfer
@@ -311,13 +315,7 @@ impl<C: MsgSender> LocalReader<C> {
                 debug!(
                     "{} leader lease expired time {:?} is outdated",
                     status.tag,
-                    status
-                        .leader_lease
-                        .as_ref()
-                        .unwrap()
-                        .lock()
-                        .unwrap()
-                        .expired_time(),
+                    leader_lease.expired_time(),
                 );
                 Ok(RequestPolicy::ReadIndex)
             }
@@ -363,8 +361,8 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                 send_time,
                 request,
                 callback,
-            }) => match self.pre_propose_raft_command(&request) {
-                Ok(_) => match self.get_handle_policy(&request) {
+            }) => if self.pre_propose_raft_command(&request) {
+                match self.get_handle_policy(&request) {
                     Ok(RequestPolicy::ReadLocal) => {
                         callback(self.exec_read(&request));
                     }
@@ -373,10 +371,9 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                     Err(_) => {
                         self.redirect_cmd(send_time, request, callback);
                     }
-                },
-                Err(_) => {
-                    self.redirect_cmd(send_time, request, callback);
                 }
+            } else {
+                self.redirect_cmd(send_time, request, callback);
             },
             Task::Msg(StoreMsg::BatchRaftSnapCmds {
                 send_time,
@@ -386,19 +383,18 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                 // Pessimistic check
                 let mut pass = true;
                 'out: for request in &batch {
-                    match self.pre_propose_raft_command(request) {
-                        Ok(_) => match self.get_handle_policy(request) {
+                    if self.pre_propose_raft_command(request) {
+                        match self.get_handle_policy(request) {
                             Ok(RequestPolicy::ReadLocal) => {}
                             Ok(RequestPolicy::ReadIndex) | Err(_) => {
                                 pass = false;
                                 break 'out;
                             }
                             Ok(policy) => unimplemented!("unsuppoted policy {:?}", policy),
-                        },
-                        Err(_) => {
-                            pass = false;
-                            break 'out;
                         }
+                    } else {
+                        pass = false;
+                        break 'out;
                     }
                 }
 
