@@ -85,12 +85,12 @@ impl Default for IOLimiter {
     }
 }
 
-pub struct LimiterWriter<'a, T: Write + 'a> {
+pub struct LimitWriter<'a, T: Write + 'a> {
     pub limiter: Arc<IOLimiter>,
     pub writer: &'a mut T,
 }
 
-impl<'a, T: Write + 'a> Write for LimiterWriter<'a, T> {
+impl<'a, T: Write + 'a> Write for LimitWriter<'a, T> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let total = buf.len();
         let single = self.limiter.get_max_bytes_per_time() as usize;
@@ -122,7 +122,7 @@ mod test {
     use std::io::{Read, Write};
     use std::sync::Arc;
 
-    use super::{IOLimiter, LimiterWriter, DEFAULT_SNAP_MAX_BYTES_PER_SEC,
+    use super::{IOLimiter, LimitWriter, DEFAULT_SNAP_MAX_BYTES_PER_SEC,
                 DEFAULT_SNAP_MAX_BYTES_PER_TIME, DEFAULT_SNAP_MIN_BYTES_PER_TIME};
 
     #[test]
@@ -157,14 +157,14 @@ mod test {
     }
 
     #[test]
-    fn test_limiter_writer() {
+    fn test_limit_writer() {
         let mut file = File::create("./test_limiter_writer.txt").unwrap();
-        let mut limiter_writer = LimiterWriter {
+        let mut limit_writer = LimitWriter {
             limiter: Arc::new(IOLimiter::default()),
             writer: &mut file,
         };
-        limiter_writer.write_all(b"Hello, World!").unwrap();
-        limiter_writer.flush().unwrap();
+        limit_writer.write_all(b"Hello, World!").unwrap();
+        limit_writer.flush().unwrap();
 
         let mut file = File::open("./test_limiter_writer.txt").unwrap();
         let mut contents = String::new();

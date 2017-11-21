@@ -31,7 +31,7 @@ use util::worker::Runnable;
 use util::buf::PipeBuffer;
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::HandyRwLock;
-use util::io_limiter::LimiterWriter;
+use util::io_limiter::LimitWriter;
 
 use super::metrics::*;
 use super::{Error, Result};
@@ -241,7 +241,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 SNAP_TASK_COUNTER.with_label_values(&["write"]).inc();
                 match self.files.entry(token) {
                     Entry::Occupied(mut e) => if let Err(err) =
-                        data.write_all_to(&mut LimiterWriter {
+                        data.write_all_to(&mut LimitWriter {
                             limiter: self.snap_mgr.get_limiter(),
                             writer: &mut e.get_mut().0,
                         }) {
