@@ -118,18 +118,21 @@ impl<'a, T: Write + 'a> Write for LimitWriter<'a, T> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let total = buf.len();
         let single = self.limiter.get_max_bytes_per_time() as usize;
-        let mut curr = 0;
-        let mut end;
-        while curr < total {
-            if curr + single >= total {
-                end = total;
-                self.limiter.request((total - curr) as i64);
-            } else {
-                end = curr + single;
-                self.limiter.request(single as i64);
+        if single > 0 {
+            let mut curr = 0;
+            let mut end;
+            while curr < total {
+                if curr + single >= total {
+                    end = total;
+                } else {
+                    end = curr + single;
+                }
+                self.limiter.request((end - curr) as i64);
+                self.writer.write_all(&buf[curr..end])?;
+                curr = end;
             }
-            self.writer.write_all(&buf[curr..end])?;
-            curr = end;
+        } else {
+            self.writer.write_all(buf)?;
         }
         Ok(total)
     }

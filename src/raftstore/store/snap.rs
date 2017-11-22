@@ -716,11 +716,13 @@ impl Snap {
                     false,
                     &mut |key, value| {
                         let l = key.len() + value.len();
-                        if bytes >= base {
-                            bytes = 0;
-                            limiter.request(base);
+                        if base > 0 {
+                            if bytes >= base {
+                                bytes = 0;
+                                limiter.request(base);
+                            }
+                            bytes += l as i64;
                         }
-                        bytes += l as i64;
                         size += l;
                         key_count += 1;
                         self.add_kv(key, value)?;
