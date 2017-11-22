@@ -21,7 +21,8 @@ use futures_cpupool::{Builder, CpuPool};
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
 
-use storage::Storage;
+use storage::{Error as StorageError, Storage};
+use storage::engine::Error as EngineError;
 use util::time::duration_to_sec;
 
 use super::util::*;
@@ -116,10 +117,19 @@ impl ImportSst for ImportSSTService {
             future
                 .map_err(Error::from)
                 .then(|res| match res {
-                    Ok(res) => match res {
-                        Ok(_) => future::ok(IngestResponse::new()),
-                        Err(e) => future::err(Error::from(e)),
-                    },
+                    Ok(res) => {
+                        let mut resp = IngestResponse::new();
+                        match res {
+                            Err(StorageError::Engine(EngineError::Request(e))) => {
+                                resp.set_error(e.into());
+                            }
+                            Err(e) => {
+                                resp.mut_error().set_message(format!("{:?}", e));
+                            }
+                            _ => {}
+                        }
+                        future::ok(resp)
+                    }
                     Err(e) => future::err(e),
                 })
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),

@@ -21,7 +21,6 @@ use std::time::Duration;
 use grpc::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use futures::{Async, Future, Poll, Stream};
 
-use kvproto::metapb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb_grpc::*;
 use kvproto::importpb::*;
@@ -78,15 +77,6 @@ impl Client {
         let timeout = Duration::from_secs(timeout_secs);
         let flags = WriteFlags::default().buffer_hint(true);
         CallOption::default().timeout(timeout).write_flags(flags)
-    }
-
-    pub fn get_region(&self, key: &[u8]) -> Result<Region> {
-        let region = self.rpc.get_region(key)?;
-        if region.get_id() > 0 {
-            Ok(region)
-        } else {
-            Err(Error::RegionNotFound)
-        }
     }
 
     pub fn split_region(

@@ -186,7 +186,7 @@ impl PdClient for RpcClient {
         Ok(resp.take_cluster())
     }
 
-    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+    fn get_region(&self, key: &[u8]) -> Result<RegionLeader> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
             .start_coarse_timer();
@@ -201,7 +201,17 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.take_region())
+        let region = if resp.has_region() {
+            resp.take_region()
+        } else {
+            return Err(Error::RegionNotFound);
+        };
+        let leader = if resp.has_leader() {
+            Some(resp.take_leader())
+        } else {
+            None
+        };
+        Ok(RegionLeader::new(region, leader))
     }
 
     fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {

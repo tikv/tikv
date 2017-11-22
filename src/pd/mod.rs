@@ -144,7 +144,7 @@ pub trait PdClient: Send + Sync {
 
     // For route.
     // Get region which the key belong to.
-    fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
+    fn get_region(&self, key: &[u8]) -> Result<RegionLeader>;
 
     // Get region info which the key belong to.
     fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {

@@ -48,7 +48,7 @@ quick_error! {
         }
         RocksDB(msg: String) {
             from()
-            display("RocksDB error: {}", msg)
+            display("RocksDB {}", msg)
         }
         Storage(err: storage::Error) {
             from()
@@ -61,7 +61,10 @@ quick_error! {
             description(err.description())
         }
         TikvRPC(err: errorpb::Error) {
-            display("Region error: {:?}", err)
+            display("TikvRPC {:?}", err)
+        }
+        SplitRegion(err: errorpb::Error) {
+            display("SplitRegion {:?}", err)
         }
         FileExists(path: PathBuf) {
             display("File {} exists", path.to_str().unwrap())
@@ -83,7 +86,6 @@ quick_error! {
         }
         ChannelClosed {}
         ThreadPanicked {}
-        RegionNotFound {}
         SSTFileOutOfRange {}
     }
 }

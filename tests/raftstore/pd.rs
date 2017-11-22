@@ -24,7 +24,7 @@ use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::eraftpb;
-use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
+use tikv::pd::{Error, Key, PdClient, PdFuture, RegionLeader, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{escape, HandyRwLock};
@@ -628,11 +628,11 @@ impl PdClient for TestPdClient {
     }
 
 
-    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+    fn get_region(&self, key: &[u8]) -> Result<RegionLeader> {
         self.check_bootstrap()?;
         if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
             if check_key_in_region(key, &region).is_ok() {
-                return Ok(region);
+                return Ok(RegionLeader::new(region, None));
             }
         }
 

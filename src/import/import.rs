@@ -25,6 +25,8 @@ use crc::crc32::{self, Hasher32};
 use tempdir::TempDir;
 use uuid::Uuid;
 
+use pd::{PdClient, RegionLeader};
+
 use rocksdb::{DBIterator, EnvOptions, SeekKey, SstFileWriter, DB};
 use rocksdb::rocksdb::ExternalSstFileInfo;
 use kvproto::metapb::*;
@@ -76,7 +78,8 @@ struct ImportCFJob {
 }
 
 impl ImportCFJob {
-    const MAX_RETRY_TIMES: u32 = 3;
+    const MAX_RETRY_TIMES: u64 = 3;
+    const RETRY_INTERVAL_SECS: u64 = 8;
 
     fn new(
         cfg: Config,
@@ -102,7 +105,7 @@ impl ImportCFJob {
         for i in 0..Self::MAX_RETRY_TIMES {
             if i != 0 {
                 info!("{} run #{}", self.tag, i);
-                thread::sleep(Duration::from_secs(8));
+                thread::sleep(Duration::from_secs(Self::RETRY_INTERVAL_SECS));
             }
 
             // TODO: Record finished jobs and only retry the unfinished.
@@ -194,7 +197,8 @@ struct ImportSSTJob {
 }
 
 impl ImportSSTJob {
-    const MAX_RETRY_TIMES: u32 = 3;
+    const MAX_RETRY_TIMES: u64 = 3;
+    const RETRY_INTERVAL_SECS: u64 = 8;
 
     fn new(tag: String, cfg: Config, sst: SSTFile, client: Arc<Client>) -> ImportSSTJob {
         ImportSSTJob {
@@ -211,7 +215,7 @@ impl ImportSSTJob {
         for i in 0..Self::MAX_RETRY_TIMES {
             if i != 0 {
                 info!("{} run #{}", self.tag, i);
-                thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_secs(Self::RETRY_INTERVAL_SECS));
             }
 
             let region = match self.prepare() {
@@ -242,18 +246,20 @@ impl ImportSSTJob {
         Err(error.unwrap())
     }
 
-    fn prepare(&self) -> Result<Region> {
+    fn prepare(&self) -> Result<RegionLeader> {
         let mut region = self.get_region()?;
 
         if self.sst.meta.get_length() > self.cfg.region_split_size / 2 {
             let range = self.sst.meta.get_range();
-            if region.get_start_key() != range.get_start() {
-                let (_, right) = self.split_region(&region, range.get_start())?;
-                region = right;
+            if region.get_start_key() < range.get_start() {
+                let (_, new_region) = self.split_region(&region, range.get_start())?;
+                region = new_region;
             }
-            if region.get_end_key() != range.get_end() {
-                let (left, _) = self.split_region(&region, range.get_end())?;
-                region = left;
+            if let Some(ref next) = self.sst.next {
+                if region.get_end_key() > next.as_slice() {
+                    let (new_region, _) = self.split_region(&region, next.as_slice())?;
+                    region = new_region;
+                }
             }
         }
 
@@ -262,7 +268,7 @@ impl ImportSSTJob {
         Ok(region)
     }
 
-    fn import(&mut self, region: &Region) -> Result<()> {
+    fn import(&mut self, region: &RegionLeader) -> Result<()> {
         // Update SST meta for this region.
         {
             let meta = &mut self.sst.meta;
@@ -273,9 +279,10 @@ impl ImportSSTJob {
         }
 
         info!(
-            "{} import {} to peers {:?}",
+            "{} import {} to region {} peers {:?}",
             self.tag,
             self.sst,
+            region.get_id(),
             region.get_peers()
         );
 
@@ -284,7 +291,7 @@ impl ImportSSTJob {
         Ok(())
     }
 
-    fn upload(&self, region: &Region) -> Result<()> {
+    fn upload(&self, region: &RegionLeader) -> Result<()> {
         for peer in region.get_peers() {
             let upload = UploadStream::new(self.sst.meta.clone(), &self.sst.data);
             match self.client.upload_sst(peer.get_store_id(), upload) {
@@ -304,24 +311,37 @@ impl ImportSSTJob {
         Ok(())
     }
 
-    fn ingest(&self, region: &Region) -> Result<()> {
-        let ctx = self.new_context(region);
-        let peer = ctx.get_peer().clone();
+    fn ingest(&self, region: &RegionLeader) -> Result<()> {
+        let (ctx, peer) = self.new_context(region);
         let mut ingest = IngestRequest::new();
         ingest.set_context(ctx);
         ingest.set_sst(self.sst.meta.clone());
 
-        match self.client.ingest_sst(peer.get_store_id(), ingest) {
+        let res = match self.client.ingest_sst(peer.get_store_id(), ingest) {
+            Ok(mut resp) => if resp.has_error() {
+                Err(Error::TikvRPC(resp.take_error()))
+            } else {
+                Ok(())
+            },
+            Err(e) => Err(e),
+        };
+
+        match res {
             Ok(_) => {
-                info!("{} ingest {} to peer {:?}", self.tag, self.sst, peer);
+                info!(
+                    "{} ingest {} to region {}",
+                    self.tag,
+                    self.sst,
+                    region.get_id(),
+                );
                 Ok(())
             }
             Err(e) => {
                 error!(
-                    "{} ingest {} to peer {:?}: {:?}",
+                    "{} ingest {} to region {}: {:?}",
                     self.tag,
                     self.sst,
-                    peer,
+                    region.get_id(),
                     e
                 );
                 Err(e)
@@ -329,7 +349,7 @@ impl ImportSSTJob {
         }
     }
 
-    fn get_region(&self) -> Result<Region> {
+    fn get_region(&self) -> Result<RegionLeader> {
         let range = self.sst.meta.get_range();
         let region = self.client.get_region(range.get_start())?;
         if (region.get_start_key().is_empty() || range.get_start() >= region.get_start_key()) &&
@@ -341,26 +361,35 @@ impl ImportSSTJob {
         }
     }
 
-    fn new_context(&self, region: &Region) -> Context {
+    fn new_context(&self, region: &RegionLeader) -> (Context, Peer) {
+        let peer = if let Some(ref leader) = region.leader {
+            leader.clone()
+        } else {
+            assert!(!region.get_peers().is_empty());
+            region.get_peers()[0].clone()
+        };
+
         let mut ctx = Context::new();
         ctx.set_region_id(region.get_id());
         ctx.set_region_epoch(region.get_region_epoch().clone());
-        // We don't know the leader, just choose the first peer.
-        assert!(!region.get_peers().is_empty());
-        ctx.set_peer(region.get_peers()[0].clone());
-        ctx
+        ctx.set_peer(peer.clone());
+        (ctx, peer)
     }
 
-    fn split_region(&self, region: &Region, split_key: &[u8]) -> Result<(Region, Region)> {
-        let ctx = self.new_context(region);
-        let peer = ctx.get_peer().clone();
+    fn split_region(
+        &self,
+        region: &RegionLeader,
+        split_key: &[u8],
+    ) -> Result<(RegionLeader, RegionLeader)> {
+        let (ctx, peer) = self.new_context(region);
         let mut req = SplitRegionRequest::new();
         req.set_context(ctx);
         req.set_split_key(split_key.to_owned());
 
-        let res = match self.client.split_region(peer.get_store_id(), req) {
+        let store_id = peer.get_store_id();
+        let res = match self.client.split_region(store_id, req) {
             Ok(mut resp) => if resp.has_region_error() {
-                Err(Error::TikvRPC(resp.take_region_error()))
+                Err(Error::SplitRegion(resp.take_region_error()))
             } else {
                 Ok(resp)
             },
@@ -377,7 +406,23 @@ impl ImportSSTJob {
                     resp.get_left(),
                     resp.get_right(),
                 );
-                Ok((resp.take_left(), resp.take_right()))
+                // Just assume that new region's leader will be on the same store.
+                let region1 = resp.take_left();
+                let leader1 = region1
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_store_id() == store_id)
+                    .cloned();
+                let region2 = resp.take_right();
+                let leader2 = region2
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_store_id() == store_id)
+                    .cloned();
+                Ok((
+                    RegionLeader::new(region1, leader1),
+                    RegionLeader::new(region2, leader2),
+                ))
             }
             Err(e) => {
                 error!(
@@ -396,6 +441,7 @@ impl ImportSSTJob {
 struct SSTFile {
     meta: SSTMeta,
     data: Vec<u8>,
+    next: Option<Vec<u8>>,
 }
 
 impl fmt::Display for SSTFile {
@@ -458,8 +504,14 @@ impl SSTFileStream {
             }
         }
 
+        let next = if self.db_iter.valid() {
+            Some(self.db_iter.key().to_owned())
+        } else {
+            None
+        };
+
         let info = ctx.finish()?;
-        let file = self.new_sst_file(&info)?;
+        let file = self.new_sst_file(&info, next)?;
         Ok(Some(file))
     }
 
@@ -485,7 +537,7 @@ impl SSTFileStream {
         ))
     }
 
-    fn new_sst_file(&self, info: &ExternalSstFileInfo) -> Result<SSTFile> {
+    fn new_sst_file(&self, info: &ExternalSstFileInfo, next: Option<Vec<u8>>) -> Result<SSTFile> {
         let mut f = File::open(info.file_path())?;
         let mut data = Vec::new();
         f.read_to_end(&mut data)?;
@@ -504,7 +556,7 @@ impl SSTFileStream {
         meta.set_length(info.file_size());
         meta.set_cf_name(self.cf_name.clone());
 
-        Ok(SSTFile { meta, data })
+        Ok(SSTFile { meta, data, next })
     }
 }
 
