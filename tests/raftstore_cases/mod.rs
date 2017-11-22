@@ -30,5 +30,6 @@ mod test_stale_peer;
 mod test_lease_read;
 mod test_bootstrap;
 mod test_service;
+mod test_merge;
 
 use raftstore::*;

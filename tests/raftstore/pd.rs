@@ -194,40 +194,42 @@ impl Cluster {
         let version = region.get_region_epoch().get_version();
         let conf_ver = region.get_region_epoch().get_conf_ver();
 
-        let search_key = data_key(region.get_start_key());
-        let search_region = match self.get_region(search_key) {
-            None => {
-                // Find no range after start key, insert directly.
+        loop {
+            let search_key = data_key(region.get_start_key());
+            let search_region = match self.get_region(search_key) {
+                None => {
+                    // Find no range after start key, insert directly.
+                    self.add_region(&region);
+                    return Ok(());
+                }
+                Some(search_region) => search_region,
+            };
+
+            let search_start_key = enc_start_key(&search_region);
+            let search_end_key = enc_end_key(&search_region);
+
+            let search_version = search_region.get_region_epoch().get_version();
+            let search_conf_ver = search_region.get_region_epoch().get_conf_ver();
+
+            if start_key == search_start_key && end_key == search_end_key {
+                // we are the same, must check epoch here.
+                return check_stale_region(&search_region, &region);
+            }
+
+            if search_start_key >= end_key {
+                // No range covers [start, end) now, insert directly.
                 self.add_region(&region);
                 return Ok(());
+            } else {
+                // overlap, remove old, insert new.
+                // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
+                // is overlapped with origin [a, c).
+                if version <= search_version {
+                    return Err(box_err!("epoch {:?} is stale.", region.get_region_epoch()));
+                }
+
+                self.remove_region(&search_region);
             }
-            Some(search_region) => search_region,
-        };
-
-        let search_start_key = enc_start_key(&search_region);
-        let search_end_key = enc_end_key(&search_region);
-
-        let search_version = search_region.get_region_epoch().get_version();
-        let search_conf_ver = search_region.get_region_epoch().get_conf_ver();
-
-        if start_key == search_start_key && end_key == search_end_key {
-            // we are the same, must check epoch here.
-            return check_stale_region(&search_region, &region);
-        }
-
-        if search_start_key >= end_key {
-            // No range covers [start, end) now, insert directly.
-            self.add_region(&region);
-        } else {
-            // overlap, remove old, insert new.
-            // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
-            // is overlapped with origin [a, c).
-            if version <= search_version || conf_ver < search_conf_ver {
-                return Err(box_err!("epoch {:?} is stale.", region.get_region_epoch()));
-            }
-
-            self.remove_region(&search_region);
-            self.add_region(&region);
         }
 
         Ok(())
@@ -542,6 +544,29 @@ impl TestPdClient {
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.remove_peer(region_id, peer.clone());
         self.must_none_peer(region_id, peer);
+    }
+
+    pub fn must_merge(&self, from: u64, direction: metapb::MergeDirection) {
+        self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
+            if region.get_id() != from {
+                return None;
+            }
+            new_pd_merge_region(direction)
+        });
+
+        for _ in 1..500 {
+            sleep_ms(10);
+
+            if self.get_region_by_id(from).wait().unwrap().is_none() {
+                return;
+            }
+        }
+
+        let region = self.get_region_by_id(from).wait().unwrap();
+        if region.is_none() {
+            return;
+        }
+        panic!("region {:?} is still not merged.", region.unwrap());
     }
 
     // check whether region is split by split_key or not.

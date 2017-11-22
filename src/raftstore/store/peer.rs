@@ -1421,22 +1421,15 @@ impl Peer {
         // when applied. Actually we can't ensure min_index >= first_index without
         // iterating all proposed logs.
         if min_index == 0 || last_index - min_index > self.cfg.max_merge_log_gap {
-            info!(
-                "{} log gap ({}, {}] is too large.",
-                self.tag,
-                min_index,
-                last_index
-            );
             return Err(box_err!(
-                "log gap ({}, {}] is too large",
+                "log gap ({}, {}] is too large, skip merge",
                 min_index,
                 last_index
             ));
         }
         for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
             if entry.get_entry_type() == EntryType::EntryConfChange {
-                info!("{} log gap contains conf change, skip pre-merge", self.tag);
-                return Err(box_err!("log gap contains admin request, skip."));
+                return Err(box_err!("log gap contains admin request, skip merge."));
             }
             if entry.get_data().is_empty() {
                 continue;
@@ -1453,13 +1446,8 @@ impl Peer {
                 AdminCmdType::InvalidAdmin => continue,
                 _ => {}
             }
-            info!(
-                "{} log gap contains admin request {:?}, skip pre-merge",
-                self.tag,
-                cmd_type
-            );
             return Err(box_err!(
-                "log gap contains admin request {:?}, skip.",
+                "log gap contains admin request {:?}, skip merge.",
                 cmd_type
             ));
         }
@@ -1481,7 +1469,10 @@ impl Peer {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        self.pre_propose(&mut req)?;
+        if let Err(e) = self.pre_propose(&mut req) {
+            warn!("{} skip proposal: {:?}", self.tag, e);
+            return Err(e);
+        }
         let data = req.write_to_bytes()?;
 
         // TODO: use local histogram metrics

@@ -22,7 +22,7 @@ use protobuf;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
-use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
+use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, TransferLeader};
 use kvproto::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
@@ -299,5 +299,14 @@ pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatRespo
 
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_transfer_leader(transfer_leader);
+    Some(resp)
+}
+
+pub fn new_pd_merge_region(direction: metapb::MergeDirection) -> Option<RegionHeartbeatResponse> {
+    let mut merge = Merge::new();
+    merge.set_direction(direction);
+
+    let mut resp = RegionHeartbeatResponse::new();
+    resp.set_merge(merge);
     Some(resp)
 }

@@ -17,7 +17,7 @@ use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::collections::VecDeque;
-use std::mem;
+use std::{cmp, mem};
 
 use rocksdb::{Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -1114,7 +1114,11 @@ impl ApplyDelegate {
         }
 
         let mut region = self.region.clone();
-        let version = region.get_region_epoch().get_version() + 1;
+        // Use a max value so that pd can ensure overlapped region has a priority.
+        let version = cmp::max(
+            source_region.get_region_epoch().get_version(),
+            region.get_region_epoch().get_version(),
+        ) + 1;
         region.mut_region_epoch().set_version(version);
         if keys::enc_end_key(&region) == keys::enc_start_key(source_region) {
             region.set_end_key(source_region.get_end_key().to_vec());

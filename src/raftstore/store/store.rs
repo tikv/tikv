@@ -1466,25 +1466,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn schedule_merge(&mut self, region: &metapb::Region, state: &MergeState) -> bool {
+    fn schedule_merge(&mut self, region: &metapb::Region, state: &MergeState) -> Result<()> {
         let req = {
             let direction = state.get_direction();
             let slibing_peer = match self.get_slibing_peer(region, direction) {
-                None => return false,
+                None => return Err(box_err!("slibing peer not exist")),
                 Some(p) => p,
             };
             if slibing_peer.region().get_region_epoch().get_conf_ver() > state.get_conf_version() {
-                return false;
+                return Err(box_err!(
+                    "slibing region changed: {:?}",
+                    slibing_peer.region()
+                ));
             }
 
             let peer = &self.region_peers[&region.get_id()];
             let min_index = peer.get_min_progress();
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
-            let entries = self.region_peers[&region.get_id()]
-                .get_store()
-                .entries(low + 1, state.get_commit() - 1, NO_LIMIT)
-                .unwrap();
+            let entries = if low >= state.get_commit() {
+                vec![]
+            } else {
+                self.region_peers[&region.get_id()]
+                    .get_store()
+                    .entries(low + 1, state.get_commit(), NO_LIMIT)
+                    .unwrap()
+            };
 
             let mut request =
                 new_admin_request(slibing_peer.region().get_id(), slibing_peer.peer.clone());
@@ -1502,7 +1509,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             request
         };
         self.propose_raft_command(req, Box::new(|_| {}));
-        true
+        Ok(())
     }
 
     fn rollback_pre_merge(&mut self, region: &metapb::Region, state: &MergeState) {
@@ -1526,7 +1533,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_check_merge(&mut self, event_loop: &mut EventLoop<Self>) {
         let merge_states = mem::replace(&mut self.merge_states, vec![]);
         for &(ref region, ref state) in &merge_states {
-            if !self.schedule_merge(region, state) {
+            if let Err(e) = self.schedule_merge(region, state) {
+                info!(
+                    "[region {}] failed to schedule merge, rollback: {:?}",
+                    region.get_id(),
+                    e
+                );
                 self.rollback_pre_merge(region, state);
             }
         }
@@ -1540,7 +1552,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .unwrap()
             .become_readonly();
 
-        if !self.schedule_merge(&region, &state) {
+        if let Err(e) = self.schedule_merge(&region, &state) {
+            info!(
+                "[region {}] failed to schedule merge, rollback: {:?}",
+                region.get_id(),
+                e
+            );
             self.rollback_pre_merge(&region, &state);
         }
         self.merge_states.push((region, state));
@@ -1564,11 +1581,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .insert(keys::enc_end_key(&region), region.get_id());
         }
         let region_id = region.get_id();
-        self.region_peers
-            .get_mut(&region_id)
-            .unwrap()
-            .mut_store()
-            .region = region;
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
+        peer.mut_store().region = region;
+        info!(
+            "notify pd with merge {:?} into {:?}",
+            source_region,
+            peer.region()
+        );
+        peer.heartbeat_pd(&self.pd_worker);
     }
 
     fn on_ready_rollback_pre_merge(&mut self, region_id: u64, commit: u64) {
@@ -1689,13 +1709,30 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         region: &metapb::Region,
         direction: MergeDirection,
     ) -> Option<&Peer> {
-        let slibing_region_key = match direction {
-            MergeDirection::Forward => enc_start_key(region),
-            MergeDirection::Backward => enc_end_key(region),
-        };
-        self.region_ranges
-            .get(&slibing_region_key)
-            .and_then(|region_id| self.region_peers.get(region_id))
+        match direction {
+            MergeDirection::Forward => {
+                let region_start_key = enc_end_key(region);
+                self.region_ranges
+                    .range((Excluded(region_start_key), Unbounded::<Key>))
+                    .next()
+                    .and_then(|(_, id)| {
+                        let peer = match self.region_peers.get(id) {
+                            None => return None,
+                            Some(p) => p,
+                        };
+                        if enc_start_key(peer.region()) == enc_end_key(region) {
+                            return Some(peer);
+                        }
+                        None
+                    })
+            }
+            MergeDirection::Backward => {
+                let slibing_region_key = enc_start_key(region);
+                self.region_ranges
+                    .get(&slibing_region_key)
+                    .and_then(|region_id| self.region_peers.get(region_id))
+            }
+        }
     }
 
     fn check_merge_proposal(&self, msg: &mut RaftCmdRequest) -> Result<()> {
@@ -1719,19 +1756,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let slibing_region = match slibing_peer {
             Some(r) => r.region(),
             None => {
-                error!("[region {}] slibing doesn't exist, reject merge", region_id);
-                return Err(box_err!("slibing doesn't exist"));
+                return Err(box_err!(
+                    "slibing of region {} doesn't exist, reject",
+                    region_id
+                ));
             }
         };
         if !util::region_on_same_store(region, slibing_region) {
-            error!(
-                "[region {}] peers doesn't match {:?} != {:?}, reject merge",
-                region_id,
-                region.get_peers(),
-                slibing_region.get_peers()
-            );
             return Err(box_err!(
-                "peers doesn't match {:?} != {:?}",
+                "peers doesn't match {:?} != {:?}, reject merge",
                 region.get_peers(),
                 slibing_region.get_peers()
             ));
@@ -1766,6 +1799,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return;
             }
             Err(e) => {
+                debug!("{} failed to propose {:?}: {:?}", self.tag, msg, e);
                 cb.call_box((new_error(e),));
                 return;
             }
@@ -1773,6 +1807,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if let Err(e) = self.check_merge_proposal(&mut msg) {
+            warn!("{} failed to propose merge: {:?}", self.tag, msg);
             cb(new_error(e));
             return;
         }
