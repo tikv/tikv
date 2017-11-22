@@ -137,7 +137,7 @@ impl Executor for IndexScanExecutor {
         }
     }
 
-    fn collect_statistics_into(&mut self, statistics: &Statistics) {
+    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(statistics);
         }

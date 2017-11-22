@@ -239,7 +239,7 @@ impl SelectContext {
         Ok(row_cnt)
     }
 
-    pub fn collect_statistics_into(self, stats: &Statistics) {
+    pub fn collect_statistics_into(self, stats: &mut Statistics) {
         stats.add(&self.statistics);
         if let Some(scanner) = self.scanner {
             scanner.collect_statistics_into(stats);

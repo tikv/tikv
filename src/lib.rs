@@ -68,6 +68,7 @@ extern crate tokio_timer;
 extern crate serde_json;
 extern crate serde;
 extern crate murmur3;
+extern crate thread_id;
 #[macro_use]
 extern crate serde_derive;
 #[cfg(test)]

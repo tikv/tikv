@@ -126,7 +126,7 @@ impl Scanner {
         Ok(Some((key, value)))
     }
 
-    pub fn collect_statistics_into(self, stats: &Statistics) {
+    pub fn collect_statistics_into(self, stats: &mut Statistics) {
         stats.add(&self.statistics_cache);
         stats.add(self.scanner.get_statistics());
     }

@@ -55,7 +55,7 @@ impl AnalyzeContext {
         }
     }
 
-    pub fn handle_request(mut self, stats: &Statistics) -> Result<Response> {
+    pub fn handle_request(mut self, stats: &mut Statistics) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();

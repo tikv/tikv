@@ -37,6 +37,7 @@ dependencies = [
  "signal 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "sys-info 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thread-id 3.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
  "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
  "tokio-core 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -917,6 +918,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread-id"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.31 (registry+https://github.com/rust-lang/crates.io-index)",
+ "redox_syscall 0.1.27 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "thread_local"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1196,6 +1207,7 @@ dependencies = [
 "checksum tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)" = "0b62933a3f96cd559700662c34f8bab881d9e3540289fb4f368419c7f13a5aa9"
 "checksum term_size 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e2b6b55df3198cc93372e85dd2ed817f0e38ce8cc0f22eb32391bfad9c4bf209"
 "checksum thread-id 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a9539db560102d1cef46b8b78ce737ff0bb64e7e18d35b2a5688f7d097d0ff03"
+"checksum thread-id 3.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "2af4d6289a69a35c4d3aea737add39685f2784122c28119a7713165a63d68c9d"
 "checksum thread_local 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)" = "8576dbbfcaef9641452d5cf0df9b0e7eeab7694956dd33bb61515fb8f18cfdd5"
 "checksum time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)" = "d5d788d3aa77bc0ef3e9621256885555368b47bd495c13dd2e7413c89f845520"
 "checksum tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)" = "<none>"
