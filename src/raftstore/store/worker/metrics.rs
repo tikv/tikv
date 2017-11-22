@@ -50,6 +50,13 @@ lazy_static! {
             &["cf"]
         ).unwrap();
 
+    pub static ref COMPACT_RANGE_CF_COUNTER: CounterVec =
+        register_counter_vec!(
+            "tikv_compact_range_cf_count",
+            "Total number of compact range for cf",
+            &["cf"]
+        ).unwrap();
+
     pub static ref REGION_HASH_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_hash_duration_seconds",

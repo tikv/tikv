@@ -20,7 +20,7 @@ use rocksdb::DB;
 use std::sync::Arc;
 use std::fmt::{self, Display, Formatter};
 use std::error;
-use super::metrics::COMPACT_RANGE_CF;
+use super::metrics::*;
 
 pub struct Task {
     pub cf_name: String,
@@ -75,6 +75,9 @@ impl Runner {
         let end = end_key.as_ref().map(Vec::as_slice);
         compact_range(&self.engine, handle, start, end, false);
         compact_range_timer.observe_duration();
+        COMPACT_RANGE_CF_COUNTER
+            .with_label_values(&[&cf_name])
+            .inc();
         Ok(())
     }
 }
