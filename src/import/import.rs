@@ -26,6 +26,7 @@ use tempdir::TempDir;
 use uuid::Uuid;
 
 use pd::{PdClient, RegionLeader};
+use raftstore::store::keys;
 
 use rocksdb::{DBIterator, EnvOptions, SeekKey, SstFileWriter, DB};
 use rocksdb::rocksdb::ExternalSstFileInfo;
@@ -220,7 +221,7 @@ impl ImportSSTJob {
 
             let region = match self.prepare() {
                 Ok(region) => {
-                    info!("{} prepare", self.tag);
+                    info!("{} prepare {:?}", self.tag, region);
                     region
                 }
                 Err(e) => {
@@ -278,13 +279,7 @@ impl ImportSSTJob {
             meta.set_region_epoch(region.get_region_epoch().clone());
         }
 
-        info!(
-            "{} import {} to region {} peers {:?}",
-            self.tag,
-            self.sst,
-            region.get_id(),
-            region.get_peers()
-        );
+        info!("{} import {} to region {:?}", self.tag, self.sst, region);
 
         self.upload(region)?;
         self.ingest(region)?;
@@ -532,7 +527,7 @@ impl SSTFileStream {
         writer.open(path.to_str().unwrap())?;
         Ok(GenSSTContext::new(
             writer,
-            limit_key,
+            limit_key.to_owned(),
             self.cfg.region_split_size,
         ))
     }
@@ -545,9 +540,10 @@ impl SSTFileStream {
         let mut digest = crc32::Digest::new(crc32::IEEE);
         digest.write(&data);
 
+        // This range doesn't contain the data prefix, like region range.
         let mut range = Range::new();
-        range.set_start(info.smallest_key().to_owned());
-        range.set_end(info.largest_key().to_owned());
+        range.set_start(keys::origin_key(info.smallest_key()).to_owned());
+        range.set_end(keys::origin_key(info.largest_key()).to_owned());
 
         let mut meta = SSTMeta::new();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
@@ -567,16 +563,17 @@ struct GenSSTContext {
 }
 
 impl GenSSTContext {
-    fn new(writer: SstFileWriter, limit_key: &[u8], limit_size: u64) -> GenSSTContext {
+    fn new(writer: SstFileWriter, limit_key: Vec<u8>, limit_size: u64) -> GenSSTContext {
         GenSSTContext {
             writer: writer,
-            limit_key: limit_key.to_owned(),
+            limit_key: limit_key,
             limit_size: limit_size,
         }
     }
 
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.writer.put(key, value).map_err(Error::from)
+        let data_key = keys::data_key(key);
+        self.writer.put(&data_key, value).map_err(Error::from)
     }
 
     fn finish(&mut self) -> Result<ExternalSstFileInfo> {

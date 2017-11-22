@@ -26,7 +26,6 @@ use config::DbConfig;
 use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use storage::types::Key;
 use storage::mvcc::{Write, WriteType};
-use raftstore::store::keys;
 use util::config::GB;
 use util::rocksdb::{new_engine_opt, CFOptions};
 
@@ -85,8 +84,7 @@ impl Engine {
         let wb = RawBatch::new();
         for m in batch.take_mutations().iter_mut() {
             let key = Key::from_encoded(m.take_key());
-            let key = keys::data_key(key.encoded());
-            wb.put(&key, m.get_value()).unwrap();
+            wb.put(key.encoded(), m.get_value()).unwrap();
         }
         wb
     }
@@ -98,15 +96,14 @@ impl Engine {
         let commit_ts = batch.get_commit_ts();
         for m in batch.take_mutations().iter_mut() {
             let key = Key::from_raw(m.get_key()).append_ts(commit_ts);
-            let key = keys::data_key(key.encoded());
             if is_short_value(m.get_value()) {
                 let value = Some(m.take_value());
                 let write = Write::new(WriteType::Put, commit_ts, value).to_bytes();
-                wb.put_cf(write_cf, &key, &write).unwrap();
+                wb.put_cf(write_cf, key.encoded(), &write).unwrap();
             } else {
-                wb.put_cf(default_cf, &key, m.get_value()).unwrap();
                 let write = Write::new(WriteType::Put, commit_ts, None).to_bytes();
-                wb.put_cf(write_cf, &key, &write).unwrap();
+                wb.put_cf(write_cf, key.encoded(), &write).unwrap();
+                wb.put_cf(default_cf, key.encoded(), m.get_value()).unwrap();
             }
         }
         wb

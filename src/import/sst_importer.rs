@@ -229,10 +229,9 @@ impl fmt::Display for ImportFile {
 }
 
 fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
-    let uuid = Uuid::from_bytes(meta.get_uuid())?;
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}.sst",
-        uuid.simple().to_string(),
+        Uuid::from_bytes(meta.get_uuid())?,
         meta.get_region_id(),
         meta.get_region_epoch().get_conf_ver(),
         meta.get_region_epoch().get_version(),
