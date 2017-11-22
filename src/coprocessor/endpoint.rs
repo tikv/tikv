@@ -200,6 +200,8 @@ impl Host {
                     .create()
             };
             loop {
+                // For now we can only use a Mutex to collect thread_ids.
+                // With next release of futures-cpupool, we can use a channel.
                 thread::sleep(Duration::from_millis(10));
                 let mut map_counter = cop_ctxs.lock().unwrap();
                 if map_counter.1 >= size {
