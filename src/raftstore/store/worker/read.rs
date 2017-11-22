@@ -27,6 +27,7 @@ use util::time::RemoteLease;
 use util::collections::{HashMap, HashMapEntry};
 use util::Either;
 
+use super::metrics::LOCAL_READ;
 use super::{apply, MsgSender};
 use super::super::engine::Snapshot;
 use super::super::super::store::{check_epoch, BatchCallback, Callback, Msg as StoreMsg,
@@ -202,7 +203,7 @@ impl<C: MsgSender> LocalReader<C> {
             request,
             callback,
         };
-        info!("local reader redirect {:?}", msg);
+        debug!("local reader redirect {:?}", msg);
         self.ch.send(msg).unwrap()
     }
 
@@ -217,7 +218,7 @@ impl<C: MsgSender> LocalReader<C> {
             batch,
             on_finished,
         };
-        info!("local reader redirect {:?}", msg);
+        debug!("local reader redirect {:?}", msg);
         self.ch.send(msg).unwrap();
     }
 
@@ -362,6 +363,7 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                 request,
                 callback,
             }) => if self.pre_propose_raft_command(&request) {
+                LOCAL_READ.with_label_values(&["handled", "RaftCmd"]).inc();
                 match self.get_handle_policy(&request) {
                     Ok(RequestPolicy::ReadLocal) => {
                         callback(self.exec_read(&request));
@@ -373,6 +375,9 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                     }
                 }
             } else {
+                LOCAL_READ
+                    .with_label_values(&["redirected", "RaftCmd"])
+                    .inc();
                 self.redirect_cmd(send_time, request, callback);
             },
             Task::Msg(StoreMsg::BatchRaftSnapCmds {
@@ -399,12 +404,18 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                 }
 
                 if pass {
+                    LOCAL_READ
+                        .with_label_values(&["handled", "BatchSnap"])
+                        .inc();
                     let mut resps = Vec::with_capacity(batch.len());
                     for request in &batch {
                         resps.push(Some(self.exec_read(request)))
                     }
                     on_finished(resps);
                 } else {
+                    LOCAL_READ
+                        .with_label_values(&["redirected", "BatchSnap"])
+                        .inc();
                     self.redirect_batch_cmds(send_time, batch, on_finished)
                 }
             }

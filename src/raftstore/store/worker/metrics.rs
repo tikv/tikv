@@ -62,4 +62,11 @@ lazy_static! {
             "Proposal count of all regions in a mio tick",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
+
+    pub static ref LOCAL_READ: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_local_reader_total",
+            "Total number of raftstore split check.",
+            &["type", "result"]
+        ).unwrap();
 }
