@@ -180,7 +180,7 @@ impl<C: MsgSender> LocalReader<C> {
 
     fn update(&mut self, status: LeaderStatus) {
         // TODO(stn): check status?
-        info!("local reader update {}", status);
+        debug!("local reader update {}", status);
         match self.region_leaders.entry(status.region.get_id()) {
             HashMapEntry::Vacant(entry) => {
                 entry.insert(status);
@@ -193,7 +193,7 @@ impl<C: MsgSender> LocalReader<C> {
     }
 
     fn delete(&mut self, region_id: u64) {
-        info!("local reader delete region {}", region_id);
+        debug!("local reader delete region {}", region_id);
         self.region_leaders.remove(&region_id);
     }
 
@@ -260,7 +260,7 @@ impl<C: MsgSender> LocalReader<C> {
         let header = req.get_header();
         // If header's term is 2 verions behind current term, leadership may have been changed away.
         if header.get_term() > 0 && status.term > header.get_term() + 1 {
-            info!(
+            debug!(
                 "status.term {}, header.term {}",
                 status.term,
                 header.get_term()
