@@ -576,8 +576,8 @@ impl<T: Simulator> Cluster<T> {
         }
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
-        if resp.mut_responses()[0].has_get() {
-            Some(resp.mut_responses()[0].take_get().take_value())
+        if resp.get_responses()[0].has_get() {
+            Some(resp.mut_responses()[0].mut_get().take_value())
         } else {
             None
         }
