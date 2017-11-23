@@ -27,6 +27,8 @@ use uuid::Uuid;
 
 use pd::{PdClient, RegionLeader};
 use raftstore::store::keys;
+use storage::types::Key;
+use util::escape;
 
 use rocksdb::{DBIterator, EnvOptions, SeekKey, SstFileWriter, DB};
 use rocksdb::rocksdb::ExternalSstFileInfo;
@@ -376,10 +378,12 @@ impl ImportSSTJob {
         region: &RegionLeader,
         split_key: &[u8],
     ) -> Result<(RegionLeader, RegionLeader)> {
+        // The SplitRegion API accepts a raw key.
+        let raw_key = Key::from_encoded(split_key.to_owned()).raw()?;
         let (ctx, peer) = self.new_context(region);
         let mut req = SplitRegionRequest::new();
         req.set_context(ctx);
-        req.set_split_key(split_key.to_owned());
+        req.set_split_key(raw_key);
 
         let store_id = peer.get_store_id();
         let res = match self.client.split_region(store_id, req) {
@@ -397,7 +401,7 @@ impl ImportSSTJob {
                     "{} split region {:?} at {:?} to left {:?} and right {:?}",
                     self.tag,
                     region,
-                    split_key,
+                    escape(split_key),
                     resp.get_left(),
                     resp.get_right(),
                 );
@@ -424,7 +428,7 @@ impl ImportSSTJob {
                     "{} split region {:?} at {:?}: {:?}",
                     self.tag,
                     region,
-                    split_key,
+                    escape(split_key),
                     e
                 );
                 Err(e)

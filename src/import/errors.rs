@@ -23,6 +23,7 @@ use kvproto::errorpb;
 
 use pd;
 use storage;
+use util::codec;
 
 quick_error! {
     #[derive(Debug)]
@@ -49,6 +50,11 @@ quick_error! {
         RocksDB(msg: String) {
             from()
             display("RocksDB {}", msg)
+        }
+        Codec(err: codec::Error) {
+            from()
+            cause(err)
+            description(err.description())
         }
         Storage(err: storage::Error) {
             from()
