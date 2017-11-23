@@ -103,8 +103,6 @@ impl ImportCFJob {
     }
 
     fn run(&self) -> Result<()> {
-        let mut error = None;
-
         for i in 0..Self::MAX_RETRY_TIMES {
             if i != 0 {
                 info!("{} run #{}", self.tag, i);
@@ -119,12 +117,12 @@ impl ImportCFJob {
                 }
                 Err(e) => {
                     error!("{} import: {:?}", self.tag, e);
-                    error = Some(e);
+                    continue;
                 }
             }
         }
 
-        Err(error.unwrap())
+        Err(Error::Timeout)
     }
 
     fn import(&self) -> Result<()> {
@@ -213,7 +211,17 @@ impl ImportSSTJob {
     }
 
     fn run(&mut self) -> Result<SSTMeta> {
-        let mut error = None;
+        // Prepare does some optimizations, it's fine to go on even if it failed.
+        let mut prepared = match self.prepare() {
+            Ok(region) => {
+                info!("{} prepare {:?}", self.tag, region);
+                Some(region)
+            }
+            Err(e) => {
+                error!("{} prepare: {:?}", self.tag, e);
+                None
+            }
+        };
 
         for i in 0..Self::MAX_RETRY_TIMES {
             if i != 0 {
@@ -221,32 +229,30 @@ impl ImportSSTJob {
                 thread::sleep(Duration::from_secs(Self::RETRY_INTERVAL_SECS));
             }
 
-            let region = match self.prepare() {
-                Ok(region) => {
-                    info!("{} prepare {:?}", self.tag, region);
-                    region
-                }
-                Err(e) => {
-                    error!("{} prepare: {:?}", self.tag, e);
-                    error = Some(e);
-                    continue;
-                }
+            let region = match prepared.take() {
+                Some(v) => v,
+                None => match self.get_region() {
+                    Ok(v) => v,
+                    Err(e) => {
+                        error!("{} get region: {:?}", self.tag, e);
+                        continue;
+                    }
+                },
             };
 
-            match self.import(&region) {
+            match self.import(region) {
                 Ok(_) => {
                     info!("{} import {} done", self.tag, self.sst);
                     return Ok(self.sst.meta.clone());
                 }
                 Err(e) => {
                     error!("{} import {}: {:?}", self.tag, self.sst, e);
-                    error = Some(e);
                     continue;
                 }
             }
         }
 
-        Err(error.unwrap())
+        Err(Error::Timeout)
     }
 
     fn prepare(&self) -> Result<RegionLeader> {
@@ -271,7 +277,7 @@ impl ImportSSTJob {
         Ok(region)
     }
 
-    fn import(&mut self, region: &RegionLeader) -> Result<()> {
+    fn import(&mut self, mut region: RegionLeader) -> Result<()> {
         // Update SST meta for this region.
         {
             let meta = &mut self.sst.meta;
@@ -283,9 +289,16 @@ impl ImportSSTJob {
 
         info!("{} import {} to region {:?}", self.tag, self.sst, region);
 
-        self.upload(region)?;
-        self.ingest(region)?;
-        Ok(())
+        self.upload(&region)?;
+
+        for _ in 0..Self::MAX_RETRY_TIMES {
+            match self.ingest(&region)? {
+                Some(new_region) => region = new_region,
+                None => return Ok(()),
+            }
+        }
+
+        Err(Error::Timeout)
     }
 
     fn upload(&self, region: &RegionLeader) -> Result<()> {
@@ -308,7 +321,7 @@ impl ImportSSTJob {
         Ok(())
     }
 
-    fn ingest(&self, region: &RegionLeader) -> Result<()> {
+    fn ingest(&self, region: &RegionLeader) -> Result<Option<RegionLeader>> {
         let (ctx, peer) = self.new_context(region);
         let mut ingest = IngestRequest::new();
         ingest.set_context(ctx);
@@ -316,7 +329,13 @@ impl ImportSSTJob {
 
         let res = match self.client.ingest_sst(peer.get_store_id(), ingest) {
             Ok(mut resp) => if resp.has_error() {
-                Err(Error::TikvRPC(resp.take_error()))
+                let mut error = resp.take_error();
+                if error.get_not_leader().has_leader() {
+                    let leader = error.take_not_leader().take_leader();
+                    let region = RegionLeader::new(region.region.clone(), Some(leader));
+                    return Ok(Some(region));
+                }
+                Err(Error::TikvRPC(error))
             } else {
                 Ok(())
             },
@@ -331,7 +350,7 @@ impl ImportSSTJob {
                     self.sst,
                     region.get_id(),
                 );
-                Ok(())
+                Ok(None)
             }
             Err(e) => {
                 error!(
