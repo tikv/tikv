@@ -24,9 +24,7 @@ fn test_region_detail() {
     assert!(region_detail.has_region());
     let region = region_detail.get_region();
     assert_eq!(region.get_id(), 1);
-    assert!(region.has_start_key());
     assert!(region.get_start_key().is_empty());
-    assert!(region.has_end_key());
     assert!(region.get_end_key().is_empty());
     assert_eq!(region.get_peers().len(), 5);
     let epoch = region.get_region_epoch();

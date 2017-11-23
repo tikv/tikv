@@ -801,6 +801,7 @@ impl ApplyDelegate {
                     self.region
                 );
             }
+            ConfChangeType::AddLearnerNode => unimplemented!(),
         }
 
         let state = if self.pending_remove {
@@ -836,7 +837,7 @@ impl ApplyDelegate {
 
         let split_req = req.get_split();
         let right_derive = split_req.get_right_derive();
-        if !split_req.has_split_key() {
+        if split_req.get_split_key().is_empty() {
             return Err(box_err!("missing split key"));
         }
 
@@ -1051,7 +1052,7 @@ impl ApplyDelegate {
         let key = keys::data_key(key);
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
-        if req.get_put().has_cf() {
+        if !req.get_put().get_cf().is_empty() {
             let cf = req.get_put().get_cf();
             // TODO: don't allow write preseved cfs.
             if cf == CF_LOCK {
@@ -1093,7 +1094,7 @@ impl ApplyDelegate {
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
         self.metrics.size_diff_hint -= key.len() as i64;
         let resp = Response::new();
-        if req.get_delete().has_cf() {
+        if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
             rocksdb::get_cf_handle(&self.engine, cf)
@@ -1203,7 +1204,7 @@ pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Res
     check_data_key(key, region)?;
 
     let mut resp = Response::new();
-    let res = if req.get_get().has_cf() {
+    let res = if !req.get_get().get_cf().is_empty() {
         let cf = req.get_get().get_cf();
         // TODO: check whether cf exists or not.
         snap.get_value_cf(cf, &keys::data_key(key)).unwrap_or_else(

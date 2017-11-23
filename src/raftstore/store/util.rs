@@ -87,6 +87,7 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
     match *conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
+        ConfChangeType::AddLearnerNode => unimplemented!(),
     }
 }
 
