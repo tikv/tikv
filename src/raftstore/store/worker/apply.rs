@@ -282,6 +282,7 @@ pub struct ApplyDelegate {
     // peer_tag, "[region region_id] peer_id"
     tag: String,
     engine: Arc<DB>,
+    raft_engine: Arc<DB>,
     region: Region,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
@@ -300,14 +301,15 @@ pub struct ApplyDelegate {
 impl ApplyDelegate {
     fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), reg)
+        ApplyDelegate::from_registration(peer.kv_engine(), peer.raft_engine(), reg)
     }
 
-    fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
+    fn from_registration(db: Arc<DB>, raft_db: Arc<DB>, reg: Registration) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             engine: db,
+            raft_engine: raft_db,
             region: reg.region,
             pending_remove: false,
             apply_state: reg.apply_state,
@@ -1079,9 +1081,8 @@ impl ApplyDelegate {
                 .get(0)
                 .map_or(merge.get_commit(), |e| e.get_index());
             let mut entries = vec![];
-            // TODO: change it to raft_engine
             peer_storage::fetch_entries_to(
-                &self.engine,
+                &self.raft_engine,
                 source_region.get_id(),
                 apply_index + 1,
                 first_index,
@@ -1106,7 +1107,11 @@ impl ApplyDelegate {
                 applied_index_term: 0,
                 region: exist_region.to_owned(),
             };
-            let mut delegate = ApplyDelegate::from_registration(self.engine.clone(), reg);
+            let mut delegate = ApplyDelegate::from_registration(
+                self.engine.clone(),
+                self.raft_engine.clone(),
+                reg,
+            );
             // Effective administration commands are filtered, so ExecResults can be
             // ignored directly.
             delegate.handle_raft_committed_entries(ctx, entries);
@@ -1663,6 +1668,7 @@ pub enum TaskRes {
 // TODO: use threadpool to do task concurrently
 pub struct Runner {
     db: Arc<DB>,
+    raft_db: Arc<DB>,
     host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
@@ -1679,6 +1685,7 @@ impl Runner {
         }
         Runner {
             db: store.kv_engine(),
+            raft_db: store.raft_engine(),
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
@@ -1804,7 +1811,7 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
+        let delegate = ApplyDelegate::from_registration(self.db.clone(), self.raft_db.clone(), s);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag,
@@ -1863,17 +1870,26 @@ mod tests {
     use storage::{ALL_CFS, CF_WRITE};
     use util::collections::HashMap;
 
-    pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
+    pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>, Arc<DB>) {
         let path = TempDir::new(path).unwrap();
         let db = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
+            rocksdb::new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS).unwrap(),
         );
-        (path, db)
+        let raft_db = Arc::new(
+            rocksdb::new_engine(path.path().join("raft").to_str().unwrap(), &[]).unwrap(),
+        );
+        (path, db, raft_db)
     }
 
-    fn new_runner(db: Arc<DB>, host: Arc<CoprocessorHost>, tx: Sender<TaskRes>) -> Runner {
+    fn new_runner(
+        db: Arc<DB>,
+        raft_db: Arc<DB>,
+        host: Arc<CoprocessorHost>,
+        tx: Sender<TaskRes>,
+    ) -> Runner {
         Runner {
             db: db,
+            raft_db: raft_db,
             host: host,
             delegates: HashMap::default(),
             notifier: tx,
@@ -1921,9 +1937,9 @@ mod tests {
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
-        let (_tmp, db) = create_tmp_engine("apply-basic");
+        let (_tmp, db, raft_db) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
-        let mut runner = new_runner(db.clone(), host, tx);
+        let mut runner = new_runner(db.clone(), raft_db, host, tx);
 
         let mut reg = Registration::default();
         reg.id = 1;
@@ -2148,11 +2164,11 @@ mod tests {
 
     #[test]
     fn test_handle_raft_committed_entries() {
-        let (_path, db) = create_tmp_engine("test-delegate");
+        let (_path, db, raft_db) = create_tmp_engine("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
+        let mut delegate = ApplyDelegate::from_registration(db.clone(), raft_db, reg);
         let (tx, rx) = mpsc::channel();
 
         let put_entry = EntryBuilder::new(1, 1)

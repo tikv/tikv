@@ -12,27 +12,12 @@
 // limitations under the License.
 
 use std::time::Duration;
-use std::{fs, thread};
-use std::sync::mpsc::channel;
-use rand::{self, Rng};
 
 use kvproto::metapb;
-use kvproto::eraftpb::MessageType;
-use kvproto::raft_cmdpb::RaftCmdResponse;
 
-use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
-use super::server::new_server_cluster;
 use super::util;
 use tikv::pd::PdClient;
-use tikv::storage::{CF_DEFAULT, CF_WRITE};
-use tikv::raftstore::store::keys::data_key;
-use tikv::raftstore::store::engine::Iterable;
-use tikv::util::config::*;
-use super::transport_simulate::*;
-
-pub const REGION_MAX_SIZE: u64 = 50000;
-pub const REGION_SPLIT_SIZE: u64 = 30000;
 
 #[test]
 fn test_node_base_merge() {

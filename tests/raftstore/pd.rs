@@ -192,7 +192,6 @@ impl Cluster {
         assert!(end_key > start_key);
 
         let version = region.get_region_epoch().get_version();
-        let conf_ver = region.get_region_epoch().get_conf_ver();
 
         loop {
             let search_key = data_key(region.get_start_key());
@@ -209,7 +208,6 @@ impl Cluster {
             let search_end_key = enc_end_key(&search_region);
 
             let search_version = search_region.get_region_epoch().get_version();
-            let search_conf_ver = search_region.get_region_epoch().get_conf_ver();
 
             if start_key == search_start_key && end_key == search_end_key {
                 // we are the same, must check epoch here.
@@ -231,8 +229,6 @@ impl Cluster {
                 self.remove_region(&search_region);
             }
         }
-
-        Ok(())
     }
 
     fn handle_heartbeat_conf_ver(
