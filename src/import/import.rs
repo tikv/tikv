@@ -82,7 +82,7 @@ struct ImportCFJob {
 
 impl ImportCFJob {
     const MAX_RETRY_TIMES: u64 = 3;
-    const RETRY_INTERVAL_SECS: u64 = 8;
+    const RETRY_INTERVAL_SECS: u64 = 10;
 
     fn new(
         cfg: Config,
@@ -199,7 +199,7 @@ struct ImportSSTJob {
 
 impl ImportSSTJob {
     const MAX_RETRY_TIMES: u64 = 3;
-    const RETRY_INTERVAL_SECS: u64 = 8;
+    const RETRY_INTERVAL_SECS: u64 = 3;
 
     fn new(tag: String, cfg: Config, sst: SSTFile, client: Arc<Client>) -> ImportSSTJob {
         ImportSSTJob {
@@ -287,15 +287,18 @@ impl ImportSSTJob {
             meta.set_region_epoch(region.get_region_epoch().clone());
         }
 
-        info!("{} import {} to region {:?}", self.tag, self.sst, region);
+        info!("{} import {} to {:?}", self.tag, self.sst, region);
 
         self.upload(&region)?;
 
-        for _ in 0..Self::MAX_RETRY_TIMES {
+        // It's more lightweight to retry here as long as the region epoch has
+        // not changed.
+        for _ in 0..10 {
             match self.ingest(&region)? {
-                Some(new_region) => region = new_region,
+                Some(leader) => region.leader = Some(leader),
                 None => return Ok(()),
             }
+            time::sleep(Duration::from_secs(1));
         }
 
         Err(Error::Timeout)
@@ -321,7 +324,7 @@ impl ImportSSTJob {
         Ok(())
     }
 
-    fn ingest(&self, region: &RegionLeader) -> Result<Option<RegionLeader>> {
+    fn ingest(&self, region: &RegionLeader) -> Result<Option<Peer>> {
         let (ctx, peer) = self.new_context(region);
         let mut ingest = IngestRequest::new();
         ingest.set_context(ctx);
@@ -331,9 +334,7 @@ impl ImportSSTJob {
             Ok(mut resp) => if resp.has_error() {
                 let mut error = resp.take_error();
                 if error.get_not_leader().has_leader() {
-                    let leader = error.take_not_leader().take_leader();
-                    let region = RegionLeader::new(region.region.clone(), Some(leader));
-                    return Ok(Some(region));
+                    return Ok(Some(error.take_not_leader().take_leader()));
                 }
                 Err(Error::TikvRPC(error))
             } else {
@@ -344,20 +345,15 @@ impl ImportSSTJob {
 
         match res {
             Ok(_) => {
-                info!(
-                    "{} ingest {} to region {}",
-                    self.tag,
-                    self.sst,
-                    region.get_id(),
-                );
+                info!("{} ingest {} to peer {:?}", self.tag, self.sst, peer);
                 Ok(None)
             }
             Err(e) => {
                 error!(
-                    "{} ingest {} to region {}: {:?}",
+                    "{} ingest {} to peer {:?}: {:?}",
                     self.tag,
                     self.sst,
-                    region.get_id(),
+                    peer,
                     e
                 );
                 Err(e)
@@ -417,10 +413,9 @@ impl ImportSSTJob {
         match res {
             Ok(mut resp) => {
                 info!(
-                    "{} split region {:?} at {:?} to left {:?} and right {:?}",
+                    "{} split {:?} to {:?} and {:?}",
                     self.tag,
                     region,
-                    escape(split_key),
                     resp.get_left(),
                     resp.get_right(),
                 );
@@ -443,13 +438,7 @@ impl ImportSSTJob {
                 ))
             }
             Err(e) => {
-                error!(
-                    "{} split region {:?} at {:?}: {:?}",
-                    self.tag,
-                    region,
-                    escape(split_key),
-                    e
-                );
+                error!("{} split {:?}: {:?}", self.tag, region, e);
                 Err(e)
             }
         }

@@ -47,13 +47,16 @@ impl Engine {
         for cf_opts in &mut cfs_opts {
             const DISABLED: i32 = i32::MAX;
             // Tune some performance related parameters here.
-            // We don't need to read here, so use one level to avoid compaction.
             cf_opts.set_num_levels(1);
             cf_opts.compression_per_level(&[DBCompressionType::Zstd]);
             cf_opts.set_write_buffer_size(GB);
             cf_opts.set_target_file_size_base(GB);
-            cf_opts.set_max_write_buffer_number(3);
+            cf_opts.set_max_write_buffer_number(6);
             cf_opts.set_min_write_buffer_number_to_merge(1);
+            // Disable compaction and rate limit.
+            cf_opts.set_disable_auto_compaction(true);
+            cf_opts.set_soft_pending_compaction_bytes_limit(0);
+            cf_opts.set_hard_pending_compaction_bytes_limit(0);
             cf_opts.set_level_zero_stop_writes_trigger(DISABLED);
             cf_opts.set_level_zero_slowdown_writes_trigger(DISABLED);
             cf_opts.set_level_zero_file_num_compaction_trigger(DISABLED);
