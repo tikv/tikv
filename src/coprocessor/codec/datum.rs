@@ -366,7 +366,7 @@ impl Datum {
     }
 
     /// into_arith converts datum to appropriate datum for arithmetic computing.
-    /// Keep compatible with TiDB's `CoerceArithmetic` fucntion.
+    /// Keep compatible with TiDB's `CoerceArithmetic` function.
     pub fn into_arith(self, ctx: &EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation

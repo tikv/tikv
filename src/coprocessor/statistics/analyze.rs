@@ -11,10 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
+
 use rand::{thread_rng, Rng, ThreadRng};
 use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Response};
-use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeReq, AnalyzeType};
+use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::schema::ColumnInfo;
 use tipb::executor::TableScan;
 
@@ -28,21 +30,19 @@ use super::cmsketch::CMSketch;
 use super::histogram::Histogram;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
-pub struct AnalyzeContext<'a> {
+pub struct AnalyzeContext {
     req: AnalyzeReq,
-    snap: SnapshotStore<'a>,
-    statistics: &'a mut Statistics,
+    snap: Option<SnapshotStore>,
     ranges: Vec<KeyRange>,
 }
 
-impl<'a> AnalyzeContext<'a> {
+impl AnalyzeContext {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
-        snap: &'a Snapshot,
-        statistics: &'a mut Statistics,
-        req_ctx: &'a ReqContext,
-    ) -> AnalyzeContext<'a> {
+        snap: Box<Snapshot>,
+        req_ctx: &ReqContext,
+    ) -> AnalyzeContext {
         let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
@@ -51,16 +51,34 @@ impl<'a> AnalyzeContext<'a> {
         );
         AnalyzeContext {
             req: req,
-            snap: snap,
-            statistics: statistics,
+            snap: Some(snap),
             ranges: ranges,
         }
     }
 
-    pub fn handle_request(self) -> Result<Response> {
+    pub fn handle_request(mut self, stats: &mut Statistics) -> Result<Response> {
         let ret = match self.req.get_tp() {
-            AnalyzeType::TypeIndex => self.handle_index(),
-            AnalyzeType::TypeColumn => self.handle_column(),
+            AnalyzeType::TypeIndex => {
+                let req = self.req.take_idx_req();
+                let mut scanner = IndexScanExecutor::new_with_cols_len(
+                    req.get_num_columns() as i64,
+                    mem::replace(&mut self.ranges, Vec::new()),
+                    self.snap.take().unwrap(),
+                );
+                let res = AnalyzeContext::handle_index(req, &mut scanner);
+                scanner.collect_statistics_into(stats);
+                res
+            }
+
+            AnalyzeType::TypeColumn => {
+                let col_req = self.req.take_col_req();
+                let snap = self.snap.take().unwrap();
+                let ranges = mem::replace(&mut self.ranges, Vec::new());
+                let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
+                let res = AnalyzeContext::handle_column(&mut builder);
+                builder.data.collect_statistics_into(stats);
+                res
+            }
         };
         match ret {
             Ok(data) => {
@@ -77,45 +95,12 @@ impl<'a> AnalyzeContext<'a> {
         }
     }
 
-    // handle_index is used to handle `AnalyzeIndexReq`,
-    // it would build a histogram and count-min sketch of index values.
-    fn handle_index(mut self) -> Result<Vec<u8>> {
-        let req = self.req.take_idx_req();
-        let mut scanner = IndexScanExecutor::new_with_cols_len(
-            req.get_num_columns() as i64,
-            self.ranges,
-            self.snap,
-            self.statistics,
-        );
-        let mut hist = Histogram::new(req.get_bucket_size() as usize);
-        let mut cms = CMSketch::new(
-            req.get_cmsketch_depth() as usize,
-            req.get_cmsketch_width() as usize,
-        );
-        while let Some(row) = scanner.next()? {
-            let bytes = row.data.get_column_values();
-            hist.append(bytes);
-            if let Some(c) = cms.as_mut() {
-                c.insert(bytes);
-            }
-        }
-        let mut res = analyze::AnalyzeIndexResp::new();
-        res.set_hist(hist.into_proto());
-        if let Some(c) = cms {
-            res.set_cms(c.into_proto());
-        }
-        let dt = box_try!(res.write_to_bytes());
-        Ok(dt)
-    }
-
     // handle_column is used to process `AnalyzeColumnsReq`
     // it would build a histogram for the primary key(if needed) and
     // collectors for each column value.
-    fn handle_column(mut self) -> Result<Vec<u8>> {
-        let col_req = self.req.take_col_req();
-        let builder = SampleBuilder::new(col_req, self.snap, self.ranges, &mut self.statistics)?;
-
+    fn handle_column(builder: &mut SampleBuilder) -> Result<Vec<u8>> {
         let (collectors, pk_builder) = builder.collect_columns_stats()?;
+
         let pk_hist = pk_builder.into_proto();
         let cols: Vec<analyze::SampleCollector> =
             collectors.into_iter().map(|col| col.into_proto()).collect();
@@ -128,10 +113,35 @@ impl<'a> AnalyzeContext<'a> {
         };
         Ok(res_data)
     }
+
+    // handle_index is used to handle `AnalyzeIndexReq`,
+    // it would build a histogram and count-min sketch of index values.
+    fn handle_index(req: AnalyzeIndexReq, scanner: &mut IndexScanExecutor) -> Result<Vec<u8>> {
+        let mut hist = Histogram::new(req.get_bucket_size() as usize);
+        let mut cms = CMSketch::new(
+            req.get_cmsketch_depth() as usize,
+            req.get_cmsketch_width() as usize,
+        );
+        while let Some(row) = scanner.next()? {
+            let bytes = row.data.get_column_values();
+            hist.append(bytes);
+            if let Some(c) = cms.as_mut() {
+                c.insert(bytes)
+            }
+        }
+        let mut res = analyze::AnalyzeIndexResp::new();
+        res.set_hist(hist.into_proto());
+        if let Some(c) = cms {
+            res.set_cms(c.into_proto());
+        }
+        let dt = box_try!(res.write_to_bytes());
+        Ok(dt)
+    }
 }
 
-struct SampleBuilder<'a> {
-    data: TableScanExecutor<'a>,
+
+struct SampleBuilder {
+    data: TableScanExecutor,
     cols: Vec<ColumnInfo>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
@@ -146,13 +156,12 @@ struct SampleBuilder<'a> {
 /// `SampleBuilder` is used to analyze columns. It collects sample from
 /// the result set using Reservoir Sampling algorithm, estimates NDVs
 /// using FM Sketch during the collecting process, and builds count-min sketch.
-impl<'a> SampleBuilder<'a> {
+impl SampleBuilder {
     fn new(
         mut req: AnalyzeColumnsReq,
-        snap: SnapshotStore<'a>,
+        snap: SnapshotStore,
         ranges: Vec<KeyRange>,
-        statistics: &'a mut Statistics,
-    ) -> Result<SampleBuilder<'a>> {
+    ) -> Result<SampleBuilder> {
         let cols_info = req.take_columns_info();
         if cols_info.is_empty() {
             return Err(box_err!("empty columns_info"));
@@ -165,7 +174,7 @@ impl<'a> SampleBuilder<'a> {
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
-        let table_scanner = TableScanExecutor::new(&meta, ranges, snap, statistics);
+        let table_scanner = TableScanExecutor::new(&meta, ranges, snap);
         Ok(SampleBuilder {
             data: table_scanner,
             cols: meta.take_columns().to_vec(),
@@ -182,7 +191,7 @@ impl<'a> SampleBuilder<'a> {
     // null count, distinct values count and count-min sketch. And it also returns the statistic
     // builder for PK which contains the histogram.
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
-    fn collect_columns_stats(mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
+    fn collect_columns_stats(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors = vec![
             SampleCollector::new(
@@ -195,9 +204,9 @@ impl<'a> SampleBuilder<'a> {
         ];
         while let Some(row) = self.data.next()? {
             let cols = row.get_binary_cols(&self.cols)?;
-            let retreive_len = cols.len();
+            let retrieve_len = cols.len();
             let mut cols_iter = cols.into_iter();
-            if self.col_len != retreive_len {
+            if self.col_len != retrieve_len {
                 if let Some(v) = cols_iter.next() {
                     pk_builder.append(&v);
                 }

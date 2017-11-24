@@ -116,7 +116,7 @@ impl PendingCmdQueue {
         self.conf_change.take()
     }
 
-    // TODO: seems we don't need to seperate conf change from normal entries.
+    // TODO: seems we don't need to separate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd) {
         self.conf_change = Some(cmd);
     }
@@ -410,7 +410,8 @@ impl ApplyDelegate {
                     });
 
                 // call callback
-                for (cb, resp) in apply_ctx.cbs.drain(..) {
+                for (cb, mut resp) in apply_ctx.cbs.drain(..) {
+                    apply_ctx.host.post_apply(&self.region, &mut resp);
                     cb(resp);
                 }
                 apply_ctx.mark_last_bytes_and_keys();
@@ -496,7 +497,7 @@ impl ApplyDelegate {
         apply_ctx: &mut ApplyContext,
         index: u64,
         term: u64,
-        mut cmd: RaftCmdRequest,
+        cmd: RaftCmdRequest,
     ) -> Option<ExecResult> {
         if index == 0 {
             panic!(
@@ -510,7 +511,7 @@ impl ApplyDelegate {
         }
 
         let cmd_cb = self.find_cb(index, term, &cmd);
-        apply_ctx.host.pre_apply(&self.region, &mut cmd);
+        apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, cmd);
 
         debug!("{} applied command at log index {}", self.tag, index);
@@ -520,7 +521,6 @@ impl ApplyDelegate {
             Some(cb) => cb,
         };
 
-        // TODO: Involve post apply hook.
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
@@ -692,6 +692,14 @@ impl ApplyDelegate {
         response.set_cmd_type(cmd_type);
 
         let mut resp = RaftCmdResponse::new();
+        let uuid = ctx.exec_ctx
+            .as_ref()
+            .unwrap()
+            .req
+            .get_header()
+            .get_uuid()
+            .to_vec();
+        resp.mut_header().set_uuid(uuid);
         resp.set_admin_response(response);
         Ok((resp, exec_result))
     }
@@ -793,6 +801,7 @@ impl ApplyDelegate {
                     self.region
                 );
             }
+            ConfChangeType::AddLearnerNode => unimplemented!(),
         }
 
         let state = if self.pending_remove {
@@ -828,7 +837,7 @@ impl ApplyDelegate {
 
         let split_req = req.get_split();
         let right_derive = split_req.get_right_derive();
-        if !split_req.has_split_key() {
+        if split_req.get_split_key().is_empty() {
             return Err(box_err!("missing split key"));
         }
 
@@ -1016,6 +1025,14 @@ impl ApplyDelegate {
         }
 
         let mut resp = RaftCmdResponse::new();
+        let uuid = ctx.exec_ctx
+            .as_ref()
+            .unwrap()
+            .req
+            .get_header()
+            .get_uuid()
+            .to_vec();
+        resp.mut_header().set_uuid(uuid);
         resp.set_responses(RepeatedField::from_vec(responses));
 
         let exec_res = if ranges.is_empty() {
@@ -1035,7 +1052,7 @@ impl ApplyDelegate {
         let key = keys::data_key(key);
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
-        if req.get_put().has_cf() {
+        if !req.get_put().get_cf().is_empty() {
             let cf = req.get_put().get_cf();
             // TODO: don't allow write preseved cfs.
             if cf == CF_LOCK {
@@ -1077,7 +1094,7 @@ impl ApplyDelegate {
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
         self.metrics.size_diff_hint -= key.len() as i64;
         let resp = Response::new();
-        if req.get_delete().has_cf() {
+        if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
             rocksdb::get_cf_handle(&self.engine, cf)
@@ -1187,7 +1204,7 @@ pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Res
     check_data_key(key, region)?;
 
     let mut resp = Response::new();
-    let res = if req.get_get().has_cf() {
+    let res = if !req.get_get().get_cf().is_empty() {
         let cf = req.get_get().get_cf();
         // TODO: check whether cf exists or not.
         snap.get_value_cf(cf, &keys::data_key(key)).unwrap_or_else(

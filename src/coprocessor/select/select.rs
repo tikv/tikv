@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
-use std::rc::Rc;
+use std::{mem, usize};
+use std::sync::Arc;
 use tipb::select::{Chunk, RowMeta, SelectRequest, SelectResponse};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{ByItem, Expr, ExprType};
@@ -20,18 +20,17 @@ use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::{KeyRange, Response};
 
+use coprocessor::dag::executor::{ScanOn, Scanner};
 use coprocessor::codec::{datum, mysql, table};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::codec::datum::Datum;
 use coprocessor::metrics::*;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_chunk, get_pk, is_point, prefix_next, to_pb_error, ReqContext,
-                            BATCH_ROW_COUNT, SINGLE_GROUP};
-use util::{escape, Either};
-use util::time::{duration_to_ms, Instant};
+use coprocessor::endpoint::{get_pk, is_point, to_pb_error, ReqContext, SINGLE_GROUP};
+use util::Either;
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::codec::number::NumberDecoder;
-use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics};
+use storage::{Key, Snapshot, SnapshotStore, Statistics};
 
 use super::xeval::{EvalContext, Evaluator};
 use super::aggregate::{self, AggrFunc};
@@ -39,20 +38,21 @@ use super::topn_heap::TopNHeap;
 
 const REQUEST_CHECKPOINT: usize = 255;
 
-pub struct SelectContext<'a> {
-    snap: SnapshotStore<'a>,
-    statistics: &'a mut Statistics,
+pub struct SelectContext {
+    snap: SnapshotStore,
+    statistics: Statistics,
     core: SelectContextCore,
-    req_ctx: &'a ReqContext,
+    req_ctx: Arc<ReqContext>,
+    scanner: Option<Scanner>,
 }
 
-impl<'a> SelectContext<'a> {
+impl SelectContext {
     pub fn new(
         sel: SelectRequest,
-        snap: &'a Snapshot,
-        statistics: &'a mut Statistics,
-        req_ctx: &'a ReqContext,
-    ) -> Result<SelectContext<'a>> {
+        snap: Box<Snapshot>,
+        req_ctx: Arc<ReqContext>,
+        batch_row_limit: usize,
+    ) -> Result<SelectContext> {
         let snap = SnapshotStore::new(
             snap,
             sel.get_start_ts(),
@@ -60,27 +60,31 @@ impl<'a> SelectContext<'a> {
             req_ctx.fill_cache,
         );
         Ok(SelectContext {
-            core: SelectContextCore::new(sel)?,
+            core: SelectContextCore::new(sel, batch_row_limit)?,
             snap: snap,
-            statistics: statistics,
+            statistics: Statistics::default(),
             req_ctx: req_ctx,
+            scanner: None,
         })
     }
 
-    pub fn handle_request(mut self, mut ranges: Vec<KeyRange>) -> Result<Response> {
+    pub fn handle_request(&mut self, mut ranges: Vec<KeyRange>) -> Result<Response> {
         if self.core.desc_scan {
             ranges.reverse();
         }
+
         let res = if self.req_ctx.table_scan {
             self.get_rows_from_sel(ranges)
         } else {
             self.get_rows_from_idx(ranges)
         };
+
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
         match res {
             Ok(()) => {
-                sel_resp.set_chunks(RepeatedField::from_vec(self.core.chunks));
+                let chunks = mem::replace(&mut self.core.chunks, Vec::new());
+                sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                 let data = box_try!(sel_resp.write_to_bytes());
                 resp.set_data(data);
             }
@@ -96,20 +100,31 @@ impl<'a> SelectContext<'a> {
         Ok(resp)
     }
 
+    fn reset_scan_range(&mut self, range: KeyRange) -> Result<()> {
+        if self.scanner.is_none() {
+            let scan_on = if self.req_ctx.table_scan {
+                ScanOn::Table
+            } else {
+                ScanOn::Index
+            };
+            let desc = self.core.desc_scan;
+            let key_only = self.key_only();
+            let s = Scanner::new(&self.snap, scan_on, desc, key_only, range)?;
+            self.scanner = Some(s);
+            return Ok(());
+        }
+        let s = self.scanner.as_mut().unwrap();
+        s.reset_range(range, &self.snap)?;
+        Ok(())
+    }
+
     fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>) -> Result<()> {
         let mut collected = 0;
         for ran in ranges {
             if collected >= self.core.limit {
                 break;
             }
-            let timer = Instant::now_coarse();
-            let row_cnt = self.get_rows_from_range(ran)?;
-            debug!(
-                "fetch {} rows takes {} ms",
-                row_cnt,
-                duration_to_ms(timer.elapsed())
-            );
-            collected += row_cnt;
+            collected += self.get_rows_from_range(ran)?;
             self.req_ctx.check_if_outdated()?;
         }
         if self.core.topn {
@@ -131,7 +146,7 @@ impl<'a> SelectContext<'a> {
     fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
-            CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
+            COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
             let value = match self.snap
                 .get(&Key::from_raw(range.get_start()), &mut self.statistics)?
             {
@@ -145,60 +160,23 @@ impl<'a> SelectContext<'a> {
             let h = box_try!(table::decode_handle(range.get_start()));
             row_count += self.core.handle_row(h, values)?;
         } else {
-            CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-            let mut seek_key = if self.core.desc_scan {
-                range.get_end().to_vec()
-            } else {
-                range.get_start().to_vec()
-            };
-            let upper_bound = if !self.core.desc_scan && !range.get_end().is_empty() {
-                Some(Key::from_raw(range.get_end()).encoded().clone())
-            } else {
-                None
-            };
-            let mut scanner = self.snap.scanner(
-                if self.core.desc_scan {
-                    ScanMode::Backward
-                } else {
-                    ScanMode::Forward
-                },
-                self.key_only(),
-                upper_bound,
-                self.statistics,
-            )?;
+            self.reset_scan_range(range)?;
+            let scanner = self.scanner.as_mut().unwrap();
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     self.req_ctx.check_if_outdated()?;
                 }
-                let kv = if self.core.desc_scan {
-                    scanner.reverse_seek(Key::from_raw(&seek_key))?
-                } else {
-                    scanner.seek(Key::from_raw(&seek_key))?
-                };
-                let (key, value) = match kv {
-                    Some((key, value)) => (box_try!(key.raw()), value),
-                    None => break,
-                };
-                if range.get_start() > key.as_slice() || range.get_end() <= key.as_slice() {
-                    debug!(
-                        "key: {} out of range [{}, {})",
-                        escape(&key),
-                        escape(range.get_start()),
-                        escape(range.get_end())
-                    );
-                    break;
+                COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+                if let Some((key, value)) = scanner.next_row()? {
+                    let h = box_try!(table::decode_handle(&key));
+                    let row_data = {
+                        let ids = self.core.cols.as_ref().left().unwrap();
+                        box_try!(table::cut_row(value, ids))
+                    };
+                    row_count += self.core.handle_row(h, row_data)?;
+                    continue;
                 }
-                let h = box_try!(table::decode_handle(&key));
-                let row_data = {
-                    let ids = self.core.cols.as_ref().left().unwrap();
-                    box_try!(table::cut_row(value, ids))
-                };
-                row_count += self.core.handle_row(h, row_data)?;
-                seek_key = if self.core.desc_scan {
-                    box_try!(table::truncate_as_row_key(&key)).to_vec()
-                } else {
-                    prefix_next(&key)
-                };
+                break;
             }
         }
         Ok(row_count)
@@ -224,55 +202,13 @@ impl<'a> SelectContext<'a> {
 
     fn get_idx_row_from_range(&mut self, r: KeyRange) -> Result<usize> {
         let mut row_cnt = 0;
-        let mut seek_key = if self.core.desc_scan {
-            r.get_end().to_vec()
-        } else {
-            r.get_start().to_vec()
-        };
-        CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-        let upper_bound = if !self.core.desc_scan && !r.get_end().is_empty() {
-            Some(Key::from_raw(r.get_end()).encoded().clone())
-        } else {
-            None
-        };
-        let mut scanner = self.snap.scanner(
-            if self.core.desc_scan {
-                ScanMode::Backward
-            } else {
-                ScanMode::Forward
-            },
-            self.key_only(),
-            upper_bound,
-            self.statistics,
-        )?;
+        self.reset_scan_range(r)?;
+        let scanner = self.scanner.as_mut().unwrap();
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
                 self.req_ctx.check_if_outdated()?;
             }
-            let nk = if self.core.desc_scan {
-                scanner.reverse_seek(Key::from_raw(&seek_key))?
-            } else {
-                scanner.seek(Key::from_raw(&seek_key))?
-            };
-            let (key, val) = match nk {
-                Some((key, val)) => (box_try!(key.raw()), val),
-                None => break,
-            };
-            if r.get_start() > key.as_slice() || r.get_end() <= key.as_slice() {
-                debug!(
-                    "key: {} out of range [{}, {})",
-                    escape(&key),
-                    escape(r.get_start()),
-                    escape(r.get_end())
-                );
-                break;
-            }
-            seek_key = if self.core.desc_scan {
-                key.clone()
-            } else {
-                prefix_next(&key)
-            };
-            {
+            if let Some((key, val)) = scanner.next_row()? {
                 let (mut values, handle) = {
                     let mut ids = self.core.cols.as_ref().right().unwrap().clone();
                     if self.core.pk_col.is_some() {
@@ -296,15 +232,24 @@ impl<'a> SelectContext<'a> {
                     values.append(pk_col.get_column_id(), &mut bytes);
                 }
                 row_cnt += self.core.handle_row(handle, values)?;
+                continue;
             }
+            break;
         }
         Ok(row_cnt)
+    }
+
+    pub fn collect_statistics_into(self, stats: &mut Statistics) {
+        stats.add(&self.statistics);
+        if let Some(scanner) = self.scanner {
+            scanner.collect_statistics_into(stats);
+        }
     }
 }
 
 
 struct SelectContextCore {
-    ctx: Rc<EvalContext>,
+    ctx: Arc<EvalContext>,
     sel: SelectRequest,
     eval: Evaluator,
     cols: Either<HashSet<i64>, Vec<i64>>,
@@ -315,16 +260,17 @@ struct SelectContextCore {
     aggr_cols: Vec<ColumnInfo>,
     topn: bool,
     topn_heap: Option<TopNHeap>,
-    order_cols: Rc<Vec<ByItem>>,
+    order_cols: Arc<Vec<ByItem>>,
     limit: usize,
     desc_scan: bool,
-    gks: Vec<Rc<Vec<u8>>>,
-    gk_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
+    gks: Vec<Arc<Vec<u8>>>,
+    gk_aggrs: HashMap<Arc<Vec<u8>>, Vec<Box<AggrFunc>>>,
     chunks: Vec<Chunk>,
+    batch_row_limit: usize,
 }
 
 impl SelectContextCore {
-    fn new(sel: SelectRequest) -> Result<SelectContextCore> {
+    fn new(sel: SelectRequest, batch_row_limit: usize) -> Result<SelectContextCore> {
         let cond_cols;
         let topn_cols;
         let mut order_by_cols: Vec<ByItem> = Vec::new();
@@ -414,7 +360,7 @@ impl SelectContextCore {
         };
 
         Ok(SelectContextCore {
-            ctx: Rc::new(box_try!(EvalContext::new(
+            ctx: Arc::new(box_try!(EvalContext::new(
                 sel.get_time_zone_offset(),
                 sel.get_flags()
             ))),
@@ -437,9 +383,10 @@ impl SelectContextCore {
                     None
                 }
             },
-            order_cols: Rc::new(order_by_cols),
+            order_cols: Arc::new(order_by_cols),
             limit: limit,
             desc_scan: desc_can,
+            batch_row_limit: batch_row_limit,
         })
     }
 
@@ -492,7 +439,7 @@ impl SelectContextCore {
     }
 
     fn get_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
-        let chunk = get_chunk(&mut self.chunks);
+        let chunk = get_chunk(&mut self.chunks, self.batch_row_limit);
         let last_len = chunk.get_rows_data().len();
         let cols = if self.sel.has_table_info() {
             self.sel.get_table_info().get_columns()
@@ -548,7 +495,7 @@ impl SelectContextCore {
 
     fn aggregate(&mut self, h: i64, values: &RowColsDict) -> Result<()> {
         inflate_with_col(&mut self.eval, &self.ctx, values, &self.aggr_cols, h)?;
-        let gk = Rc::new(self.get_group_key()?);
+        let gk = Arc::new(self.get_group_key()?);
         let aggr_exprs = self.sel.get_aggregates();
         match self.gk_aggrs.entry(gk.clone()) {
             Entry::Occupied(e) => {
@@ -590,16 +537,15 @@ impl SelectContextCore {
     ///       groupKey2, count1, value2, count3, value3
     fn aggr_rows(&mut self) -> Result<()> {
         self.chunks = Vec::with_capacity(
-            (self.gk_aggrs.len() + BATCH_ROW_COUNT - 1) / BATCH_ROW_COUNT,
+            (self.gk_aggrs.len() + self.batch_row_limit - 1) / self.batch_row_limit,
         );
         // Each aggregate partial result will be converted to two datum.
         let mut row_data = Vec::with_capacity(1 + 2 * self.sel.get_aggregates().len());
         for gk in self.gks.drain(..) {
             let aggrs = self.gk_aggrs.remove(&gk).unwrap();
-
-            let chunk = get_chunk(&mut self.chunks);
+            let chunk = get_chunk(&mut self.chunks, self.batch_row_limit);
             // The first column is group key.
-            row_data.push(Datum::Bytes(Rc::try_unwrap(gk).unwrap()));
+            row_data.push(Datum::Bytes(Arc::try_unwrap(gk).unwrap()));
             for mut aggr in aggrs {
                 aggr.calc(&mut row_data)?;
             }
@@ -671,4 +617,16 @@ where
         }
     }
     Ok(())
+}
+
+#[inline]
+fn get_chunk(chunks: &mut Vec<Chunk>, batch_row_limit: usize) -> &mut Chunk {
+    if chunks
+        .last()
+        .map_or(true, |chunk| chunk.get_rows_meta().len() >= batch_row_limit)
+    {
+        let chunk = Chunk::new();
+        chunks.push(chunk);
+    }
+    chunks.last_mut().unwrap()
 }

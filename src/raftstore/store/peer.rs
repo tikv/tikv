@@ -246,6 +246,9 @@ pub struct Peer {
     //      locally.
     leader_lease_expired_time: Option<Either<Timespec, Timespec>>,
 
+    // If a snapshot is being applied asynchronously, messages should not be sent.
+    pending_messages: Vec<eraftpb::Message>,
+
     pub peer_stat: PeerStat,
 }
 
@@ -356,6 +359,7 @@ impl Peer {
             raft_entry_max_size: cfg.raft_entry_max_size.0,
             cfg: cfg,
             leader_lease_expired_time: None,
+            pending_messages: vec![],
             peer_stat: PeerStat::default(),
         };
 
@@ -535,7 +539,7 @@ impl Peer {
                     // the old leader may be expired earlier than usual, since a new leader
                     // may be elected and the old leader doesn't step down due to
                     // network partition from the new leader.
-                    // For lease safty during leader transfer, mark `leader_lease_expired_time`
+                    // For lease safety during leader transfer, mark `leader_lease_expired_time`
                     // to be unsafe until next_lease_expired_time from now
                     self.leader_lease_expired_time = Some(Either::Right(
                         self.next_lease_expired_time(monotonic_raw_now()),
@@ -726,6 +730,15 @@ impl Peer {
             return;
         }
 
+        if !self.pending_messages.is_empty() {
+            fail_point!("raft_before_follower_send");
+            let messages = mem::replace(&mut self.pending_messages, vec![]);
+            self.send(ctx.trans, messages, &mut ctx.metrics.message)
+                .unwrap_or_else(|e| {
+                    warn!("{} clear snapshot pending messages err {:?}", self.tag, e);
+                });
+        }
+
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
             debug!(
                 "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
@@ -790,10 +803,14 @@ impl Peer {
 
         if !self.is_leader() {
             fail_point!("raft_before_follower_send");
-            self.send(trans, ready.messages.drain(..), &mut metrics.message)
-                .unwrap_or_else(|e| {
-                    warn!("{} follower send messages err {:?}", self.tag, e);
-                });
+            if self.is_applying_snapshot() {
+                self.pending_messages = mem::replace(&mut ready.messages, vec![]);
+            } else {
+                self.send(trans, ready.messages.drain(..), &mut metrics.message)
+                    .unwrap_or_else(|e| {
+                        warn!("{} follower send messages err {:?}", self.tag, e);
+                    });
+            }
         }
 
         if apply_snap_result.is_some() {
@@ -1245,6 +1262,7 @@ impl Peer {
                     return Ok(());
                 }
             }
+            ConfChangeType::AddLearnerNode => unimplemented!(),
         }
         let healthy = self.count_healthy_node(status.progress.values());
         let quorum_after_change = raft::quorum(status.progress.len());
@@ -1411,7 +1429,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transfered = if self.is_transfer_leader_allowed(peer) {
+        let transferred = if self.is_transfer_leader_allowed(peer) {
             self.transfer_leader(peer);
             true
         } else {
@@ -1427,7 +1445,7 @@ impl Peer {
         // return immediately. Note that this command may fail, we can view it just as an advice
         cb(make_transfer_leader_response());
 
-        transfered
+        transferred
     }
 
     fn propose_conf_change(

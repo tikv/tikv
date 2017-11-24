@@ -11,11 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
-use tipb::executor::{ExecType, Executor};
 use tipb::schema::ColumnInfo;
-use tipb::select::{DAGRequest, SelectResponse};
+use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
 
@@ -23,55 +22,68 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_chunk, get_pk, to_pb_error, ReqContext};
+use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
-use super::executor::{AggregationExecutor, Executor as DAGExecutor, IndexScanExecutor,
-                      LimitExecutor, Row, SelectionExecutor, TableScanExecutor, TopNExecutor};
+use super::executor::{build_exec, Executor, Row};
 
-pub struct DAGContext<'s> {
-    columns: Rc<Vec<ColumnInfo>>,
+pub struct DAGContext {
+    columns: Arc<Vec<ColumnInfo>>,
     has_aggr: bool,
-    req: DAGRequest,
-    ranges: Vec<KeyRange>,
-    snap: &'s Snapshot,
-    eval_ctx: Rc<EvalContext>,
-    req_ctx: &'s ReqContext,
+    req_ctx: Arc<ReqContext>,
+    exec: Box<Executor>,
+    output_offsets: Vec<u32>,
+    batch_row_limit: usize,
 }
 
-impl<'s> DAGContext<'s> {
+impl DAGContext {
     pub fn new(
-        req: DAGRequest,
+        mut req: DAGRequest,
         ranges: Vec<KeyRange>,
-        snap: &'s Snapshot,
-        eval_ctx: Rc<EvalContext>,
-        req_ctx: &'s ReqContext,
-    ) -> DAGContext<'s> {
-        DAGContext {
-            req: req,
-            columns: Rc::new(vec![]),
-            ranges: ranges,
-            snap: snap,
-            has_aggr: false,
-            eval_ctx: eval_ctx,
+        snap: Box<Snapshot>,
+        req_ctx: Arc<ReqContext>,
+        batch_row_limit: usize,
+    ) -> Result<DAGContext> {
+        let eval_ctx = Arc::new(box_try!(EvalContext::new(
+            req.get_time_zone_offset(),
+            req.get_flags()
+        )));
+        let store = SnapshotStore::new(
+            snap,
+            req.get_start_ts(),
+            req_ctx.isolation_level,
+            req_ctx.fill_cache,
+        );
+
+        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
+        Ok(DAGContext {
+            columns: dag_executor.columns,
+            has_aggr: dag_executor.has_aggr,
             req_ctx: req_ctx,
-        }
+            exec: dag_executor.exec,
+            output_offsets: req.take_output_offsets(),
+            batch_row_limit: batch_row_limit,
+        })
     }
 
-    pub fn handle_request(mut self, statistics: &'s mut Statistics) -> Result<Response> {
-        self.validate_dag()?;
-        let mut exec = self.build_dag(statistics)?;
-        let mut chunks = vec![];
+    pub fn handle_request(&mut self) -> Result<Response> {
+        let mut record_cnt = 0;
+        let mut chunks = Vec::new();
         loop {
-            match exec.next() {
+            match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    let chunk = get_chunk(&mut chunks);
+                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
+                        let chunk = Chunk::new();
+                        chunks.push(chunk);
+                        record_cnt = 0;
+                    }
+                    let chunk = chunks.last_mut().unwrap();
+                    record_cnt += 1;
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
-                        let value =
-                            inflate_cols(&row, &self.columns, self.req.get_output_offsets())?;
+                        let value = inflate_cols(&row, &self.columns, &self.output_offsets)?;
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                 }
@@ -97,99 +109,8 @@ impl<'s> DAGContext<'s> {
         }
     }
 
-    fn validate_dag(&mut self) -> Result<()> {
-        let execs = self.req.get_executors();
-        let first = execs
-            .first()
-            .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
-        // check whether first exec is *scan and get the column info
-        match first.get_tp() {
-            ExecType::TypeTableScan => {
-                self.columns = Rc::new(first.get_tbl_scan().get_columns().to_vec());
-            }
-            ExecType::TypeIndexScan => {
-                self.columns = Rc::new(first.get_idx_scan().get_columns().to_vec());
-            }
-            _ => {
-                return Err(box_err!(
-                    "first exec type should be *Scan, but get {:?}",
-                    first.get_tp()
-                ))
-            }
-        }
-        // check whether dag has a aggregation action and take a flag
-        if execs
-            .iter()
-            .rev()
-            .any(|exec| exec.get_tp() == ExecType::TypeAggregation)
-        {
-            self.has_aggr = true;
-        }
-        Ok(())
-    }
-
-    // seperate first exec build action from `build_dag`
-    // since it will generte mutable conflict when putting together
-    fn build_first(
-        &'s self,
-        mut first: Executor,
-        statistics: &'s mut Statistics,
-    ) -> Box<DAGExecutor + 's> {
-        let store = SnapshotStore::new(
-            self.snap,
-            self.req.get_start_ts(),
-            self.req_ctx.isolation_level,
-            self.req_ctx.fill_cache,
-        );
-
-        match first.get_tp() {
-            ExecType::TypeTableScan => Box::new(TableScanExecutor::new(
-                first.get_tbl_scan(),
-                self.ranges.clone(),
-                store,
-                statistics,
-            )),
-            ExecType::TypeIndexScan => Box::new(IndexScanExecutor::new(
-                first.take_idx_scan(),
-                self.ranges.clone(),
-                store,
-                statistics,
-            )),
-            _ => unreachable!(),
-        }
-    }
-
-    fn build_dag(&'s self, statistics: &'s mut Statistics) -> Result<Box<DAGExecutor + 's>> {
-        let mut execs = self.req.get_executors().to_vec().into_iter();
-        let mut src = self.build_first(execs.next().unwrap(), statistics);
-        for mut exec in execs {
-            let curr: Box<DAGExecutor> = match exec.get_tp() {
-                ExecType::TypeTableScan | ExecType::TypeIndexScan => {
-                    return Err(box_err!("got too much *scan exec, should be only one"))
-                }
-                ExecType::TypeSelection => Box::new(SelectionExecutor::new(
-                    exec.take_selection(),
-                    self.eval_ctx.clone(),
-                    self.columns.clone(),
-                    src,
-                )?),
-                ExecType::TypeAggregation => Box::new(AggregationExecutor::new(
-                    exec.take_aggregation(),
-                    self.eval_ctx.clone(),
-                    self.columns.clone(),
-                    src,
-                )?),
-                ExecType::TypeTopN => Box::new(TopNExecutor::new(
-                    exec.take_topN(),
-                    self.eval_ctx.clone(),
-                    self.columns.clone(),
-                    src,
-                )?),
-                ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
-            };
-            src = curr;
-        }
-        Ok(src)
+    pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
+        self.exec.collect_statistics_into(statistics);
     }
 }
 
