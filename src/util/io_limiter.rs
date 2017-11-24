@@ -17,6 +17,7 @@ use std::io::{Result, Write};
 
 use rocksdb::RateLimiter;
 
+const REQUEST_PRIORITY: u8 = 1;
 const REFILL_PERIOD: i64 = 100 * 1000;
 const FARENESS: i32 = 10;
 pub const DEFAULT_SNAP_MIN_BYTES_PER_TIME: u64 = 128 * 1024;
@@ -55,7 +56,7 @@ impl IOLimiter {
 
     pub fn request(&self, bytes: i64) {
         if let Some(ref limiter) = self.inner {
-            limiter.request(bytes, 1)
+            limiter.request(bytes, REQUEST_PRIORITY)
         }
     }
 
