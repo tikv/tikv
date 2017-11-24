@@ -93,7 +93,12 @@ impl WeekdayExtension for Weekday {
 
 pub trait DateTimeExtension<Tz> {
     fn days(&self) -> i32;
-    fn calc_year_week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> (i32, i32);
+    fn calc_year_week(
+        &self,
+        monday_first: bool,
+        zero_week: bool,
+        first_weekday: bool,
+    ) -> (i32, i32);
     fn week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> i32;
 }
 
@@ -101,18 +106,24 @@ impl<Tz: TimeZone> DateTimeExtension<Tz> for DateTime<Tz> {
     /// returns the day of year starting from 1.
     fn days(&self) -> i32 {
         if self.month() == 0 || self.day() == 0 {
-            return 0;
+            (0)
         } else {
-            return self.ordinal() as i32;
+            self.ordinal() as i32
         }
     }
 
     /// returns the week of year.
-    /// when monday_first == true, Monday is considered as the first day in the week, otherwise Sunday.
+    /// when monday_first == true, Monday is considered as the first day in the week,
+    ///         otherwise Sunday.
     /// when zero_week == true, week is from 0 to 53, otherwise from 1 to 53.
     /// when first_weekday == true, the week that contains the first 'first-day-of-week' is week 1,
     ///         otherwise weeks are numbered according to ISO 8601:1988.
-    fn calc_year_week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> (i32, i32) {
+    fn calc_year_week(
+        &self,
+        monday_first: bool,
+        zero_week: bool,
+        first_weekday: bool,
+    ) -> (i32, i32) {
         let week: i32;
         let mut year = self.year();
 
@@ -147,17 +158,18 @@ impl<Tz: TimeZone> DateTimeExtension<Tz> for DateTime<Tz> {
             }
         }
         week = days / 7 + 1;
-        return (year, week);
+        (year, week)
     }
 
     fn week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> i32 {
         if self.month() == 0 || self.day() == 0 {
             return 0;
         }
-        let (_, week) = self.calc_year_week(monday_first, zero_week, match monday_first {
-            true => false,
-            false => first_weekday,
-        });
+        let (_, week) = self.calc_year_week(
+            monday_first,
+            zero_week,
+            if monday_first { false } else { first_weekday },
+        );
         week
     }
 }
@@ -1185,41 +1197,41 @@ mod test {
         let cases = vec![
             (
                 "2010-01-07 23:12:34.12345",
-                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%",
-                "Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01 01 Thu Thursday 4 2010 2010 2010 10 %",
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V
+                %v %a %W %w %X %x %Y %y %%",
+                "Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01
+                01 Thu Thursday 4 2010 2010 2010 10 %",
             ),
             (
                 "2012-12-21 23:12:34.123456",
-                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%",
-                "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12 %",
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U
+                %u %V %v %a %W %w %X %x %Y %y %%",
+                "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51
+                51 51 51 Fri Friday 5 2012 2012 2012 12 %",
             ),
             (
                 "0000-01-01 00:00:00.123456",
                 // Functions week() and yearweek() don't support multi mode,
                 // so the result of "%U %u %V %Y" is different from MySQL.
-                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %Y %y %%",
-                "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 52 0000 00 %",
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %Y
+                %y %%",
+                "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 52 0000
+                00 %",
             ),
             (
                 "2016-09-3 00:59:59.123456",
-                "abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z",
-                "abcSep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35 35 35 35 Sat Saturday 6 2016 2016 2016 16!123 %xyz z",
+                "abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U
+                %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z",
+                "abcSep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35
+                35 35 35 Sat Saturday 6 2016 2016 2016 16!123 %xyz z",
             ),
             (
                 "2012-10-01 00:00:00",
-                "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v %x %Y %y %%",
-                "Oct October 10 10 1st 01 1 275 0 00 00 AM 12:00:00 AM 00:00:00 00 000000 40 2012 2012 12 %",
+                "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v
+                %x %Y %y %%",
+                "Oct October 10 10 1st 01 1 275 0 00 00 AM 12:00:00 AM 00:00:00 00 000000 40
+                2012 2012 12 %",
             ),
-            // Commented out because we does not support invalid date in cop
-            // (
-            //     // For invalid date month or year = 0, MySQL behavior is confusing, %U (which format Week()) is 52, but Week() is 0.
-            //     // It's because in MySQL, Week() checks invalid date before processing, but DateFormat() don't.
-            //     // So there are some difference to MySQL here (%U %u %V %v), TiDB user should not rely on those corner case behavior.
-            //     // %W %w %a is not compatible in this case because Week() use GoTime() currently.
-            //     "0000-01-00 00:00:00.123456",
-            //     "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%",
-            //     "Jan January 01 1 0th 00 0 000 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 00 00 52 Sun Sunday 0 4294967295 4294967295 0000 00 %",
-            // ),
         ];
         for (s, layout, expect) in cases {
             let t = Time::parse_utc_datetime(s, 6).unwrap();
