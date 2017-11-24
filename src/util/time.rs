@@ -377,6 +377,7 @@ impl Sub<Instant> for Instant {
 #[derive(Debug)]
 pub struct Lease {
     lease_expired_time: Option<Either<Timespec, Timespec>>,
+    last_update: Timespec,
     remote: Option<RemoteLease>,
 }
 
@@ -384,6 +385,7 @@ impl Lease {
     pub fn new() -> Lease {
         Lease {
             lease_expired_time: None,
+            last_update: Timespec::new(0, 0),
             remote: None,
         }
     }
@@ -396,6 +398,7 @@ impl Lease {
         assert!(self.remote.is_none(), "Already derived a remote");
         let remote = Arc::new(Mutex::new(Lease {
             lease_expired_time: self.lease_expired_time.clone(),
+            last_update: Timespec::new(0, 0),
             remote: None,
         }));
         self.remote = Some(remote.clone());
@@ -405,12 +408,11 @@ impl Lease {
     pub fn update_safe(&mut self, lease_expired_time: Timespec) {
         let max_drift = TimeDuration::from_std(Duration::new(2, 0)).unwrap();
         let mut sync = !self.has_safe_lease();
-        sync |= self.expired_time().map_or(true, |expired_time| {
-            lease_expired_time - expired_time > max_drift
-        });
+        sync |= lease_expired_time - self.last_update > max_drift;
 
         self.lease_expired_time = Some(Either::Left(lease_expired_time));
         if sync {
+            self.last_update = lease_expired_time;
             self.remote.as_ref().map(|lease| {
                 lease.lock().unwrap().update_safe(lease_expired_time)
             });
@@ -489,6 +491,64 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn test_update_lease() {
+        let duration = TimeDuration::milliseconds(500);
+        {
+            let mut lease = Lease::new();
+            assert!(!lease.in_safe_lease());
+
+            lease.update_safe(monotonic_raw_now() + duration);
+            assert!(lease.in_safe_lease());
+
+            let remote = lease.remote();
+            assert_eq!(
+                lease.in_safe_lease(),
+                remote.lock().unwrap().in_safe_lease()
+            );
+
+            lease.update_unsafe(monotonic_raw_now() + duration);
+            assert!(!lease.in_safe_lease());
+            assert_eq!(
+                lease.in_safe_lease(),
+                remote.lock().unwrap().in_safe_lease()
+            );
+
+            lease.update_safe(monotonic_raw_now() + duration);
+            assert!(lease.in_safe_lease());
+            assert_eq!(
+                lease.in_safe_lease(),
+                remote.lock().unwrap().in_safe_lease()
+            );
+            lease.clear();
+            assert!(!remote.lock().unwrap().in_safe_lease());
+        }
+
+        {
+            let mut lease = Lease::new();
+            assert!(!lease.in_safe_lease());
+            let remote = lease.remote();
+            assert!(!remote.lock().unwrap().in_safe_lease());
+
+            lease.update_safe(monotonic_raw_now() + duration);
+            assert!(remote.lock().unwrap().in_safe_lease());
+
+            thread::sleep(duration.to_std().unwrap());
+            assert!(!lease.in_safe_lease());
+            assert_eq!(
+                lease.in_safe_lease(),
+                remote.lock().unwrap().in_safe_lease()
+            );
+
+            lease.update_safe(monotonic_raw_now() + duration);
+            assert!(lease.in_safe_lease());
+            assert_eq!(
+                lease.in_safe_lease(),
+                remote.lock().unwrap().in_safe_lease()
+            );
+        }
+    }
 
     #[test]
     fn test_time_monitor() {

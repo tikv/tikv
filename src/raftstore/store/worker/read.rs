@@ -305,7 +305,16 @@ impl<C: MsgSender> LocalReader<C> {
 
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
-        if status.applied_index_term != status.term || status.leader_lease.is_none() {
+        if status.applied_index_term != status.term {
+            info!(
+                "local reader deny at {}, applied_index_term {}, term {} ",
+                line!(),
+                status.applied_index_term,
+                status.term
+            );
+            Ok(RequestPolicy::ReadIndex)
+        } else if status.leader_lease.is_none() {
+            info!("local reader deny at {}", line!());
             Ok(RequestPolicy::ReadIndex)
         } else {
             let leader_lease = status.leader_lease.as_ref().unwrap().lock().unwrap();
