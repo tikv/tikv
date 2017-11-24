@@ -19,7 +19,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 use tempdir::TempDir;
 
-use rocksdb::{DBCompressionType, DBIterator, ReadOptions, Writable, WriteBatch as RawBatch, DB};
+use rocksdb::{DBCompactionStyle, DBCompressionType, DBIterator, ReadOptions, Writable,
+              WriteBatch as RawBatch, DB};
 use kvproto::importpb::*;
 
 use config::DbConfig;
@@ -39,7 +40,9 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(cfg: &DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
-        let db_opts = cfg.build_opt();
+        let mut db_opts = cfg.build_opt();
+        db_opts.set_max_background_jobs(16);
+        db_opts.set_use_direct_io_for_flush_and_compaction(true);
         let mut cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, cfg.defaultcf.build_opt()),
             CFOptions::new(CF_WRITE, cfg.writecf.build_opt()),
@@ -49,6 +52,7 @@ impl Engine {
             // Tune some performance related parameters here.
             cf_opts.set_num_levels(1);
             cf_opts.compression_per_level(&[DBCompressionType::Zstd]);
+            cf_opts.set_compaction_style(DBCompactionStyle::Universal);
             cf_opts.set_write_buffer_size(GB);
             cf_opts.set_target_file_size_base(GB);
             cf_opts.set_max_write_buffer_number(6);
