@@ -28,7 +28,6 @@ use uuid::Uuid;
 use pd::{PdClient, RegionLeader};
 use raftstore::store::keys;
 use storage::types::Key;
-use util::escape;
 
 use rocksdb::{DBIterator, EnvOptions, SeekKey, SstFileWriter, DB};
 use rocksdb::rocksdb::ExternalSstFileInfo;
@@ -298,7 +297,7 @@ impl ImportSSTJob {
                 Some(leader) => region.leader = Some(leader),
                 None => return Ok(()),
             }
-            time::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_secs(1));
         }
 
         Err(Error::Timeout)

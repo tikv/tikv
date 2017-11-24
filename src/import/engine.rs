@@ -54,7 +54,7 @@ impl Engine {
             cf_opts.set_max_write_buffer_number(6);
             cf_opts.set_min_write_buffer_number_to_merge(1);
             // Disable compaction and rate limit.
-            cf_opts.set_disable_auto_compaction(true);
+            cf_opts.set_disable_auto_compactions(true);
             cf_opts.set_soft_pending_compaction_bytes_limit(0);
             cf_opts.set_hard_pending_compaction_bytes_limit(0);
             cf_opts.set_level_zero_stop_writes_trigger(DISABLED);
