@@ -1304,6 +1304,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     p.peer_heartbeats.remove(&cp.peer.get_id());
                     p.remove_peer_from_cache(cp.peer.get_id());
                 }
+                ConfChangeType::AddLearnerNode => unimplemented!(),
             }
 
             my_peer_id = p.peer_id();
