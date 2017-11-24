@@ -16,7 +16,7 @@ use std::cmp::Ordering;
 use std::str;
 use std::fmt::{self, Display, Formatter};
 
-use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc, Weekday};
 
 use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
 use coprocessor::codec::mysql::Decimal;
@@ -29,6 +29,180 @@ const ZERO_DATE_STR: &'static str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
 /// `-0001-11-30 00:00:00 +0000 UTC`, whose timestamp is -62169984000.
 const ZERO_TIMESTAMP: i64 = -62169984000;
+
+const MONTH_NAMES: &'static [&'static str] = &[
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+const MONTH_NAMES_ABBR: &'static [&'static str] = &[
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+];
+
+pub trait WeekdayExtension {
+    fn name(&self) -> &'static str;
+    fn name_abbr(&self) -> &'static str;
+}
+
+impl WeekdayExtension for Weekday {
+    fn name(&self) -> &'static str {
+        match *self {
+            Weekday::Mon => "Monday",
+            Weekday::Tue => "Tuesday",
+            Weekday::Wed => "Wednesday",
+            Weekday::Thu => "Thursday",
+            Weekday::Fri => "Friday",
+            Weekday::Sat => "Saturday",
+            Weekday::Sun => "Sunday",
+        }
+    }
+
+    fn name_abbr(&self) -> &'static str {
+        match *self {
+            Weekday::Mon => "Mon",
+            Weekday::Tue => "Tue",
+            Weekday::Wed => "Wed",
+            Weekday::Thu => "Thu",
+            Weekday::Fri => "Fri",
+            Weekday::Sat => "Sat",
+            Weekday::Sun => "Sun",
+        }
+    }
+}
+
+pub trait DateTimeExtension<Tz> {
+    fn days(&self) -> i32;
+    fn calc_year_week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> (i32, i32);
+    fn week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> i32;
+}
+
+impl<Tz: TimeZone> DateTimeExtension<Tz> for DateTime<Tz> {
+    /// returns the day of year starting from 1.
+    fn days(&self) -> i32 {
+        if self.month() == 0 || self.day() == 0 {
+            return 0;
+        } else {
+            return self.ordinal() as i32;
+        }
+    }
+
+    /// returns the week of year.
+    /// when monday_first == true, Monday is considered as the first day in the week, otherwise Sunday.
+    /// when zero_week == true, week is from 0 to 53, otherwise from 1 to 53.
+    /// when first_weekday == true, the week that contains the first 'first-day-of-week' is week 1,
+    ///         otherwise weeks are numbered according to ISO 8601:1988.
+    fn calc_year_week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> (i32, i32) {
+        let week: i32;
+        let mut year = self.year();
+
+        let daynr = calc_day_number(self.year(), self.month() as i32, self.day() as i32);
+        let mut first_daynr = calc_day_number(self.year(), 1, 1);
+        let mut weekday = calc_weekday(first_daynr, !monday_first);
+        let mut week_year = !zero_week;
+        let mut days: i32;
+
+        if self.month() == 1 && (self.day() as i32) <= 7 - weekday {
+            if !week_year && ((first_weekday && weekday != 0) || (!first_weekday && weekday >= 4)) {
+                return (year, 0);
+            }
+            week_year = true;
+            year -= 1;
+            days = calc_days_in_year(year);
+            first_daynr -= days;
+            weekday = (weekday + 53 * 7 - days) % 7;
+        }
+
+        if (first_weekday && weekday != 0) || (!first_weekday && weekday >= 4) {
+            days = daynr - (first_daynr + 7 - weekday);
+        } else {
+            days = daynr - (first_daynr - weekday);
+        }
+
+        if week_year && days >= 52 * 7 {
+            weekday = (weekday + calc_days_in_year(year)) % 7;
+            if (!first_weekday && weekday < 4) || (first_weekday && weekday == 0) {
+                year += 1;
+                return (year, 1);
+            }
+        }
+        week = days / 7 + 1;
+        return (year, week);
+    }
+
+    fn week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> i32 {
+        if self.month() == 0 || self.day() == 0 {
+            return 0;
+        }
+        let (_, week) = self.calc_year_week(monday_first, zero_week, match monday_first {
+            true => false,
+            false => first_weekday,
+        });
+        week
+    }
+}
+
+fn abbr_day_of_month(day: i32) -> &'static str {
+    match day {
+        1 | 21 | 31 => "st",
+        2 | 22 => "nd",
+        3 | 23 => "rd",
+        _ => "th",
+    }
+}
+
+// calculates days since 0000-00-00.
+fn calc_day_number(year: i32, month: i32, day: i32) -> i32 {
+    if year == 0 && month == 0 {
+        return 0;
+    }
+    let mut year2 = year;
+    let mut delsum = 365 * year + 31 * (month - 1) + day;
+    if month <= 2 {
+        year2 -= 1;
+    } else {
+        delsum -= (month * 4 + 23) / 10;
+    }
+    let temp = ((year2 / 100 + 1) * 3) / 4;
+    delsum + year2 / 4 - temp
+}
+
+/// calculates days in one year, it works with 0 <= year <= 99.
+fn calc_days_in_year(year: i32) -> i32 {
+    if (year & 3) == 0 && (year % 100 != 0 || (year % 400 == 0 && (year != 0))) {
+        return 366;
+    }
+    365
+}
+
+/// calculates weekday from daynr, returns 0 for Monday, 1 for Tuesday ...
+fn calc_weekday(daynr: i32, sunday_first_day: bool) -> i32 {
+    let mut daynr2 = daynr + 5;
+    if sunday_first_day {
+        daynr2 += 1;
+    }
+    daynr2 % 7
+}
 
 #[inline]
 fn zero_time(tz: &FixedOffset) -> DateTime<FixedOffset> {
@@ -142,6 +316,10 @@ impl Time {
 
     pub fn is_zero(&self) -> bool {
         self.time.timestamp() == ZERO_TIMESTAMP
+    }
+
+    pub fn invalid_zero(&self) -> bool {
+        self.time.month() == 0 || self.time.day() == 0
     }
 
     pub fn get_fsp(&self) -> u8 {
@@ -386,6 +564,163 @@ impl Time {
             self.fsp = fsp;
             Ok(())
         }
+    }
+
+    fn convert_date_format(&self, b: char) -> Result<String> {
+        match b {
+            'b' => {
+                let m = self.time.month();
+                if m == 0 || m > 12 {
+                    Err(box_err!("invalid time format"))
+                } else {
+                    Ok(MONTH_NAMES_ABBR[(m - 1) as usize].to_string())
+                }
+            }
+            'M' => {
+                let m = self.time.month();
+                if m == 0 || m > 12 {
+                    Err(box_err!("invalid time format"))
+                } else {
+                    Ok(MONTH_NAMES[(m - 1) as usize].to_string())
+                }
+            }
+            'm' => Ok(format!("{:02}", self.time.month())),
+            'c' => Ok(format!("{}", self.time.month())),
+            'D' => Ok(format!(
+                "{}{}",
+                self.time.day(),
+                abbr_day_of_month(self.time.day() as i32)
+            )),
+            'd' => Ok(format!("{:02}", self.time.day())),
+            'e' => Ok(format!("{}", self.time.day())),
+            'j' => Ok(format!("{:03}", self.time.days())),
+            'H' => Ok(format!("{:02}", self.time.hour())),
+            'k' => Ok(format!("{}", self.time.hour())),
+            'h' | 'I' => {
+                let t = self.time.hour();
+                if t == 0 || t == 12 {
+                    Ok("12".to_string())
+                } else {
+                    Ok(format!("{:02}", t % 12))
+                }
+            }
+            'l' => {
+                let t = self.time.hour();
+                if t == 0 || t == 12 {
+                    Ok("12".to_string())
+                } else {
+                    Ok(format!("{}", t % 12))
+                }
+            }
+            'i' => Ok(format!("{:02}", self.time.minute())),
+            'p' => {
+                let hour = self.time.hour();
+                if (hour / 12) % 2 == 0 {
+                    Ok("AM".to_string())
+                } else {
+                    Ok("PM".to_string())
+                }
+            }
+            'r' => {
+                let h = self.time.hour();
+                if h == 0 {
+                    Ok(format!(
+                        "{:02}:{:02}:{:02} AM",
+                        12,
+                        self.time.minute(),
+                        self.time.second()
+                    ))
+                } else if h == 12 {
+                    Ok(format!(
+                        "{:02}:{:02}:{:02} PM",
+                        12,
+                        self.time.minute(),
+                        self.time.second()
+                    ))
+                } else if h < 12 {
+                    Ok(format!(
+                        "{:02}:{:02}:{:02} AM",
+                        h,
+                        self.time.minute(),
+                        self.time.second()
+                    ))
+                } else {
+                    Ok(format!(
+                        "{:02}:{:02}:{:02} PM",
+                        h - 12,
+                        self.time.minute(),
+                        self.time.second()
+                    ))
+                }
+            }
+            'T' => Ok(format!(
+                "{:02}:{:02}:{:02}",
+                self.time.hour(),
+                self.time.minute(),
+                self.time.second()
+            )),
+            'S' | 's' => Ok(format!("{:02}", self.time.second())),
+            'f' => Ok(format!("{:06}", self.time.nanosecond() / 1000)),
+            'U' => {
+                let w = self.time.week(false, true, true);
+                Ok(format!("{:02}", w))
+            }
+            'u' => {
+                let w = self.time.week(true, true, false);
+                Ok(format!("{:02}", w))
+            }
+            'V' => {
+                let w = self.time.week(false, false, true);
+                Ok(format!("{:02}", w))
+            }
+            'v' => {
+                let (_, w) = self.time.calc_year_week(true, false, false);
+                Ok(format!("{:02}", w))
+            }
+            'a' => Ok(self.time.weekday().name_abbr().to_string()),
+            'W' => Ok(self.time.weekday().name().to_string()),
+            'w' => Ok(format!("{}", self.time.weekday().num_days_from_sunday())),
+            'X' => {
+                let (year, _) = self.time.calc_year_week(false, false, true);
+                if year < 0 {
+                    Ok(u32::max_value().to_string())
+                } else {
+                    Ok(format!("{:04}", year))
+                }
+            }
+            'x' => {
+                let (year, _) = self.time.calc_year_week(true, false, false);
+                if year < 0 {
+                    Ok(u32::max_value().to_string())
+                } else {
+                    Ok(format!("{:04}", year))
+                }
+            }
+            'Y' => Ok(format!("{:04}", self.time.year())),
+            'y' => {
+                let year_str = format!("{:04}", self.time.year());
+                Ok(year_str[2..].to_string())
+            }
+            _ => Ok(b.to_string()),
+        }
+    }
+
+    pub fn date_format(&self, layout: String) -> Result<String> {
+        let mut ret = String::new();
+        let mut pattern_match = false;
+        for b in layout.chars() {
+            if pattern_match {
+                ret.push_str(&self.convert_date_format(b)?);
+                pattern_match = false;
+                continue;
+            }
+            if b == '%' {
+                pattern_match = true;
+            } else {
+                ret.push(b);
+            }
+        }
+        Ok(ret)
     }
 }
 
@@ -841,6 +1176,54 @@ mod test {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
             let du = t.to_duration().unwrap();
             let get = du.to_string();
+            assert_eq!(get, expect);
+        }
+    }
+
+    #[test]
+    fn test_date_format() {
+        let cases = vec![
+            (
+                "2010-01-07 23:12:34.12345",
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%",
+                "Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01 01 Thu Thursday 4 2010 2010 2010 10 %",
+            ),
+            (
+                "2012-12-21 23:12:34.123456",
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%",
+                "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12 %",
+            ),
+            (
+                "0000-01-01 00:00:00.123456",
+                // Functions week() and yearweek() don't support multi mode,
+                // so the result of "%U %u %V %Y" is different from MySQL.
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %Y %y %%",
+                "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 52 0000 00 %",
+            ),
+            (
+                "2016-09-3 00:59:59.123456",
+                "abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z",
+                "abcSep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35 35 35 35 Sat Saturday 6 2016 2016 2016 16!123 %xyz z",
+            ),
+            (
+                "2012-10-01 00:00:00",
+                "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v %x %Y %y %%",
+                "Oct October 10 10 1st 01 1 275 0 00 00 AM 12:00:00 AM 00:00:00 00 000000 40 2012 2012 12 %",
+            ),
+            // Commented out because we does not support invalid date in cop
+            // (
+            //     // For invalid date month or year = 0, MySQL behavior is confusing, %U (which format Week()) is 52, but Week() is 0.
+            //     // It's because in MySQL, Week() checks invalid date before processing, but DateFormat() don't.
+            //     // So there are some difference to MySQL here (%U %u %V %v), TiDB user should not rely on those corner case behavior.
+            //     // %W %w %a is not compatible in this case because Week() use GoTime() currently.
+            //     "0000-01-00 00:00:00.123456",
+            //     "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%",
+            //     "Jan January 01 1 0th 00 0 000 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 00 00 52 Sun Sunday 0 4294967295 4294967295 0000 00 %",
+            // ),
+        ];
+        for (s, layout, expect) in cases {
+            let t = Time::parse_utc_datetime(s, 6).unwrap();
+            let get = t.date_format(layout.to_string()).unwrap();
             assert_eq!(get, expect);
         }
     }
