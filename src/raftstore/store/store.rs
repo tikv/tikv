@@ -2329,7 +2329,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_hash_computed(&mut self, region_id: u64, index: u64, hash: Vec<u8>) {
-        let (state, peer) = match self.region_peers.get_mut(&region_id) {
+        let peer = match self.region_peers.get_mut(&region_id) {
             None => {
                 warn!(
                     "[region {}] receive stale hash at index {}",
@@ -2338,15 +2338,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
                 return;
             }
-            Some(p) => (&mut p.consistency_state, &p.peer),
+            Some(peer) => peer,
         };
 
-        if !verify_and_store_hash(region_id, state, index, hash) {
+        if !verify_and_store_hash(region_id, &mut peer.consistency_state, index, hash) {
             return;
         }
 
+        if !peer.is_leader() {
+            return;
+        } 
+
         let msg = Msg::new_raft_cmd(
-            new_verify_hash_request(region_id, peer.clone(), state),
+            new_verify_hash_request(region_id, peer.peer.clone(), &peer.consistency_state),
             Box::new(|_| {}),
         );
         if let Err(e) = self.sendch.send(msg) {
