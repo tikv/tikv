@@ -51,7 +51,7 @@ use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, Compact
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
                     RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
-use super::{util, Msg, SignificantMsg, SnapManager, SnapshotDeleter, Tick};
+use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
@@ -774,7 +774,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if !self.check_snapshot(&msg)? {
+        if let Some(key) = self.check_snapshot(&msg)? {
+            // If the snapshot file is not used again, then it's OK to
+            // delete them here. If the snapshot file will be reused when
+            // receiving, then it will fail to pass the check again, so
+            // missing snapshot files should not be noticed.
+            let s = self.snap_mgr.get_snapshot_for_applying(&key)?;
+            self.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
             return Ok(());
         }
 
@@ -999,17 +1005,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<bool> {
+    fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Option<SnapKey>> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
         if self.region_peers[&region_id].get_store().is_initialized() ||
             !msg.get_message().has_snapshot()
         {
-            return Ok(true);
+            return Ok(None);
         }
 
         let snap = msg.get_message().get_snapshot();
+        let key = SnapKey::from_region_snap(region_id, snap);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.merge_from_bytes(snap.get_data())?;
         let snap_region = snap_data.take_region();
@@ -1026,7 +1033,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 msg.get_to_peer()
             );
             self.raft_metrics.message_dropped.region_no_peer += 1;
-            return Ok(false);
+            return Ok(Some(key));
         }
         if let Some((_, &exist_region_id)) = self.region_ranges
             .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
@@ -1036,7 +1043,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if enc_start_key(exist_region) < enc_end_key(&snap_region) {
                 info!("region overlapped {:?}, {:?}", exist_region, snap_region);
                 self.raft_metrics.message_dropped.region_overlap += 1;
-                return Ok(false);
+                return Ok(Some(key));
             }
         }
         for region in &self.pending_snapshot_regions {
@@ -1047,12 +1054,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 info!("pending region overlapped {:?}, {:?}", region, snap_region);
                 self.raft_metrics.message_dropped.region_overlap += 1;
-                return Ok(false);
+                return Ok(Some(key));
             }
         }
+        // check if snapshot file exists.
+        self.snap_mgr.get_snapshot_for_applying(&key)?;
+
         self.pending_snapshot_regions.push(snap_region);
 
-        Ok(true)
+        Ok(None)
     }
 
     fn on_raft_ready(&mut self) {
@@ -1294,6 +1304,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     p.peer_heartbeats.remove(&cp.peer.get_id());
                     p.remove_peer_from_cache(cp.peer.get_id());
                 }
+                ConfChangeType::AddLearnerNode => unimplemented!(),
             }
 
             my_peer_id = p.peer_id();

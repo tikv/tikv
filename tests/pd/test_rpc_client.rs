@@ -153,8 +153,7 @@ fn test_validate_endpoints() {
     assert!(validate_endpoints(env, &eps).is_err());
 }
 
-#[test]
-fn test_retry_async() {
+fn test_retry<F: Fn(&RpcClient)>(func: F) {
     let eps_count = 1;
     let se = Arc::new(Service::new());
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
@@ -170,10 +169,24 @@ fn test_retry_async() {
 
     let client = RpcClient::new(&eps).unwrap();
 
-    for _ in 0..5 {
+    for _ in 0..3 {
+        func(&client);
+    }
+}
+
+#[test]
+fn test_retry_async() {
+    let async = |client: &RpcClient| {
         let region = client.get_region_by_id(1);
         region.wait().unwrap();
-    }
+    };
+    test_retry(async);
+}
+
+#[test]
+fn test_retry_sync() {
+    let sync = |client: &RpcClient| { client.get_store(1).unwrap(); };
+    test_retry(sync)
 }
 
 #[test]
