@@ -31,7 +31,6 @@ use util::worker::Runnable;
 use util::buf::PipeBuffer;
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::HandyRwLock;
-use util::io_limiter::LimitWriter;
 
 use super::metrics::*;
 use super::{Error, Result};
@@ -240,21 +239,19 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             Task::Write(token, mut data) => {
                 SNAP_TASK_COUNTER.with_label_values(&["write"]).inc();
                 match self.files.entry(token) {
-                    Entry::Occupied(mut e) => if let Err(err) =
-                        data.write_all_to(&mut LimitWriter {
-                            limiter: self.snap_mgr.get_limiter(),
-                            writer: &mut e.get_mut().0,
-                        }) {
-                        error!(
-                            "failed to write data to snapshot file {} for token {:?}: {:?}",
-                            e.get_mut().0.path(),
-                            token,
-                            err
-                        );
-                        let (_, msg) = e.remove();
-                        let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
-                        self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
-                    },
+                    Entry::Occupied(mut e) => {
+                        if let Err(err) = data.write_all_to(&mut e.get_mut().0) {
+                            error!(
+                                "failed to write data to snapshot file {} for token {:?}: {:?}",
+                                e.get_mut().0.path(),
+                                token,
+                                err
+                            );
+                            let (_, msg) = e.remove();
+                            let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
+                            self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
+                        }
+                    }
                     Entry::Vacant(_) => error!("invalid snap token {:?}", token),
                 }
             }

@@ -20,7 +20,6 @@ use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::rocksdb;
 use tikv::util::worker::FutureWorker;
-use tikv::util::io_limiter::IOLimiter;
 use tempdir::TempDir;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
@@ -70,11 +69,10 @@ fn test_node_bootstrap_with_prepared_data() {
         &cfg.raft_store,
         pd_client.clone(),
     );
-    let limiter = Arc::new(IOLimiter::default());
     let snap_mgr = SnapManager::new(
         tmp_mgr.path().to_str().unwrap(),
         Some(node.get_sendch()),
-        limiter.clone(),
+        None,
     );
     let (_, snapshot_status_receiver) = mpsc::channel();
     let pd_worker = FutureWorker::new("test-pd-worker");

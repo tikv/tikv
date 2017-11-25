@@ -14,8 +14,6 @@ end-point-concurrency = 12
 end-point-max-tasks = 12
 end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
-snap-min-write-bytes-per-time = "64KB"
-snap-max-write-bytes-per-time = "1MB"
 snap-max-write-bytes-per-sec = "10MB"
 end-point-batch-row-limit = 64
 

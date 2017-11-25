@@ -32,7 +32,6 @@ use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
-use tikv::util::io_limiter::IOLimiter;
 use tikv::storage::{CfName, Engine};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
@@ -122,8 +121,7 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
-        let limiter = Arc::new(IOLimiter::default());
-        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), limiter.clone());
+        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
         let pd_worker = FutureWorker::new("test-pd-worker");
         let mut server = Server::new(
             &cfg.server,

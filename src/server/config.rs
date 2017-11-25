@@ -17,8 +17,7 @@ use sys_info;
 
 use util::collections::HashMap;
 use util::config::{self, ReadableSize};
-use util::io_limiter::{DEFAULT_SNAP_MAX_BYTES_PER_SEC, DEFAULT_SNAP_MAX_BYTES_PER_TIME,
-                       DEFAULT_SNAP_MIN_BYTES_PER_TIME};
+use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use super::Result;
 
 pub use raftstore::store::Config as RaftStoreConfig;
@@ -69,8 +68,6 @@ pub struct Config {
     pub end_point_max_tasks: usize,
     pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
-    pub snap_min_write_bytes_per_time: ReadableSize,
-    pub snap_max_write_bytes_per_time: ReadableSize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub end_point_batch_row_limit: usize,
 
@@ -102,8 +99,6 @@ impl Default for Config {
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
-            snap_min_write_bytes_per_time: ReadableSize(DEFAULT_SNAP_MIN_BYTES_PER_TIME),
-            snap_max_write_bytes_per_time: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_TIME),
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
         }
@@ -149,25 +144,6 @@ impl Config {
         for (k, v) in &self.labels {
             validate_label(k, "key")?;
             validate_label(v, "value")?;
-        }
-
-        if (self.snap_min_write_bytes_per_time.0 == 0 ||
-            self.snap_max_write_bytes_per_time.0 == 0) &&
-            self.snap_max_write_bytes_per_sec.0 > 0
-        {
-            return Err(box_err!(
-                "snap_min_write_bytes_per_time or snap_max_write_bytes_per_time must not be 0 \
-                 if snap_max_write_bytes_per_sec is greater than 0"
-            ));
-        }
-
-        if self.snap_max_write_bytes_per_time.0 > self.snap_max_write_bytes_per_sec.0 / 10 {
-            return Err(box_err!(
-                "snap_max_write_bytes_per_time {} should be much smaller than \
-                 snap_max_write_bytes_per_sec {}",
-                self.snap_max_write_bytes_per_time.0,
-                self.snap_max_write_bytes_per_sec.0
-            ));
         }
 
         Ok(())
@@ -237,11 +213,6 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.validate().unwrap();
-
-        let mut invalid_cfg = cfg.clone();
-        invalid_cfg.snap_max_write_bytes_per_time = ReadableSize::mb(1);
-        invalid_cfg.snap_max_write_bytes_per_sec = ReadableSize::mb(1);
-        assert!(invalid_cfg.validate().is_err());
 
         cfg.labels.insert("k1".to_owned(), "v1".to_owned());
         cfg.validate().unwrap();
