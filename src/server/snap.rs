@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::fmt::{self, Display, Formatter};
-use std::net::SocketAddr;
 use std::boxed::FnBox;
 use std::time::Instant;
 use std::sync::{Arc, RwLock};
@@ -20,7 +19,7 @@ use std::sync::{Arc, RwLock};
 use mio::Token;
 use futures::{Async, Future, Poll, Stream};
 use futures::stream::{self, Once};
-use grpc::{ChannelBuilder, Environment, WriteFlags};
+use grpc::{ChannelBuilder, ChannelCredentialsBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::SnapshotChunk;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
@@ -33,7 +32,7 @@ use util::collections::{HashMap, HashMapEntry as Entry};
 use util::HandyRwLock;
 
 use super::metrics::*;
-use super::{Error, Result};
+use super::{Config, Error, Result};
 use super::transport::RaftStoreRouter;
 
 pub type Callback = Box<FnBox(Result<()>) + Send>;
@@ -53,7 +52,7 @@ pub enum Task {
     Close(Token),
     Discard(Token),
     SendTo {
-        addr: SocketAddr,
+        addr: String,
         msg: RaftMessage,
         cb: Callback,
     },
@@ -110,8 +109,9 @@ impl Stream for SnapChunk {
 /// It will first send the normal raft snapshot message and then send the snapshot file.
 fn send_snap(
     env: Arc<Environment>,
+    cfg: Arc<Config>,
     mgr: SnapManager,
-    addr: SocketAddr,
+    addr: &str,
     msg: RaftMessage,
 ) -> Result<()> {
     assert!(msg.get_message().has_snapshot());
@@ -149,7 +149,18 @@ fn send_snap(
         first.chain(snap_chunk)
     };
 
-    let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
+    let mut cb = ChannelBuilder::new(env);
+    let channel = if cfg.ca.is_empty() {
+        cb.connect(addr)
+    } else {
+        if !cfg.override_ssl_target.is_empty() {
+            cb = cb.override_ssl_target(cfg.override_ssl_target.clone());
+        }
+        let cred = ChannelCredentialsBuilder::new()
+            .root_cert(cfg.ca.clone())
+            .build();
+        cb.secure_connect(addr, cred)
+    };
     let client = TikvClient::new(channel);
     let (sink, receiver) = client.snapshot();
     let send = chunks.forward(sink);
@@ -178,10 +189,11 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     files: HashMap<Token, (Box<Snapshot>, RaftMessage)>,
     pool: ThreadPool<DefaultContext>,
     raft_router: R,
+    cfg: Arc<Config>,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(env: Arc<Environment>, snap_mgr: SnapManager, r: R) -> Runner<R> {
+    pub fn new(env: Arc<Environment>, snap_mgr: SnapManager, r: R, cfg: Arc<Config>) -> Runner<R> {
         Runner {
             env: env,
             snap_mgr: snap_mgr,
@@ -190,6 +202,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
                 .thread_count(DEFAULT_SENDER_POOL_SIZE)
                 .build(),
             raft_router: r,
+            cfg: cfg,
         }
     }
 }
@@ -293,8 +306,9 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
                 let env = self.env.clone();
                 let mgr = self.snap_mgr.clone();
+                let cfg = self.cfg.clone();
                 self.pool.execute(move |_| {
-                    let res = send_snap(env, mgr, addr, msg);
+                    let res = send_snap(env, cfg, mgr, &addr, msg);
                     if res.is_err() {
                         error!("failed to send snap to {}: {:?}", addr, res);
                     }

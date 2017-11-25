@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use futures::{Future, Sink, Stream};
 use grpc::{DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
-           Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags};
+           Server as GrpcServer, ServerBuilder, ServerCredentials, UnarySink, WriteFlags};
 use tikv::pd::Error as PdError;
 
 use kvproto::pdpb::*;
@@ -36,8 +36,31 @@ impl Server {
         Server::run_with_eps(eps, handler, case)
     }
 
+    pub fn run_with_secure_eps<C>(
+        eps: Vec<(String, u16, ServerCredentials)>,
+        handler: Arc<Service>,
+        case: Option<Arc<C>>,
+    ) -> Server
+    where
+        C: PdMocker + Send + Sync + 'static,
+    {
+        Server::run_imp(vec![], eps, handler, case)
+    }
+
     pub fn run_with_eps<C>(
         eps: Vec<(String, u16)>,
+        handler: Arc<Service>,
+        case: Option<Arc<C>>,
+    ) -> Server
+    where
+        C: PdMocker + Send + Sync + 'static,
+    {
+        Server::run_imp(eps, vec![], handler, case)
+    }
+
+    pub fn run_imp<C>(
+        eps: Vec<(String, u16)>,
+        secure_eps: Vec<(String, u16, ServerCredentials)>,
         handler: Arc<Service>,
         case: Option<Arc<C>>,
     ) -> Server
@@ -58,6 +81,9 @@ impl Server {
         let mut sb = ServerBuilder::new(env).register_service(service);
         for (host, port) in eps {
             sb = sb.bind(host, port);
+        }
+        for (host, port, cred) in secure_eps {
+            sb = sb.bind_secure(host, port, cred);
         }
 
         let mut server = sb.build().unwrap();

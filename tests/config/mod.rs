@@ -17,6 +17,7 @@ use std::fs::File;
 
 use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
+use tikv::pd::Config as PdConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
@@ -67,6 +68,13 @@ fn test_serde_custom_tikv_config() {
         end_point_stack_size: ReadableSize::mb(12),
         end_point_recursion_limit: 100,
         end_point_batch_row_limit: 64,
+        ca_path: "invalid path".to_owned(),
+        cert_path: "invalid path".to_owned(),
+        key_path: "invalid path".to_owned(),
+        ca: b"ca".to_vec(),
+        cert: b"cert".to_vec(),
+        key: b"".to_vec(),
+        override_ssl_target: "".to_owned(),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -112,6 +120,9 @@ fn test_serde_custom_tikv_config() {
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],
+        ca_path: "invalid path".to_owned(),
+        ca: b"ca".to_vec(),
+        override_ssl_target: "".to_owned(),
     };
     value.rocksdb = DbConfig {
         wal_recovery_mode: DBRecoveryMode::AbsoluteConsistency,

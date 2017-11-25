@@ -15,7 +15,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io;
 use std::{slice, thread};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -133,13 +133,6 @@ impl<T> HandyRwLock<T> for RwLock<T> {
     fn rl(&self) -> RwLockReadGuard<T> {
         self.read().unwrap()
     }
-}
-
-
-pub fn make_std_tcp_conn<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
-    let stream = TcpStream::connect(addr)?;
-    stream.set_nodelay(true)?;
-    Ok(stream)
 }
 
 // A helper function to parse SocketAddr for mio.

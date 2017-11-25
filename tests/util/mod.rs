@@ -95,3 +95,19 @@ pub fn init_log() {
     // we don't mind set it multiple times.
     let _ = logger::init_log_for_tikv_only(CaseTraceLogger { f: writer }, level);
 }
+
+pub struct CertBundle {
+    pub cn: &'static str,
+    pub ca: &'static [u8],
+    pub cert: &'static [u8],
+    pub key: &'static [u8],
+}
+
+pub fn load_cert_bundle() -> CertBundle {
+    CertBundle {
+        cn: "example.com",
+        ca: include_bytes!("../data/ca.crt"),
+        cert: include_bytes!("../data/server.crt"),
+        key: include_bytes!("../data/server.pem"),
+    }
+}

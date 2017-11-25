@@ -12,6 +12,8 @@
 // limitations under the License.
 
 use std::ascii::AsciiExt;
+use std::fs::File;
+use std::io::Read;
 
 use sys_info;
 
@@ -69,6 +71,16 @@ pub struct Config {
     pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
     pub end_point_batch_row_limit: usize,
+    pub ca_path: String,
+    pub cert_path: String,
+    pub key_path: String,
+    pub ca: Vec<u8>,
+    pub cert: Vec<u8>,
+    #[serde(skip_serializing)]
+    pub key: Vec<u8>,
+    // Test purpose only.
+    #[serde(skip)]
+    pub override_ssl_target: String,
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -98,6 +110,13 @@ impl Default for Config {
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
+            ca_path: String::new(),
+            cert_path: String::new(),
+            key_path: String::new(),
+            ca: vec![],
+            cert: vec![],
+            key: vec![],
+            override_ssl_target: String::new(),
         }
     }
 }
@@ -143,8 +162,38 @@ impl Config {
             validate_label(v, "value")?;
         }
 
+        load_key("ca key", &self.ca_path, &mut self.ca)?;
+        load_key("cert key", &self.cert_path, &mut self.cert)?;
+        load_key("private key", &self.key_path, &mut self.key)?;
+        // TODO: validate whether ca, cert and private key match.
+        if (!self.ca.is_empty() || !self.cert.is_empty() || !self.key.is_empty()) &&
+            (self.ca.is_empty() || self.cert.is_empty() || self.key.is_empty())
+        {
+            return Err(box_err!(
+                "ca, cert and private key should be all configured."
+            ));
+        }
+
         Ok(())
     }
+}
+
+fn load_key(tag: &str, path: &str, key: &mut Vec<u8>) -> Result<()> {
+    if !key.is_empty() {
+        return Ok(());
+    }
+    if path.is_empty() {
+        return Ok(());
+    }
+    if let Err(e) = File::open(path).and_then(|mut f| f.read_to_end(key)) {
+        return Err(box_err!(
+            "failed to load {} from path {}: {:?}",
+            tag,
+            path,
+            e
+        ));
+    }
+    Ok(())
 }
 
 fn validate_label(s: &str, tp: &str) -> Result<()> {
@@ -182,6 +231,10 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    use std::io::Write;
+
+    use tempdir::TempDir;
+
     #[test]
     fn test_config_validate() {
         let mut cfg = Config::default();
@@ -215,6 +268,82 @@ mod tests {
         cfg.validate().unwrap();
         cfg.labels.insert("k2".to_owned(), "v2?".to_owned());
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_cred() {
+        let mut cfg = Config::default();
+        // default is disable secure connection.
+        cfg.validate().unwrap();
+
+        let assert_cfg = |c: fn(&mut Config), valid: bool| {
+            let mut invalid_cfg = cfg.clone();
+            c(&mut invalid_cfg);
+            assert_eq!(invalid_cfg.validate().is_ok(), valid);
+        };
+
+        // incomplete configurations should be rejected.
+        assert_cfg(|c| c.ca = vec![0], false);
+        assert_cfg(|c| c.cert = vec![0], false);
+        assert_cfg(|c| c.key = vec![0], false);
+        assert_cfg(
+            |c| {
+                c.ca = vec![0];
+                c.cert = vec![0];
+                c.key = vec![0];
+            },
+            true,
+        );
+
+        // invalid path should be rejected.
+        assert_cfg(
+            |c| {
+                c.ca_path = "invalid ca path".to_owned();
+                c.cert_path = "invalid cert path".to_owned();
+                c.key_path = "invalid key path".to_owned();
+            },
+            false,
+        );
+
+        let temp = TempDir::new("test_cred").unwrap();
+        let example_ca = temp.path().join("ca");
+        let example_cert = temp.path().join("cert");
+        let example_key = temp.path().join("key");
+        for (id, f) in (&[&example_ca, &example_cert, &example_key])
+            .into_iter()
+            .enumerate()
+        {
+            File::create(f).unwrap().write_all(&[id as u8]).unwrap();
+        }
+        let mut c = cfg.clone();
+        c.cert_path = format!("{}", example_cert.display());
+        c.key_path = format!("{}", example_key.display());
+        // incomplete configuration.
+        c.validate().unwrap_err();
+
+        // data should be loaded from file after validating.
+        c.ca_path = format!("{}", example_ca.display());
+        c.validate().unwrap();
+        assert_eq!(c.ca, vec![0]);
+        assert_eq!(c.cert, vec![1]);
+        assert_eq!(c.key, vec![2]);
+
+        // either content or path need to be set.
+        c.ca = vec![3];
+        c.ca_path = "".to_owned();
+        c.validate().unwrap();
+        assert_eq!(c.ca, vec![3]);
+        assert_eq!(c.cert, vec![1]);
+        assert_eq!(c.key, vec![2]);
+
+        // prefer content to path
+        c.ca_path = format!("{}", example_ca.display());
+        c.cert = vec![4];
+        c.key = vec![5];
+        c.validate().unwrap();
+        assert_eq!(c.ca, vec![3]);
+        assert_eq!(c.cert, vec![4]);
+        assert_eq!(c.key, vec![5]);
     }
 
     #[test]

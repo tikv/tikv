@@ -21,6 +21,7 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
 use sys_info;
 
 use server::Config as ServerConfig;
+use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
@@ -584,25 +585,6 @@ impl RaftDbConfig {
 
     pub fn build_cf_opts(&self) -> Vec<CFOptions> {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct PdConfig {
-    pub endpoints: Vec<String>,
-}
-
-impl PdConfig {
-    fn validate(&self) -> Result<(), Box<Error>> {
-        if self.endpoints.is_empty() {
-            return Err("please specify pd.endpoints.".into());
-        }
-        for addr in &self.endpoints {
-            config::check_addr(addr)?;
-        }
-        Ok(())
     }
 }
 

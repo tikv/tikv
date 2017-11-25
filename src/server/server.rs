@@ -15,7 +15,8 @@ use std::sync::{Arc, RwLock};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
-use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder,
+           ServerCredentialsBuilder};
 use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
 
@@ -56,7 +57,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(too_many_arguments)]
     pub fn new(
-        cfg: &Config,
+        cfg: &Arc<Config>,
         region_split_size: usize,
         storage: Storage,
         raft_router: T,
@@ -93,9 +94,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .build_args();
         let grpc_server = {
             let mut sb = ServerBuilder::new(env.clone())
-                .bind(ip, addr.port())
                 .channel_args(channel_args)
                 .register_service(create_tikv(kv_service));
+            sb = if cfg.cert.is_empty() {
+                sb.bind(ip, addr.port())
+            } else {
+                let cred = ServerCredentialsBuilder::new()
+                    .add_cert(cfg.cert.clone(), cfg.key.clone())
+                    .build();
+                sb.bind_secure(ip, addr.port(), cred)
+            };
             if let Some(engines) = debug_engines {
                 sb = sb.register_service(create_debug(DebugService::new(engines)));
             }
@@ -134,11 +142,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.trans.clone()
     }
 
-    pub fn start(&mut self, cfg: &Config) -> Result<()> {
+    pub fn start(&mut self, cfg: Arc<Config>) -> Result<()> {
         let end_point = EndPointHost::new(
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
-            cfg,
+            &cfg,
             self.pd_scheduler.clone(),
         );
         box_try!(
@@ -149,6 +157,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.env.clone(),
             self.snap_mgr.clone(),
             self.raft_router.clone(),
+            cfg,
         );
         box_try!(self.snap_worker.start(snap_runner));
         self.grpc_server.start();
@@ -180,7 +189,6 @@ mod tests {
     use std::sync::*;
     use std::sync::mpsc::*;
     use std::sync::atomic::*;
-    use std::net::SocketAddr;
 
     use super::*;
     use super::super::{Config, Result};
@@ -197,7 +205,7 @@ mod tests {
     #[derive(Clone)]
     struct MockResolver {
         quick_fail: Arc<AtomicBool>,
-        addr: Arc<Mutex<Option<SocketAddr>>>,
+        addr: Arc<Mutex<Option<String>>>,
     }
 
     impl StoreAddrResolver for MockResolver {
@@ -205,7 +213,12 @@ mod tests {
             if self.quick_fail.load(Ordering::SeqCst) {
                 return Err(box_err!("quick fail"));
             }
-            cb.call_box((self.addr.lock().unwrap().ok_or(box_err!("not set")),));
+            let addr = self.addr.lock().unwrap();
+            cb(
+                addr.as_ref()
+                    .map(|s| s.to_owned())
+                    .ok_or(box_err!("not set")),
+            );
             Ok(())
         }
     }
@@ -259,6 +272,7 @@ mod tests {
         let addr = Arc::new(Mutex::new(None));
         let quick_fail = Arc::new(AtomicBool::new(false));
         let pd_worker = FutureWorker::new("pd worker");
+        let cfg = Arc::new(cfg);
         let mut server = Server::new(
             &cfg,
             1024,
@@ -273,7 +287,7 @@ mod tests {
             None,
         ).unwrap();
 
-        server.start(&cfg).unwrap();
+        server.start(cfg).unwrap();
 
         let mut trans = server.transport();
         trans.report_unreachable(RaftMessage::new());
@@ -287,7 +301,7 @@ mod tests {
         resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 1, 0), "{:?}", resp);
 
-        *addr.lock().unwrap() = Some(server.listening_addr());
+        *addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
 
         trans.send(msg.clone()).unwrap();
         trans.flush();

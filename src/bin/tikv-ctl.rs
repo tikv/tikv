@@ -26,6 +26,8 @@ extern crate futures;
 extern crate rustc_serialize;
 
 use std::{process, str, u64};
+use std::fs::File;
+use std::io::Read;
 use std::iter::FromIterator;
 use std::cmp::Ordering;
 use std::error::Error;
@@ -36,7 +38,7 @@ use rustc_serialize::hex::{FromHex, ToHex};
 use clap::{App, Arg, SubCommand};
 use protobuf::Message;
 use futures::{future, stream, Future, Stream};
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::{ChannelBuilder, ChannelCredentialsBuilder, Environment};
 use protobuf::RepeatedField;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -51,7 +53,7 @@ use tikv::util::{self, escape, unescape};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{Debugger, RegionInfo};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::pd::{PdClient, RpcClient};
+use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
@@ -62,6 +64,7 @@ fn new_debug_executor(
     db: Option<&str>,
     raft_db: Option<&str>,
     host: Option<&str>,
+    ca_path: Option<&str>,
 ) -> Box<DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
@@ -77,7 +80,15 @@ fn new_debug_executor(
         }
         (Some(remote), None) => {
             let env = Arc::new(Environment::new(1));
-            let channel = ChannelBuilder::new(env).connect(remote);
+            let cb = ChannelBuilder::new(env);
+            let channel = if let Some(path) = ca_path {
+                let mut ca = vec![];
+                File::open(path).unwrap().read_to_end(&mut ca).unwrap();
+                let cred = ChannelCredentialsBuilder::new().root_cert(ca).build();
+                cb.secure_connect(remote, cred)
+            } else {
+                cb.connect(remote)
+            };
             let client = DebugClient::new(channel);
             Box::new(client) as Box<DebugExecutor>
         }
@@ -217,8 +228,9 @@ trait DebugExecutor {
         db: Option<&str>,
         raft_db: Option<&str>,
         host: Option<&str>,
+        ca_path: Option<&str>,
     ) {
-        let rhs_debug_executor = new_debug_executor(db, raft_db, host);
+        let rhs_debug_executor = new_debug_executor(db, raft_db, host, ca_path);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);
@@ -325,9 +337,9 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
-    fn set_region_tombstone_after_remove_peer(&self, region_id: u64, endpoints: Vec<String>) {
+    fn set_region_tombstone_after_remove_peer(&self, region_id: u64, cfg: &PdConfig) {
         self.check_local_mode();
-        match RpcClient::new(&endpoints)
+        match RpcClient::new(cfg)
             .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
             .get_region_by_id(region_id)
             .wait()
@@ -546,6 +558,14 @@ fn main() {
                 .help("set remote host"),
         )
         .arg(
+            Arg::with_name("ca_path")
+                .required(false)
+                .conflicts_with_all(&["db", "raftdb", "hex-to-escaped", "escaped-to-hex"])
+                .long("ca-path")
+                .takes_value(true)
+                .help("set CA certificate path"),
+        )
+        .arg(
             Arg::with_name("hex-to-escaped")
                 .conflicts_with("escaped-to-hex")
                 .long("to-escaped")
@@ -747,6 +767,13 @@ fn main() {
                         .takes_value(true)
                         .conflicts_with("to_db")
                         .help("to which remote host"),
+                )
+                .arg(
+                    Arg::with_name("to_ca_path")
+                        .long("to-ca-path")
+                        .takes_value(true)
+                        .conflicts_with("to_db")
+                        .help("CA certificate of the remote host"),
                 ),
         )
         .subcommand(
@@ -801,6 +828,12 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
+                )
+                .arg(
+                    Arg::with_name("ca_path")
+                        .long("ca-path")
+                        .takes_value(true)
+                        .help("certificate of PD"),
                 ),
         );
     let matches = app.clone().get_matches();
@@ -823,8 +856,9 @@ fn main() {
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
+    let ca_path = matches.value_of("ca_path");
 
-    let debug_executor = new_debug_executor(db, raft_db, host);
+    let debug_executor = new_debug_executor(db, raft_db, host, ca_path);
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -875,7 +909,8 @@ fn main() {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let to_db = matches.value_of("to_db");
         let to_host = matches.value_of("to_host");
-        debug_executor.diff_region(region, to_db, None, to_host);
+        let ca_path = matches.value_of("to_ca_path");
+        debug_executor.diff_region(region, to_db, None, to_host, ca_path);
     } else if let Some(matches) = matches.subcommand_matches("compact") {
         let db = matches.value_of("db").unwrap();
         let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
@@ -886,7 +921,15 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
-        debug_executor.set_region_tombstone_after_remove_peer(region, pd_urls);
+        let mut cfg = PdConfig::default();
+        cfg.endpoints = pd_urls;
+        if let Some(path) = matches.value_of("ca_path") {
+            cfg.ca_path = path.to_owned();
+        }
+        if let Err(e) = cfg.validate() {
+            panic!("invalid pd configuration: {:?}", e);
+        }
+        debug_executor.set_region_tombstone_after_remove_peer(region, &cfg);
     } else {
         let _ = app.print_help();
     }

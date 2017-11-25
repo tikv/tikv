@@ -24,7 +24,7 @@ use kvproto::pdpb::{self, Member};
 
 use util::{Either, HandyRwLock};
 use util::time::duration_to_sec;
-use pd::PdFuture;
+use pd::{Config, PdFuture};
 use super::{Error, PdClient, RegionStat, Result, REQUEST_TIMEOUT};
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::metrics::*;
@@ -38,18 +38,18 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new(endpoints: &[String]) -> Result<RpcClient> {
+    pub fn new(cfg: &Config) -> Result<RpcClient> {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(CQ_COUNT)
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        let (client, members) = validate_endpoints(env.clone(), endpoints)?;
+        let (client, members) = validate_endpoints(env.clone(), cfg)?;
 
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),
-            leader_client: LeaderClient::new(env, client, members),
+            leader_client: LeaderClient::new(env, cfg, client, members),
         })
     }
 
