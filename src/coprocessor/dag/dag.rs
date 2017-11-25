@@ -31,7 +31,7 @@ use super::executor::{build_exec, Executor, Row};
 pub struct DAGContext {
     columns: Arc<Vec<ColumnInfo>>,
     has_aggr: bool,
-    req_ctx: Arc<ReqContext>,
+    req_ctx: ReqContext,
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
@@ -44,7 +44,7 @@ impl DAGContext {
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
-        req_ctx: Arc<ReqContext>,
+        req_ctx: ReqContext,
         batch_row_limit: usize,
         chunks_per_stream: usize,
     ) -> Result<DAGContext> {

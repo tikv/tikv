@@ -25,10 +25,10 @@ pub mod snap;
 pub mod debug;
 
 use std::fmt;
+use std::boxed::FnBox;
 
-use grpc::{ServerStreamingSink, UnarySink};
-#[cfg(test)]
-use futures::sync::mpsc::Sender;
+use grpc::Error as GrpcError;
+use futures::{stream, Stream};
 
 use kvproto::coprocessor::Response;
 
@@ -40,59 +40,44 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
-pub enum CopResponseSink {
-    Unary(UnarySink<Response>),
-    Streaming(ServerStreamingSink<Response>),
-    #[cfg(test)]
-    TestChannel(Sender<Response>),
+pub type ResponseStream = Box<Stream<Item = Response, Error = GrpcError> + Send>;
+
+pub enum OnResponse {
+    Unary(Box<FnBox(Response) + Send>),
+    Streaming(Box<FnBox(ResponseStream) + Send>),
 }
 
-impl CopResponseSink {
+impl OnResponse {
     pub fn is_streaming(&self) -> bool {
         match *self {
-            CopResponseSink::Unary(_) => false,
-            _ => true,
+            OnResponse::Unary(_) => false,
+            OnResponse::Streaming(_) => true,
+        }
+    }
+
+    pub fn respond(self, resp: Response) {
+        match self {
+            OnResponse::Unary(cb) => cb(resp),
+            OnResponse::Streaming(cb) => {
+                let s = box stream::once::<_, GrpcError>(Ok(resp));
+                cb(s as ResponseStream);
+            }
+        }
+    }
+
+    pub fn respond_stream(self, s: ResponseStream) {
+        match self {
+            OnResponse::Streaming(cb) => cb(s),
+            OnResponse::Unary(_) => unreachable!(),
         }
     }
 }
 
-impl From<UnarySink<Response>> for CopResponseSink {
-    fn from(s: UnarySink<Response>) -> CopResponseSink {
-        CopResponseSink::Unary(s)
-    }
-}
-
-impl From<ServerStreamingSink<Response>> for CopResponseSink {
-    fn from(s: ServerStreamingSink<Response>) -> CopResponseSink {
-        CopResponseSink::Streaming(s)
-    }
-}
-
-impl From<CopResponseSink> for UnarySink<Response> {
-    fn from(s: CopResponseSink) -> UnarySink<Response> {
-        match s {
-            CopResponseSink::Unary(sink) => sink,
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl From<CopResponseSink> for ServerStreamingSink<Response> {
-    fn from(s: CopResponseSink) -> ServerStreamingSink<Response> {
-        match s {
-            CopResponseSink::Streaming(sink) => sink,
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl fmt::Debug for CopResponseSink {
+impl fmt::Debug for OnResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            CopResponseSink::Unary(_) => write!(f, "Grpc UnarySink"),
-            CopResponseSink::Streaming(_) => write!(f, "Grpc ServerStreamingSink"),
-            #[cfg(test)]
-            CopResponseSink::TestChannel(_) => write!(f, "Test Sender"),
+            OnResponse::Unary(_) => write!(f, "Unary"),
+            OnResponse::Streaming(_) => write!(f, "Streaming"),
         }
     }
 }

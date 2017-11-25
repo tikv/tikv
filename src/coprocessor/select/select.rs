@@ -42,7 +42,7 @@ pub struct SelectContext {
     snap: SnapshotStore,
     statistics: Statistics,
     core: SelectContextCore,
-    req_ctx: Arc<ReqContext>,
+    req_ctx: ReqContext,
     scanner: Option<Scanner>,
 }
 
@@ -50,7 +50,7 @@ impl SelectContext {
     pub fn new(
         sel: SelectRequest,
         snap: Box<Snapshot>,
-        req_ctx: Arc<ReqContext>,
+        req_ctx: ReqContext,
         batch_row_limit: usize,
     ) -> Result<SelectContext> {
         let snap = SnapshotStore::new(

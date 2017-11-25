@@ -12,14 +12,13 @@
 // limitations under the License.
 
 use std::boxed::FnBox;
-use std::fmt::Debug;
 use std::io::Write;
 use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use mio::Token;
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
-           ServerStreamingSink, UnarySink};
+           ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, Future, Stream};
 use futures::sync::oneshot;
 use protobuf::RepeatedField;
@@ -29,7 +28,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
-use util::worker::{Scheduler, Stopped};
+use util::worker::Scheduler;
 use util::collections::HashMap;
 use util::buf::PipeBuffer;
 use storage::{self, Key, Mutation, Options, Storage, Value};
@@ -39,7 +38,7 @@ use storage::engine::Error as EngineError;
 use server::transport::RaftStoreRouter;
 use server::snap::Task as SnapTask;
 use server::metrics::*;
-use server::{CopResponseSink, Error};
+use server::{Error, OnResponse};
 use raftstore::store::Msg as StoreMessage;
 use coprocessor::{EndPointTask, RequestTask};
 
@@ -100,9 +99,9 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
     }
 }
 
-fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot::Receiver<T>) {
+fn make_callback<T: Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot::Receiver<T>) {
     let (tx, rx) = oneshot::channel();
-    let callback = move |resp| { tx.send(resp).unwrap(); };
+    let callback = move |resp| tx.send(resp).map_err(|_| ()).unwrap();
     (box callback, rx)
 }
 
@@ -766,13 +765,38 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     }
 
     fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
-        let scheduler = &self.end_point_scheduler;
-        let recursion_limit = self.recursion_limit;
-        if let Some((sink, error, code)) =
-            coprocessor_dispatch(scheduler, req, recursion_limit, sink, "coprocessor")
-        {
-            self.send_fail_status(ctx, sink, error, code);
+        let (cb, future) = make_callback();
+        let on_resp = OnResponse::Unary(cb);
+        let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
+            Ok(req_task) => req_task,
+            Err(e) => {
+                let error = box_err!(e);
+                let code = RpcStatusCode::InvalidArgument;
+                return self.send_fail_status(ctx, sink, error, code);
+            }
+        };
+
+        let task = EndPointTask::Request(req_task);
+        if let Err(e) = self.end_point_scheduler.schedule(task) {
+            let error = Error::from(e);
+            let code = RpcStatusCode::ResourceExhausted;
+            return self.send_fail_status(ctx, sink, error, code);
         }
+
+        let label = "coprocessor";
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .with_label_values(&[label])
+            .start_coarse_timer();
+
+        let future = future
+            .map_err(Error::from)
+            .and_then(|resp| sink.success(resp).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+        ctx.spawn(future);
     }
 
     fn coprocessor_stream(
@@ -781,13 +805,42 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         req: Request,
         sink: ServerStreamingSink<Response>,
     ) {
-        let scheduler = &self.end_point_scheduler;
-        let recursion_limit = self.recursion_limit;
-        if let Some((sink, error, code)) =
-            coprocessor_dispatch(scheduler, req, recursion_limit, sink, "coprpcessor_stream")
-        {
-            self.send_fail_status_to_stream(ctx, sink, error, code);
+        let (cb, future) = make_callback();
+        let on_resp = OnResponse::Streaming(cb);
+        let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
+            Ok(req_task) => req_task,
+            Err(e) => {
+                let error = box_err!(e);
+                let code = RpcStatusCode::InvalidArgument;
+                return self.send_fail_status_to_stream(ctx, sink, error, code);
+            }
+        };
+
+        let task = EndPointTask::Request(req_task);
+        if let Err(e) = self.end_point_scheduler.schedule(task) {
+            let error = Error::from(e);
+            let code = RpcStatusCode::ResourceExhausted;
+            return self.send_fail_status_to_stream(ctx, sink, error, code);
         }
+
+        let label = "coprocessor_stream";
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .with_label_values(&[label])
+            .start_coarse_timer();
+
+        let future = future
+            .map_err(Error::from)
+            .and_then(|s| {
+                s.map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
+                    .forward(sink)
+                    .map_err(Error::from)
+            })
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+        ctx.spawn(future);
     }
 
     fn raft(
@@ -1138,47 +1191,5 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
             })
             .collect(),
         Err(e) => vec![extract_key_error(&e)],
-    }
-}
-
-/// dispatch `coprocessor` or `coprocessor_stream` requests.
-/// Return None on success, or return a (`Sink`, `Error`, `RpcStatusCode`) tuple.
-fn coprocessor_dispatch<S>(
-    scheduler: &Scheduler<EndPointTask>,
-    req: Request,
-    recursion_limit: u32,
-    sink: S,
-    metric_lable: &str,
-) -> Option<(S, Error, RpcStatusCode)>
-where
-    S: From<CopResponseSink>,
-    CopResponseSink: From<S>,
-{
-    let timer = GRPC_MSG_HISTOGRAM_VEC
-        .with_label_values(&[metric_lable])
-        .start_coarse_timer();
-
-    let mut req_task = match RequestTask::new(req, recursion_limit) {
-        Ok(req_task) => req_task,
-        Err(e) => {
-            timer.observe_duration();
-            return Some((sink, box_err!(e), RpcStatusCode::InvalidArgument));
-        }
-    };
-
-    req_task.set_on_finish_sink(CopResponseSink::from(sink));
-    req_task.set_metric_callback(box move || timer.observe_duration());
-
-    match scheduler.schedule(EndPointTask::Request(req_task)) {
-        Err(Stopped(EndPointTask::Request(mut req_task))) => {
-            let metric_cb = req_task.take_metric_callback();
-            metric_cb();
-
-            let sink = S::from(req_task.take_on_finish_sink());
-            let error = Error::from(Stopped(EndPointTask::Request(req_task)));
-            Some((sink, error, RpcStatusCode::ResourceExhausted))
-        }
-        Ok(_) => None,
-        _ => unreachable!(),
     }
 }
