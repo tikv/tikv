@@ -61,7 +61,7 @@ impl IOLimiter {
 
 #[cfg(test)]
 mod test {
-    use super::{IOLimiter, DEFAULT_SNAP_MAX_BYTES_PER_SEC, SNAP_MAX_BYTES_PER_TIME};
+    use super::{IOLimiter, SNAP_MAX_BYTES_PER_TIME};
 
     #[test]
     fn test_io_limiter() {
