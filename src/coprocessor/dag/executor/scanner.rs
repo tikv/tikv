@@ -48,12 +48,18 @@ impl Scanner {
         key_only: bool,
         range: KeyRange,
     ) -> Result<Scanner> {
-        let (scan_mode, seek_key, upper_bound) = if desc {
-            (ScanMode::Backward, range.get_end().to_vec(), None)
+        let (scan_mode, seek_key, lower_bound, upper_bound) = if desc {
+            (
+                ScanMode::Backward,
+                range.get_end().to_vec(),
+                Some(Key::from_raw(range.get_start()).encoded().to_vec()),
+                None,
+            )
         } else {
             (
                 ScanMode::Forward,
                 range.get_start().to_vec(),
+                None,
                 Some(Key::from_raw(range.get_end()).encoded().to_vec()),
             )
         };
@@ -63,7 +69,8 @@ impl Scanner {
             scan_on: scan_on,
             key_only: key_only,
             seek_key: seek_key,
-            scanner: store.scanner(scan_mode, key_only, upper_bound)?,
+            scanner: store
+                .scanner(scan_mode, key_only, lower_bound, upper_bound)?,
             range: range,
             no_more: false,
             statistics_cache: Statistics::default(),
@@ -75,15 +82,16 @@ impl Scanner {
         self.no_more = false;
         match self.scan_mode {
             ScanMode::Backward => self.seek_key = self.range.get_end().to_vec(),
-            ScanMode::Forward => {
-                // For forward scan, we need to re-initialize the scanner.
-                self.seek_key = self.range.get_start().to_vec();
-                self.statistics_cache.add(self.scanner.get_statistics());
-                let upper_bound = Some(Key::from_raw(&self.range.end).encoded().to_vec());
-                self.scanner = store.scanner(self.scan_mode, self.key_only, upper_bound)?;
-            }
+            ScanMode::Forward => self.seek_key = self.range.get_start().to_vec(),
             _ => unreachable!(),
         };
+
+        self.statistics_cache.add(self.scanner.get_statistics());
+        let lower_bound = Some(Key::from_raw(&self.range.start).encoded().to_vec());
+        let upper_bound = Some(Key::from_raw(&self.range.end).encoded().to_vec());
+        self.scanner = store
+        .scanner(self.scan_mode, self.key_only, lower_bound, upper_bound)?;
+
         Ok(())
     }
 

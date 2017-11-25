@@ -80,7 +80,8 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        let iter_opt =
+            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
 
@@ -96,7 +97,8 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        let iter_opt =
+            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
@@ -156,6 +158,14 @@ pub struct RegionIterator {
     end_key: Vec<u8>,
 }
 
+fn set_lower_bound(iter_opt: IterOption, region: &Region) -> IterOption {
+    let lower_bound = match iter_opt.lower_bound() {
+        Some(k) if !k.is_empty() => keys::data_key(k),
+        _ => keys::enc_start_key(region),
+    };
+    iter_opt.set_lower_bound(lower_bound)
+}
+
 fn set_upper_bound(iter_opt: IterOption, region: &Region) -> IterOption {
     let upper_bound = match iter_opt.upper_bound() {
         Some(k) if !k.is_empty() => keys::data_key(k),
@@ -167,13 +177,16 @@ fn set_upper_bound(iter_opt: IterOption, region: &Region) -> IterOption {
 // we use rocksdb's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
+        iter_opt = set_lower_bound(iter_opt, &region);
         iter_opt = set_upper_bound(iter_opt, &region);
+        let start_key = iter_opt.lower_bound().unwrap().to_vec();
+        let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator(iter_opt);
         RegionIterator {
             iter: iter,
             valid: false,
-            start_key: keys::enc_start_key(&region),
-            end_key: keys::enc_end_key(&region),
+            start_key: start_key,
+            end_key: end_key,
             region: region,
         }
     }
@@ -184,13 +197,16 @@ impl RegionIterator {
         mut iter_opt: IterOption,
         cf: &str,
     ) -> RegionIterator {
+        iter_opt = set_lower_bound(iter_opt, &region);
         iter_opt = set_upper_bound(iter_opt, &region);
+        let start_key = iter_opt.lower_bound().unwrap().to_vec();
+        let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
         RegionIterator {
             iter: iter,
             valid: false,
-            start_key: keys::enc_start_key(&region),
-            end_key: keys::enc_end_key(&region),
+            start_key: start_key,
+            end_key: end_key,
             region: region,
         }
     }
@@ -416,7 +432,7 @@ mod tests {
         ];
         let upper_bounds: Vec<Option<&[u8]>> = vec![None, Some(b"a7")];
         for upper_bound in upper_bounds {
-            let iter_opt = IterOption::new(upper_bound.map(|v| v.to_vec()), true);
+            let iter_opt = IterOption::new(None, upper_bound.map(|v| v.to_vec()), true);
             let mut iter = snap.iter(iter_opt);
             for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
                 let check_res =
@@ -491,7 +507,7 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter(IterOption::new(Some(b"a5".to_vec()), true));
+        let mut iter = snap.iter(IterOption::new(None, Some(b"a5".to_vec()), true));
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
@@ -591,5 +607,21 @@ mod tests {
         let mut expect = test_data.clone();
         expect.reverse();
         assert_eq!(res, expect);
+
+        // test lower bound
+        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
+        let snap = RegionSnapshot::new(&store);
+        let mut iter_opt = IterOption::default();
+        let mut iter = snap.iter(iter_opt.set_lower_bound(b"a3".to_vec()));
+        assert!(iter.seek_to_last());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.prev() {
+                break;
+            }
+        }
+        res.sort();
+        assert_eq!(res, test_data[1..].to_vec());
     }
 }
