@@ -223,7 +223,7 @@ impl SampleCollector {
         let mut s = analyze::SampleCollector::new();
         s.set_null_count(self.null_count as i64);
         s.set_count(self.count as i64);
-        s.set_sketch(self.sketch.into_proto());
+        s.set_fm_sketch(self.sketch.into_proto());
         s.set_samples(RepeatedField::from_vec(self.samples));
         s
     }
