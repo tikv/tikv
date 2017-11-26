@@ -206,7 +206,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
-        limiter.clone(),
+        limiter,
     );
 
     // Create server
