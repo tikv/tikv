@@ -108,9 +108,10 @@ impl<'a, T: Write + 'a> Write for LimitWriter<'a, T> {
 
 #[cfg(test)]
 mod test {
-    use std::fs::{self, File};
+    use std::fs::File;
     use std::io::{Read, Write};
     use std::sync::Arc;
+    use tempdir::TempDir;
 
     use super::{IOLimiter, LimitWriter, SNAP_MAX_BYTES_PER_TIME};
 
@@ -132,15 +133,20 @@ mod test {
 
     #[test]
     fn test_limit_writer() {
-        let mut file = File::create("./test_limiter_writer.txt").unwrap();
+        let path = TempDir::new("_test_limit_writer.txt").expect("");
+        let mut file = File::create(path).unwrap();
         let mut limit_writer = LimitWriter::new(Some(Arc::new(IOLimiter::new(1024))), &mut file);
-        limit_writer.write_all(b"Hello, World!").unwrap();
+
+        let mut s = String::new();
+        for _ in 0..1000 {
+            s.push_str("Hello, World!");
+        }
+        limit_writer.write_all(s.as_bytes()).unwrap();
         limit_writer.flush().unwrap();
 
-        let mut file = File::open("./test_limiter_writer.txt").unwrap();
+        let mut file = File::open(path).unwrap();
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
-        assert_eq!(contents, "Hello, World!");
-        fs::remove_file("./test_limiter_writer.txt").unwrap();
+        assert_eq!(contents, s);
     }
 }
