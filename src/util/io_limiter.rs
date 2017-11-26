@@ -108,6 +108,10 @@ impl<'a, T: Write + 'a> Write for LimitWriter<'a, T> {
 
 #[cfg(test)]
 mod test {
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+
     use super::{IOLimiter, LimitWriter, SNAP_MAX_BYTES_PER_TIME};
 
     #[test]
