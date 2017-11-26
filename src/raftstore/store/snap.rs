@@ -35,7 +35,7 @@ use raftstore::store::Msg;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::transport::SendCh;
-use util::io_limiter::IOLimiter;
+use util::io_limiter::{IOLimiter, LimitWriter};
 use util::HandyRwLock;
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
@@ -710,11 +710,9 @@ impl Snap {
             } else {
                 let mut key_count = 0;
                 let mut size = 0;
-                let base = if self.limiter.is_some() {
-                    self.limiter.as_ref().unwrap().get_max_bytes_per_time()
-                } else {
-                    0 as i64
-                };
+                let base = self.limiter
+                    .as_ref()
+                    .map_or(0 as i64, |l| l.get_max_bytes_per_time());
                 let mut bytes: i64 = 0;
                 snap.scan_cf(
                     cf,
@@ -723,10 +721,10 @@ impl Snap {
                     false,
                     &mut |key, value| {
                         let l = key.len() + value.len();
-                        if base > 0 {
+                        if let Some(ref limiter) = self.limiter {
                             if bytes >= base {
                                 bytes = 0;
-                                self.limiter.as_ref().unwrap().request(base);
+                                limiter.request(base);
                             }
                             bytes += l as i64;
                         }
@@ -1019,42 +1017,18 @@ impl Write for Snap {
                 continue;
             }
 
-            let file = cf_file.file.as_mut().unwrap();
+            let mut file = LimitWriter::new(self.limiter.clone(), cf_file.file.as_mut().unwrap());
             let digest = cf_file.write_digest.as_mut().unwrap();
 
-            if self.limiter.is_some() {
-                let base = self.limiter.as_ref().unwrap().get_max_bytes_per_time() as usize;
-                let total = if next_buf.len() > left {
-                    left
-                } else {
-                    next_buf.len()
-                };
-                let mut cur = 0;
-                let mut end;
-                while cur < total {
-                    if cur + base >= total {
-                        end = total;
-                    } else {
-                        end = cur + base;
-                    }
-                    self.limiter.as_ref().unwrap().request((end - cur) as i64);
-                    file.write_all(&next_buf[cur..end])?;
-                    cur = end;
-                }
-            }
             if next_buf.len() > left {
-                if self.limiter.is_none() {
-                    file.write_all(&next_buf[0..left])?;
-                    digest.write(&next_buf[0..left]);
-                }
+                file.write_all(&next_buf[0..left])?;
+                digest.write(&next_buf[0..left]);
                 cf_file.written_size += left as u64;
                 self.cf_index += 1;
                 next_buf = &next_buf[left..];
             } else {
-                if self.limiter.is_none() {
-                    file.write_all(next_buf)?;
-                    digest.write(next_buf);
-                }
+                file.write_all(next_buf)?;
+                digest.write(next_buf);
                 cf_file.written_size += next_buf.len() as u64;
                 return Ok(buf.len());
             }

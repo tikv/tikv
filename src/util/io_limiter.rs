@@ -11,6 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io::{Result, Write};
+use std::sync::Arc;
+use std::option::Option;
+
 use rocksdb::RateLimiter;
 
 const PRIORITY_HIGH: u8 = 1;
@@ -59,9 +63,52 @@ impl IOLimiter {
     }
 }
 
+pub struct LimitWriter<'a, T: Write + 'a> {
+    limiter: Option<Arc<IOLimiter>>,
+    writer: &'a mut T,
+}
+
+impl<'a, T: Write + 'a> LimitWriter<'a, T> {
+    pub fn new(limiter: Option<Arc<IOLimiter>>, writer: &'a mut T) -> LimitWriter<'a, T> {
+        LimitWriter {
+            limiter: limiter,
+            writer: writer,
+        }
+    }
+}
+
+impl<'a, T: Write + 'a> Write for LimitWriter<'a, T> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        let total = buf.len();
+        if let Some(ref limiter) = self.limiter {
+            let single = limiter.get_max_bytes_per_time() as usize;
+            let mut curr = 0;
+            let mut end;
+            while curr < total {
+                if curr + single >= total {
+                    end = total;
+                } else {
+                    end = curr + single;
+                }
+                limiter.request((end - curr) as i64);
+                self.writer.write_all(&buf[curr..end])?;
+                curr = end;
+            }
+        } else {
+            self.writer.write_all(buf)?;
+        }
+        Ok(total)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.writer.flush()?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use super::{IOLimiter, SNAP_MAX_BYTES_PER_TIME};
+    use super::{IOLimiter, LimitWriter, SNAP_MAX_BYTES_PER_TIME};
 
     #[test]
     fn test_io_limiter() {
@@ -77,5 +124,19 @@ mod test {
         assert_eq!(limiter.get_total_bytes_through(), 1024 * 1024);
 
         assert_eq!(limiter.get_total_requests(), 1);
+    }
+
+    #[test]
+    fn test_limit_writer() {
+        let mut file = File::create("./test_limiter_writer.txt").unwrap();
+        let mut limit_writer = LimitWriter::new(Some(Arc::new(IOLimiter::new(1024))), &mut file);
+        limit_writer.write_all(b"Hello, World!").unwrap();
+        limit_writer.flush().unwrap();
+
+        let mut file = File::open("./test_limiter_writer.txt").unwrap();
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "Hello, World!");
+        fs::remove_file("./test_limiter_writer.txt").unwrap();
     }
 }
