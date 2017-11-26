@@ -1500,64 +1500,64 @@ fn test_aggr_bit_ops() {
     let exp = vec![
         (
             Datum::Bytes(b"name:0".to_vec()),
-            //Datum::U64(0),
+            Datum::U64(0),
             Datum::U64(3),
-            //Datum::U64(3),
+            Datum::U64(3),
         ),
         (
             Datum::Bytes(b"name:3".to_vec()),
-            //Datum::U64(3),
             Datum::U64(3),
-        //    //Datum::U64(3),
+            Datum::U64(3),
+            Datum::U64(3),
         ),
         (
             Datum::Bytes(b"name:5".to_vec()),
-        //    //Datum::U64(4),
+            Datum::U64(4),
             Datum::U64(5),
-        //    //Datum::U64(1),
+            Datum::U64(1),
         ),
         (
             Datum::Null,
             Datum::U64(4),
-        //    Datum::I64(4),
-        //    //Datum::I64(4),
+            Datum::U64(4),
+            Datum::U64(4),
         ),
         (
             Datum::Bytes(b"name:6".to_vec()),
-        //    //Datum::U64(18446744073709551615),
+            Datum::U64(18446744073709551615),
             Datum::U64(0),
-        //    //Datum::U64(0),
+            Datum::U64(0),
         )
     ];
     // for selection
     let req = Select::from(&product.table)
-        //.bit_and(product.count)
+        .bit_and(product.count)
         .bit_or(product.count)
-        //.bit_xor(product.count)
+        .bit_xor(product.count)
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), exp.len());
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
-    for (row, (name, bitor)) in spliter.zip(exp.clone()) {
+    for (row, (name, bitand, bitor, bitxor)) in spliter.zip(exp.clone()) {
         let gk = datum::encode_value(&[name]).unwrap();
-        let expected_datum = vec![Datum::Bytes(gk), bitor];
+        let expected_datum = vec![Datum::Bytes(gk), bitand, bitor, bitxor];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.data, &*expected_encoded);
     }
     // for dag
     let req = DAGSelect::from(&product.table)
-        //.bit_and(product.count)
+        .bit_and(product.count)
         .bit_or(product.count)
-        //.bit_xor(product.count)
+        .bit_xor(product.count)
         .group_by(&[product.name])
         .build();
     let mut resp = handle_select(&end_point, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 2);
-    for (row, (name, bitor)) in spliter.zip(exp) {
-        let expected_datum = vec![bitor, name];
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 4);
+    for (row, (name, bitand, bitor, bitxor)) in spliter.zip(exp) {
+        let expected_datum = vec![bitand, bitor, bitxor, name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
