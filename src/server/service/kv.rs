@@ -14,10 +14,12 @@
 use std::boxed::FnBox;
 use std::fmt::Debug;
 use std::io::Write;
+use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use mio::Token;
-use grpc::{ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink};
+use grpc::{ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
+           ServerStreamingSink, UnarySink};
 use futures::{future, Future, Stream};
 use futures::sync::oneshot;
 use protobuf::RepeatedField;
@@ -28,6 +30,7 @@ use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
 use util::worker::Scheduler;
+use util::collections::HashMap;
 use util::buf::PipeBuffer;
 use storage::{self, Key, Mutation, Options, Storage, Value};
 use storage::txn::Error as TxnError;
@@ -478,14 +481,21 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let commit_ts = match req.get_commit_version() {
-            0 => None,
-            x => Some(x),
+        let txn_status = if req.get_start_version() > 0 {
+            HashMap::from_iter(iter::once(
+                (req.get_start_version(), req.get_commit_version()),
+            ))
+        } else {
+            HashMap::from_iter(
+                req.take_txn_infos()
+                    .into_iter()
+                    .map(|info| (info.txn, info.status)),
+            )
         };
 
         let (cb, future) = make_callback();
         let res = self.storage
-            .async_resolve_lock(req.take_context(), req.get_start_version(), commit_ts, cb);
+            .async_resolve_lock(req.take_context(), txn_status, cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -769,6 +779,12 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             });
 
         ctx.spawn(future);
+    }
+
+    fn coprocessor_stream(&self, ctx: RpcContext, _: Request, sink: ServerStreamingSink<Response>) {
+        let f = sink.fail(RpcStatus::new(RpcStatusCode::Unimplemented, None))
+            .map_err(|e| error!("failed to report unimplemented method: {:?}", e));
+        ctx.spawn(f);
     }
 
     fn raft(

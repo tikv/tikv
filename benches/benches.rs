@@ -35,7 +35,7 @@ mod serialization;
 mod coprocessor;
 
 #[allow(dead_code)]
-#[path = "../tests/util.rs"]
+#[path = "../tests/util/mod.rs"]
 mod util;
 
 use test::Bencher;

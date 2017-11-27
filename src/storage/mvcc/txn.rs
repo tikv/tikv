@@ -24,46 +24,42 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
-pub struct MvccTxn<'a> {
-    reader: MvccReader<'a>,
+pub struct MvccTxn {
+    reader: MvccReader,
     start_ts: u64,
     writes: Vec<Modify>,
     write_size: usize,
 }
 
-impl<'a> fmt::Debug for MvccTxn<'a> {
+impl fmt::Debug for MvccTxn {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "txn @{}", self.start_ts)
     }
 }
 
-impl<'a> MvccTxn<'a> {
+impl MvccTxn {
     pub fn new(
-        snapshot: &'a Snapshot,
-        statistics: &'a mut Statistics,
+        snapshot: Box<Snapshot>,
         start_ts: u64,
         mode: Option<ScanMode>,
         isolation_level: IsolationLevel,
         fill_cache: bool,
-    ) -> MvccTxn<'a> {
+    ) -> MvccTxn {
         MvccTxn {
             // Todo: use session variable to indicate fill cache or not
-            reader: MvccReader::new(
-                snapshot,
-                statistics,
-                mode,
-                fill_cache,
-                None,
-                isolation_level,
-            ),
+            reader: MvccReader::new(snapshot, mode, fill_cache, None, isolation_level),
             start_ts: start_ts,
             writes: vec![],
             write_size: 0,
         }
     }
 
-    pub fn modifies(self) -> Vec<Modify> {
+    pub fn into_modifies(self) -> Vec<Modify> {
         self.writes
+    }
+
+    pub fn get_statistics(&self) -> &Statistics {
+        self.reader.get_statistics()
     }
 
     pub fn write_size(&self) -> usize {
@@ -340,8 +336,7 @@ mod tests {
     use super::MvccTxn;
     use super::super::MvccReader;
     use super::super::write::{Write, WriteType};
-    use storage::{make_key, Mutation, Options, ScanMode, Statistics, ALL_CFS, CF_WRITE,
-                  SHORT_VALUE_MAX_LEN};
+    use storage::{make_key, Mutation, Options, ScanMode, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
     use storage::engine::{self, Engine, TEMP_DIR};
 
     fn gen_value(v: u8, len: usize) -> Vec<u8> {
@@ -745,15 +740,7 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            10,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, 10, None, IsolationLevel::SI, true);
         let key = make_key(k);
         assert_eq!(txn.write_size, 0);
 
@@ -766,21 +753,13 @@ mod tests {
             &Options::default(),
         ).unwrap();
         assert!(txn.write_size() > 0);
-        engine.write(&ctx, txn.modifies()).unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
 
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            10,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, 10, None, IsolationLevel::SI, true);
         txn.commit(&key, 15).unwrap();
         assert!(txn.write_size() > 0);
-        engine.write(&ctx, txn.modifies()).unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
     #[test]
@@ -801,15 +780,7 @@ mod tests {
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            5,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, 5, None, IsolationLevel::SI, true);
         assert!(
             txn.prewrite(
                 Mutation::Put((make_key(key), value.to_vec())),
@@ -820,15 +791,7 @@ mod tests {
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            5,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, 5, None, IsolationLevel::SI, true);
         let mut opt = Options::default();
         opt.skip_constraint_check = true;
         assert!(
@@ -853,129 +816,65 @@ mod tests {
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
         assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect);
     }
 
     fn must_get_rc(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            ts,
-            None,
-            IsolationLevel::RC,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::RC, true);
         assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect)
     }
 
     fn must_get_none(engine: &Engine, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
         assert!(txn.get(&make_key(key)).unwrap().is_none());
     }
 
     fn must_get_err(engine: &Engine, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
         assert!(txn.get(&make_key(key)).is_err());
     }
 
     fn must_prewrite_put(engine: &Engine, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
         txn.prewrite(
             Mutation::Put((make_key(key), value.to_vec())),
             pk,
             &Options::default(),
         ).unwrap();
-        engine.write(&ctx, txn.modifies()).unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
     fn must_prewrite_delete(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
         txn.prewrite(Mutation::Delete(make_key(key)), pk, &Options::default())
             .unwrap();
-        engine.write(&ctx, txn.modifies()).unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
     fn must_prewrite_lock(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
         txn.prewrite(Mutation::Lock(make_key(key)), pk, &Options::default())
             .unwrap();
-        engine.write(&ctx, txn.modifies()).unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
     fn must_prewrite_lock_err(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
         assert!(
             txn.prewrite(Mutation::Lock(make_key(key)), pk, &Options::default())
                 .is_err()
@@ -985,107 +884,51 @@ mod tests {
     fn must_commit(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            start_ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         txn.commit(&make_key(key), commit_ts).unwrap();
-        engine.write(&ctx, txn.modifies()).unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
     fn must_commit_err(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            start_ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         assert!(txn.commit(&make_key(key), commit_ts).is_err());
     }
 
     fn must_rollback(engine: &Engine, key: &[u8], start_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            start_ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         txn.rollback(&make_key(key)).unwrap();
-        engine.write(&ctx, txn.modifies()).unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
     fn must_rollback_err(engine: &Engine, key: &[u8], start_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            start_ts,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         assert!(txn.rollback(&make_key(key)).is_err());
     }
 
     fn must_gc(engine: &Engine, key: &[u8], safe_point: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            0,
-            None,
-            IsolationLevel::SI,
-            true,
-        );
+        let mut txn = MvccTxn::new(snapshot, 0, None, IsolationLevel::SI, true);
         txn.gc(&make_key(key), safe_point).unwrap();
-        engine.write(&ctx, txn.modifies()).unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
     fn must_locked(engine: &Engine, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
-        let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            None,
-            true,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
         let lock = reader.load_lock(&make_key(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
     }
 
     fn must_unlocked(engine: &Engine, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
-        let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            None,
-            true,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
         assert!(reader.load_lock(&make_key(key)).unwrap().is_none());
     }
 
@@ -1100,15 +943,7 @@ mod tests {
 
     fn must_seek_write_none(engine: &Engine, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
-        let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            None,
-            true,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
         assert!(reader.seek_write(&make_key(key), ts).unwrap().is_none());
     }
 
@@ -1121,15 +956,7 @@ mod tests {
         write_type: WriteType,
     ) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
-        let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            None,
-            true,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
         let (t, write) = reader.seek_write(&make_key(key), ts).unwrap().unwrap();
         assert_eq!(t, commit_ts);
         assert_eq!(write.start_ts, start_ts);
@@ -1138,15 +965,7 @@ mod tests {
 
     fn must_reverse_seek_write_none(engine: &Engine, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
-        let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            None,
-            true,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
         assert!(
             reader
                 .reverse_seek_write(&make_key(key), ts)
@@ -1164,15 +983,7 @@ mod tests {
         write_type: WriteType,
     ) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
-        let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            None,
-            true,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
         let (t, write) = reader
             .reverse_seek_write(&make_key(key), ts)
             .unwrap()
@@ -1184,15 +995,7 @@ mod tests {
 
     fn must_get_commit_ts(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
-        let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            None,
-            true,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
         let (ts, write_type) = reader
             .get_txn_commit_info(&make_key(key), start_ts)
             .unwrap()
@@ -1203,15 +1006,7 @@ mod tests {
 
     fn must_get_commit_ts_none(engine: &Engine, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
-        let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
-            None,
-            true,
-            None,
-            IsolationLevel::SI,
-        );
+        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
 
         let ret = reader.get_txn_commit_info(&make_key(key), start_ts);
         assert!(ret.is_ok());
@@ -1235,10 +1030,8 @@ mod tests {
             next_start.map(|x| make_key(x).append_ts(0)),
         );
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
         let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
+            snapshot,
             Some(ScanMode::Mixed),
             false,
             None,
@@ -1293,10 +1086,8 @@ mod tests {
         must_commit(engine.as_ref(), &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
         let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
+            snapshot,
             Some(ScanMode::Forward),
             true,
             None,
@@ -1340,10 +1131,8 @@ mod tests {
         must_commit(engine.as_ref(), &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut statistics = Statistics::default();
         let mut reader = MvccReader::new(
-            snapshot.as_ref(),
-            &mut statistics,
+            snapshot,
             Some(ScanMode::Forward),
             true,
             None,
