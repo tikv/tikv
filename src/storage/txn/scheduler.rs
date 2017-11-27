@@ -216,11 +216,11 @@ impl RunningCtx {
                     .with_label_values(&[tag])
                     .start_coarse_timer(),
             ),
+            get_snapshot_timer: None,
             processing_timer: None,
             _timer: SCHED_HISTOGRAM_VEC
                 .with_label_values(&[tag])
                 .start_coarse_timer(),
-            get_snapshot_timer: None,
             slow_timer: SlowTimer::new(),
         }
     }
