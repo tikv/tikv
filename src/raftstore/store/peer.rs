@@ -925,7 +925,7 @@ impl Peer {
         self.raft_group
             .advance_apply(res.apply_state.get_applied_index());
         self.mut_store().apply_state = res.apply_state.clone();
-        if self.mut_store().applied_index_term != res.applied_index_term && self.is_leader() {
+        if self.is_leader() {
             // TODO(stn): unify update.
             let local_read_scheduler = self.local_read_scheduler.as_ref();
             let region = self.region();
