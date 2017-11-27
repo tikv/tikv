@@ -1092,6 +1092,11 @@ impl Scheduler {
         let mut cmd = {
             let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
             assert_eq!(ctx.cid, cid);
+            ctx.processing_timer = Some(
+                SCHED_PROCESSING_HISTOGRAM_VEC
+                    .with_label_values(&[ctx.tag])
+                    .start_coarse_timer(),
+            );
             ctx.cmd.take().unwrap()
         };
         if let Some(term) = cb_ctx.term {
@@ -1346,11 +1351,6 @@ impl Scheduler {
         for cid in &cids {
             let ctx = self.cmd_ctxs.get_mut(cid).unwrap();
             ctx.get_snapshot_timer.take();
-            ctx.processing_timer = Some(
-                SCHED_PROCESSING_HISTOGRAM_VEC
-                    .with_label_values(&[ctx.tag])
-                    .start_coarse_timer(),
-            )
         }
 
         match snapshot {
