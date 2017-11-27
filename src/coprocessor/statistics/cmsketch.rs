@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tipb::analyze;
 use byteorder::{ByteOrder, LittleEndian};
 use protobuf::RepeatedField;
 use murmur3::murmur3_x64_128;
+use tipb::analyze;
 
 /// `CMSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
@@ -75,13 +75,13 @@ impl CMSketch {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::datum;
-    use coprocessor::codec::datum::Datum;
-    use util::as_slice;
     use std::collections::HashMap;
     use std::cmp::min;
     use rand::{Rng, SeedableRng, StdRng};
     use zipf::ZipfDistribution;
+    use coprocessor::codec::datum;
+    use coprocessor::codec::datum::Datum;
+    use util::as_slice;
     use super::*;
 
     impl CMSketch {
