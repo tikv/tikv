@@ -18,8 +18,10 @@ use std::fmt::{self, Display, Formatter};
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use util::worker::Runnable;
+use util::transport::SendCh;
 use raft::Ready;
 use raftstore::store::peer_storage::InvokeContext;
+use raftstore::store::Msg;
 
 pub struct Task {
     pub kv_wb: WriteBatch,
@@ -47,7 +49,8 @@ pub struct Runner {
     tag: String,
     kv_engine: Arc<DB>,
     raft_engine: Arc<DB>,
-    notifier: Sender<TaskRes>,
+    sender: Sender<TaskRes>,
+    notifier: SendCh<Msg>,
     sync_log: bool,
 }
 
@@ -56,13 +59,15 @@ impl Runner {
         tag: String,
         kv_engine: Arc<DB>,
         raft_engine: Arc<DB>,
-        notifier: Sender<TaskRes>,
+        sender: Sender<TaskRes>,
+        notifier: SendCh<Msg>,
         sync_log: bool,
     ) -> Runner {
         Runner {
             tag,
             kv_engine,
             raft_engine,
+            sender,
             notifier,
             sync_log,
         }
@@ -96,11 +101,12 @@ impl Runner {
         }
         fail_point!("raft_after_save");
 
-        self.notifier
+        self.sender
             .send(TaskRes {
                 ready_res: task.ready_res,
             })
             .unwrap();
+        self.notifier.send(Msg::AppendLogReady).unwrap();
     }
 }
 

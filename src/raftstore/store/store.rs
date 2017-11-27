@@ -557,6 +557,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.kv_engine.clone(),
             self.raft_engine.clone(),
             tx,
+            self.sendch.clone(),
             self.cfg.sync_log,
         );
         self.append_res_receiver = Some(rx);
@@ -2503,6 +2504,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_id,
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
+            Msg::AppendLogReady => {
+                let ready_res = self.poll_append();
+                if !ready_res.is_empty() {
+                    self.on_raft_ready(ready_res);
+                }
+            }
         }
     }
 
