@@ -68,6 +68,8 @@ fn test_serde_custom_tikv_config() {
         distsql_cache_size: ReadableSize(256 * 1024 * 1024),
         end_point_stack_size: ReadableSize::mb(12),
         end_point_recursion_limit: 100,
+        end_point_batch_row_limit: 64,
+        snap_max_write_bytes_per_sec: ReadableSize::mb(10),
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
@@ -324,6 +326,7 @@ fn test_serde_custom_tikv_config() {
         enable_distsql_cache: false,
     };
     value.coprocessor = CopConfig {
+        split_region_on_table: true,
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
     };

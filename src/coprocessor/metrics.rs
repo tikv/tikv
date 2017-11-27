@@ -82,7 +82,7 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref CORP_GET_OR_SCAN_COUNT: CounterVec =
+    pub static ref COPR_GET_OR_SCAN_COUNT: CounterVec =
         register_counter_vec!(
             "tikv_coprocessor_get_or_scan_count",
             "Total number of rocksdb query of get or scan count",

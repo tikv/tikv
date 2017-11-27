@@ -392,6 +392,34 @@ fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
 }
 
 #[test]
+fn test_txn_store_resolve_lock_in_a_batch() {
+    let store = AssertionStorage::default();
+
+    store.prewrite_ok(
+        vec![
+            Mutation::Put((make_key(b"p1"), b"v5".to_vec())),
+            Mutation::Put((make_key(b"s1"), b"v5".to_vec())),
+        ],
+        b"p1",
+        5,
+    );
+    store.prewrite_ok(
+        vec![
+            Mutation::Put((make_key(b"p2"), b"v10".to_vec())),
+            Mutation::Put((make_key(b"s2"), b"v10".to_vec())),
+        ],
+        b"p2",
+        10,
+    );
+    store.resolve_lock_batch_ok(5, 0, 10, 20);
+    store.get_none(b"p1", 30);
+    store.get_none(b"s1", 30);
+    store.get_ok(b"p2", 30, b"v10");
+    store.get_ok(b"s2", 30, b"v10");
+    store.scan_lock_ok(30, vec![]);
+}
+
+#[test]
 fn test_txn_store_resolve_lock2() {
     for &i in &[
         0,

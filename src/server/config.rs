@@ -17,7 +17,7 @@ use sys_info;
 
 use util::collections::HashMap;
 use util::config::{self, ReadableSize};
-
+use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use super::Result;
 use coprocessor::cache::DEFAULT_DISTSQL_CACHE_SIZE;
 
@@ -42,6 +42,9 @@ const DEFAULT_ENDPOINT_STACK_SIZE_MB: u64 = 10;
 // backoff. So when it needs to wait for more than 2 seconds, return error won't causse
 // larger latency.
 pub const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = 2 as usize * 1000;
+
+// Number of rows in each chunk.
+pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -68,6 +71,9 @@ pub struct Config {
     pub distsql_cache_size: ReadableSize,
     pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
+    pub end_point_batch_row_limit: usize,
+    pub snap_max_write_bytes_per_sec: ReadableSize,
+
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -98,6 +104,8 @@ impl Default for Config {
             distsql_cache_size: ReadableSize(DEFAULT_DISTSQL_CACHE_SIZE as u64),
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
+            end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
+            snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
         }
     }
 }

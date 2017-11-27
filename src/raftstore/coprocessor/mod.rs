@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use rocksdb::DB;
-use kvproto::raft_cmdpb::{AdminRequest, Request};
+use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use kvproto::metapb::Region;
 use protobuf::RepeatedField;
 
@@ -28,8 +28,8 @@ pub use self::config::Config;
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
-pub use self::split_check::{SizeCheckObserver, Status as SplitCheckStatus,
-                            SIZE_CHECK_OBSERVER_PRIORITY};
+pub use self::split_check::{SizeCheckObserver, Status as SplitCheckStatus, TableCheckObserver,
+                            SIZE_CHECK_OBSERVER_PRIORITY, TABLE_CHECK_OBSERVER_PRIORITY};
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.
@@ -58,23 +58,39 @@ impl<'a> ObserverContext<'a> {
     }
 }
 
-/// Observer hook of region level.
-pub trait RegionObserver: Coprocessor {
-    /// Hook to call before execute admin request.
-    fn pre_admin(&self, _: &mut ObserverContext, _: &mut AdminRequest) -> Result<()> {
+pub trait AdminObserver: Coprocessor {
+    /// Hook to call before proposing admin request.
+    fn pre_propose_admin(&self, _: &mut ObserverContext, _: &mut AdminRequest) -> Result<()> {
         Ok(())
     }
 
-    /// Hook to call before execute read/write request.
-    fn pre_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) -> Result<()> {
-        Ok(())
-    }
+    /// Hook to call before applying admin request.
+    fn pre_apply_admin(&self, _: &mut ObserverContext, _: &AdminRequest) {}
 
-    /// Hook to call before apply read/write request.
+    /// Hook to call after applying admin request.
+    fn post_apply_admin(&self, _: &mut ObserverContext, _: &mut AdminResponse) {}
+}
+
+pub trait QueryObserver: Coprocessor {
+    /// Hook to call before proposing write request.
     ///
-    /// Please note that improper implementation can lead to data inconsistency.
-    fn pre_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) {}
+    /// We don't propose read request, hence there is no hook for it yet.
+    fn pre_propose_query(
+        &self,
+        _: &mut ObserverContext,
+        _: &mut RepeatedField<Request>,
+    ) -> Result<()> {
+        Ok(())
+    }
 
+    /// Hook to call before applying write request.
+    fn pre_apply_query(&self, _: &mut ObserverContext, _: &[Request]) {}
+
+    /// Hook to call after applying write request.
+    fn post_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Response>) {}
+}
+
+pub trait SplitCheckObserver: Coprocessor {
     /// Hook to call before handle split region task. If it returns a None,
     /// then `on_split_check` can be skippped.
     //

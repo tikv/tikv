@@ -643,7 +643,7 @@ fn test_leader_election_with_config(pre_vote: bool) {
             1,
         ),
 
-        // three logs futher along than 0, but in the same term so rejection
+        // three logs further along than 0, but in the same term so rejection
         // are returned instead of the votes being ignored.
         (
             Network::new_with_config(
@@ -972,7 +972,9 @@ fn test_log_replicatioin() {
             }
 
             let mut ents = next_ents(x, &network.storage[j]);
-            let ents: Vec<Entry> = ents.drain(..).filter(|e| e.has_data()).collect();
+            let ents: Vec<Entry> = ents.drain(..)
+                .filter(|e| !e.get_data().is_empty())
+                .collect();
             for (k, m) in msgs.iter()
                 .filter(|m| m.get_msg_type() == MessageType::MsgPropose)
                 .enumerate()
@@ -2163,7 +2165,7 @@ fn test_free_stuck_candidate_with_check_quorum() {
 }
 
 #[test]
-fn test_non_promotable_voter_wich_check_quorum() {
+fn test_non_promotable_voter_which_check_quorum() {
     let mut a = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
     let mut b = new_test_raft(2, vec![1], 10, 1, new_storage());
 
@@ -3076,7 +3078,7 @@ fn test_commit_after_remove_node() {
     let ents = next_ents(&mut r, &s);
     assert_eq!(ents.len(), 2);
     assert_eq!(ents[0].get_entry_type(), EntryType::EntryNormal);
-    assert!(!ents[0].has_data());
+    assert!(ents[0].get_data().is_empty());
     assert_eq!(ents[1].get_entry_type(), EntryType::EntryConfChange);
 
     // Apply the config change. This reduces quorum requirements so the

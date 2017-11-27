@@ -16,6 +16,8 @@ enable-distsql-cache = false
 distsql-cache-size = "256MB"
 end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
+end-point-batch-row-limit = 64
+snap-max-write-bytes-per-sec = "10MB"
 
 [server.labels]
 a = "b"
@@ -78,6 +80,7 @@ allow-remove-leader = true
 enable-distsql-cache = false
 
 [coprocessor]
+split-region-on-table = true
 region-max-size = "12MB"
 region-split-size = "12MB"
 

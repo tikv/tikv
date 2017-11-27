@@ -13,11 +13,11 @@
 
 use std::usize;
 use std::time::Duration;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
-use tipb::select::{self, Chunk, DAGRequest, SelectRequest};
+use tipb::select::{self, DAGRequest, SelectRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
@@ -38,7 +38,6 @@ use pd::PdTask;
 use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::select::select::SelectContext;
-use super::select::xeval::EvalContext;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
@@ -48,7 +47,6 @@ pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
-pub const BATCH_ROW_COUNT: usize = 64;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
@@ -74,6 +72,7 @@ pub struct Host {
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
     enable_distsql_cache: bool,
+    batch_row_limit: usize,
 }
 
 pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
@@ -155,7 +154,6 @@ impl Context for CopContext {
                 error!("send coprocessor statistics: {:?}", e);
             };
         }
-
     }
 }
 
@@ -173,6 +171,7 @@ impl Host {
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
             enable_distsql_cache: cfg.enable_distsql_cache,
+            batch_row_limit: cfg.end_point_batch_row_limit,
             pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-normal-pool"),
                 CopContextFactory { sender: r.clone() },
@@ -214,7 +213,7 @@ impl Host {
             return;
         }
 
-
+        let batch_row_limit = self.batch_row_limit;
         for req in reqs {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
@@ -231,7 +230,7 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
-                let stats = end_point.handle_request(req);
+                let stats = end_point.handle_request(req, batch_row_limit);
                 ctx.add_statistics(type_str, &stats);
                 ctx.add_statistics_by_region(region_id, &stats);
                 COPR_PENDING_REQS
@@ -302,7 +301,7 @@ pub struct RequestTask {
     statistics: Statistics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
-    ctx: ReqContext,
+    ctx: Arc<ReqContext>,
 }
 
 impl RequestTask {
@@ -374,7 +373,7 @@ impl RequestTask {
             statistics: Default::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
-            ctx: req_ctx,
+            ctx: Arc::new(req_ctx),
         }
     }
 
@@ -406,7 +405,6 @@ impl RequestTask {
         COPR_REQ_HANDLE_TIME
             .with_label_values(&[type_str])
             .observe(handle_time - wait_time);
-
 
         COPR_SCAN_KEYS
             .with_label_values(&[type_str])
@@ -634,14 +632,15 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask) -> Statistics {
+    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> Statistics {
         t.stop_record_waiting();
+
         if let Err(e) = t.check_outdated() {
             return on_error(e, t);
         }
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
-            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t),
+            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t, batch_row_limit),
+            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
         };
@@ -651,43 +650,36 @@ impl TiDbEndPoint {
         }
     }
 
-    fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
-        let ctx = SelectContext::new(sel, self.snap.as_ref(), &mut t.statistics, &t.ctx)?;
-        let range = t.req.get_ranges().to_vec();
-        ctx.handle_request(range)
+    fn handle_select(
+        self,
+        sel: SelectRequest,
+        t: &mut RequestTask,
+        batch_row_limit: usize,
+    ) -> Result<Response> {
+        let mut ctx = SelectContext::new(sel, self.snap, t.ctx.clone(), batch_row_limit)?;
+        let ranges = t.req.take_ranges().into_vec();
+        let res = ctx.handle_request(ranges);
+        ctx.collect_statistics_into(&mut t.statistics);
+        res
     }
 
-    pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
-        let ranges = t.req.get_ranges().to_vec();
-        let eval_ctx = Rc::new(box_try!(EvalContext::new(
-            dag.get_time_zone_offset(),
-            dag.get_flags()
-        )));
-        let ctx = DAGContext::new(
-            dag,
-            ranges,
-            self.snap.as_ref(),
-            eval_ctx.clone(),
-            &t.ctx,
-            self.enable_distsql_cache,
-        );
-        let (region_id, epoch) = {
-            let ctx = t.req.get_context();
-            (ctx.get_region_id(), ctx.get_region_epoch().clone())
-        };
-        ctx.handle_request(region_id, epoch, &mut t.statistics)
+    pub fn handle_dag(
+        self,
+        dag: DAGRequest,
+        t: &mut RequestTask,
+        batch_row_limit: usize,
+    ) -> Result<Response> {
+        let ranges = t.req.take_ranges().into_vec();
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
+        let res = ctx.handle_request();
+        ctx.collect_statistics_into(&mut t.statistics);
+        res
     }
 
-    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
-        let ranges = t.req.get_ranges().to_vec();
-        let ctx = AnalyzeContext::new(
-            analyze,
-            ranges,
-            self.snap.as_ref(),
-            &mut t.statistics,
-            &t.ctx,
-        );
-        ctx.handle_request()
+    pub fn handle_analyze(self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
+        let ranges = t.req.take_ranges().into_vec();
+        let ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
+        ctx.handle_request(&mut t.statistics)
     }
 }
 
@@ -734,18 +726,6 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     } else {
         Datum::I64(h)
     }
-}
-
-#[inline]
-pub fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
-    if chunks
-        .last()
-        .map_or(true, |chunk| chunk.get_rows_meta().len() >= BATCH_ROW_COUNT)
-    {
-        let chunk = Chunk::new();
-        chunks.push(chunk);
-    }
-    chunks.last_mut().unwrap()
 }
 
 pub const STR_REQ_TYPE_SELECT: &'static str = "select";
@@ -807,13 +787,18 @@ mod tests {
             box move |msg| { tx.send(msg).unwrap(); },
             1000,
         );
-        task.ctx.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
+        let ctx = ReqContext {
+            deadline: task.ctx.deadline - Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS),
+            isolation_level: task.ctx.isolation_level,
+            fill_cache: task.ctx.fill_cache,
+            table_scan: task.ctx.table_scan,
+        };
+        task.ctx = Arc::new(ctx);
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
     }
-
     #[test]
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");
