@@ -63,6 +63,7 @@ use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
+use tikv::util::io_limiter::IOLimiter;
 use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -195,9 +196,17 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     let pd_worker = FutureWorker::new("pd worker");
     let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
+    let limiter = if cfg.server.snap_max_write_bytes_per_sec.0 > 0 {
+        Some(Arc::new(
+            IOLimiter::new(cfg.server.snap_max_write_bytes_per_sec.0),
+        ))
+    } else {
+        None
+    };
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
+        limiter,
     );
 
     // Create server
