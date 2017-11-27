@@ -87,7 +87,7 @@ pub enum Msg {
     // For region size
     ApproximateRegionSize { region_id: u64, region_size: u64 },
 
-    // For notiy
+    // For notify raftstore.
     AppendLogReady,
 }
 

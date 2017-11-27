@@ -923,7 +923,14 @@ impl Peer {
         } else {
             for state in &ready.read_states {
                 if let Some(read) = self.pending_reads.reads.get(self.pending_reads.ready_cnt) {
-                    assert_eq!(state.request_ctx.as_slice(), read.binary_id());
+                    assert_eq!(
+                        state.request_ctx.as_slice(),
+                        read.binary_id(),
+                        "{} read index context mismatch, ready read {:?}, pending read {:?}",
+                        self.tag,
+                        state.request_ctx.as_slice(),
+                        read.binary_id()
+                    );
                     self.pending_reads.ready_cnt += 1;
                     propose_time = Some(read.renew_lease_time);
                 } else {
