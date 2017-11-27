@@ -267,8 +267,8 @@ impl Host {
             metrics: &mut CopMetrics,
             ctxs: &mut CopContextPool,
         ) {
-            metrics.stop_record_handling(&stats);
-            ctxs.collect(metrics.region_id, metrics.scan_tag, &stats);
+            metrics.stop_record_handling(stats);
+            ctxs.collect(metrics.region_id, metrics.scan_tag, stats);
             running_task_count.fetch_sub(1, Ordering::Release);
         }
 
