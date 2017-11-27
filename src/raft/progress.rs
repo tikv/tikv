@@ -41,7 +41,7 @@ impl Default for ProgressState {
     }
 }
 
-/// ProgressSet contains several `Progress`es,
+/// `ProgressSet` contains several `Progress`es,
 /// which could be `Leader`, `Follower` and `Learner`.
 #[derive(Default, Clone)]
 pub struct ProgressSet {

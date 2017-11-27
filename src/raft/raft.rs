@@ -324,7 +324,7 @@ impl<T: Storage> Raft<T> {
             r.prs.voters.insert(*p, new_progress(1, r.max_inflight));
         }
         for p in learners {
-            if r.prs.voters.contains_key(&p) {
+            if r.prs.voters.contains_key(p) {
                 panic!("node {} is in both learner and peer list", p);
             }
             let mut progress = new_progress(1, r.max_inflight);
