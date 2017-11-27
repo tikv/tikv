@@ -25,8 +25,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::cmp;
+use super::{FlatMap, FlatMapEntry};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {
@@ -41,6 +41,81 @@ impl Default for ProgressState {
     }
 }
 
+/// ProgressSet contains several `Progress`es,
+/// which could be `Leader`, `Follower` and `Learner`.
+#[derive(Default, Clone)]
+pub struct ProgressSet {
+    pub voters: FlatMap<u64, Progress>,
+    pub learners: FlatMap<u64, Progress>,
+}
+
+impl ProgressSet {
+    pub fn new(voter_size: usize, learner_size: usize) -> Self {
+        ProgressSet {
+            voters: FlatMap::with_capacity(voter_size),
+            learners: FlatMap::with_capacity(learner_size),
+        }
+    }
+
+    pub fn nodes(&self) -> Vec<u64> {
+        let mut nodes = Vec::with_capacity(self.voters.len() + self.learners.len());
+        nodes.extend(self.voters.keys());
+        nodes.extend(self.learners.keys());
+        nodes.sort();
+        nodes
+    }
+
+    pub fn get_progress(&self, id: u64) -> Option<&Progress> {
+        self.voters.get(&id).or_else(|| self.learners.get(&id))
+    }
+
+    pub fn get_mut_progress(&mut self, id: u64) -> Option<&mut Progress> {
+        let progress = self.voters.get_mut(&id);
+        if progress.is_none() {
+            return self.learners.get_mut(&id);
+        }
+        progress
+    }
+
+    pub fn set_progress(
+        &mut self,
+        id: u64,
+        max_inflight: usize,
+        matched: u64,
+        next_idx: u64,
+        is_learner: bool,
+    ) -> &mut Progress {
+        let mut p = new_progress(next_idx, max_inflight);
+        p.matched = matched;
+        p.is_learner = is_learner;
+
+        let progresses = if is_learner {
+            &mut self.learners
+        } else {
+            &mut self.voters
+        };
+
+        match progresses.entry(id) {
+            FlatMapEntry::Occupied(e) => {
+                let pr = e.into_mut();
+                *pr = p;
+                pr
+            }
+            FlatMapEntry::Vacant(e) => e.insert(p),
+        }
+    }
+
+    pub fn del_progress(&mut self, id: u64) {
+        self.voters.remove(&id);
+        self.learners.remove(&id);
+    }
+
+    pub fn check_intersect(&self) -> bool {
+        self.voters.keys().fold(false, |intersect, v| {
+            intersect | self.learners.get(v).is_some()
+        })
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct Progress {
@@ -83,8 +158,6 @@ pub struct Progress {
     // Indicates the Progress is a learner or not.
     pub is_learner: bool,
 }
-
-
 
 impl Progress {
     fn reset_state(&mut self, state: ProgressState) {
@@ -191,7 +264,6 @@ impl Progress {
     }
 }
 
-
 #[derive(Debug, Default, Clone)]
 pub struct Inflights {
     // the starting index in the buffer
@@ -274,10 +346,17 @@ impl Inflights {
         self.free_to(start);
     }
 
-
     // resets frees all inflights.
     pub fn reset(&mut self) {
         self.count = 0;
         self.start = 0;
+    }
+}
+
+pub fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
+    Progress {
+        next_idx: next_idx,
+        ins: Inflights::new(ins_size),
+        ..Default::default()
     }
 }
