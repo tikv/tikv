@@ -781,7 +781,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
-    fn coprocessor_stream(&self, _: RpcContext, _: Request, _: ServerStreamingSink<Response>) {}
+    fn coprocessor_stream(&self, ctx: RpcContext, _: Request, sink: ServerStreamingSink<Response>) {
+        let f = sink.fail(RpcStatus::new(RpcStatusCode::Unimplemented, None))
+            .map_err(|e| error!("failed to report unimplemented method: {:?}", e));
+        ctx.spawn(f);
+    }
 
     fn raft(
         &self,

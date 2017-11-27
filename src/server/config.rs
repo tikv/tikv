@@ -17,7 +17,7 @@ use sys_info;
 
 use util::collections::HashMap;
 use util::config::{self, ReadableSize};
-
+use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use super::Result;
 
 pub use raftstore::store::Config as RaftStoreConfig;
@@ -69,6 +69,8 @@ pub struct Config {
     pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
     pub end_point_batch_row_limit: usize,
+    pub snap_max_write_bytes_per_sec: ReadableSize,
+
     // Server labels to specify some attributes about this server.
     #[serde(with = "config::order_map_serde")]
     pub labels: HashMap<String, String>,
@@ -98,6 +100,7 @@ impl Default for Config {
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
+            snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
         }
     }
 }
