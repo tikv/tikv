@@ -22,10 +22,12 @@ use std::thread::{self, Builder, JoinHandle};
 use std::io;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SendError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender, TryRecvError};
 use std::error::Error;
+use std::time::Duration;
 
-use util::time::SlowTimer;
+use util::Either;
+use util::time::{Instant, SlowTimer};
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
@@ -54,14 +56,16 @@ impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T);
+    fn on_tick(&mut self);
     fn shutdown(&mut self) {}
 }
 
 pub trait BatchRunnable<T: Display> {
-    /// run a batch of tasks.
+    /// Run a batch of tasks.
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
+    fn on_tick(&mut self);
     fn shutdown(&mut self) {}
 }
 
@@ -73,6 +77,10 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
             self.run(t);
             slow_log!(timer, "handle task {}", task_str);
         }
+    }
+
+    fn on_tick(&mut self) {
+        Runnable::on_tick(self)
     }
 
     fn shutdown(&mut self) {
@@ -145,22 +153,43 @@ pub struct Worker<T: Display> {
     scheduler: Scheduler<T>,
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
+    timeout: Option<usize>,
+    tasks_per_tick: Option<usize>,
 }
 
-fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
-where
+fn poll<R, T>(
+    mut runner: R,
+    rx: Receiver<Option<T>>,
+    counter: Arc<AtomicUsize>,
+    batch_size: usize,
+    timeout: Option<usize>,
+    tasks_per_tick: Option<usize>,
+) where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut keep_going = true;
     let mut buffer = Vec::with_capacity(batch_size);
+
+    let timeout = timeout.map(|t| Duration::from_secs(t));
+    let tasks_per_tick = tasks_per_tick.unwrap_or(0);
+    let mut timing_task_counter = 0;
     while keep_going {
-        let t = rx.recv();
+        let t = match timeout {
+            Some(dur) => rx.recv_timeout(dur).map_err(Either::Left),
+            None => rx.recv().map_err(Either::Right),
+        };
         match t {
             Ok(Some(t)) => buffer.push(t),
+            Err(Either::Left(RecvTimeoutError::Timeout)) => {
+                timing_task_counter = 0;
+                runner.on_tick();
+                continue;
+            }
             _ => break,
         }
+
         while buffer.len() < batch_size {
             match rx.try_recv() {
                 Ok(None) => {
@@ -181,6 +210,12 @@ where
             .unwrap();
         runner.run_batch(&mut buffer);
         buffer.clear();
+
+        timing_task_counter += 1;
+        if tasks_per_tick > 0 && timing_task_counter > tasks_per_tick {
+            timing_task_counter = 0;
+            runner.on_tick();
+        }
     }
     runner.shutdown();
 }
@@ -193,7 +228,14 @@ impl<T: Display + Send + 'static> Worker<T> {
             scheduler: Scheduler::new(name, AtomicUsize::new(0), tx),
             receiver: Mutex::new(Some(rx)),
             handle: None,
+            timeout: None,
+            tasks_per_tick: None,
         }
+    }
+
+    pub fn set_timing_tasks(&mut self, timeout: usize, tasks_per_tick) {
+        self.timeout = timeout;
+        self.tasks_per_tick = tasks_per_tick;
     }
 
     /// Start the worker.
@@ -214,9 +256,12 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
+        let timeout = self.timeout;
+        let tasks_per_tick = self.tasks_per_tick;
+        let periodic_interval = self.periodic_interval;
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size))?;
+            .spawn(move || poll(runner, rx, counter, batch_size, timeout, tasks_per_tick))?;
         self.handle = Some(h);
         Ok(())
     }
