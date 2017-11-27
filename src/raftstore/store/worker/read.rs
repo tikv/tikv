@@ -27,7 +27,7 @@ use util::time::RemoteLease;
 use util::collections::{HashMap, HashMapEntry};
 use util::Either;
 
-use super::metrics::LOCAL_READ;
+use super::metrics::*;
 use super::{apply, MsgSender};
 use super::super::engine::Snapshot;
 use super::super::super::store::{check_epoch, BatchCallback, Callback, Msg as StoreMsg,
@@ -48,10 +48,26 @@ impl LeaderStatus {
     fn merge(&mut self, status: LeaderStatus) {
         self.region = status.region;
         self.leader = status.leader;
-        self.term = status.term;
         self.tag = status.tag;
 
-        self.applied_index_term = status.applied_index_term;
+        if self.term <= status.term {
+            self.term = status.term;
+        } else {
+            warn!(
+                "Stale LeaderStatus, cached term {}, update term {}",
+                self.term,
+                status.term
+            );
+        }
+        if self.applied_index_term <= status.applied_index_term {
+            self.applied_index_term = status.applied_index_term;
+        } else {
+            warn!(
+                "Stale LeaderStatus, cached applied_index_term {}, update applied_index_term {}",
+                self.applied_index_term,
+                status.applied_index_term
+            );
+        }
         if let Some(lease) = status.leader_lease {
             self.leader_lease = Some(lease);
         }
@@ -226,6 +242,7 @@ impl<C: MsgSender> LocalReader<C> {
         // Check store id.
         let store_id = req.get_header().get_peer().get_store_id();
         if store_id != self.store.get_id() {
+            LOCAL_READ_REJECT.with_label_values(&["store_id"]).inc();
             return false;
         }
 
@@ -246,6 +263,7 @@ impl<C: MsgSender> LocalReader<C> {
         let status = match self.region_leaders.get(&region_id) {
             Some(status) => status,
             None => {
+                LOCAL_READ_REJECT.with_label_values(&["region_id"]).inc();
                 return false;
             }
         };
@@ -253,6 +271,7 @@ impl<C: MsgSender> LocalReader<C> {
         // Check peer id.
         let peer_id = req.get_header().get_peer().get_id();
         if status.leader.get_id() != peer_id {
+            LOCAL_READ_REJECT.with_label_values(&["peer_id"]).inc();
             return false;
         }
 
@@ -265,10 +284,12 @@ impl<C: MsgSender> LocalReader<C> {
                 status.term,
                 header.get_term()
             );
+            LOCAL_READ_REJECT.with_label_values(&["header_term"]).inc();
             return false;
         }
 
-        if let Err(_) = check_epoch(&status.region, req) {
+        if check_epoch(&status.region, req).is_err() {
+            LOCAL_READ_REJECT.with_label_values(&["epoch"]).inc();
             return false;
         }
 
@@ -292,6 +313,7 @@ impl<C: MsgSender> LocalReader<C> {
         }
 
         if req.has_header() && req.get_header().get_read_quorum() {
+            LOCAL_READ_REJECT.with_label_values(&["read_quorum"]).inc();
             return Ok(RequestPolicy::ReadIndex);
         }
 
@@ -299,6 +321,7 @@ impl<C: MsgSender> LocalReader<C> {
         let status = match self.region_leaders.get(&region_id) {
             Some(status) => status,
             None => {
+                LOCAL_READ_REJECT.with_label_values(&["no_region"]).inc();
                 return Err(Error::RegionNotFound(region_id));
             }
         };
@@ -307,14 +330,17 @@ impl<C: MsgSender> LocalReader<C> {
         // must happened, if read locally, we may read old value.
         if status.applied_index_term != status.term {
             info!(
-                "local reader deny at {}, applied_index_term {}, term {} ",
+                "local reader deny at {}, [{}], applied_index_term {}, term {} ",
                 line!(),
+                status.tag,
                 status.applied_index_term,
                 status.term
             );
+            LOCAL_READ_REJECT.with_label_values(&["applied_term"]).inc();
             Ok(RequestPolicy::ReadIndex)
         } else if status.leader_lease.is_none() {
             info!("local reader deny at {}", line!());
+            LOCAL_READ_REJECT.with_label_values(&["no_lease"]).inc();
             Ok(RequestPolicy::ReadIndex)
         } else {
             let leader_lease = status.leader_lease.as_ref().unwrap().lock().unwrap();
@@ -327,6 +353,9 @@ impl<C: MsgSender> LocalReader<C> {
                     status.tag,
                     leader_lease.expired_time(),
                 );
+                LOCAL_READ_REJECT
+                    .with_label_values(&["lease_expired"])
+                    .inc();
                 Ok(RequestPolicy::ReadIndex)
             }
         }
@@ -361,6 +390,10 @@ impl<C: MsgSender> LocalReader<C> {
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(protobuf::RepeatedField::from_vec(responses));
         resp
+    }
+
+    fn report_region_cache(&self) {
+        LOCAL_READ_CACHE.set(self.region_leaders.len() as f64);
     }
 }
 
@@ -433,9 +466,11 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
             }
             Task::Update(status) => {
                 self.update(status);
+                self.report_region_cache();
             }
             Task::Delete(region_id) => {
                 self.delete(region_id);
+                self.report_region_cache();
             }
         }
     }

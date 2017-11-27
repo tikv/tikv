@@ -472,6 +472,12 @@ impl Lease {
     }
 }
 
+impl Default for Lease {
+    fn default() -> Lease {
+        Lease::new()
+    }
+}
+
 impl Drop for Lease {
     fn drop(&mut self) {
         self.clear_remote();
@@ -495,59 +501,33 @@ mod tests {
     #[test]
     fn test_update_lease() {
         let duration = TimeDuration::milliseconds(500);
-        {
-            let mut lease = Lease::new();
-            assert!(!lease.in_safe_lease());
+        let mut lease = Lease::new();
+        assert!(!lease.in_safe_lease());
 
-            lease.update_safe(monotonic_raw_now() + duration);
-            assert!(lease.in_safe_lease());
+        lease.update_safe(monotonic_raw_now() + duration);
+        assert!(lease.in_safe_lease());
 
-            let remote = lease.remote();
-            assert_eq!(
-                lease.in_safe_lease(),
-                remote.lock().unwrap().in_safe_lease()
-            );
+        let remote = lease.remote();
+        assert_eq!(
+            lease.in_safe_lease(),
+            remote.lock().unwrap().in_safe_lease()
+        );
 
-            lease.update_unsafe(monotonic_raw_now() + duration);
-            assert!(!lease.in_safe_lease());
-            assert_eq!(
-                lease.in_safe_lease(),
-                remote.lock().unwrap().in_safe_lease()
-            );
+        lease.update_unsafe(monotonic_raw_now() + duration);
+        assert!(!lease.in_safe_lease());
+        assert_eq!(
+            lease.in_safe_lease(),
+            remote.lock().unwrap().in_safe_lease()
+        );
 
-            lease.update_safe(monotonic_raw_now() + duration);
-            assert!(lease.in_safe_lease());
-            assert_eq!(
-                lease.in_safe_lease(),
-                remote.lock().unwrap().in_safe_lease()
-            );
-            lease.clear();
-            assert!(!remote.lock().unwrap().in_safe_lease());
-        }
-
-        {
-            let mut lease = Lease::new();
-            assert!(!lease.in_safe_lease());
-            let remote = lease.remote();
-            assert!(!remote.lock().unwrap().in_safe_lease());
-
-            lease.update_safe(monotonic_raw_now() + duration);
-            assert!(remote.lock().unwrap().in_safe_lease());
-
-            thread::sleep(duration.to_std().unwrap());
-            assert!(!lease.in_safe_lease());
-            assert_eq!(
-                lease.in_safe_lease(),
-                remote.lock().unwrap().in_safe_lease()
-            );
-
-            lease.update_safe(monotonic_raw_now() + duration);
-            assert!(lease.in_safe_lease());
-            assert_eq!(
-                lease.in_safe_lease(),
-                remote.lock().unwrap().in_safe_lease()
-            );
-        }
+        lease.update_safe(monotonic_raw_now() + duration);
+        assert!(lease.in_safe_lease());
+        assert_eq!(
+            lease.in_safe_lease(),
+            remote.lock().unwrap().in_safe_lease()
+        );
+        lease.clear();
+        assert!(!remote.lock().unwrap().in_safe_lease());
     }
 
     #[test]
