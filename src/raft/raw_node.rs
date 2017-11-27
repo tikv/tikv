@@ -286,7 +286,7 @@ impl<T: Storage> RawNode<T> {
         if cc.get_node_id() == INVALID_ID {
             self.raft.reset_pending_conf();
             let mut cs = ConfState::new();
-            cs.set_nodes(self.raft.prs.nodes());
+            cs.set_nodes(self.raft.nodes());
             return cs;
         }
         let nid = cc.get_node_id();
@@ -297,7 +297,7 @@ impl<T: Storage> RawNode<T> {
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
         }
         let mut cs = ConfState::new();
-        cs.set_nodes(self.raft.prs.nodes());
+        cs.set_nodes(self.raft.nodes());
         cs
     }
 

@@ -347,7 +347,7 @@ impl<T: Storage> Raft<T> {
             "{} newRaft [peers: {:?}, term: {:?}, commit: {}, applied: {}, last_index: {}, \
              last_term: {}]",
             r.tag,
-            r.prs.nodes(),
+            r.nodes(),
             r.term,
             r.raft_log.committed,
             r.raft_log.get_applied(),
@@ -404,6 +404,47 @@ impl<T: Storage> Raft<T> {
     fn quorum(&self) -> usize {
         quorum(self.prs.voters.len())
     }
+
+    pub fn nodes(&self) -> Vec<u64> {
+        let mut nodes = Vec::with_capacity(self.prs.voters.len() + self.prs.learners.len());
+        nodes.extend(self.prs.voters.keys());
+        nodes.extend(self.prs.learners.keys());
+        nodes.sort();
+        nodes
+    }
+
+    pub fn set_progress(
+        &mut self,
+        id: u64,
+        matched: u64,
+        next_idx: u64,
+        is_learner: bool,
+    ) -> &mut Progress {
+        let mut p = new_progress(next_idx, self.max_inflight);
+        p.matched = matched;
+        p.is_learner = is_learner;
+
+        let progresses = if is_learner {
+            &mut self.prs.learners
+        } else {
+            &mut self.prs.voters
+        };
+
+        match progresses.entry(id) {
+            FlatMapEntry::Occupied(e) => {
+                let pr = e.into_mut();
+                *pr = p;
+                pr
+            }
+            FlatMapEntry::Vacant(e) => e.insert(p),
+        }
+    }
+
+    pub fn del_progress(&mut self, id: u64) {
+        self.prs.voters.remove(&id);
+        self.prs.learners.remove(&id);
+    }
+
 
     // for testing leader lease
     pub fn set_randomized_election_timeout(&mut self, t: usize) {
@@ -610,7 +651,7 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn bcast_heartbeat_with_ctx(&mut self, ctx: Option<Vec<u8>>) {
-        for id in self.prs.nodes() {
+        for id in self.nodes() {
             if id == self.id {
                 continue;
             }
@@ -1818,9 +1859,9 @@ impl<T: Storage> Raft<T> {
                     matched = next_idx - 1;
                     self.is_learner = is_learner;
                 }
-                let pr = self.prs
-                    .set_progress(n, self.max_inflight, matched, next_idx, is_learner);
-                info!("{} restored progress of {} [{:?}]", self.tag, n, pr);
+                let tag = self.tag.clone();
+                let pr = self.set_progress(n, matched, next_idx, is_learner);
+                info!("{} restored progress of {} [{:?}]", tag, n, pr)
             };
             restore_nodes(nodes, false);
             restore_nodes(learners, true);
@@ -1882,8 +1923,7 @@ impl<T: Storage> Raft<T> {
 
         // New progress.
         let last_index = self.raft_log.last_index();
-        let pr = self.prs
-            .set_progress(id, self.max_inflight, 0, last_index + 1, is_learner);
+        let pr = self.set_progress(id, 0, last_index + 1, is_learner);
         pr.recent_active = true;
     }
 
@@ -1896,7 +1936,7 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn remove_node(&mut self, id: u64) {
-        self.prs.del_progress(id);
+        self.del_progress(id);
         self.pending_conf = false;
 
         // do not try to commit or abort transferring if there are no nodes in the cluster.

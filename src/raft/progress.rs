@@ -26,7 +26,7 @@
 // limitations under the License.
 
 use std::cmp;
-use super::{FlatMap, FlatMapEntry};
+use super::FlatMap;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {
@@ -57,14 +57,6 @@ impl ProgressSet {
         }
     }
 
-    pub fn nodes(&self) -> Vec<u64> {
-        let mut nodes = Vec::with_capacity(self.voters.len() + self.learners.len());
-        nodes.extend(self.voters.keys());
-        nodes.extend(self.learners.keys());
-        nodes.sort();
-        nodes
-    }
-
     pub fn get_progress(&self, id: u64) -> Option<&Progress> {
         self.voters.get(&id).or_else(|| self.learners.get(&id))
     }
@@ -75,39 +67,6 @@ impl ProgressSet {
             return self.learners.get_mut(&id);
         }
         progress
-    }
-
-    pub fn set_progress(
-        &mut self,
-        id: u64,
-        max_inflight: usize,
-        matched: u64,
-        next_idx: u64,
-        is_learner: bool,
-    ) -> &mut Progress {
-        let mut p = new_progress(next_idx, max_inflight);
-        p.matched = matched;
-        p.is_learner = is_learner;
-
-        let progresses = if is_learner {
-            &mut self.learners
-        } else {
-            &mut self.voters
-        };
-
-        match progresses.entry(id) {
-            FlatMapEntry::Occupied(e) => {
-                let pr = e.into_mut();
-                *pr = p;
-                pr
-            }
-            FlatMapEntry::Vacant(e) => e.insert(p),
-        }
-    }
-
-    pub fn del_progress(&mut self, id: u64) {
-        self.voters.remove(&id);
-        self.learners.remove(&id);
     }
 
     pub fn check_intersect(&self) -> bool {
@@ -350,13 +309,5 @@ impl Inflights {
     pub fn reset(&mut self) {
         self.count = 0;
         self.start = 0;
-    }
-}
-
-pub fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
-    Progress {
-        next_idx: next_idx,
-        ins: Inflights::new(ins_size),
-        ..Default::default()
     }
 }
