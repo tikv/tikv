@@ -26,8 +26,6 @@ extern crate futures;
 extern crate rustc_serialize;
 
 use std::{process, str, u64};
-use std::fs::File;
-use std::io::Read;
 use std::iter::FromIterator;
 use std::cmp::Ordering;
 use std::error::Error;
@@ -35,10 +33,10 @@ use std::sync::Arc;
 use std::path::PathBuf;
 use rustc_serialize::hex::{FromHex, ToHex};
 
-use clap::{App, Arg, SubCommand};
+use clap::{App, Arg, ArgMatches, SubCommand};
 use protobuf::Message;
 use futures::{future, stream, Future, Stream};
-use grpcio::{ChannelBuilder, ChannelCredentialsBuilder, Environment};
+use grpcio::{ChannelBuilder, Environment};
 use protobuf::RepeatedField;
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -50,6 +48,7 @@ use kvproto::debugpb::*;
 use kvproto::debugpb::DB as DBType;
 use kvproto::debugpb_grpc::DebugClient;
 use tikv::util::{self, escape, unescape};
+use tikv::util::security::{SecurityConfig, SecurityManager};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{Debugger, RegionInfo};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -64,7 +63,7 @@ fn new_debug_executor(
     db: Option<&str>,
     raft_db: Option<&str>,
     host: Option<&str>,
-    ca_path: Option<&str>,
+    mgr: Arc<SecurityManager>,
 ) -> Box<DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
@@ -81,14 +80,7 @@ fn new_debug_executor(
         (Some(remote), None) => {
             let env = Arc::new(Environment::new(1));
             let cb = ChannelBuilder::new(env);
-            let channel = if let Some(path) = ca_path {
-                let mut ca = vec![];
-                File::open(path).unwrap().read_to_end(&mut ca).unwrap();
-                let cred = ChannelCredentialsBuilder::new().root_cert(ca).build();
-                cb.secure_connect(remote, cred)
-            } else {
-                cb.connect(remote)
-            };
+            let channel = mgr.connect(cb, remote);
             let client = DebugClient::new(channel);
             Box::new(client) as Box<DebugExecutor>
         }
@@ -228,9 +220,9 @@ trait DebugExecutor {
         db: Option<&str>,
         raft_db: Option<&str>,
         host: Option<&str>,
-        ca_path: Option<&str>,
+        mgr: Arc<SecurityManager>,
     ) {
-        let rhs_debug_executor = new_debug_executor(db, raft_db, host, ca_path);
+        let rhs_debug_executor = new_debug_executor(db, raft_db, host, mgr);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);
@@ -337,9 +329,14 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
-    fn set_region_tombstone_after_remove_peer(&self, region_id: u64, cfg: &PdConfig) {
+    fn set_region_tombstone_after_remove_peer(
+        &self,
+        mgr: Arc<SecurityManager>,
+        cfg: &PdConfig,
+        region_id: u64,
+    ) {
         self.check_local_mode();
-        match RpcClient::new(cfg)
+        match RpcClient::new(cfg, mgr)
             .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
             .get_region_by_id(region_id)
             .wait()
@@ -560,10 +557,23 @@ fn main() {
         .arg(
             Arg::with_name("ca_path")
                 .required(false)
-                .conflicts_with_all(&["db", "raftdb", "hex-to-escaped", "escaped-to-hex"])
                 .long("ca-path")
                 .takes_value(true)
                 .help("set CA certificate path"),
+        )
+        .arg(
+            Arg::with_name("cert_path")
+                .required(false)
+                .long("cert-path")
+                .takes_value(true)
+                .help("set certificate path"),
+        )
+        .arg(
+            Arg::with_name("key_path")
+                .required(false)
+                .long("key-path")
+                .takes_value(true)
+                .help("set private key path"),
         )
         .arg(
             Arg::with_name("hex-to-escaped")
@@ -767,13 +777,6 @@ fn main() {
                         .takes_value(true)
                         .conflicts_with("to_db")
                         .help("to which remote host"),
-                )
-                .arg(
-                    Arg::with_name("to_ca_path")
-                        .long("to-ca-path")
-                        .takes_value(true)
-                        .conflicts_with("to_db")
-                        .help("CA certificate of the remote host"),
                 ),
         )
         .subcommand(
@@ -828,12 +831,6 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
-                )
-                .arg(
-                    Arg::with_name("ca_path")
-                        .long("ca-path")
-                        .takes_value(true)
-                        .help("certificate of PD"),
                 ),
         );
     let matches = app.clone().get_matches();
@@ -856,9 +853,9 @@ fn main() {
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
-    let ca_path = matches.value_of("ca_path");
 
-    let debug_executor = new_debug_executor(db, raft_db, host, ca_path);
+    let mgr = new_security_mgr(&matches);
+    let debug_executor = new_debug_executor(db, raft_db, host, mgr.clone());
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -909,8 +906,7 @@ fn main() {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let to_db = matches.value_of("to_db");
         let to_host = matches.value_of("to_host");
-        let ca_path = matches.value_of("to_ca_path");
-        debug_executor.diff_region(region, to_db, None, to_host, ca_path);
+        debug_executor.diff_region(region, to_db, None, to_host, mgr);
     } else if let Some(matches) = matches.subcommand_matches("compact") {
         let db = matches.value_of("db").unwrap();
         let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
@@ -923,13 +919,10 @@ fn main() {
         let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
         let mut cfg = PdConfig::default();
         cfg.endpoints = pd_urls;
-        if let Some(path) = matches.value_of("ca_path") {
-            cfg.ca_path = path.to_owned();
-        }
         if let Err(e) = cfg.validate() {
             panic!("invalid pd configuration: {:?}", e);
         }
-        debug_executor.set_region_tombstone_after_remove_peer(region, &cfg);
+        debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, region);
     } else {
         let _ = app.print_help();
     }
@@ -965,4 +958,25 @@ fn convert_gbmb(mut bytes: u64) -> String {
         format!("{} GB ", bytes)
     };
     format!("{}{}", gb, mb)
+}
+
+fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
+    let ca_path = matches.value_of("ca_path");
+    let cert_path = matches.value_of("cert_path");
+    let key_path = matches.value_of("key_path");
+
+    let mut cfg = SecurityConfig::default();
+    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() {
+        return Arc::new(SecurityManager::new(&cfg).unwrap());
+    }
+
+    if ca_path.is_none() || cert_path.is_none() || key_path.is_none() {
+        panic!("CA certificate and private key should all be set.");
+    }
+    cfg.ca_path = ca_path.unwrap().to_owned();
+    cfg.cert_path = cert_path.unwrap().to_owned();
+    cfg.key_path = key_path.unwrap().to_owned();
+    Arc::new(
+        SecurityManager::new(&cfg).expect("failed to initialize security manager"),
+    )
 }

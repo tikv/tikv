@@ -31,6 +31,7 @@ use util::config::{self, compression_type_level_serde, ReadableDuration, Readabl
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
 use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
+use util::security::SecurityConfig;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -635,6 +636,7 @@ pub struct TiKvConfig {
     pub coprocessor: CopConfig,
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,
+    pub security: SecurityConfig,
 }
 
 impl Default for TiKvConfig {
@@ -650,6 +652,7 @@ impl Default for TiKvConfig {
             rocksdb: DbConfig::default(),
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -691,6 +694,7 @@ impl TiKvConfig {
         self.raft_store.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
+        self.security.validate()?;
         Ok(())
     }
 

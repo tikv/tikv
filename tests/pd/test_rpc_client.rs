@@ -15,13 +15,14 @@ use std::thread;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use grpc::{EnvBuilder, ServerCredentials, ServerCredentialsBuilder};
+use grpc::EnvBuilder;
 use futures::Future;
 use futures_cpupool::Builder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
 use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use tikv::util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -31,6 +32,12 @@ fn new_config(eps: Vec<String>) -> Config {
     let mut cfg = Config::default();
     cfg.endpoints = eps;
     cfg
+}
+
+fn new_client(eps: Vec<String>) -> RpcClient {
+    let cfg = new_config(eps);
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    RpcClient::new(&cfg, mgr).unwrap()
 }
 
 #[test]
@@ -46,7 +53,7 @@ fn test_rpc_client() {
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&new_config(eps.clone())).unwrap();
+    let client = new_client(eps.clone());
     assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
@@ -78,7 +85,7 @@ fn test_rpc_client() {
 
     let mut prev_id = 0;
     for _ in 0..100 {
-        let client = RpcClient::new(&new_config(eps.clone())).unwrap();
+        let client = new_client(eps.clone());
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
@@ -125,7 +132,7 @@ fn test_reboot() {
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&new_config(eps)).unwrap();
+    let client = new_client(eps);
 
     assert!(!client.is_cluster_bootstrapped().unwrap());
 
@@ -157,7 +164,8 @@ fn test_validate_endpoints() {
 
     thread::sleep(Duration::from_secs(1));
 
-    assert!(validate_endpoints(env, &new_config(eps)).is_err());
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    assert!(validate_endpoints(env, &new_config(eps), &mgr).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
@@ -174,7 +182,7 @@ fn test_retry<F: Fn(&RpcClient)>(func: F) {
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&new_config(eps)).unwrap();
+    let client = new_client(eps);
 
     for _ in 0..3 {
         func(&client);
@@ -211,7 +219,7 @@ fn test_restart_leader() {
 
     thread::sleep(Duration::from_secs(2));
 
-    let client = RpcClient::new(&new_config(eps)).unwrap();
+    let client = new_client(eps);
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::new();
@@ -239,7 +247,8 @@ fn test_restart_leader() {
     // Kill servers.
     drop(server);
     // Restart them again.
-    let _server = MockServer::run_with_eps::<Service>(eps, se.clone(), None);
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, se.clone(), None);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
@@ -253,17 +262,11 @@ fn test_restart_leader() {
 fn test_secure_restart_leader() {
     // Service has only one GetMembersResponse, so the leader never changes.
     let se = Arc::new(Service::new());
-    let bundle = util::load_cert_bundle();
+    let security_cfg = util::new_security_cfg();
+    let mgr = Arc::new(SecurityManager::new(&security_cfg).unwrap());
     // Start mock servers.
-    let eps: Vec<(String, u16, ServerCredentials)> = (0..3)
-        .map(|_| {
-            let cred = ServerCredentialsBuilder::new()
-                .add_cert(bundle.cert.to_vec(), bundle.key.to_vec())
-                .build();
-            ("127.0.0.1".to_owned(), 0, cred)
-        })
-        .collect();
-    let server = MockServer::run_with_secure_eps::<Service>(eps, se.clone(), None);
+    let eps: Vec<(String, u16)> = (0..3).map(|_| ("127.0.0.1".to_owned(), 0)).collect();
+    let server = MockServer::run_with_eps::<Service>(&mgr, eps, se.clone(), None);
     let eps: Vec<String> = server
         .bind_addrs()
         .into_iter()
@@ -272,10 +275,8 @@ fn test_secure_restart_leader() {
 
     thread::sleep(Duration::from_secs(2));
 
-    let mut cfg = new_config(eps);
-    cfg.ca = bundle.ca.to_vec();
-    cfg.override_ssl_target = bundle.cn.to_owned();
-    let client = RpcClient::new(&cfg).unwrap();
+    let cfg = new_config(eps);
+    let client = RpcClient::new(&cfg, mgr.clone()).unwrap();
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::new();
@@ -298,21 +299,12 @@ fn test_secure_restart_leader() {
     region.wait().unwrap();
 
     // Get the random binded addrs.
-    let eps = server
-        .bind_addrs()
-        .into_iter()
-        .map(|(host, port)| {
-            let cred = ServerCredentialsBuilder::new()
-                .add_cert(bundle.cert.to_vec(), bundle.key.to_vec())
-                .build();
-            (host, port, cred)
-        })
-        .collect();
+    let eps = server.bind_addrs().into_iter().collect();
 
     // Kill servers.
     drop(server);
     // Restart them again.
-    let _server = MockServer::run_with_secure_eps::<Service>(eps, se.clone(), None);
+    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, se.clone(), None);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
@@ -335,7 +327,7 @@ fn test_change_leader_async() {
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&new_config(eps)).unwrap();
+    let client = new_client(eps);
     let leader = client.get_leader();
 
     for _ in 0..5 {

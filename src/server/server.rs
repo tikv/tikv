@@ -15,12 +15,12 @@ use std::sync::{Arc, RwLock};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
-use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder,
-           ServerCredentialsBuilder};
+use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
 
 use util::worker::{FutureScheduler, Worker};
+use util::security::SecurityManager;
 use storage::Storage;
 use raftstore::store::{Engines, SnapManager};
 
@@ -58,6 +58,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(too_many_arguments)]
     pub fn new(
         cfg: &Arc<Config>,
+        security_mgr: &Arc<SecurityManager>,
         region_split_size: usize,
         storage: Storage,
         raft_router: T,
@@ -72,7 +73,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .name_prefix(thd_name!("grpc-server"))
                 .build(),
         );
-        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.clone())));
+        let raft_client = Arc::new(RwLock::new(RaftClient::new(
+            env.clone(),
+            cfg.clone(),
+            security_mgr.clone(),
+        )));
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
 
@@ -96,14 +101,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             let mut sb = ServerBuilder::new(env.clone())
                 .channel_args(channel_args)
                 .register_service(create_tikv(kv_service));
-            sb = if cfg.cert.is_empty() {
-                sb.bind(ip, addr.port())
-            } else {
-                let cred = ServerCredentialsBuilder::new()
-                    .add_cert(cfg.cert.clone(), cfg.key.clone())
-                    .build();
-                sb.bind_secure(ip, addr.port(), cred)
-            };
+            sb = security_mgr.bind(sb, &ip, addr.port());
             if let Some(engines) = debug_engines {
                 sb = sb.register_service(create_debug(DebugService::new(engines)));
             }
@@ -142,7 +140,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.trans.clone()
     }
 
-    pub fn start(&mut self, cfg: Arc<Config>) -> Result<()> {
+    pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
         let end_point = EndPointHost::new(
             self.storage.get_engine(),
             self.end_point_worker.scheduler(),
@@ -157,7 +155,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             self.env.clone(),
             self.snap_mgr.clone(),
             self.raft_router.clone(),
-            cfg,
+            security_mgr,
         );
         box_try!(self.snap_worker.start(snap_runner));
         self.grpc_server.start();
@@ -201,6 +199,7 @@ mod tests {
     use raftstore::store::*;
     use raftstore::store::transport::Transport;
     use util::worker::FutureWorker;
+    use util::security::SecurityConfig;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -273,8 +272,10 @@ mod tests {
         let quick_fail = Arc::new(AtomicBool::new(false));
         let pd_worker = FutureWorker::new("pd worker");
         let cfg = Arc::new(cfg);
+        let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
         let mut server = Server::new(
             &cfg,
+            &security_mgr,
             1024,
             storage,
             router,
@@ -287,7 +288,7 @@ mod tests {
             None,
         ).unwrap();
 
-        server.start(cfg).unwrap();
+        server.start(cfg, security_mgr).unwrap();
 
         let mut trans = server.transport();
         trans.report_unreachable(RaftMessage::new());

@@ -47,11 +47,6 @@
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
 
-# set the path for certificates. Empty string means disabling secure connectoins.
-# ca-path = ""
-# cert-path = ""
-# key-path = ""
-
 [storage]
 # set the path to rocksdb directory.
 # data-dir = "/tmp/tikv/store"
@@ -409,3 +404,9 @@
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
 # wal-bytes-per-sync = 0
+
+[security]
+# set the path for certificates. Empty string means disabling secure connectoins.
+# ca-path = ""
+# cert-path = ""
+# key-path = ""

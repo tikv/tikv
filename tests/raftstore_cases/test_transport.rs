@@ -66,11 +66,7 @@ fn test_server_partition_write() {
 #[test]
 fn test_secure_connect() {
     let mut cluster = new_server_cluster(0, 3);
-    let bundle = util::load_cert_bundle();
-    cluster.cfg.server.ca = bundle.ca.to_vec();
-    cluster.cfg.server.cert = bundle.cert.to_vec();
-    cluster.cfg.server.key = bundle.key.to_vec();
-    cluster.cfg.server.override_ssl_target = bundle.cn.to_owned();
+    cluster.cfg.security = util::new_security_cfg();
     cluster.run_conf_change();
 
     let (key, value) = (b"k1", b"v1");

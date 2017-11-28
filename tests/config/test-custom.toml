@@ -16,19 +16,6 @@ end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
 end-point-batch-row-limit = 64
 snap-max-write-bytes-per-sec = "10MB"
-ca-path = "invalid path"
-cert-path = "invalid path"
-key-path = "invalid path"
-ca = [
-    99,
-    97,
-]
-cert = [
-    99,
-    101,
-    114,
-    116,
-]
 
 [server.labels]
 a = "b"
@@ -46,11 +33,6 @@ scheduler-pending-write-threshold = "123KB"
 [pd]
 endpoints = [
     "example.com:443",
-]
-ca-path = "invalid path"
-ca = [
-    99,
-    97,
 ]
 
 [metric]
@@ -293,3 +275,8 @@ level0-slowdown-writes-trigger = 123
 level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
 compaction-pri = 3
+
+[security]
+ca-path = "invalid path"
+cert-path = "invalid path"
+key-path = "invalid path"

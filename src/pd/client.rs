@@ -23,6 +23,7 @@ use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 
 use util::{Either, HandyRwLock};
+use util::security::SecurityManager;
 use util::time::duration_to_sec;
 use pd::{Config, PdFuture};
 use super::{Error, PdClient, RegionStat, Result, REQUEST_TIMEOUT};
@@ -38,18 +39,18 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new(cfg: &Config) -> Result<RpcClient> {
+    pub fn new(cfg: &Config, security_mgr: Arc<SecurityManager>) -> Result<RpcClient> {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(CQ_COUNT)
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        let (client, members) = validate_endpoints(env.clone(), cfg)?;
+        let (client, members) = validate_endpoints(env.clone(), cfg, &security_mgr)?;
 
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),
-            leader_client: LeaderClient::new(env, cfg, client, members),
+            leader_client: LeaderClient::new(env, security_mgr, client, members),
         })
     }
 

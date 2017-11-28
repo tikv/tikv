@@ -22,14 +22,15 @@ use futures::{task, Async, Future, Poll, Stream};
 use futures::task::Task;
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
-use grpc::{CallOption, ChannelBuilder, ChannelCredentialsBuilder, ClientDuplexReceiver,
-           ClientDuplexSender, Environment, Result as GrpcResult};
+use grpc::{CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+           Result as GrpcResult};
 use tokio_timer::Timer;
 use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
                     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader};
 use kvproto::pdpb_grpc::PdClient;
 
 use util::{Either, HandyRwLock};
+use util::security::SecurityManager;
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
@@ -41,7 +42,7 @@ pub struct Inner {
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Task>,
     pub client: PdClient,
     members: GetMembersResponse,
-    cfg: Config,
+    security_mgr: Arc<SecurityManager>,
 
     last_update: Instant,
 }
@@ -92,7 +93,7 @@ pub struct LeaderClient {
 impl LeaderClient {
     pub fn new(
         env: Arc<Environment>,
-        cfg: &Config,
+        security_mgr: Arc<SecurityManager>,
         client: PdClient,
         members: GetMembersResponse,
     ) -> LeaderClient {
@@ -105,7 +106,7 @@ impl LeaderClient {
                 hb_receiver: Either::Left(Some(rx)),
                 client: client,
                 members: members,
-                cfg: cfg.clone(),
+                security_mgr: security_mgr,
 
                 last_update: Instant::now(),
             })),
@@ -161,7 +162,7 @@ impl LeaderClient {
 
             let start = Instant::now();
             (
-                try_connect_leader(inner.env.clone(), &inner.cfg, &inner.members)?,
+                try_connect_leader(inner.env.clone(), &inner.security_mgr, &inner.members)?,
                 start,
             )
         };
@@ -309,6 +310,7 @@ where
 pub fn validate_endpoints(
     env: Arc<Environment>,
     cfg: &Config,
+    security_mgr: &SecurityManager,
 ) -> Result<(PdClient, GetMembersResponse)> {
     let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity(len);
@@ -320,7 +322,7 @@ pub fn validate_endpoints(
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match connect(env.clone(), cfg, ep) {
+        let (_, resp) = match connect(env.clone(), security_mgr, ep) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -351,7 +353,7 @@ pub fn validate_endpoints(
 
     match members {
         Some(members) => {
-            let (client, members) = try_connect_leader(env.clone(), cfg, &members)?;
+            let (client, members) = try_connect_leader(env.clone(), security_mgr, &members)?;
             info!("All PD endpoints are consistent: {:?}", cfg.endpoints);
             Ok((client, members))
         }
@@ -361,24 +363,14 @@ pub fn validate_endpoints(
 
 fn connect(
     env: Arc<Environment>,
-    cfg: &Config,
+    security_mgr: &SecurityManager,
     addr: &str,
 ) -> Result<(PdClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
     let addr = addr.trim_left_matches("http://")
         .trim_left_matches("https://");
-    let mut cb = ChannelBuilder::new(env);
-    let channel = if cfg.ca.is_empty() {
-        cb.connect(addr)
-    } else {
-        if !cfg.override_ssl_target.is_empty() {
-            cb = cb.override_ssl_target(cfg.override_ssl_target.clone());
-        }
-        let cred = ChannelCredentialsBuilder::new()
-            .root_cert(cfg.ca.clone())
-            .build();
-        cb.secure_connect(addr, cred)
-    };
+    let cb = ChannelBuilder::new(env);
+    let channel = security_mgr.connect(cb, addr);
     let client = PdClient::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
     match client.get_members_opt(GetMembersRequest::new(), option) {
@@ -389,7 +381,7 @@ fn connect(
 
 pub fn try_connect_leader(
     env: Arc<Environment>,
-    cfg: &Config,
+    security_mgr: &SecurityManager,
     previous: &GetMembersResponse,
 ) -> Result<(PdClient, GetMembersResponse)> {
     let previous_leader = previous.get_leader();
@@ -403,7 +395,7 @@ pub fn try_connect_leader(
         .chain(&[previous_leader.clone()])
     {
         for ep in m.get_client_urls() {
-            match connect(env.clone(), cfg, ep.as_str()) {
+            match connect(env.clone(), security_mgr, ep.as_str()) {
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
@@ -430,7 +422,7 @@ pub fn try_connect_leader(
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(env.clone(), cfg, ep.as_str()) {
+            if let Ok((client, _)) = connect(env.clone(), security_mgr, ep.as_str()) {
                 info!("connect to PD leader {:?}", ep);
                 return Ok((client, resp));
             }

@@ -18,17 +18,19 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
 use futures::{stream, Future, Sink, Stream};
-use grpc::{ChannelBuilder, ChannelCredentialsBuilder, Environment, WriteFlags};
+use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
+
+use util::collections::HashMap;
+use util::security::SecurityManager;
+use super::{Config, Error, Result};
+use super::metrics::*;
 
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
 const INITIAL_BUFFER_CAP: usize = 1024;
 
-use util::collections::HashMap;
-use super::{Config, Error, Result};
-use super::metrics::*;
 
 static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
@@ -43,12 +45,18 @@ struct Conn {
 }
 
 impl Conn {
-    fn new(env: Arc<Environment>, addr: &str, cfg: &Config, store_id: u64) -> Conn {
+    fn new(
+        env: Arc<Environment>,
+        addr: &str,
+        cfg: &Config,
+        security_mgr: &SecurityManager,
+        store_id: u64,
+    ) -> Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
         let alive = Arc::new(AtomicBool::new(true));
         let alive1 = alive.clone();
-        let mut cb = ChannelBuilder::new(env)
+        let cb = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
@@ -57,17 +65,7 @@ impl Conn {
                 CString::new("random id").unwrap(),
                 CONN_ID.fetch_add(1, Ordering::SeqCst),
             );
-        let channel = if cfg.ca.is_empty() {
-            cb.connect(addr)
-        } else {
-            if !cfg.override_ssl_target.is_empty() {
-                cb = cb.override_ssl_target(cfg.override_ssl_target.clone());
-            }
-            let cred = ChannelCredentialsBuilder::new()
-                .root_cert(cfg.ca.clone())
-                .build();
-            cb.secure_connect(addr, cred)
-        };
+        let channel = security_mgr.connect(cb, addr);
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
@@ -118,26 +116,33 @@ pub struct RaftClient {
     conns: HashMap<(String, usize), Conn>,
     pub addrs: HashMap<u64, String>,
     cfg: Arc<Config>,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl RaftClient {
-    pub fn new(env: Arc<Environment>, cfg: Arc<Config>) -> RaftClient {
+    pub fn new(
+        env: Arc<Environment>,
+        cfg: Arc<Config>,
+        security_mgr: Arc<SecurityManager>,
+    ) -> RaftClient {
         RaftClient {
             env: env,
             conns: HashMap::default(),
             addrs: HashMap::default(),
             cfg: cfg,
+            security_mgr: security_mgr,
         }
     }
 
     fn get_conn(&mut self, addr: &str, region_id: u64, store_id: u64) -> &mut Conn {
         let index = region_id as usize % self.cfg.grpc_raft_conn_num;
         let cfg = &self.cfg;
+        let security_mgr = &self.security_mgr;
         let env = &self.env;
         // TODO: avoid to_owned
         self.conns
             .entry((addr.to_owned(), index))
-            .or_insert_with(|| Conn::new(env.clone(), addr, cfg, store_id))
+            .or_insert_with(|| Conn::new(env.clone(), addr, cfg, security_mgr, store_id))
     }
 
     pub fn send(&mut self, store_id: u64, addr: &str, msg: RaftMessage) -> Result<()> {

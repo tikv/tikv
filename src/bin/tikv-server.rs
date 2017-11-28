@@ -61,6 +61,7 @@ use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
+use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::FutureWorker;
 use tikv::util::io_limiter::IOLimiter;
@@ -145,7 +146,7 @@ fn check_system_config(config: &TiKvConfig) {
     }
 }
 
-fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
+fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
     let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
@@ -213,6 +214,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
     // Create server
     let mut server = Server::new(
         &server_cfg,
+        &security_mgr,
         cfg.coprocessor.region_split_size.0 as usize,
         storage.clone(),
         raft_router,
@@ -258,7 +260,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig) {
 
     // Run server.
     server
-        .start(server_cfg)
+        .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
     signal_handler::handle_signal(engines, &cfg.rocksdb.backup_dir);
 
@@ -492,7 +494,11 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    let pd_client = RpcClient::new(&config.pd)
+    let security_mgr = Arc::new(
+        SecurityManager::new(&config.security)
+            .unwrap_or_else(|e| fatal!("failed to create security manager: {:?}", e)),
+    );
+    let pd_client = RpcClient::new(&config.pd, security_mgr.clone())
         .unwrap_or_else(|e| fatal!("failed to create rpc client: {:?}", e));
     let cluster_id = pd_client
         .get_cluster_id()
@@ -504,5 +510,5 @@ fn main() {
     info!("connect to PD cluster {}", cluster_id);
 
     let _m = Monitor::default();
-    run_raft_server(pd_client, &config);
+    run_raft_server(pd_client, &config, security_mgr);
 }

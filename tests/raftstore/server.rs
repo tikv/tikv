@@ -30,6 +30,7 @@ use tikv::raftstore::{store, Error, Result};
 use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
+use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{CfName, Engine};
 use kvproto::raft_serverpb::{self, RaftMessage};
@@ -70,13 +71,14 @@ impl ServerCluster {
                 .name_prefix(thd_name!("server-cluster"))
                 .build(),
         );
+        let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         ServerCluster {
             metas: HashMap::new(),
             addrs: HashMap::new(),
             pd_client: pd_client,
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
-            raft_client: RaftClient::new(env, Arc::new(Config::default())),
+            raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
         }
     }
 
@@ -123,8 +125,10 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
+        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let mut server = Server::new(
             &server_cfg,
+            &security_mgr,
             cfg.coprocessor.region_split_size.0 as usize,
             store.clone(),
             sim_router.clone(),
@@ -165,7 +169,7 @@ impl Simulator for ServerCluster {
             self.snap_paths.insert(node_id, tmp);
         }
 
-        server.start(server_cfg).unwrap();
+        server.start(server_cfg, security_mgr).unwrap();
 
         self.metas.insert(
             node_id,
