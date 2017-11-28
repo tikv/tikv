@@ -1597,18 +1597,13 @@ fn test_aggr_bit_ops() {
             Datum::U64(5),
             Datum::U64(1),
         ),
-        (
-            Datum::Null,
-            Datum::U64(4),
-            Datum::U64(4),
-            Datum::U64(4),
-        ),
+        (Datum::Null, Datum::U64(4), Datum::U64(4), Datum::U64(4)),
         (
             Datum::Bytes(b"name:6".to_vec()),
             Datum::U64(18446744073709551615),
             Datum::U64(0),
             Datum::U64(0),
-        )
+        ),
     ];
     // for selection
     let req = Select::from(&product.table)

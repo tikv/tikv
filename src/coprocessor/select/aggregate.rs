@@ -21,7 +21,9 @@ use super::xeval::{evaluator, EvalContext};
 
 pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
     match tp {
-        ExprType::Agg_BitAnd => Ok(box AggBitAnd { c: 0xffffffffffffffff }),
+        ExprType::Agg_BitAnd => Ok(box AggBitAnd {
+            c: 0xffffffffffffffff,
+        }),
         ExprType::Agg_BitOr => Ok(box AggBitOr { c: 0 }),
         ExprType::Agg_BitXor => Ok(box AggBitXor { c: 0 }),
         ExprType::Count => Ok(box Count { c: 0 }),
