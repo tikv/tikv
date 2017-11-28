@@ -429,14 +429,15 @@ impl CopMetrics {
 
     fn stop_record_handling(&mut self, stats: &Statistics) {
         self.stop_record_waiting();
-        let handle_time = duration_to_sec(self.timer.elapsed());
+        let query_time = duration_to_sec(self.timer.elapsed());
         COPR_REQ_HISTOGRAM_VEC
             .with_label_values(&[self.scan_tag])
-            .observe(handle_time);
+            .observe(query_time);
 
+        let handle_time = query_time - self.wait_time;
         COPR_REQ_HANDLE_TIME
             .with_label_values(&[self.scan_tag])
-            .observe(handle_time - self.wait_time);
+            .observe(handle_time);
 
         COPR_SCAN_KEYS
             .with_label_values(&[self.scan_tag])
@@ -448,13 +449,12 @@ impl CopMetrics {
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
-                "[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
+                "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
                 self.start_ts,
                 self.scan_tag,
                 handle_time,
-                self.wait_time,
                 stats.total_op_count(),
                 stats.total_processed(),
                 self.ranges_len,
