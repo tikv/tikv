@@ -67,6 +67,8 @@ pub trait BatchRunnable<T: Display> {
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
+    /// Run a periodic task. It's need the `Worker` calls `enable_tick_task`
+    /// before `start_batch`.
     fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
 }
@@ -263,7 +265,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
     }
 
-    pub fn set_timing_tasks(&mut self, tasks_per_tick: usize) {
+    pub fn enable_tick_task(&mut self, tasks_per_tick: usize) {
         self.tasks_per_tick = Some(tasks_per_tick);
     }
 
@@ -458,7 +460,7 @@ mod test {
     #[test]
     fn test_on_tick() {
         let mut worker = Worker::new("test-worker-batch");
-        worker.set_timing_tasks(5);
+        worker.enable_tick_task(5);
         let (tx, rx) = mpsc::channel();
         worker.start_batch(TickRunner { ch: tx }, 1).unwrap();
 
