@@ -1498,17 +1498,17 @@ fn test_aggr_extre() {
     store.commit();
 
     let exp = vec![
-        (   
+        (
             Datum::Bytes(b"name:0".to_vec()),
             Datum::I64(2),
             Datum::I64(1),
         ),
-        (   
+        (
             Datum::Bytes(b"name:3".to_vec()),
             Datum::I64(3),
             Datum::I64(3),
         ),
-        (   
+        (
             Datum::Bytes(b"name:5".to_vec()),
             Datum::I64(5),
             Datum::I64(4),
