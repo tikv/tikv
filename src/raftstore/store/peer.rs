@@ -360,8 +360,8 @@ impl Peer {
             },
             raft_log_size_hint: 0,
             raft_entry_max_size: cfg.raft_entry_max_size.0,
+            leader_lease_expired_time: Lease::new(cfg.raft_store_max_leader_lease()),
             cfg: cfg,
-            leader_lease_expired_time: Lease::new(),
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
         };
@@ -677,7 +677,7 @@ impl Peer {
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
-                    self.clear_lease();
+                    self.expire_leader_lease();
                 }
                 _ => {}
             }
@@ -1004,8 +1004,8 @@ impl Peer {
         }
     }
 
-    fn clear_lease(&mut self) {
-        let empty_lease = Lease::new();
+    fn expire_leader_lease(&mut self) {
+        let empty_lease = Lease::new(self.cfg.raft_store_max_leader_lease());
         let old_lease = mem::replace(&mut self.leader_lease_expired_time, empty_lease);
         old_lease.clear();
 
@@ -1249,7 +1249,7 @@ impl Peer {
                     self.leader_lease_expired_time.expired_time().unwrap(),
                 );
                 // Reset leader lease expiring time.
-                self.clear_lease();
+                self.expire_leader_lease();
             }
         }
 

@@ -41,7 +41,7 @@ pub struct LeaderStatus {
     tag: String,
 
     applied_index_term: u64,
-    leader_lease: Option<RemoteLease>,
+    leader_lease: Option<Arc<RemoteLease>>,
 }
 
 impl LeaderStatus {
@@ -101,7 +101,7 @@ impl Task {
         leader: Peer,
         term: u64,
         applied_index_term: u64,
-        leader_lease: Option<RemoteLease>,
+        leader_lease: Option<Arc<RemoteLease>>,
     ) -> Task {
         let tag = format!("[region {}]", region.get_id());
         Task::Update(LeaderStatus {
@@ -342,22 +342,15 @@ impl<C: MsgSender> LocalReader<C> {
             info!("local reader deny at {}", line!());
             LOCAL_READ_REJECT.with_label_values(&["no_lease"]).inc();
             Ok(RequestPolicy::ReadIndex)
+        } else if status.leader_lease.as_ref().unwrap().in_safe_lease() {
+            // Local read should be performed, iff leader is in safe lease.
+            Ok(RequestPolicy::ReadLocal)
         } else {
-            let leader_lease = status.leader_lease.as_ref().unwrap().lock().unwrap();
-            if leader_lease.in_safe_lease() {
-                // Local read should be performed, iff leader is in safe lease.
-                Ok(RequestPolicy::ReadLocal)
-            } else {
-                debug!(
-                    "{} leader lease expired time {:?} is outdated",
-                    status.tag,
-                    leader_lease.expired_time(),
-                );
-                LOCAL_READ_REJECT
-                    .with_label_values(&["lease_expired"])
-                    .inc();
-                Ok(RequestPolicy::ReadIndex)
-            }
+            debug!("{} leader lease expired time is outdated", status.tag,);
+            LOCAL_READ_REJECT
+                .with_label_values(&["lease_expired"])
+                .inc();
+            Ok(RequestPolicy::ReadIndex)
         }
     }
 
