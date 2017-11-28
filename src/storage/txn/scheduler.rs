@@ -190,7 +190,6 @@ pub struct RunningCtx {
     region_id: u64,
     latch_timer: Option<HistogramTimer>,
     get_snapshot_timer: Option<HistogramTimer>,
-    processing_timer: Option<HistogramTimer>,
     _timer: HistogramTimer,
     slow_timer: SlowTimer,
 }
@@ -217,7 +216,6 @@ impl RunningCtx {
                     .start_coarse_timer(),
             ),
             get_snapshot_timer: None,
-            processing_timer: None,
             _timer: SCHED_HISTOGRAM_VEC
                 .with_label_values(&[tag])
                 .start_coarse_timer(),
@@ -1092,11 +1090,6 @@ impl Scheduler {
         let mut cmd = {
             let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
             assert_eq!(ctx.cid, cid);
-            ctx.processing_timer = Some(
-                SCHED_PROCESSING_HISTOGRAM_VEC
-                    .with_label_values(&[ctx.tag])
-                    .start_coarse_timer(),
-            );
             ctx.cmd.take().unwrap()
         };
         if let Some(term) = cb_ctx.term {
@@ -1108,13 +1101,25 @@ impl Scheduler {
         let tag = cmd.tag();
         if readcmd {
             worker_pool.execute(move |ctx: &mut SchedContext| {
+                let process_read_timer = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                    .with_label_values(&[tag])
+                    .start_coarse_timer();
+
                 let s = process_read(cid, cmd, ch, snapshot);
                 ctx.add_statistics(tag, &s);
+
+                drop(process_read_timer);
             });
         } else {
             worker_pool.execute(move |ctx: &mut SchedContext| {
+                let process_write_timer = SCHED_PROCESSING_WRITE_HISTOGRAM_VEC
+                    .with_label_values(&[tag])
+                    .start_coarse_timer();
+
                 let s = process_write(cid, cmd, ch, snapshot);
                 ctx.add_statistics(tag, &s);
+
+                drop(process_write_timer);
             });
         }
     }
