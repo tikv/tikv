@@ -980,7 +980,7 @@ impl Peer {
     fn update_leader_lease(&mut self, expired_time: Timespec, safe: bool) {
         assert!(
             self.is_leader(),
-            "[{}] non-leader peer {} try to update leader lease",
+            "{} non-leader peer {} try to update leader lease",
             self.tag,
             self.peer.get_id()
         );
@@ -989,25 +989,18 @@ impl Peer {
         } else {
             self.leader_lease_expired_time.update_unsafe(expired_time);
         }
-        if !self.leader_lease_expired_time.has_remote() {
-            let local_read_scheduler = self.local_read_scheduler.as_ref();
+        if !self.leader_lease_expired_time.has_remote() && self.local_read_scheduler.is_some() {
             let region = self.region().clone();
-            let peer = &self.peer;
+            let peer = self.peer.clone();
             let term = self.term();
             let applied_index_term = self.get_store().applied_index_term;
-            let leader_lease_expired_time = &mut self.leader_lease_expired_time;
+            let leader_lease = Some(self.leader_lease_expired_time.remote());
 
-            local_read_scheduler.as_ref().map(|local_read_scheduler| {
-                local_read_scheduler
-                    .schedule(LocalReadTask::update(
-                        region,
-                        peer.clone(),
-                        term,
-                        applied_index_term,
-                        Some(leader_lease_expired_time.remote()),
-                    ))
-                    .unwrap();
-            });
+            let local_read_scheduler = self.local_read_scheduler.as_ref().unwrap();
+            let update =
+                LocalReadTask::update(region, peer, term, applied_index_term, leader_lease);
+            info!("{} update local reader {}", self.tag, update);
+            local_read_scheduler.schedule(update).unwrap();
         }
     }
 
