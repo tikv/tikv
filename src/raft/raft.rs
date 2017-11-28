@@ -1231,6 +1231,7 @@ impl<T: Storage> Raft<T> {
         &mut self,
         m: &Message,
         prs: &mut ProgressSet,
+        quorum: usize,
         send_append: &mut bool,
         more_to_send: &mut Option<Message>,
     ) {
@@ -1250,8 +1251,7 @@ impl<T: Storage> Raft<T> {
             return;
         }
 
-        let ack_count = self.read_only.recv_ack(m);
-        if ack_count < self.quorum() {
+        if self.read_only.recv_ack(m) < quorum {
             return;
         }
 
@@ -1380,7 +1380,8 @@ impl<T: Storage> Raft<T> {
                 self.handle_append_response(m, &mut prs, old_paused, send_append, maybe_commit);
             }
             MessageType::MsgHeartbeatResponse => {
-                self.handle_heartbeat_response(m, &mut prs, send_append, more_to_send);
+                let quorum = quorum(prs.voters.len());
+                self.handle_heartbeat_response(m, &mut prs, quorum, send_append, more_to_send);
             }
             MessageType::MsgSnapStatus => {
                 let pr = prs.get_mut_progress(m.get_from()).unwrap();
