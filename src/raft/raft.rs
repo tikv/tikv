@@ -610,7 +610,7 @@ impl<T: Storage> Raft<T> {
     }
 
     // send_heartbeat sends an empty MsgAppend
-    fn send_heartbeat(&mut self, to: u64, ctx: Option<Vec<u8>>) {
+    fn send_heartbeat(&mut self, to: u64, pr: &Progress, ctx: Option<Vec<u8>>) {
         // Attach the commit as min(to.matched, self.raft_log.committed).
         // When the leader sends out heartbeat message,
         // the receiver(follower) might not be matched with the leader
@@ -620,10 +620,7 @@ impl<T: Storage> Raft<T> {
         let mut m = Message::new();
         m.set_to(to);
         m.set_msg_type(MessageType::MsgHeartbeat);
-        let commit = cmp::min(
-            self.prs.get_progress(to).unwrap().matched,
-            self.raft_log.committed,
-        );
+        let commit = cmp::min(pr.matched, self.raft_log.committed);
         m.set_commit(commit);
         if let Some(context) = ctx {
             m.set_context(context);
@@ -651,12 +648,13 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn bcast_heartbeat_with_ctx(&mut self, ctx: Option<Vec<u8>>) {
-        for id in self.nodes() {
-            if id == self.id {
-                continue;
+        let prs = mem::replace(&mut self.prs, ProgressSet::default());
+        for (id, pr) in prs.voters.iter().chain(&prs.learners) {
+            if *id != self.id {
+                self.send_heartbeat(*id, pr, ctx.clone());
             }
-            self.send_heartbeat(id, ctx.clone());
         }
+        self.prs = prs;
     }
 
     // maybe_commit attempts to advance the commit index. Returns true if
@@ -1322,7 +1320,7 @@ impl<T: Storage> Raft<T> {
         // so reset r.electionElapsed.
         self.election_elapsed = 0;
         self.lead_transferee = Some(lead_transferee);
-        if self.prs.get_progress(m.get_from()).unwrap().matched == self.raft_log.last_index() {
+        if pr.matched == self.raft_log.last_index() {
             self.send_timeout_now(lead_transferee);
             info!(
                 "{} sends MsgTimeoutNow to {} immediately as {} already has up-to-date log",
@@ -2003,7 +2001,6 @@ impl<T: Storage> Raft<T> {
     // false.
     // check_quorum_active also resets all recent_active to false.
     fn check_quorum_active(&mut self) -> bool {
-        // NOTE: Here is a little different from etcd.
         let self_id = self.id;
         let act = self.prs.voters.iter_mut().fold(0, |act, (&id, pr)| {
             if id == self_id {
