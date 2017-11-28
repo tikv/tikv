@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::{cmp, mem};
+use std::cmp;
 
 use protobuf::{self, RepeatedField};
 use kvproto::eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState,
@@ -156,12 +156,12 @@ fn next_ents(r: &mut Raft<MemStorage>, s: &MemStorage) -> Vec<Entry> {
 }
 
 fn do_send_append(raft: &mut Raft<MemStorage>, to: u64) {
-    let mut prs = mem::replace(&mut raft.prs, ProgressSet::default());
+    let mut prs = raft.take_prs();
     {
         let pr = prs.get_mut_progress(to).unwrap();
         raft.send_append(to, pr);
     }
-    raft.prs = prs;
+    raft.set_prs(prs);
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Hash)]
@@ -200,20 +200,20 @@ impl Interface {
     fn initial(&mut self, id: u64, ids: &[u64]) {
         if self.raft.is_some() {
             self.id = id;
-            let prs = mem::replace(&mut self.prs, ProgressSet::default());
-            self.prs = ProgressSet::new(ids.len(), prs.learners.len());
+            let prs = self.take_prs();
+            self.set_prs(ProgressSet::new(ids.len(), prs.learners.len()));
             for id in ids {
                 if prs.learners.get(id).is_some() {
                     let progress = Progress {
                         is_learner: true,
                         ..Default::default()
                     };
-                    self.prs.learners.insert(*id, progress);
+                    self.mut_prs().learners.insert(*id, progress);
                 } else {
                     let progress = Progress {
                         ..Default::default()
                     };
-                    self.prs.voters.insert(*id, progress);
+                    self.mut_prs().voters.insert(*id, progress);
                 }
             }
             let term = self.term;

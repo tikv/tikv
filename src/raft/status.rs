@@ -54,8 +54,8 @@ impl Status {
         s.ss = raft.soft_state();
         s.applied = raft.raft_log.get_applied();
         if s.ss.raft_state == StateRole::Leader {
-            s.progress = raft.prs.voters.clone();
-            s.learner_progress = raft.prs.learners.clone();
+            s.progress = raft.get_prs().voters.clone();
+            s.learner_progress = raft.get_prs().learners.clone();
         }
         s
     }

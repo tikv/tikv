@@ -69,10 +69,13 @@ impl ProgressSet {
         progress
     }
 
-    pub fn check_intersect(&self) -> bool {
-        self.voters.keys().fold(false, |intersect, v| {
-            intersect | self.learners.get(v).is_some()
-        })
+    pub fn check_intersect(&self) {
+        if let Some(p) = self.voters
+            .keys()
+            .find(|id| self.learners.get(id).is_some())
+        {
+            panic!("node {} is in both learner and peer list", p);
+        }
     }
 }
 

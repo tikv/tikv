@@ -45,4 +45,4 @@ pub use self::status::Status;
 pub use self::log_unstable::Unstable;
 pub use self::progress::{Inflights, Progress, ProgressSet, ProgressState};
 pub use self::read_only::{ReadOnlyOption, ReadState};
-use util::collections::{FlatMap, FlatMapEntry, HashMap, HashSet};
+use util::collections::{FlatMap, HashMap, HashSet};

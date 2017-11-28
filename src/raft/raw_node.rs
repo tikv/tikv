@@ -306,7 +306,7 @@ impl<T: Storage> RawNode<T> {
         if is_local_msg(m.get_msg_type()) {
             return Err(Error::StepLocalMsg);
         }
-        if self.raft.prs.get_progress(m.get_from()).is_some() ||
+        if self.raft.get_prs().get_progress(m.get_from()).is_some() ||
             !is_response_msg(m.get_msg_type())
         {
             return self.raft.step(m);
