@@ -27,12 +27,14 @@ use std::error::Error;
 use std::time::Duration;
 
 use util::Either;
-use util::time::{Instant, SlowTimer};
+use util::time::SlowTimer;
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
 pub use self::future::Worker as FutureWorker;
+
+const NAP_SECS: u64 = 1;
 
 pub struct Stopped<T>(pub T);
 
@@ -56,7 +58,7 @@ impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T);
-    fn on_tick(&mut self);
+    fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
 }
 
@@ -65,7 +67,7 @@ pub trait BatchRunnable<T: Display> {
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
-    fn on_tick(&mut self);
+    fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
 }
 
@@ -153,7 +155,6 @@ pub struct Worker<T: Display> {
     scheduler: Scheduler<T>,
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
-    timeout: Option<usize>,
     tasks_per_tick: Option<usize>,
 }
 
@@ -162,44 +163,28 @@ fn poll<R, T>(
     rx: Receiver<Option<T>>,
     counter: Arc<AtomicUsize>,
     batch_size: usize,
-    timeout: Option<usize>,
     tasks_per_tick: Option<usize>,
 ) where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
-    let mut keep_going = true;
-    let mut buffer = Vec::with_capacity(batch_size);
-
-    let timeout = timeout.map(|t| Duration::from_secs(t));
     let tasks_per_tick = tasks_per_tick.unwrap_or(0);
     let mut timing_task_counter = 0;
+    let mut keep_going = true;
+    let mut buffer = Vec::with_capacity(batch_size);
     while keep_going {
-        let t = match timeout {
-            Some(dur) => rx.recv_timeout(dur).map_err(Either::Left),
-            None => rx.recv().map_err(Either::Right),
-        };
-        match t {
-            Ok(Some(t)) => buffer.push(t),
-            Err(Either::Left(RecvTimeoutError::Timeout)) => {
-                timing_task_counter = 0;
-                runner.on_tick();
-                continue;
-            }
-            _ => break,
+        keep_going = next_batch(
+            &rx,
+            &mut runner,
+            &mut buffer,
+            batch_size,
+            &mut timing_task_counter,
+        );
+        if buffer.is_empty() {
+            break;
         }
 
-        while buffer.len() < batch_size {
-            match rx.try_recv() {
-                Ok(None) => {
-                    keep_going = false;
-                    break;
-                }
-                Ok(Some(t)) => buffer.push(t),
-                _ => break,
-            }
-        }
         counter.fetch_sub(buffer.len(), Ordering::SeqCst);
         WORKER_PENDING_TASK_VEC
             .with_label_values(&[&name])
@@ -208,16 +193,62 @@ fn poll<R, T>(
             .with_label_values(&[&name])
             .inc_by(buffer.len() as f64)
             .unwrap();
+
         runner.run_batch(&mut buffer);
         buffer.clear();
 
         timing_task_counter += 1;
-        if tasks_per_tick > 0 && timing_task_counter > tasks_per_tick {
+        if tasks_per_tick > 0 && timing_task_counter >= tasks_per_tick {
             timing_task_counter = 0;
             runner.on_tick();
         }
     }
     runner.shutdown();
+}
+
+fn next_batch<T, R>(
+    rx: &Receiver<Option<T>>,
+    runner: &mut R,
+    buffer: &mut Vec<T>,
+    batch_size: usize,
+    timing_task_counter: &mut usize,
+) -> bool
+where
+    R: BatchRunnable<T> + Send + 'static,
+    T: Display + Send + 'static,
+{
+    let mut timeout = Some(Duration::from_secs(NAP_SECS));
+    let head = loop {
+        let task = match timeout {
+            Some(dur) => rx.recv_timeout(dur).map_err(Either::Left),
+            None => rx.recv().map_err(Either::Right),
+        };
+        match task {
+            Ok(t) => break t,
+            Err(Either::Left(RecvTimeoutError::Timeout)) => {
+                *timing_task_counter = 0;
+                runner.on_tick();
+                timeout = None;
+            }
+            _ => break None,
+        }
+    };
+
+    let mut keep_going = true;
+    if let Some(task) = head {
+        buffer.push(task);
+        while buffer.len() < batch_size {
+            match rx.try_recv() {
+                Ok(Some(t)) => buffer.push(t),
+                Err(TryRecvError::Empty) => break,
+                Ok(None) | Err(_) => {
+                    keep_going = false;
+                    break;
+                }
+            }
+        }
+    }
+    keep_going
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
@@ -228,14 +259,12 @@ impl<T: Display + Send + 'static> Worker<T> {
             scheduler: Scheduler::new(name, AtomicUsize::new(0), tx),
             receiver: Mutex::new(Some(rx)),
             handle: None,
-            timeout: None,
             tasks_per_tick: None,
         }
     }
 
-    pub fn set_timing_tasks(&mut self, timeout: usize, tasks_per_tick) {
-        self.timeout = timeout;
-        self.tasks_per_tick = tasks_per_tick;
+    pub fn set_timing_tasks(&mut self, tasks_per_tick: usize) {
+        self.tasks_per_tick = Some(tasks_per_tick);
     }
 
     /// Start the worker.
@@ -256,12 +285,12 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
-        let timeout = self.timeout;
         let tasks_per_tick = self.tasks_per_tick;
-        let periodic_interval = self.periodic_interval;
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size, timeout, tasks_per_tick))?;
+            .spawn(move || {
+                poll(runner, rx, counter, batch_size, tasks_per_tick)
+            })?;
         self.handle = Some(h);
         Ok(())
     }
@@ -339,6 +368,19 @@ mod test {
         }
     }
 
+    struct TickRunner {
+        ch: Sender<&'static str>,
+    }
+
+    impl Runnable<&'static str> for TickRunner {
+        fn run(&mut self, msg: &'static str) {
+            self.ch.send(msg).unwrap();
+        }
+        fn on_tick(&mut self) {
+            self.ch.send("tick msg").unwrap();
+        }
+    }
+
     #[test]
     fn test_worker() {
         let mut worker = Worker::new("test-worker");
@@ -411,5 +453,27 @@ mod test {
             rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         assert_eq!(rx.recv().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_on_tick() {
+        let mut worker = Worker::new("test-worker-batch");
+        worker.set_timing_tasks(5);
+        let (tx, rx) = mpsc::channel();
+        worker.start_batch(TickRunner { ch: tx }, 1).unwrap();
+
+        // Send 20 tasks, we should get 20 + 4 =24 results.
+        for _ in 0..20 {
+            worker.schedule("normal msg").unwrap();
+        }
+        for _ in 0..24 {
+            rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+
+        thread::sleep(Duration::from_secs(5));
+        worker.stop().unwrap().join().unwrap();
+
+        assert_eq!(rx.recv().unwrap(), "tick msg");
+        assert!(rx.recv().is_err());
     }
 }
