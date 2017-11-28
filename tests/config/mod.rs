@@ -68,6 +68,7 @@ fn test_serde_custom_tikv_config() {
         end_point_stack_size: ReadableSize::mb(12),
         end_point_recursion_limit: 100,
         end_point_batch_row_limit: 64,
+        snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         ca_path: "invalid path".to_owned(),
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
