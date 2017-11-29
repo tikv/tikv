@@ -23,7 +23,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
+use coprocessor::endpoint::{get_pk, prefix_next, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
 
 use super::executor::{build_exec, Executor, Row};
@@ -74,14 +74,23 @@ impl DAGContext {
 
     pub fn handle_request(&mut self, streaming: bool) -> Result<(Response, bool)> {
         let mut record_cnt = 0;
+        let (mut first_row, mut start_key) = (true, None);
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
+
+                    if first_row {
+                        first_row = false;
+                        start_key = self.exec.take_last_key();
+                    }
+
                     let mut stream_result = None;
                     if self.chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         if streaming && self.chunks.len() >= self.chunks_per_stream {
-                            stream_result = Some(self.make_response(true));
+                            let start_key = start_key.take();
+                            let end_key = self.exec.take_last_key();
+                            stream_result = Some(self.make_response(true, start_key, end_key));
                         }
                         self.chunks.push(Chunk::new());
                         record_cnt = 0;
@@ -99,7 +108,10 @@ impl DAGContext {
                         return stream_result;
                     }
                 }
-                Ok(None) => return self.make_response(false),
+                Ok(None) => {
+                    let end_key = self.exec.take_last_key();
+                    return self.make_response(false, start_key, end_key);
+                }
                 Err(e) => if let Error::Other(_) = e {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
@@ -114,13 +126,36 @@ impl DAGContext {
         }
     }
 
-    fn make_response(&mut self, remain: bool) -> Result<(Response, bool)> {
+    fn make_response(
+        &mut self,
+        remain: bool,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
+    ) -> Result<(Response, bool)> {
         let chunks = mem::replace(&mut self.chunks, Vec::new());
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
         sel_resp.set_chunks(RepeatedField::from_vec(chunks));
         let data = box_try!(sel_resp.write_to_bytes());
         resp.set_data(data);
+
+        let (start, end) = match (start_key, end_key) {
+            (Some(start_key), Some(end_key)) => if start_key > end_key {
+                (end_key, prefix_next(&start_key))
+            } else {
+                (start_key, prefix_next(&end_key))
+            },
+            (Some(start_key), None) => {
+                let end_key = prefix_next(&start_key);
+                (start_key, end_key)
+            }
+            (None, None) => return Ok((resp, remain)),
+            _ => unreachable!(),
+        };
+        let mut range = KeyRange::new();
+        range.set_start(start);
+        range.set_end(end);
+        resp.set_range(range);
         Ok((resp, remain))
     }
 

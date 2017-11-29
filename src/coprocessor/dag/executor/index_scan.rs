@@ -34,6 +34,7 @@ pub struct IndexScanExecutor {
     pk_col: Option<ColumnInfo>,
     key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
+    last_key: Option<Vec<u8>>,
 }
 
 impl IndexScanExecutor {
@@ -61,6 +62,7 @@ impl IndexScanExecutor {
             pk_col: pk_col,
             key_ranges: key_ranges.into_iter(),
             scanner: None,
+            last_key: None,
         }
     }
 
@@ -78,6 +80,7 @@ impl IndexScanExecutor {
             pk_col: None,
             key_ranges: key_ranges.into_iter(),
             scanner: None,
+            last_key: None,
         }
     }
 
@@ -92,6 +95,7 @@ impl IndexScanExecutor {
             Some((key, value)) => (key, value),
             None => return Ok(None),
         };
+        self.last_key = Some(key.clone());
 
         let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
         let handle = match handle {
@@ -141,6 +145,10 @@ impl Executor for IndexScanExecutor {
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(statistics);
         }
+    }
+
+    fn take_last_key(&mut self) -> Option<Vec<u8>> {
+        self.last_key.take()
     }
 }
 

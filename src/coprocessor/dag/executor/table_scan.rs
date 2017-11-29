@@ -34,6 +34,7 @@ pub struct TableScanExecutor {
     col_ids: HashSet<i64>,
     key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
+    last_key: Option<Vec<u8>>,
 }
 
 impl TableScanExecutor {
@@ -62,6 +63,7 @@ impl TableScanExecutor {
             col_ids: col_ids,
             key_ranges: key_ranges.into_iter(),
             scanner: None,
+            last_key: None,
         }
     }
 
@@ -74,17 +76,19 @@ impl TableScanExecutor {
             };
             let row_data = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(&key));
+            self.last_key = Some(key);
             return Ok(Some(Row::new(h, row_data)));
         }
         Ok(None)
     }
 
-    fn get_row_from_point(&mut self, range: KeyRange) -> Result<Option<Row>> {
-        let key = range.get_start();
-        let value = self.store.get(&Key::from_raw(key), &mut self.statistics)?;
+    fn get_row_from_point(&mut self, mut range: KeyRange) -> Result<Option<Row>> {
+        let key = range.take_start();
+        let value = self.store.get(&Key::from_raw(&key), &mut self.statistics)?;
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
-            let h = box_try!(table::decode_handle(key));
+            let h = box_try!(table::decode_handle(&key));
+            self.last_key = Some(key);
             return Ok(Some(Row::new(h, values)));
         }
         Ok(None)
@@ -129,6 +133,10 @@ impl Executor for TableScanExecutor {
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(statistics);
         }
+    }
+
+    fn take_last_key(&mut self) -> Option<Vec<u8>> {
+        self.last_key.take()
     }
 }
 

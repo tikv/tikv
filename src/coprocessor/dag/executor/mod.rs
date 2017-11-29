@@ -130,6 +130,12 @@ impl Row {
 pub trait Executor: Send {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_statistics_into(&mut self, stats: &mut Statistics);
+    /// Take the last key accessed by the executor.
+    ///
+    /// If the executor doesn't support this, return None.
+    fn take_last_key(&mut self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 pub struct DAGExecutor {
