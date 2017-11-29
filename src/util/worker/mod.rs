@@ -193,7 +193,7 @@ fn poll<R, T>(
             runner.run_batch(&mut buffer);
             buffer.clear();
         }
-        if timeout.is_none() || timing_task_counter >= tasks_per_tick {
+        if (timeout.is_none() && keep_going) || timing_task_counter >= tasks_per_tick {
             runner.on_tick();
             timing_task_counter = 0;
         }
@@ -214,7 +214,7 @@ fn next_batch<T>(
     match next_task {
         Ok(Some(task)) => {
             buffer.push(task);
-            while buffer.len() <= batch_size {
+            while buffer.len() < batch_size {
                 match rx.try_recv() {
                     Ok(Some(t)) => buffer.push(t),
                     Err(TryRecvError::Empty) => break,
@@ -450,15 +450,18 @@ mod test {
     #[test]
     fn test_on_tick() {
         let mut worker = Worker::new("test-worker-batch");
+        worker.set_tick_duration(Duration::from_secs(3));
         worker.set_tasks_per_tick(5);
         let (tx, rx) = mpsc::channel();
         worker.start_batch(TickRunner { ch: tx }, 4).unwrap();
 
-        // Send 20 tasks, we should get 20 + 4 =24 results.
+        // Send 20 tasks, we should get 20 + 2 =22 results.
         for _ in 0..20 {
             worker.schedule("normal msg").unwrap();
         }
-        for _ in 0..24 {
+        thread::sleep(Duration::from_secs(1));
+
+        for _ in 0..22 {
             rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
 
