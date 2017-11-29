@@ -335,17 +335,17 @@ mod test {
     fn test_unique_index_scan() {
         let mut wrapper = IndexTestWrapper::default();
 
-        // let r1 = get_idx_range(TABLE_ID, INDEX_ID, 0, 1); // point get
-        // let r2 = get_idx_range(TABLE_ID, INDEX_ID, 1, 4); // range seek
-        // let r3 = get_idx_range(TABLE_ID, INDEX_ID, 4, 5); // point get
-        // let r4 = get_idx_range(TABLE_ID, INDEX_ID, 5, (KEY_NUMBER + 1) as i64); // range seek
-        // let r5 = get_idx_range(
-        //     TABLE_ID,
-        //     INDEX_ID,
-        //     (KEY_NUMBER + 1) as i64,
-        //     (KEY_NUMBER + 2) as i64,
-        // ); // point get but miss
-        // wrapper.ranges = vec![r1, r2, r3, r4, r5];
+        let r1 = get_idx_range(TABLE_ID, INDEX_ID, 0, 1); // point get
+        let r2 = get_idx_range(TABLE_ID, INDEX_ID, 1, 4); // range seek
+        let r3 = get_idx_range(TABLE_ID, INDEX_ID, 4, 5); // point get
+        let r4 = get_idx_range(TABLE_ID, INDEX_ID, 5, (KEY_NUMBER + 1) as i64); // range seek
+        let r5 = get_idx_range(
+            TABLE_ID,
+            INDEX_ID,
+            (KEY_NUMBER + 1) as i64,
+            (KEY_NUMBER + 2) as i64,
+        ); // point get but miss
+        wrapper.ranges = vec![r1, r2, r3, r4, r5];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
