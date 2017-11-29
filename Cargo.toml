@@ -80,7 +80,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 git = "https://github.com/pingcap/kvproto.git"
 
 [dependencies.tipb]
-git = "https://github.com/pingcap/tipb.git"
+git = "https://github.com/spongedu/tipb.git"
 
 [dependencies.prometheus]
 version = "0.3"
