@@ -648,11 +648,14 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn bcast_heartbeat_with_ctx(&mut self, ctx: Option<Vec<u8>>) {
+        let self_id = self.id;
         let prs = self.take_prs();
-        for (id, pr) in prs.voters.iter().chain(&prs.learners) {
-            if *id != self.id {
-                self.send_heartbeat(*id, pr, ctx.clone());
-            }
+        for (id, pr) in prs.voters
+            .iter()
+            .chain(&prs.learners)
+            .filter(|&(id, _)| *id != self_id)
+        {
+            self.send_heartbeat(*id, pr, ctx.clone());
         }
         self.set_prs(prs);
     }
