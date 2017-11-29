@@ -68,8 +68,6 @@ pub trait BatchRunnable<T: Display> {
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
-    /// Run a periodic task. It's need the `Worker` calls `enable_tick_task`
-    /// before `start_batch`.
     fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
 }
