@@ -407,9 +407,6 @@ fn process_read(
     snapshot: Box<Snapshot>,
 ) -> Statistics {
     debug!("process read cmd(cid={}) in worker pool.", cid);
-    SCHED_WORKER_COUNTER_VEC
-        .with_label_values(&[cmd.tag(), "read"])
-        .inc();
     let tag = cmd.tag();
 
     let mut statistics = Statistics::default();
@@ -759,10 +756,6 @@ fn process_write(
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
 ) -> Statistics {
-    SCHED_WORKER_COUNTER_VEC
-        .with_label_values(&[cmd.tag(), "write"])
-        .inc();
-
     let mut statistics = Statistics::default();
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot, &mut statistics) {
         if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
@@ -1101,25 +1094,21 @@ impl Scheduler {
         let tag = cmd.tag();
         if readcmd {
             worker_pool.execute(move |ctx: &mut SchedContext| {
-                let process_read_timer = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                let _processing_read_timer = SCHED_PROCESSING_READ_HISTOGRAM_VEC
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
                 let s = process_read(cid, cmd, ch, snapshot);
                 ctx.add_statistics(tag, &s);
-
-                drop(process_read_timer);
             });
         } else {
             worker_pool.execute(move |ctx: &mut SchedContext| {
-                let process_write_timer = SCHED_PROCESSING_WRITE_HISTOGRAM_VEC
+                let _processing_write_timer = SCHED_PROCESSING_WRITE_HISTOGRAM_VEC
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
                 let s = process_write(cid, cmd, ch, snapshot);
                 ctx.add_statistics(tag, &s);
-
-                drop(process_write_timer);
             });
         }
     }

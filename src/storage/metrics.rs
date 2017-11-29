@@ -40,13 +40,6 @@ lazy_static! {
             "Total number of pending commands."
         ).unwrap();
 
-    pub static ref SCHED_WORKER_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_scheduler_worker_command_total",
-            "Total number of commands executed by worker pool.",
-            &["type", "rw_type"]
-        ).unwrap();
-
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_scheduler_command_duration_seconds",
