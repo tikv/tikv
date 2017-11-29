@@ -147,6 +147,7 @@ impl Executor for IndexScanExecutor {
 #[cfg(test)]
 mod test {
     use std::i64;
+    use byteorder::{BigEndian, WriteBytesExt};
 
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
@@ -154,7 +155,6 @@ mod test {
 
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::datum::{self, Datum};
-    use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
     use storage::SnapshotStore;
 
@@ -167,14 +167,34 @@ mod test {
 
     #[inline]
     pub fn get_idx_range(table_id: i64, idx_id: i64, start: i64, end: i64) -> KeyRange {
-        let mut start_buf = Vec::with_capacity(8);
-        start_buf.encode_i64(start).unwrap();
-        let mut end_buf = Vec::with_capacity(8);
-        end_buf.encode_i64(end).unwrap();
+        let (_, start_key) = generate_index_data(table_id, idx_id, start);
+        let (_, end_key) = generate_index_data(table_id, idx_id, end);
         let mut key_range = KeyRange::new();
-        key_range.set_start(table::encode_index_seek_key(table_id, idx_id, &start_buf));
-        key_range.set_end(table::encode_index_seek_key(table_id, idx_id, &end_buf));
+        key_range.set_start(start_key);
+        key_range.set_end(end_key);
         key_range
+    }
+
+    pub fn generate_index_data(
+        table_id: i64,
+        index_id: i64,
+        handle: i64,
+    ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
+        let indice = vec![
+            (2, Datum::Bytes(b"abc".to_vec())),
+            (3, Datum::Dec(handle.into())),
+        ];
+        let mut expect_row = HashMap::default();
+        let v: Vec<_> = indice
+            .iter()
+            .map(|&(ref cid, ref value)| {
+                expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
+                value.clone()
+            })
+            .collect();
+        let encoded = datum::encode_key(&v).unwrap();
+        let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
+        (expect_row, idx_key)
     }
 
     pub fn prepare_index_data(key_number: usize, table_id: i64, index_id: i64) -> Data {
@@ -188,24 +208,11 @@ mod test {
         let mut expect_rows = Vec::new();
 
         for handle in 0..key_number {
-            let indice = vec![
-                (2, Datum::Bytes(b"abc".to_vec())),
-                (3, Datum::Dec(handle.into())),
-            ];
-            let mut expect_row = HashMap::default();
-            let mut v: Vec<_> = indice
-                .iter()
-                .map(|&(ref cid, ref value)| {
-                    expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
-                    value.clone()
-                })
-                .collect();
-            let h = Datum::I64(handle as i64);
-            v.push(h);
-            let encoded = datum::encode_key(&v).unwrap();
-            let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
+            let (expect_row, idx_key) = generate_index_data(table_id, index_id, handle as i64);
             expect_rows.push(expect_row);
-            kv_data.push((idx_key, vec![0]));
+            let mut value = Vec::with_capacity(8);
+            value.write_i64::<BigEndian>(handle as i64).unwrap();
+            kv_data.push((idx_key, value));
         }
         Data {
             kv_data: kv_data,
@@ -245,7 +252,7 @@ mod test {
             let col_req = RepeatedField::from_vec(cols.clone());
             scan.set_columns(col_req);
             // prepare range
-            let range = get_idx_range(TABLE_ID, INDEX_ID, i64::MIN, i64::MAX);
+            let range = get_idx_range(TABLE_ID, INDEX_ID, 0, i64::MAX);
             let key_ranges = vec![range];
             IndexTestWrapper {
                 data: test_data,
