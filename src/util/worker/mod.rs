@@ -151,13 +151,27 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
     Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
 }
 
+#[derive(Copy, Clone)]
+pub struct TickOption {
+    pub tick_duration: Duration,
+    pub tasks_per_tick: usize,
+}
+
+impl Default for TickOption {
+    fn default() -> Self {
+        TickOption {
+            tick_duration: Duration::from_secs(NAP_SECS),
+            tasks_per_tick: DEFAULT_TASKS_PER_TICK,
+        }
+    }
+}
+
 /// A worker that can schedule time consuming tasks.
 pub struct Worker<T: Display> {
     scheduler: Scheduler<T>,
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
-    tick_duration: Duration,
-    tasks_per_tick: usize,
+    tick_option: TickOption,
 }
 
 fn poll<R, T>(
@@ -165,15 +179,15 @@ fn poll<R, T>(
     rx: Receiver<Option<T>>,
     counter: Arc<AtomicUsize>,
     batch_size: usize,
-    tick_duration: Duration,
-    tasks_per_tick: usize,
+    tick_option: TickOption,
 ) where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
+    let tasks_per_tick = tick_option.tasks_per_tick;
     let mut buffer = Vec::with_capacity(batch_size);
-    let mut timeout = Some(tick_duration);
+    let mut timeout = Some(tick_option.tick_duration);
     let mut timing_task_counter = 0;
     let mut keep_going = true;
     while keep_going {
@@ -189,7 +203,7 @@ fn poll<R, T>(
                 .unwrap();
 
             timing_task_counter += buffer.len();
-            timeout = Some(tick_duration);
+            timeout = Some(tick_option.tick_duration);
             runner.run_batch(&mut buffer);
             buffer.clear();
         }
@@ -239,23 +253,14 @@ impl<T: Display + Send + 'static> Worker<T> {
             scheduler: Scheduler::new(name, AtomicUsize::new(0), tx),
             receiver: Mutex::new(Some(rx)),
             handle: None,
-            tick_duration: Duration::from_secs(NAP_SECS),
-            tasks_per_tick: DEFAULT_TASKS_PER_TICK,
+            tick_option: TickOption::default(),
         }
     }
 
-    /// Set the `tick_duration` of the worker, must be greater than 0.
-    pub fn set_tick_duration(&mut self, tick_dur: Duration) {
-        if tick_dur > Duration::from_secs(0) {
-            self.tick_duration = tick_dur;
-        }
-    }
-
-    /// Set the `tasks_per_tick` to a new value, must be greater than 0.
-    pub fn set_tasks_per_tick(&mut self, tasks_per_tick: usize) {
-        if tasks_per_tick > 0 {
-            self.tasks_per_tick = tasks_per_tick;
-        }
+    pub fn with_tick_option<S: Into<String>>(name: S, tick_option: TickOption) -> Worker<T> {
+        let mut worker = Worker::new(name);
+        worker.tick_option = tick_option;
+        worker
     }
 
     /// Start the worker.
@@ -276,13 +281,10 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
-        let tick_dur = self.tick_duration;
-        let tasks_per_tick = self.tasks_per_tick;
+        let tick_option = self.tick_option;
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || {
-                poll(runner, rx, counter, batch_size, tick_dur, tasks_per_tick)
-            })?;
+            .spawn(move || poll(runner, rx, counter, batch_size, tick_option))?;
         self.handle = Some(h);
         Ok(())
     }
@@ -449,26 +451,34 @@ mod test {
 
     #[test]
     fn test_on_tick() {
-        let mut worker = Worker::new("test-worker-batch");
-        worker.set_tick_duration(Duration::from_secs(3));
-        worker.set_tasks_per_tick(5);
-        let (tx, rx) = mpsc::channel();
-        worker.start_batch(TickRunner { ch: tx }, 4).unwrap();
-
-        // Send 20 tasks, we should get 20 + 2 =22 results.
+        let tick_option = TickOption {
+            tasks_per_tick: 5,
+            tick_duration: Duration::from_secs(3),
+        };
+        let mut worker = Worker::with_tick_option("test-worker-batch", tick_option);
         for _ in 0..20 {
             worker.schedule("normal msg").unwrap();
         }
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_secs(3));
 
-        for _ in 0..22 {
-            rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let runner = TickRunner { ch: tx };
+        worker.start_batch(runner, 4).unwrap();
+
+        // The stream in rx should be: ^^^^^^^^o^^^^^^^^o^^^^o.
+        // '^' means normal message and 'o' means tick message.
+        for i in 0..22 {
+            let msg = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            if i != 8 && i != 17 {
+                assert_eq!(msg, "normal msg");
+            } else {
+                assert_eq!(msg, "tick msg");
+            }
         }
 
         thread::sleep(Duration::from_secs(5));
         worker.stop().unwrap().join().unwrap();
-
-        assert_eq!(rx.recv().unwrap(), "tick msg");
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), "tick msg");
         assert!(rx.recv().is_err());
     }
 }
