@@ -26,7 +26,7 @@ use util::{Either, HandyRwLock};
 use util::security::SecurityManager;
 use util::time::duration_to_sec;
 use pd::{Config, PdFuture};
-use super::{Error, PdClient, RegionStat, Result, REQUEST_TIMEOUT};
+use super::{Error, PdClient, RegionLeader, RegionStat, Result, REQUEST_TIMEOUT};
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::metrics::*;
 
@@ -202,6 +202,34 @@ impl PdClient for RpcClient {
         check_resp_header(resp.get_header())?;
 
         Ok(resp.take_region())
+    }
+
+    fn get_region_leader(&self, key: &[u8]) -> Result<RegionLeader> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_region"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetRegionRequest::new();
+        req.set_header(self.header());
+        req.set_region_key(key.to_vec());
+
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_region_opt(req.clone(), option)
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        let region = if resp.has_region() {
+            resp.take_region()
+        } else {
+            return Err(Error::RegionNotFound);
+        };
+        let leader = if resp.has_leader() {
+            Some(resp.take_leader())
+        } else {
+            None
+        };
+        Ok(RegionLeader::new(region, leader))
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {

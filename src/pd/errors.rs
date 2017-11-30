@@ -41,6 +41,7 @@ quick_error!{
             description(err.description())
             display("unknown error {:?}", err)
         }
+        RegionNotFound {}
     }
 }
 

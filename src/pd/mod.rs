@@ -26,6 +26,8 @@ pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::RECONNECT_INTERVAL_SEC;
 pub use self::config::Config;
 
+use std::ops::{Deref, DerefMut};
+
 use kvproto::metapb;
 use kvproto::pdpb;
 use futures::Future;
@@ -63,6 +65,41 @@ impl RegionStat {
             read_keys: read_keys,
             approximate_size: approximate_size,
         }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct RegionLeader {
+    pub region: metapb::Region,
+    pub leader: Option<metapb::Peer>,
+}
+
+impl RegionLeader {
+    pub fn new(region: metapb::Region, leader: Option<metapb::Peer>) -> RegionLeader {
+        RegionLeader {
+            region: region,
+            leader: leader,
+        }
+    }
+}
+
+impl Deref for RegionLeader {
+    type Target = metapb::Region;
+
+    fn deref(&self) -> &Self::Target {
+        &self.region
+    }
+}
+
+impl DerefMut for RegionLeader {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.region
+    }
+}
+
+impl From<metapb::Region> for RegionLeader {
+    fn from(region: metapb::Region) -> RegionLeader {
+        RegionLeader::new(region, None)
     }
 }
 
@@ -120,6 +157,13 @@ pub trait PdClient: Send + Sync {
     // For route.
     // Get region which the key belong to.
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
+
+    // Get region and leader which the key belong to.
+    // We can return leader in `get_region` too, but that will break a lot of code.
+    // In most cases we just need the region, so just leave it for convenience.
+    fn get_region_leader(&self, key: &[u8]) -> Result<RegionLeader> {
+        self.get_region(key).map(|region| region.into())
+    }
 
     // Get region by region id.
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>>;
