@@ -19,7 +19,7 @@ use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, Server
 use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
 
-use util::worker::{FutureScheduler, Worker};
+use util::worker::{Builder as WorkerBuilder, FutureScheduler, Worker};
 use storage::Storage;
 use raftstore::store::{Engines, SnapManager};
 
@@ -72,7 +72,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .build(),
         );
         let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.clone())));
-        let end_point_worker = Worker::new("end-point-worker");
+        let end_point_worker = WorkerBuilder::new("end-point-worker")
+            .batch_size(DEFAULT_COPROCESSOR_BATCH)
+            .create();
         let snap_worker = Worker::new("snap-handler");
 
         let kv_service = KvService::new(
@@ -141,10 +143,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             cfg,
             self.pd_scheduler.clone(),
         );
-        box_try!(
-            self.end_point_worker
-                .start_batch(end_point, DEFAULT_COPROCESSOR_BATCH)
-        );
+        box_try!(self.end_point_worker.start(end_point));
         let snap_runner = SnapHandler::new(
             self.env.clone(),
             self.snap_mgr.clone(),

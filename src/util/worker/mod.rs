@@ -18,7 +18,7 @@ mod metrics;
 mod future;
 
 use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder, JoinHandle};
+use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::io;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -152,16 +152,47 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 }
 
 #[derive(Copy, Clone)]
-pub struct TickOption {
-    pub tick_duration: Duration,
-    pub tasks_per_tick: usize,
+pub struct Builder<S: Into<String>> {
+    name: S,
+    batch_size: usize,
+    tick_duration: Duration,
+    tasks_per_tick: usize,
 }
 
-impl Default for TickOption {
-    fn default() -> Self {
-        TickOption {
+impl<S: Into<String>> Builder<S> {
+    pub fn new(name: S) -> Self {
+        Builder {
+            name: name,
+            batch_size: 1,
             tick_duration: Duration::from_secs(NAP_SECS),
             tasks_per_tick: DEFAULT_TASKS_PER_TICK,
+        }
+    }
+
+    pub fn batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    pub fn tick_duration(mut self, tick_dur: Duration) -> Self {
+        self.tick_duration = tick_dur;
+        self
+    }
+
+    pub fn tasks_per_tick(mut self, tasks: usize) -> Self {
+        self.tasks_per_tick = tasks;
+        self
+    }
+
+    pub fn create<T: Display>(self) -> Worker<T> {
+        let (tx, rx) = mpsc::channel::<Option<T>>();
+        Worker {
+            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx),
+            receiver: Mutex::new(Some(rx)),
+            handle: None,
+            batch_size: self.batch_size,
+            tick_duration: self.tick_duration,
+            tasks_per_tick: self.tasks_per_tick,
         }
     }
 }
@@ -171,7 +202,9 @@ pub struct Worker<T: Display> {
     scheduler: Scheduler<T>,
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
-    tick_option: TickOption,
+    batch_size: usize,
+    tick_duration: Duration,
+    tasks_per_tick: usize,
 }
 
 fn poll<R, T>(
@@ -179,15 +212,15 @@ fn poll<R, T>(
     rx: Receiver<Option<T>>,
     counter: Arc<AtomicUsize>,
     batch_size: usize,
-    tick_option: TickOption,
+    tick_duration: Duration,
+    tasks_per_tick: usize,
 ) where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
-    let tasks_per_tick = tick_option.tasks_per_tick;
     let mut buffer = Vec::with_capacity(batch_size);
-    let mut timeout = Some(tick_option.tick_duration);
+    let mut timeout = Some(tick_duration);
     let mut timing_task_counter = 0;
     let mut keep_going = true;
     while keep_going {
@@ -203,7 +236,7 @@ fn poll<R, T>(
                 .unwrap();
 
             timing_task_counter += buffer.len();
-            timeout = Some(tick_option.tick_duration);
+            timeout = Some(tick_duration);
             runner.run_batch(&mut buffer);
             buffer.clear();
         }
@@ -248,27 +281,11 @@ fn next_batch<T>(
 impl<T: Display + Send + 'static> Worker<T> {
     /// Create a worker.
     pub fn new<S: Into<String>>(name: S) -> Worker<T> {
-        let (tx, rx) = mpsc::channel();
-        Worker {
-            scheduler: Scheduler::new(name, AtomicUsize::new(0), tx),
-            receiver: Mutex::new(Some(rx)),
-            handle: None,
-            tick_option: TickOption::default(),
-        }
-    }
-
-    pub fn with_tick_option<S: Into<String>>(name: S, tick_option: TickOption) -> Worker<T> {
-        let mut worker = Worker::new(name);
-        worker.tick_option = tick_option;
-        worker
+        Builder::new(name).create()
     }
 
     /// Start the worker.
-    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<(), io::Error> {
-        self.start_batch(runner, 1)
-    }
-
-    pub fn start_batch<R>(&mut self, runner: R, batch_size: usize) -> Result<(), io::Error>
+    pub fn start<R>(&mut self, runner: R) -> Result<(), io::Error>
     where
         R: BatchRunnable<T> + Send + 'static,
     {
@@ -281,10 +298,14 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
-        let tick_option = self.tick_option;
-        let h = Builder::new()
+        let batch_size = self.batch_size;
+        let tick_dur = self.tick_duration;
+        let tasks_per_tick = self.tasks_per_tick;
+        let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size, tick_option))?;
+            .spawn(move || {
+                poll(runner, rx, counter, batch_size, tick_dur, tasks_per_tick)
+            })?;
         self.handle = Some(h);
         Ok(())
     }
@@ -414,9 +435,9 @@ mod test {
 
     #[test]
     fn test_batch() {
-        let mut worker = Worker::new("test-worker-batch");
+        let mut worker = Builder::new("test-worker-batch").batch_size(10).create();
         let (tx, rx) = mpsc::channel();
-        worker.start_batch(BatchRunner { ch: tx }, 10).unwrap();
+        worker.start(BatchRunner { ch: tx }).unwrap();
         for _ in 0..20 {
             worker.schedule(50).unwrap();
         }
@@ -436,9 +457,9 @@ mod test {
 
     #[test]
     fn test_autowired_batch() {
-        let mut worker = Worker::new("test-worker-batch");
+        let mut worker = Builder::new("test-worker-batch").batch_size(10).create();
         let (tx, rx) = mpsc::channel();
-        worker.start_batch(StepRunner { ch: tx }, 10).unwrap();
+        worker.start(StepRunner { ch: tx }).unwrap();
         for _ in 0..20 {
             worker.schedule(50).unwrap();
         }
@@ -451,19 +472,18 @@ mod test {
 
     #[test]
     fn test_on_tick() {
-        let tick_option = TickOption {
-            tasks_per_tick: 5,
-            tick_duration: Duration::from_secs(3),
-        };
-        let mut worker = Worker::with_tick_option("test-worker-batch", tick_option);
+        let mut worker = Builder::new("test-worker-tick")
+            .batch_size(4)
+            .tick_duration(Duration::from_secs(3))
+            .tasks_per_tick(5)
+            .create();
         for _ in 0..20 {
             worker.schedule("normal msg").unwrap();
         }
         thread::sleep(Duration::from_secs(3));
 
         let (tx, rx) = mpsc::channel();
-        let runner = TickRunner { ch: tx };
-        worker.start_batch(runner, 4).unwrap();
+        worker.start(TickRunner { ch: tx }).unwrap();
 
         // The stream in rx should be: ^^^^^^^^o^^^^^^^^o^^^^o.
         // '^' means normal message and 'o' means tick message.
