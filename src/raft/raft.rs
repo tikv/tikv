@@ -285,7 +285,7 @@ impl<T: Storage> Raft<T> {
                 // tests; the argument should be removed and these tests should be
                 // updated to specify their nodes through a snap
                 panic!(
-                    "{} cannot specify both new(peers/learners) and ConfState.Nodes",
+                    "{} cannot specify both new(peers/learners) and ConfState.(Nodes, Learners)",
                     c.tag
                 )
             }
@@ -1905,7 +1905,7 @@ impl<T: Storage> Raft<T> {
         self.get_prs().voters.contains_key(&self.id)
     }
 
-    fn add_node_or_learner(&mut self, id: u64, is_learner: bool) {
+    fn add_voter_or_learner(&mut self, id: u64, is_learner: bool) {
         self.pending_conf = false;
         if self.get_prs().voters.contains_key(&id) {
             // If is_learner is true, we don't support change Voter to Learner,
@@ -1934,11 +1934,11 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn add_node(&mut self, id: u64) {
-        self.add_node_or_learner(id, false);
+        self.add_voter_or_learner(id, false);
     }
 
     pub fn add_learner(&mut self, id: u64) {
-        self.add_node_or_learner(id, true);
+        self.add_voter_or_learner(id, true);
     }
 
     pub fn remove_node(&mut self, id: u64) {
