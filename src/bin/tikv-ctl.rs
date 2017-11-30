@@ -341,9 +341,9 @@ trait DebugExecutor {
         }
     }
 
-    fn unsafe_recover(&self) {
+    fn unsafe_recover(&self, region_id: u64) {
         self.check_local_mode();
-        self.do_unsafe_recover();
+        self.do_unsafe_recover(region_id);
     }
 
     fn check_local_mode(&self);
@@ -369,7 +369,7 @@ trait DebugExecutor {
 
     fn set_region_tombstone(&self, region_id: u64, region: Region);
 
-    fn do_unsafe_recover(&self);
+    fn do_unsafe_recover(&self, u64);
 }
 
 
@@ -466,7 +466,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!();
     }
 
-    fn do_unsafe_recover(&self) {
+    fn do_unsafe_recover(&self, _: u64) {
         unimplemented!();
     }
 }
@@ -526,8 +526,8 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e))
     }
 
-    fn do_unsafe_recover(&self) {
-        self.do_unsafe_recover()
+    fn do_unsafe_recover(&self, region_id: u64) {
+        self.do_unsafe_recover(region_id)
             .unwrap_or_else(|e| perror_and_exit("Debugger::do_unsafe_recover", e))
     }
 }
@@ -821,7 +821,14 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("unsafe-recover")
-                .about("recover the instance even if it's the only server"),
+                .about("recover the instance even if it's the only server")
+                .arg(
+                    Arg::with_name("region")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .help("region id"),
+                ),
         );
 
     let matches = app.clone().get_matches();
@@ -908,8 +915,9 @@ fn main() {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
         debug_executor.set_region_tombstone_after_remove_peer(region, pd_urls);
-    } else if let Some(_) = matches.subcommand_matches("unsafe-recover") {
-        debug_executor.unsafe_recover();
+    } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
+        let region = matches.value_of("region").unwrap().parse().unwrap();
+        debug_executor.unsafe_recover(region);
     } else {
         let _ = app.print_help();
     }

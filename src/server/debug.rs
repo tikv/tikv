@@ -18,7 +18,7 @@ use std::sync::Arc;
 use protobuf::{Message, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
-use kvproto::metapb::Region;
+use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::kvrpcpb::{LockInfo, MvccInfo, Op, ValueInfo, WriteInfo};
 use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
@@ -266,7 +266,46 @@ impl Debugger {
         }
     }
 
-    pub fn do_unsafe_recover(&self) -> Result<()> {
+    pub fn do_unsafe_recover(&self, region_id: u64) -> Result<()> {
+        let db = &self.engines.kv_engine;
+        let key = keys::region_state_key(region_id);
+        let mut region_state = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).unwrap();
+        if region_state.state == PeerState::Tombstone {
+            return Ok(());
+        }
+
+        let store_id = self.get_store_id()?;
+        let wb = WriteBatch::new();
+
+        let peers = region_state.mut_region().take_peers();
+        let peer = match peers.into_iter().find(|p| p.get_store_id() == store_id) {
+            Some(p) => p.clone(),
+            None => {
+                let err_msg = "RegionLocalState doesn't contains the peer itself";
+                return Err(Error::Other(err_msg.into()));
+            }
+        };
+
+        let conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
+        let ver = region_state.get_region().get_region_epoch().get_version();
+        let mut new_epoch = RegionEpoch::new();
+        new_epoch.set_conf_ver(conf_ver + 10);
+        new_epoch.set_version(ver + 10);
+
+        region_state.mut_region().mut_peers().clear();
+        region_state.mut_region().mut_peers().push(peer);
+        region_state.mut_region().set_region_epoch(new_epoch);
+
+        let handle = box_try!(get_cf_handle(db.as_ref(), CF_RAFT));
+        box_try!(wb.put_msg_cf(handle, &key, &region_state));
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(db.write_opt(wb, &write_opts));
+        Ok(())
+    }
+
+    pub fn do_unsafe_recover_all(&self) -> Result<()> {
         let db = &self.engines.kv_engine;
         let upper_bound = keys::REGION_META_MAX_KEY.to_owned();
         let readopts = IterOption::new(Some(upper_bound), false).build_read_opts();
