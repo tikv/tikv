@@ -52,15 +52,6 @@ dependencies:
         make -j && \
         make install;
       fi
-    - |
-      if [[ ! -e $HOME/.local/lib/librocksdb.so.5.7.3 ]]; then
-        export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
-        cd /tmp && \
-        curl -L https://github.com/facebook/rocksdb/archive/v5.7.3.tar.gz -o rocksdb.tar.gz && \
-        tar xf rocksdb.tar.gz && \
-        cd rocksdb-5.7.3 && \
-        INSTALL_PATH=${LOCAL_PREFIX} make -j 1 install-shared;
-      fi
   post:
     # check format first
     - make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
