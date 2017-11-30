@@ -74,7 +74,8 @@ zipf = "0.2.0"
 signal = "0.4"
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/UncP/rust-rocksdb.git"
+branch = "uncp/import-sst-reader"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"

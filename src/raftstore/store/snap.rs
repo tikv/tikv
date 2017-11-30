@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::error;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::sync::{Arc, RwLock};
@@ -222,7 +222,8 @@ use std::time::Instant;
 use crc::crc32::{self, Digest, Hasher32};
 use protobuf::RepeatedField;
 use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
-use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
+use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileReader,
+              SstFileWriter};
 use util::rocksdb;
 use util::time::duration_to_sec;
 use util::file::{delete_file_if_exist, file_exists, get_file_size};
@@ -231,7 +232,8 @@ use util::rocksdb::get_fastest_supported_compression_type;
 pub const SNAPSHOT_VERSION: u64 = 2;
 const META_FILE_SUFFIX: &'static str = ".meta";
 const DIGEST_BUFFER_SIZE: usize = 10240;
-
+const ROCKSDB_GLOBAL_SEQNO_STR: &'static str = "rocksdb.external_sst_file.global_seqno";
+const ROCKSDB_DEFAULT_GLOBAL_SEQNO: &'static [u8] = &[0; 8];
 
 fn calc_crc32(p: &PathBuf) -> io::Result<u32> {
     let mut digest = Digest::new(crc32::IEEE);
@@ -304,6 +306,26 @@ fn check_file_size_and_checksum(
     expected_checksum: u32,
 ) -> RaftStoreResult<()> {
     check_file_size(path, expected_size).and_then(|_| check_file_checksum(path, expected_checksum))
+}
+
+/// find the offset of rocksdb global seq no in sst file and update seq no with 0
+fn adjust_file_seq_no(path: &PathBuf) -> RaftStoreResult<()> {
+    let path_str = path.to_str().unwrap();
+    let mut reader = SstFileReader::new(path_str.as_bytes(), false /* checksum */);
+    let props = reader.get_properties();
+    let off = props.get_property_offset(ROCKSDB_GLOBAL_SEQNO_STR.as_bytes());
+    if off == 0 {
+        return Err(box_err!(
+            "adjust sst file seq no {} failed, expected seq no offset > 0",
+            path.display()
+        ));
+    }
+
+    let mut file = OpenOptions::new().write(true).open(path_str)?;
+    file.seek(SeekFrom::Start(off))?;
+    file.write_all(ROCKSDB_DEFAULT_GLOBAL_SEQNO)?;
+    file.sync_data()?;
+    Ok(())
 }
 
 #[derive(Default)]
@@ -594,12 +616,15 @@ impl Snap {
         )
     }
 
-    fn validate(&self) -> RaftStoreResult<()> {
+    fn validate(&self, is_applying: bool) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
                 // this is checked when loading the snapshot meta.
                 continue;
+            }
+            if plain_file_used(cf_file.cf) == false && is_applying {
+                adjust_file_seq_no(&cf_file.path)?;
             }
             check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
         }
@@ -678,7 +703,7 @@ impl Snap {
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         if self.exists() {
-            match self.validate() {
+            match self.validate(false) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
@@ -941,7 +966,7 @@ impl Snapshot for Snap {
     }
 
     fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-        box_try!(self.validate());
+        box_try!(self.validate(true));
 
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
@@ -955,10 +980,8 @@ impl Snapshot for Snap {
                 let mut file = box_try!(File::open(&cf_file.path));
                 apply_plain_cf_file(&mut file, &options, cf_handle)?;
             } else {
-                let ingest_opt = IngestExternalFileOptions::new();
-                // TODO: move SST file instead of copy
-                // after changing logic in raft, ask for resending snapshot if applying fail.
-                // ingest_opt.move_files(true);
+                let mut ingest_opt = IngestExternalFileOptions::new();
+                ingest_opt.move_files(true);
                 let path = cf_file.path.as_path().to_str().unwrap();
                 box_try!(
                     options
