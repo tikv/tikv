@@ -813,6 +813,47 @@ mod tests {
     }
 
     #[test]
+    fn test_too_many_reqs() {
+        let mut worker = Worker::new("test-endpoint");
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_concurrency = 1;
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        end_point.max_running_task_count = 3;
+        worker.start_batch(end_point, 30).unwrap();
+        let (tx, rx) = mpsc::channel();
+        for pos in 0..30 * 4 {
+            let tx = tx.clone();
+            let mut req = Request::new();
+            req.set_tp(REQ_TYPE_DAG);
+            if pos % 3 == 0 {
+                req.mut_context().set_priority(CommandPri::Low);
+            } else if pos % 3 == 1 {
+                req.mut_context().set_priority(CommandPri::Normal);
+            } else {
+                req.mut_context().set_priority(CommandPri::High);
+            }
+            let on_resp = OnResponse::Unary(box move |msg| {
+                thread::sleep(Duration::from_millis(100));
+                let _ = tx.send(msg);
+            });
+
+            let task = RequestTask::new(req, on_resp, 1000).unwrap();
+            worker.schedule(Task::Request(task)).unwrap();
+        }
+        for _ in 0..120 {
+            let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            if !resp.has_region_error() {
+                continue;
+            }
+            assert!(resp.get_region_error().has_server_is_busy());
+            return;
+        }
+        panic!("suppose to get ServerIsBusy error.");
+    }
+
+    #[test]
     fn test_stack_guard() {
         let mut expr = Expr::new();
         for _ in 0..10 {
