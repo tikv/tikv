@@ -341,6 +341,11 @@ trait DebugExecutor {
         }
     }
 
+    fn unsafe_recover(&self) {
+        self.check_local_mode();
+        self.do_unsafe_recover();
+    }
+
     fn check_local_mode(&self);
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -363,6 +368,8 @@ trait DebugExecutor {
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, region_id: u64, region: Region);
+
+    fn do_unsafe_recover(&self);
 }
 
 
@@ -458,6 +465,10 @@ impl DebugExecutor for DebugClient {
     fn set_region_tombstone(&self, _: u64, _: Region) {
         unimplemented!();
     }
+
+    fn do_unsafe_recover(&self) {
+        unimplemented!();
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -513,6 +524,11 @@ impl DebugExecutor for Debugger {
     fn set_region_tombstone(&self, region_id: u64, region: Region) {
         self.set_region_tombstone(region_id, region)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e))
+    }
+
+    fn do_unsafe_recover(&self) {
+        self.do_unsafe_recover()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::do_unsafe_recover", e))
     }
 }
 
@@ -802,7 +818,12 @@ fn main() {
                         .value_delimiter(",")
                         .help("PD endpoints"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("unsafe-recover")
+                .about("recover the instance even if it's the only server"),
         );
+
     let matches = app.clone().get_matches();
 
     let hex_key = matches.value_of("hex-to-escaped");
@@ -887,6 +908,8 @@ fn main() {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
         debug_executor.set_region_tombstone_after_remove_peer(region, pd_urls);
+    } else if let Some(_) = matches.subcommand_matches("unsafe-recover") {
+        debug_executor.unsafe_recover();
     } else {
         let _ = app.print_help();
     }
