@@ -165,7 +165,7 @@ mod test {
     const INDEX_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
 
-    #[inline]
+    // get_idx_range get range for index in [("abc",start),("abc", end))
     pub fn get_idx_range(table_id: i64, idx_id: i64, start: i64, end: i64) -> KeyRange {
         let (_, start_key) = generate_index_data(table_id, idx_id, start);
         let (_, end_key) = generate_index_data(table_id, idx_id, end);
@@ -267,15 +267,13 @@ mod test {
     #[test]
     fn test_multiple_ranges() {
         let mut wrapper = IndexTestWrapper::default();
-        let (ref start_key, _) = wrapper.data.kv_data[0];
-        let (ref split_key, _) = wrapper.data.kv_data[KEY_NUMBER / 3];
-        let (ref end_key, _) = wrapper.data.kv_data[KEY_NUMBER / 2];
-        let mut r1 = KeyRange::new();
-        r1.set_start(start_key.clone());
-        r1.set_end(split_key.clone());
-        let mut r2 = KeyRange::new();
-        r2.set_start(split_key.clone());
-        r2.set_end(end_key.clone());
+        let r1 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 3) as i64);
+        let r2 = get_idx_range(
+            TABLE_ID,
+            INDEX_ID,
+            (KEY_NUMBER / 3) as i64,
+            (KEY_NUMBER / 2) as i64,
+        );
         wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
