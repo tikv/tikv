@@ -14,7 +14,6 @@
 use std::ffi::CString;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
-use std::net::SocketAddr;
 
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
@@ -23,13 +22,15 @@ use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
+use util::collections::HashMap;
+use util::security::SecurityManager;
+use super::{Config, Error, Result};
+use super::metrics::*;
+
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
 const INITIAL_BUFFER_CAP: usize = 1024;
 
-use util::collections::HashMap;
-use super::{Config, Error, Result};
-use super::metrics::*;
 
 static CONN_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
@@ -44,12 +45,18 @@ struct Conn {
 }
 
 impl Conn {
-    fn new(env: Arc<Environment>, addr: SocketAddr, cfg: &Config, store_id: u64) -> Conn {
+    fn new(
+        env: Arc<Environment>,
+        addr: &str,
+        cfg: &Config,
+        security_mgr: &SecurityManager,
+        store_id: u64,
+    ) -> Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
         let alive = Arc::new(AtomicBool::new(true));
         let alive1 = alive.clone();
-        let channel = ChannelBuilder::new(env)
+        let cb = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
@@ -57,12 +64,13 @@ impl Conn {
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
                 CONN_ID.fetch_add(1, Ordering::SeqCst),
-            )
-            .connect(&format!("{}", addr));
+            );
+        let channel = security_mgr.connect(cb, addr);
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
         let (sink, _) = client.raft();
+        let addr = addr.to_owned();
         client.spawn(
             rx_close
                 .map_err(|_| ())
@@ -105,31 +113,39 @@ impl Conn {
 /// `RaftClient` is used for sending raft messages to other stores.
 pub struct RaftClient {
     env: Arc<Environment>,
-    conns: HashMap<(SocketAddr, usize), Conn>,
-    pub addrs: HashMap<u64, SocketAddr>,
-    cfg: Config,
+    conns: HashMap<(String, usize), Conn>,
+    pub addrs: HashMap<u64, String>,
+    cfg: Arc<Config>,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl RaftClient {
-    pub fn new(env: Arc<Environment>, cfg: Config) -> RaftClient {
+    pub fn new(
+        env: Arc<Environment>,
+        cfg: Arc<Config>,
+        security_mgr: Arc<SecurityManager>,
+    ) -> RaftClient {
         RaftClient {
             env: env,
             conns: HashMap::default(),
             addrs: HashMap::default(),
             cfg: cfg,
+            security_mgr: security_mgr,
         }
     }
 
-    fn get_conn(&mut self, addr: SocketAddr, region_id: u64, store_id: u64) -> &mut Conn {
+    fn get_conn(&mut self, addr: &str, region_id: u64, store_id: u64) -> &mut Conn {
         let index = region_id as usize % self.cfg.grpc_raft_conn_num;
         let cfg = &self.cfg;
+        let security_mgr = &self.security_mgr;
         let env = &self.env;
+        // TODO: avoid to_owned
         self.conns
-            .entry((addr, index))
-            .or_insert_with(|| Conn::new(env.clone(), addr, cfg, store_id))
+            .entry((addr.to_owned(), index))
+            .or_insert_with(|| Conn::new(env.clone(), addr, cfg, security_mgr, store_id))
     }
 
-    pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
+    pub fn send(&mut self, store_id: u64, addr: &str, msg: RaftMessage) -> Result<()> {
         let conn = self.get_conn(addr, msg.region_id, store_id);
         conn.buffer
             .as_mut()
@@ -141,11 +157,11 @@ impl RaftClient {
 
     pub fn flush(&mut self) {
         let addrs = &mut self.addrs;
-        self.conns.retain(|&(addr, _), conn| {
+        self.conns.retain(|&(ref addr, _), conn| {
             let store_id = conn.store_id;
             if !conn.alive.load(Ordering::SeqCst) {
                 if let Some(addr_current) = addrs.remove(&store_id) {
-                    if addr_current != addr {
+                    if addr_current != *addr {
                         addrs.insert(store_id, addr_current);
                     }
                 }
@@ -166,7 +182,7 @@ impl RaftClient {
                 );
 
                 if let Some(addr_current) = addrs.remove(&store_id) {
-                    if addr_current != addr {
+                    if addr_current != *addr {
                         addrs.insert(store_id, addr_current);
                     }
                 }
