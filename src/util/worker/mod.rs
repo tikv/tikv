@@ -96,7 +96,6 @@ pub struct Scheduler<T> {
     name: Arc<String>,
     counter: Arc<AtomicUsize>,
     sender: Sender<Option<T>>,
-    busy_limit: usize,
 }
 
 impl<T: Display> Scheduler<T> {
@@ -104,13 +103,11 @@ impl<T: Display> Scheduler<T> {
         name: S,
         counter: AtomicUsize,
         sender: Sender<Option<T>>,
-        busy_limit: usize,
     ) -> Scheduler<T> {
         Scheduler {
             name: Arc::new(name.into()),
             counter: Arc::new(counter),
             sender: sender,
-            busy_limit: busy_limit,
         }
     }
 
@@ -131,7 +128,7 @@ impl<T: Display> Scheduler<T> {
 
     /// Check if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.counter.load(Ordering::SeqCst) >= self.busy_limit
+        self.counter.load(Ordering::SeqCst) > 0
     }
 }
 
@@ -141,7 +138,6 @@ impl<T: Display> Clone for Scheduler<T> {
             name: self.name.clone(),
             counter: self.counter.clone(),
             sender: self.sender.clone(),
-            busy_limit: self.busy_limit,
         }
     }
 }
@@ -158,7 +154,6 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 #[derive(Copy, Clone)]
 pub struct Builder<S: Into<String>> {
     name: S,
-    busy_limit: usize,
     batch_size: usize,
     tick_timeout: Duration,
     tasks_per_tick: usize,
@@ -168,16 +163,10 @@ impl<S: Into<String>> Builder<S> {
     pub fn new(name: S) -> Self {
         Builder {
             name: name,
-            busy_limit: 1,
             batch_size: 1,
             tick_timeout: Duration::from_secs(NAP_SECS),
             tasks_per_tick: DEFAULT_TASKS_PER_TICK,
         }
-    }
-
-    pub fn busy_limit(mut self, limit: usize) -> Self {
-        self.busy_limit = limit;
-        self
     }
 
     pub fn batch_size(mut self, batch_size: usize) -> Self {
@@ -198,7 +187,7 @@ impl<S: Into<String>> Builder<S> {
     pub fn create<T: Display>(self) -> Worker<T> {
         let (tx, rx) = mpsc::channel::<Option<T>>();
         Worker {
-            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx, self.busy_limit),
+            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx),
             receiver: Mutex::new(Some(rx)),
             handle: None,
             batch_size: self.batch_size,
@@ -432,31 +421,6 @@ mod test {
         assert!(worker.is_busy());
         // when shutdown, StepRunner should send back a 0.
         assert_eq!(0, rx.recv().unwrap());
-    }
-
-    #[test]
-    fn test_is_busy() {
-        let mut worker = Builder::new("test-worker-is-busy").busy_limit(3).create();
-        let (tx, rx) = mpsc::channel();
-        worker.start(StepRunner { ch: tx }).unwrap();
-
-        assert!(!worker.is_busy());
-        worker.schedule(100).unwrap();
-        assert!(!worker.is_busy());
-        worker.schedule(100).unwrap();
-        assert!(!worker.is_busy());
-        worker.schedule(100).unwrap();
-        worker.schedule(100).unwrap();
-        assert!(worker.is_busy());
-
-        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 100);
-        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 100);
-        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 100);
-        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 100);
-        assert!(!worker.is_busy());
-
-        worker.stop().unwrap().join().unwrap();
-        assert!(worker.is_busy());
     }
 
     #[test]
