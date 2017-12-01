@@ -27,7 +27,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use util::Either;
-use util::time::SlowTimer;
+use util::time::{Instant, SlowTimer};
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
@@ -231,11 +231,11 @@ fn poll<R, T>(
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut buffer = Vec::with_capacity(batch_size);
-    let mut timeout = Some(tick_timeout);
     let mut task_counter = 0;
     let mut keep_going = true;
+    let (mut timeout, mut start) = (None, Instant::now_coarse());
     while keep_going {
-        keep_going = fill_task_batch(&rx, &mut buffer, batch_size, &mut timeout);
+        keep_going = fill_task_batch(&rx, &mut buffer, batch_size, timeout);
         if !buffer.is_empty() {
             counter.fetch_sub(buffer.len(), Ordering::SeqCst);
             WORKER_PENDING_TASK_VEC
@@ -247,11 +247,19 @@ fn poll<R, T>(
                 .unwrap();
 
             task_counter += buffer.len();
-            timeout = Some(tick_timeout);
             runner.run_batch(&mut buffer);
             buffer.clear();
         }
+
+        timeout = timeout.map_or(Some(tick_timeout), |dur| {
+            let new_start = Instant::now_coarse();
+            let elapsed = new_start.duration_since(start);
+            start = new_start;
+            dur.checked_sub(elapsed)
+        });
+
         if timeout.is_none() || task_counter >= tasks_per_tick || !keep_going {
+            timeout = None;
             runner.on_tick();
             task_counter = 0;
         }
@@ -259,15 +267,14 @@ fn poll<R, T>(
     runner.shutdown();
 }
 
-// Get next task batch from `rx`. If meet `timeout` but got nothing,
-// set `timeout` to None.
+// Fill buffer with next task batch comes from `rx`.
 fn fill_task_batch<T>(
     rx: &Receiver<Option<T>>,
     buffer: &mut Vec<T>,
     batch_size: usize,
-    timeout: &mut Option<Duration>,
+    timeout: Option<Duration>,
 ) -> bool {
-    let next_task = match *timeout {
+    let next_task = match timeout {
         Some(dur) => rx.recv_timeout(dur).map_err(Either::Left),
         None => rx.recv().map_err(Either::Right),
     };
@@ -283,10 +290,7 @@ fn fill_task_batch<T>(
             }
             true
         }
-        Err(Either::Left(RecvTimeoutError::Timeout)) => {
-            *timeout = None;
-            true
-        }
+        Err(Either::Left(RecvTimeoutError::Timeout)) => true,
         _ => false,
     }
 }
@@ -523,7 +527,7 @@ mod test {
         let (tx, rx) = mpsc::channel();
         worker.start(TickRunner { ch: tx }).unwrap();
 
-        // The stream in rx should be: ^^^^^^^^o^^^^^^^^o^^^^oo.
+        // The stream in rx should be: ^^^^^^^^o^^^^^^^^o^^^^.
         // '^' means normal message and 'o' means tick message.
         for i in 0..22 {
             let msg = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -534,9 +538,11 @@ mod test {
             }
         }
 
-        thread::sleep(Duration::from_secs(5));
+        // tick message from `timeout`.
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "tick msg");
+
+        // tick message from `not keep_going`.
         worker.stop().unwrap().join().unwrap();
-        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), "tick msg");
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), "tick msg");
         assert!(rx.recv().is_err());
     }
