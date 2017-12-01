@@ -491,8 +491,12 @@ mod test {
         let (tx, rx) = mpsc::channel();
         worker.start(TickRunner { ch: tx }).unwrap();
 
-        // The stream in rx should be: ^^^^^^^^o^^^^^^^^o^^^^.
-        // '^' means normal message and 'o' means tick message.
+        // Because we produce "normal msg" quickly, so we won't meet timeout.
+        // And because `tasks_per_tick` is 5, `batch_size` is 4, so we will
+        // get a "tick msg" after we finish 2 batches.
+        //
+        // So the stream in rx should be: ^^^^^^^^o^^^^^^^^o^^^^.
+        // '^' means normal message but 'o' means tick message.
         for i in 0..22 {
             let msg = rx.recv_timeout(Duration::from_secs(3)).unwrap();
             if i != 8 && i != 17 {
