@@ -30,7 +30,8 @@ use kvproto::pdpb::{ErrorType, GetMembersRequest, GetMembersResponse, Member,
 use kvproto::pdpb_grpc::PdClient;
 
 use util::{Either, HandyRwLock};
-use super::{Error, PdFuture, Result, REQUEST_TIMEOUT};
+use util::security::SecurityManager;
+use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -41,6 +42,7 @@ pub struct Inner {
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Task>,
     pub client: PdClient,
     members: GetMembersResponse,
+    security_mgr: Arc<SecurityManager>,
 
     last_update: Instant,
 }
@@ -91,6 +93,7 @@ pub struct LeaderClient {
 impl LeaderClient {
     pub fn new(
         env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
         client: PdClient,
         members: GetMembersResponse,
     ) -> LeaderClient {
@@ -103,6 +106,7 @@ impl LeaderClient {
                 hb_receiver: Either::Left(Some(rx)),
                 client: client,
                 members: members,
+                security_mgr: security_mgr,
 
                 last_update: Instant::now(),
             })),
@@ -158,7 +162,7 @@ impl LeaderClient {
 
             let start = Instant::now();
             (
-                try_connect_leader(inner.env.clone(), &inner.members)?,
+                try_connect_leader(inner.env.clone(), &inner.security_mgr, &inner.members)?,
                 start,
             )
         };
@@ -305,23 +309,20 @@ where
 
 pub fn validate_endpoints(
     env: Arc<Environment>,
-    endpoints: &[String],
+    cfg: &Config,
+    security_mgr: &SecurityManager,
 ) -> Result<(PdClient, GetMembersResponse)> {
-    if endpoints.is_empty() {
-        return Err(box_err!("empty PD endpoints"));
-    }
-
-    let len = endpoints.len();
+    let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity(len);
 
     let mut members = None;
     let mut cluster_id = None;
-    for ep in endpoints {
+    for ep in &cfg.endpoints {
         if !endpoints_set.insert(ep) {
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match connect(env.clone(), ep) {
+        let (_, resp) = match connect(env.clone(), security_mgr, ep) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -352,18 +353,24 @@ pub fn validate_endpoints(
 
     match members {
         Some(members) => {
-            let (client, members) = try_connect_leader(env.clone(), &members)?;
-            info!("All PD endpoints are consistent: {:?}", endpoints);
+            let (client, members) = try_connect_leader(env.clone(), security_mgr, &members)?;
+            info!("All PD endpoints are consistent: {:?}", cfg.endpoints);
             Ok((client, members))
         }
         _ => Err(box_err!("PD cluster failed to respond")),
     }
 }
 
-fn connect(env: Arc<Environment>, addr: &str) -> Result<(PdClient, GetMembersResponse)> {
+fn connect(
+    env: Arc<Environment>,
+    security_mgr: &SecurityManager,
+    addr: &str,
+) -> Result<(PdClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
-    let addr = addr.trim_left_matches("http://");
-    let channel = ChannelBuilder::new(env).connect(addr);
+    let addr = addr.trim_left_matches("http://")
+        .trim_left_matches("https://");
+    let cb = ChannelBuilder::new(env);
+    let channel = security_mgr.connect(cb, addr);
     let client = PdClient::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
     match client.get_members_opt(GetMembersRequest::new(), option) {
@@ -374,6 +381,7 @@ fn connect(env: Arc<Environment>, addr: &str) -> Result<(PdClient, GetMembersRes
 
 pub fn try_connect_leader(
     env: Arc<Environment>,
+    security_mgr: &SecurityManager,
     previous: &GetMembersResponse,
 ) -> Result<(PdClient, GetMembersResponse)> {
     let previous_leader = previous.get_leader();
@@ -387,7 +395,7 @@ pub fn try_connect_leader(
         .chain(&[previous_leader.clone()])
     {
         for ep in m.get_client_urls() {
-            match connect(env.clone(), ep.as_str()) {
+            match connect(env.clone(), security_mgr, ep.as_str()) {
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
@@ -414,7 +422,7 @@ pub fn try_connect_leader(
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(env.clone(), ep.as_str()) {
+            if let Ok((client, _)) = connect(env.clone(), security_mgr, ep.as_str()) {
                 info!("connect to PD leader {:?}", ep);
                 return Ok((client, resp));
             }
