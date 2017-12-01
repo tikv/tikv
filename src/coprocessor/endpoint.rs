@@ -147,13 +147,13 @@ unsafe impl Sync for CopContext {}
 
 #[derive(Clone)]
 struct CopContextPool {
-    cop_ctxs: Arc<HashMap<usize, CopContext>>,
+    cop_ctxs: Arc<HashMap<thread::ThreadId, CopContext>>,
 }
 
 impl CopContextPool {
     // Must run in CpuPool.
     fn collect(&self, region_id: u64, scan_tag: &str, stats: &Statistics) {
-        let thread_id = ::thread_id::get();
+        let thread_id = thread::current().id();
         let cop_ctx = self.cop_ctxs.get(&thread_id).unwrap();
         cop_ctx.0.borrow_mut().collect(region_id, scan_tag, stats);
     }
@@ -189,7 +189,7 @@ impl Host {
                     .name_prefix(name_prefix)
                     .pool_size(size)
                     .after_start(move || {
-                        let thread_id = ::thread_id::get();
+                        let thread_id = thread::current().id();
                         let cop_ctx = CopContext(RefCell::new(_CopContext::new(sender.clone())));
                         let mut map_counter = cop_ctxs.lock().unwrap();
                         map_counter.0.insert(thread_id, cop_ctx);
