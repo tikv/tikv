@@ -96,6 +96,7 @@ pub struct Scheduler<T> {
     name: Arc<String>,
     counter: Arc<AtomicUsize>,
     sender: Sender<Option<T>>,
+    busy_limit: usize,
 }
 
 impl<T: Display> Scheduler<T> {
@@ -103,11 +104,13 @@ impl<T: Display> Scheduler<T> {
         name: S,
         counter: AtomicUsize,
         sender: Sender<Option<T>>,
+        busy_limit: usize,
     ) -> Scheduler<T> {
         Scheduler {
             name: Arc::new(name.into()),
             counter: Arc::new(counter),
             sender: sender,
+            busy_limit: busy_limit,
         }
     }
 
@@ -128,7 +131,7 @@ impl<T: Display> Scheduler<T> {
 
     /// Check if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.counter.load(Ordering::SeqCst) > 0
+        self.counter.load(Ordering::SeqCst) >= self.busy_limit
     }
 }
 
@@ -138,6 +141,7 @@ impl<T: Display> Clone for Scheduler<T> {
             name: self.name.clone(),
             counter: self.counter.clone(),
             sender: self.sender.clone(),
+            busy_limit: self.busy_limit,
         }
     }
 }
@@ -148,14 +152,15 @@ impl<T: Display> Clone for Scheduler<T> {
 #[cfg(test)]
 pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
     let (tx, _) = mpsc::channel();
-    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
+    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx, 1)
 }
 
 #[derive(Copy, Clone)]
 pub struct Builder<S: Into<String>> {
     name: S,
+    busy_limit: usize,
     batch_size: usize,
-    tick_duration: Duration,
+    tick_timeout: Duration,
     tasks_per_tick: usize,
 }
 
@@ -163,10 +168,16 @@ impl<S: Into<String>> Builder<S> {
     pub fn new(name: S) -> Self {
         Builder {
             name: name,
+            busy_limit: 1,
             batch_size: 1,
-            tick_duration: Duration::from_secs(NAP_SECS),
+            tick_timeout: Duration::from_secs(NAP_SECS),
             tasks_per_tick: DEFAULT_TASKS_PER_TICK,
         }
+    }
+
+    pub fn busy_limit(mut self, limit: usize) -> Self {
+        self.busy_limit = limit;
+        self
     }
 
     pub fn batch_size(mut self, batch_size: usize) -> Self {
@@ -174,8 +185,8 @@ impl<S: Into<String>> Builder<S> {
         self
     }
 
-    pub fn tick_duration(mut self, tick_dur: Duration) -> Self {
-        self.tick_duration = tick_dur;
+    pub fn tick_timeout(mut self, tick_dur: Duration) -> Self {
+        self.tick_timeout = tick_dur;
         self
     }
 
@@ -187,11 +198,11 @@ impl<S: Into<String>> Builder<S> {
     pub fn create<T: Display>(self) -> Worker<T> {
         let (tx, rx) = mpsc::channel::<Option<T>>();
         Worker {
-            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx),
+            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx, self.busy_limit),
             receiver: Mutex::new(Some(rx)),
             handle: None,
             batch_size: self.batch_size,
-            tick_duration: self.tick_duration,
+            tick_timeout: self.tick_timeout,
             tasks_per_tick: self.tasks_per_tick,
         }
     }
@@ -203,7 +214,7 @@ pub struct Worker<T: Display> {
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
     batch_size: usize,
-    tick_duration: Duration,
+    tick_timeout: Duration,
     tasks_per_tick: usize,
 }
 
@@ -212,7 +223,7 @@ fn poll<R, T>(
     rx: Receiver<Option<T>>,
     counter: Arc<AtomicUsize>,
     batch_size: usize,
-    tick_duration: Duration,
+    tick_timeout: Duration,
     tasks_per_tick: usize,
 ) where
     R: BatchRunnable<T> + Send + 'static,
@@ -220,11 +231,11 @@ fn poll<R, T>(
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut buffer = Vec::with_capacity(batch_size);
-    let mut timeout = Some(tick_duration);
-    let mut timing_task_counter = 0;
+    let mut timeout = Some(tick_timeout);
+    let mut task_counter = 0;
     let mut keep_going = true;
     while keep_going {
-        keep_going = next_batch(&rx, &mut buffer, batch_size, &mut timeout);
+        keep_going = fill_task_batch(&rx, &mut buffer, batch_size, &mut timeout);
         if !buffer.is_empty() {
             counter.fetch_sub(buffer.len(), Ordering::SeqCst);
             WORKER_PENDING_TASK_VEC
@@ -235,20 +246,22 @@ fn poll<R, T>(
                 .inc_by(buffer.len() as f64)
                 .unwrap();
 
-            timing_task_counter += buffer.len();
-            timeout = Some(tick_duration);
+            task_counter += buffer.len();
+            timeout = Some(tick_timeout);
             runner.run_batch(&mut buffer);
             buffer.clear();
         }
-        if (timeout.is_none() && keep_going) || timing_task_counter >= tasks_per_tick {
+        if timeout.is_none() || task_counter >= tasks_per_tick || !keep_going {
             runner.on_tick();
-            timing_task_counter = 0;
+            task_counter = 0;
         }
     }
     runner.shutdown();
 }
 
-fn next_batch<T>(
+// Get next task batch from `rx`. If meet `timeout` but got nothing,
+// set `timeout` to None.
+fn fill_task_batch<T>(
     rx: &Receiver<Option<T>>,
     buffer: &mut Vec<T>,
     batch_size: usize,
@@ -299,7 +312,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
         let batch_size = self.batch_size;
-        let tick_dur = self.tick_duration;
+        let tick_dur = self.tick_timeout;
         let tasks_per_tick = self.tasks_per_tick;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
@@ -418,6 +431,31 @@ mod test {
     }
 
     #[test]
+    fn test_is_busy() {
+        let mut worker = Builder::new("test-worker-is-busy").busy_limit(3).create();
+        let (tx, rx) = mpsc::channel();
+        worker.start(StepRunner { ch: tx }).unwrap();
+
+        assert!(!worker.is_busy());
+        worker.schedule(100).unwrap();
+        assert!(!worker.is_busy());
+        worker.schedule(100).unwrap();
+        assert!(!worker.is_busy());
+        worker.schedule(100).unwrap();
+        worker.schedule(100).unwrap();
+        assert!(worker.is_busy());
+
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 100);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 100);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 100);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 100);
+        assert!(!worker.is_busy());
+
+        worker.stop().unwrap().join().unwrap();
+        assert!(worker.is_busy());
+    }
+
+    #[test]
     fn test_threaded() {
         let mut worker = Worker::new("test-worker-threaded");
         let (tx, rx) = mpsc::channel();
@@ -474,7 +512,7 @@ mod test {
     fn test_on_tick() {
         let mut worker = Builder::new("test-worker-tick")
             .batch_size(4)
-            .tick_duration(Duration::from_secs(3))
+            .tick_timeout(Duration::from_secs(3))
             .tasks_per_tick(5)
             .create();
         for _ in 0..20 {
@@ -485,7 +523,7 @@ mod test {
         let (tx, rx) = mpsc::channel();
         worker.start(TickRunner { ch: tx }).unwrap();
 
-        // The stream in rx should be: ^^^^^^^^o^^^^^^^^o^^^^o.
+        // The stream in rx should be: ^^^^^^^^o^^^^^^^^o^^^^oo.
         // '^' means normal message and 'o' means tick message.
         for i in 0..22 {
             let msg = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -498,6 +536,7 @@ mod test {
 
         thread::sleep(Duration::from_secs(5));
         worker.stop().unwrap().join().unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), "tick msg");
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), "tick msg");
         assert!(rx.recv().is_err());
     }
