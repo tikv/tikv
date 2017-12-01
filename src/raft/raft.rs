@@ -426,8 +426,9 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn del_progress(&mut self, id: u64) {
-        self.mut_prs().voters.remove(&id);
-        self.mut_prs().learners.remove(&id);
+        if self.mut_prs().voters.remove(&id).is_none() {
+            self.mut_prs().learners.remove(&id);
+        }
     }
 
     pub fn take_prs(&mut self) -> ProgressSet {
