@@ -17,25 +17,21 @@
 mod metrics;
 mod future;
 
+use std::{io, u64};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
-use std::io;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender, TryRecvError};
 use std::error::Error;
 use std::time::Duration;
 
-use util::Either;
-use util::time::{Instant, SlowTimer};
+use util::time::SlowTimer;
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
 pub use self::future::Worker as FutureWorker;
-
-const NAP_SECS: u64 = 1;
-const DEFAULT_TASKS_PER_TICK: usize = 10000;
 
 pub struct Stopped<T>(pub T);
 
@@ -152,11 +148,16 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 }
 
 #[derive(Copy, Clone)]
+pub enum TickBy {
+    Timeout(Duration),
+    TaskBatch,
+}
+
+#[derive(Copy, Clone)]
 pub struct Builder<S: Into<String>> {
     name: S,
     batch_size: usize,
-    tick_timeout: Duration,
-    tasks_per_tick: usize,
+    tick_by: TickBy,
 }
 
 impl<S: Into<String>> Builder<S> {
@@ -164,8 +165,7 @@ impl<S: Into<String>> Builder<S> {
         Builder {
             name: name,
             batch_size: 1,
-            tick_timeout: Duration::from_secs(NAP_SECS),
-            tasks_per_tick: DEFAULT_TASKS_PER_TICK,
+            tick_by: TickBy::TaskBatch,
         }
     }
 
@@ -174,13 +174,8 @@ impl<S: Into<String>> Builder<S> {
         self
     }
 
-    pub fn tick_timeout(mut self, tick_dur: Duration) -> Self {
-        self.tick_timeout = tick_dur;
-        self
-    }
-
-    pub fn tasks_per_tick(mut self, tasks: usize) -> Self {
-        self.tasks_per_tick = tasks;
+    pub fn tick_by(mut self, tick_by: TickBy) -> Self {
+        self.tick_by = tick_by;
         self
     }
 
@@ -191,8 +186,7 @@ impl<S: Into<String>> Builder<S> {
             receiver: Mutex::new(Some(rx)),
             handle: None,
             batch_size: self.batch_size,
-            tick_timeout: self.tick_timeout,
-            tasks_per_tick: self.tasks_per_tick,
+            tick_by: self.tick_by,
         }
     }
 }
@@ -203,8 +197,7 @@ pub struct Worker<T: Display> {
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
     batch_size: usize,
-    tick_timeout: Duration,
-    tasks_per_tick: usize,
+    tick_by: TickBy,
 }
 
 fn poll<R, T>(
@@ -212,45 +205,38 @@ fn poll<R, T>(
     rx: Receiver<Option<T>>,
     counter: Arc<AtomicUsize>,
     batch_size: usize,
-    tick_timeout: Duration,
-    tasks_per_tick: usize,
+    tick_by: TickBy,
 ) where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
-    let mut buffer = Vec::with_capacity(batch_size);
-    let mut task_counter = 0;
+    let mut batch = Vec::with_capacity(batch_size);
+    let timeout = match tick_by {
+        TickBy::TaskBatch => Duration::from_secs(u64::MAX),
+        TickBy::Timeout(dur) => dur,
+    };
     let mut keep_going = true;
-    let (mut timeout, mut start) = (None, Instant::now_coarse());
     while keep_going {
-        keep_going = fill_task_batch(&rx, &mut buffer, batch_size, timeout);
-        if !buffer.is_empty() {
-            counter.fetch_sub(buffer.len(), Ordering::SeqCst);
+        keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
+        let should_tick = match tick_by {
+            TickBy::TaskBatch => !batch.is_empty(),
+            _ => true,
+        };
+        if !batch.is_empty() {
+            counter.fetch_sub(batch.len(), Ordering::SeqCst);
             WORKER_PENDING_TASK_VEC
                 .with_label_values(&[&name])
-                .sub(buffer.len() as f64);
+                .sub(batch.len() as f64);
             WORKER_HANDLED_TASK_VEC
                 .with_label_values(&[&name])
-                .inc_by(buffer.len() as f64)
+                .inc_by(batch.len() as f64)
                 .unwrap();
-
-            task_counter += buffer.len();
-            runner.run_batch(&mut buffer);
-            buffer.clear();
+            runner.run_batch(&mut batch);
+            batch.clear();
         }
-
-        timeout = timeout.map_or(Some(tick_timeout), |dur| {
-            let new_start = Instant::now_coarse();
-            let elapsed = new_start.duration_since(start);
-            start = new_start;
-            dur.checked_sub(elapsed)
-        });
-
-        if timeout.is_none() || task_counter >= tasks_per_tick || !keep_going {
-            timeout = None;
+        if should_tick {
             runner.on_tick();
-            task_counter = 0;
         }
     }
     runner.shutdown();
@@ -261,13 +247,9 @@ fn fill_task_batch<T>(
     rx: &Receiver<Option<T>>,
     buffer: &mut Vec<T>,
     batch_size: usize,
-    timeout: Option<Duration>,
+    timeout: Duration,
 ) -> bool {
-    let next_task = match timeout {
-        Some(dur) => rx.recv_timeout(dur).map_err(Either::Left),
-        None => rx.recv().map_err(Either::Right),
-    };
-    match next_task {
+    match rx.recv_timeout(timeout) {
         Ok(Some(task)) => {
             buffer.push(task);
             while buffer.len() < batch_size {
@@ -279,7 +261,7 @@ fn fill_task_batch<T>(
             }
             true
         }
-        Err(Either::Left(RecvTimeoutError::Timeout)) => true,
+        Err(RecvTimeoutError::Timeout) => true,
         _ => false,
     }
 }
@@ -305,13 +287,10 @@ impl<T: Display + Send + 'static> Worker<T> {
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
         let batch_size = self.batch_size;
-        let tick_dur = self.tick_timeout;
-        let tasks_per_tick = self.tasks_per_tick;
+        let tick_by = self.tick_by;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || {
-                poll(runner, rx, counter, batch_size, tick_dur, tasks_per_tick)
-            })?;
+            .spawn(move || poll(runner, rx, counter, batch_size, tick_by))?;
         self.handle = Some(h);
         Ok(())
     }
@@ -400,6 +379,9 @@ mod test {
         fn on_tick(&mut self) {
             self.ch.send("tick msg").unwrap();
         }
+        fn shutdown(&mut self) {
+            self.ch.send("").unwrap();
+        }
     }
 
     #[test]
@@ -477,13 +459,12 @@ mod test {
     }
 
     #[test]
-    fn test_on_tick() {
+    fn test_tick_by_batch() {
         let mut worker = Builder::new("test-worker-tick")
             .batch_size(4)
-            .tick_timeout(Duration::from_secs(3))
-            .tasks_per_tick(5)
+            .tick_by(TickBy::TaskBatch)
             .create();
-        for _ in 0..20 {
+        for _ in 0..10 {
             worker.schedule("normal msg").unwrap();
         }
         thread::sleep(Duration::from_secs(3));
@@ -491,27 +472,13 @@ mod test {
         let (tx, rx) = mpsc::channel();
         worker.start(TickRunner { ch: tx }).unwrap();
 
-        // Because we produce "normal msg" quickly, so we won't meet timeout.
-        // And because `tasks_per_tick` is 5, `batch_size` is 4, so we will
-        // get a "tick msg" after we finish 2 batches.
-        //
-        // So the stream in rx should be: ^^^^^^^^o^^^^^^^^o^^^^.
-        // '^' means normal message but 'o' means tick message.
-        for i in 0..22 {
+        for i in 0..13 {
             let msg = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-            if i != 8 && i != 17 {
+            if i != 4 && i != 9 && i != 12 {
                 assert_eq!(msg, "normal msg");
             } else {
                 assert_eq!(msg, "tick msg");
             }
         }
-
-        // tick message from `timeout`.
-        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "tick msg");
-
-        // tick message from `not keep_going`.
-        worker.stop().unwrap().join().unwrap();
-        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), "tick msg");
-        assert!(rx.recv().is_err());
     }
 }
