@@ -30,7 +30,6 @@ use std::iter::FromIterator;
 use std::cmp::Ordering;
 use std::error::Error;
 use std::sync::Arc;
-use std::path::PathBuf;
 use rustc_serialize::hex::{FromHex, ToHex};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
@@ -47,12 +46,14 @@ use kvproto::kvrpcpb::MvccInfo;
 use kvproto::debugpb::*;
 use kvproto::debugpb::DB as DBType;
 use kvproto::debugpb_grpc::DebugClient;
-use tikv::util::{self, escape, unescape};
+use tikv::util::{escape, unescape};
 use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv::util::rocksdb as rocksdb_util;
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{Debugger, RegionInfo};
-use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
+use tikv::config::TiKvConfig;
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
@@ -67,15 +68,22 @@ fn new_debug_executor(
 ) -> Box<DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
-            let db = util::rocksdb::open(kv_path, ALL_CFS).unwrap();
-            let raft_db = if let Some(raft_path) = raft_db {
-                util::rocksdb::open(raft_path, &[CF_DEFAULT]).unwrap()
-            } else {
-                let raft_path = PathBuf::from(kv_path).join("../raft");
-                util::rocksdb::open(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap()
-            };
-            Box::new(Debugger::new(Engines::new(Arc::new(db), Arc::new(raft_db)))) as
-                Box<DebugExecutor>
+            let cfg = TiKvConfig::default();
+            let kv_db_opts = cfg.rocksdb.build_opt();
+            let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+            let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+
+            let raft_path = raft_db
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| format!("{}/../raft", kv_path));
+            let raft_db_opts = cfg.raftdb.build_opt();
+            let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+            let raft_db =
+                rocksdb_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+
+            Box::new(Debugger::new(
+                Engines::new(Arc::new(kv_db), Arc::new(raft_db)),
+            )) as Box<DebugExecutor>
         }
         (Some(remote), None) => {
             let env = Arc::new(Environment::new(1));
