@@ -148,7 +148,7 @@ impl<T: Display> Clone for Scheduler<T> {
 #[cfg(test)]
 pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
     let (tx, _) = mpsc::channel();
-    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx, 1)
+    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
 }
 
 #[derive(Copy, Clone)]
