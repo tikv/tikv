@@ -189,7 +189,6 @@ pub struct RunningCtx {
     ts: u64,
     region_id: u64,
     latch_timer: Option<HistogramTimer>,
-    get_snapshot_timer: Option<HistogramTimer>,
     _timer: HistogramTimer,
     slow_timer: Option<SlowTimer>,
 }
@@ -215,7 +214,6 @@ impl RunningCtx {
                     .with_label_values(&[tag])
                     .start_coarse_timer(),
             ),
-            get_snapshot_timer: None,
             _timer: SCHED_HISTOGRAM_VEC
                 .with_label_values(&[tag])
                 .start_coarse_timer(),
@@ -1208,11 +1206,6 @@ impl Scheduler {
         let ok = self.latches.acquire(&mut ctx.lock, cid);
         if ok {
             ctx.latch_timer.take();
-            ctx.get_snapshot_timer = Some(
-                SCHED_GET_SNAPSHOT_HISTOGRAM_VEC
-                    .with_label_values(&[ctx.tag])
-                    .start_coarse_timer(),
-            );
             ctx.slow_timer = Some(SlowTimer::new());
         }
         ok
@@ -1344,11 +1337,6 @@ impl Scheduler {
             cids,
             cb_ctx
         );
-
-        for cid in &cids {
-            let ctx = self.cmd_ctxs.get_mut(cid).unwrap();
-            ctx.get_snapshot_timer.take();
-        }
 
         match snapshot {
             Ok(snapshot) => for cid in cids {

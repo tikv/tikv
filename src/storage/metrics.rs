@@ -56,14 +56,6 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref SCHED_GET_SNAPSHOT_HISTOGRAM_VEC: HistogramVec =
-        register_histogram_vec!(
-            "tikv_scheduler_get_snapshot_duration_seconds",
-            "Bucketed histogram of get snapshot duration",
-            &["type"],
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
-        ).unwrap();
-
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_scheduler_processing_read_duration_seconds",
