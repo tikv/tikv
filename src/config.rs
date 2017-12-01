@@ -21,6 +21,7 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
 use sys_info;
 
 use server::Config as ServerConfig;
+use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
@@ -30,6 +31,7 @@ use util::config::{self, compression_type_level_serde, ReadableDuration, Readabl
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
 use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
+use util::security::SecurityConfig;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -587,25 +589,6 @@ impl RaftDbConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct PdConfig {
-    pub endpoints: Vec<String>,
-}
-
-impl PdConfig {
-    fn validate(&self) -> Result<(), Box<Error>> {
-        if self.endpoints.is_empty() {
-            return Err("please specify pd.endpoints.".into());
-        }
-        for addr in &self.endpoints {
-            config::check_addr(addr)?;
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -653,6 +636,7 @@ pub struct TiKvConfig {
     pub coprocessor: CopConfig,
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,
+    pub security: SecurityConfig,
 }
 
 impl Default for TiKvConfig {
@@ -668,6 +652,7 @@ impl Default for TiKvConfig {
             rocksdb: DbConfig::default(),
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -709,6 +694,7 @@ impl TiKvConfig {
         self.raft_store.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
+        self.security.validate()?;
         Ok(())
     }
 
