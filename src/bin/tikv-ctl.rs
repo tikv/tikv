@@ -24,7 +24,10 @@ extern crate rocksdb;
 extern crate grpcio;
 extern crate futures;
 extern crate rustc_serialize;
+extern crate toml;
 
+use std::fs::File;
+use std::io::Read;
 use std::{process, str, u64};
 use std::iter::FromIterator;
 use std::cmp::Ordering;
@@ -64,14 +67,26 @@ fn new_debug_executor(
     db: Option<&str>,
     raft_db: Option<&str>,
     host: Option<&str>,
+    cfg_path: Option<&str>,
     mgr: Arc<SecurityManager>,
 ) -> Box<DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
-            let cfg = TiKvConfig::default();
+            let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
+                File::open(&path)
+                    // .map_err::<Box<Error>, _>(|e| Box::new(e))
+                    .and_then(|mut f| {
+                        let mut s = String::new();
+                        f.read_to_string(&mut s).unwrap();
+                        let c = toml::from_str(&s).unwrap();
+                        Ok(c)
+                    })
+                    .unwrap()
+            });
             let kv_db_opts = cfg.rocksdb.build_opt();
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
             let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            println!("{:?}", cfg);
 
             let raft_path = raft_db
                 .map(|p| p.to_string())
@@ -228,9 +243,10 @@ trait DebugExecutor {
         db: Option<&str>,
         raft_db: Option<&str>,
         host: Option<&str>,
+        cfg_path: Option<&str>,
         mgr: Arc<SecurityManager>,
     ) {
-        let rhs_debug_executor = new_debug_executor(db, raft_db, host, mgr);
+        let rhs_debug_executor = new_debug_executor(db, raft_db, host, cfg_path, mgr);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);
@@ -555,9 +571,22 @@ fn main() {
                 .help("set raft rocksdb path"),
         )
         .arg(
+            Arg::with_name("config")
+                .conflicts_with_all(&["host", "hex-to-escaped", "escaped-to-hex"])
+                .long("config")
+                .takes_value(true)
+                .help("set config for rocksdb"),
+        )
+        .arg(
             Arg::with_name("host")
                 .required(true)
-                .conflicts_with_all(&["db", "raftdb", "hex-to-escaped", "escaped-to-hex"])
+                .conflicts_with_all(&[
+                    "db",
+                    "raftdb",
+                    "hex-to-escaped",
+                    "escaped-to-hex",
+                    "config",
+                ])
                 .long("host")
                 .takes_value(true)
                 .help("set remote host"),
@@ -861,9 +890,10 @@ fn main() {
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
+    let cfg_path = matches.value_of("config");
 
     let mgr = new_security_mgr(&matches);
-    let debug_executor = new_debug_executor(db, raft_db, host, mgr.clone());
+    let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, mgr.clone());
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -914,7 +944,7 @@ fn main() {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let to_db = matches.value_of("to_db");
         let to_host = matches.value_of("to_host");
-        debug_executor.diff_region(region, to_db, None, to_host, mgr);
+        debug_executor.diff_region(region, to_db, None, to_host, cfg_path, mgr);
     } else if let Some(matches) = matches.subcommand_matches("compact") {
         let db = matches.value_of("db").unwrap();
         let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
