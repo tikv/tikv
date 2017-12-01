@@ -74,7 +74,6 @@ fn new_debug_executor(
         (None, Some(kv_path)) => {
             let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
                 File::open(&path)
-                    // .map_err::<Box<Error>, _>(|e| Box::new(e))
                     .and_then(|mut f| {
                         let mut s = String::new();
                         f.read_to_string(&mut s).unwrap();
@@ -86,7 +85,6 @@ fn new_debug_executor(
             let kv_db_opts = cfg.rocksdb.build_opt();
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
             let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
-            println!("{:?}", cfg);
 
             let raft_path = raft_db
                 .map(|p| p.to_string())
