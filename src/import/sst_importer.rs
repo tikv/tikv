@@ -36,9 +36,8 @@ pub struct SSTImporter {
 
 impl SSTImporter {
     pub fn new<P: AsRef<Path>>(root: P) -> Result<SSTImporter> {
-        let dir = ImportDir::new(root)?;
         Ok(SSTImporter {
-            dir: dir,
+            dir: ImportDir::new(root)?,
             token: AtomicUsize::new(1),
             files: Mutex::new(HashMap::new()),
         })

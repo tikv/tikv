@@ -14,13 +14,14 @@
 use std::i32;
 use std::fmt;
 use std::ops::Deref;
+use std::path::Path;
 use std::sync::Arc;
 
 use uuid::Uuid;
 use tempdir::TempDir;
 
-use rocksdb::{DBCompactionStyle, DBCompressionType, DBIterator, ReadOptions, Writable,
-              WriteBatch as RawBatch, DB};
+use rocksdb::{DBCompactionStyle, DBCompressionType, DBIterator, Env, EnvOptions, ReadOptions,
+              SequentialFile, SstFileWriter, Writable, WriteBatch as RawBatch, DB};
 use kvproto::importpb::*;
 
 use config::DbConfig;
@@ -34,14 +35,17 @@ use super::{Error, Result};
 
 pub struct Engine {
     db: Arc<DB>,
+    env: Arc<Env>,
     uuid: Uuid,
     _temp_dir: TempDir, // Cleanup when engine is dropped.
 }
 
 impl Engine {
     pub fn new(cfg: &DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
+        // Configuration recommendation:
+        // 1. Use a large `write_buffer_size`, 1GB should be good enough.
+        // 2. Increase `max_background_jobs`, RocksDB preserves `max_background_jobs/4` for flush.
         let mut db_opts = cfg.build_opt();
-        db_opts.set_max_background_jobs(16);
         db_opts.set_use_direct_io_for_flush_and_compaction(true);
         let mut cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, cfg.defaultcf.build_opt()),
@@ -49,16 +53,12 @@ impl Engine {
         ];
         for cf_opts in &mut cfs_opts {
             const DISABLED: i32 = i32::MAX;
-            // Tune some performance related parameters here.
-            cf_opts.set_num_levels(1);
-            cf_opts.compression_per_level(&[DBCompressionType::Zstd]);
-            cf_opts.set_compaction_style(DBCompactionStyle::Universal);
-            cf_opts.set_write_buffer_size(GB);
-            cf_opts.set_target_file_size_base(GB);
-            cf_opts.set_max_write_buffer_number(6);
-            cf_opts.set_min_write_buffer_number_to_merge(1);
             // Disable compaction and rate limit.
+            cf_opts.set_num_levels(1);
+            cf_opts.set_target_file_size_base(GB);
             cf_opts.set_disable_auto_compactions(true);
+            cf_opts.set_compaction_style(DBCompactionStyle::None);
+            cf_opts.compression_per_level(&[DBCompressionType::Zstd]);
             cf_opts.set_soft_pending_compaction_bytes_limit(0);
             cf_opts.set_hard_pending_compaction_bytes_limit(0);
             cf_opts.set_level_zero_stop_writes_trigger(DISABLED);
@@ -68,6 +68,7 @@ impl Engine {
         let db = new_engine_opt(temp_dir.path().to_str().unwrap(), db_opts, cfs_opts)?;
         Ok(Engine {
             db: Arc::new(db),
+            env: Arc::new(Env::new_mem()),
             uuid: uuid,
             _temp_dir: temp_dir,
         })
@@ -116,12 +117,28 @@ impl Engine {
         wb
     }
 
-    pub fn iter_cf(&self, cf_name: &str) -> DBIterator<Arc<DB>> {
+    pub fn new_iter(&self, cf_name: &str) -> DBIterator<Arc<DB>> {
         let cf_handle = self.cf_handle(cf_name).unwrap();
         // Don't need to cache since it is unlikely to read more than once.
         let mut ropts = ReadOptions::new();
         ropts.fill_cache(false);
         DBIterator::new_cf(self.db.clone(), cf_handle, ropts)
+    }
+
+    pub fn new_sst_writer<P: AsRef<Path>>(&self, cf_name: &str, path: P) -> Result<SstFileWriter> {
+        let path = path.as_ref().to_str().unwrap();
+        let cf_handle = self.cf_handle(cf_name).unwrap();
+        let mut cf_opts = self.get_options_cf(cf_handle);
+        cf_opts.set_env(self.env.clone());
+        let mut writer = SstFileWriter::new(EnvOptions::new(), cf_opts);
+        writer.open(path)?;
+        Ok(writer)
+    }
+
+    pub fn new_sst_reader<P: AsRef<Path>>(&self, path: P) -> Result<SequentialFile> {
+        let path = path.as_ref().to_str().unwrap();
+        let f = self.env.new_sequential_file(path, EnvOptions::new())?;
+        Ok(f)
     }
 }
 

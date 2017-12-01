@@ -13,6 +13,7 @@
 
 use std::sync::{mpsc, Arc};
 use std::path::Path;
+use tikv::import::SSTImporter;
 use tikv::raftstore::store::{bootstrap_store, create_event_loop, keys, Engines, Peekable,
                              SnapManager};
 use tikv::server::Node;

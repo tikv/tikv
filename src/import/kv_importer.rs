@@ -37,9 +37,8 @@ pub struct KVImporter {
 
 impl KVImporter {
     pub fn new<P: AsRef<Path>>(root: P, opts: &DbConfig) -> Result<KVImporter> {
-        let dir = EngineDir::new(root, opts)?;
         Ok(KVImporter {
-            dir: dir,
+            dir: EngineDir::new(root, opts)?,
             token: AtomicUsize::new(1),
             engines: Mutex::new(HashMap::new()),
             clients: Mutex::new(HashMap::new()),

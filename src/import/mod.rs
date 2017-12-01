@@ -20,6 +20,7 @@ mod engine;
 mod import;
 mod server;
 mod metrics;
+mod sst_stream;
 mod kv_service;
 mod kv_importer;
 mod sst_service;

@@ -186,7 +186,25 @@ impl PdClient for RpcClient {
         Ok(resp.take_cluster())
     }
 
-    fn get_region(&self, key: &[u8]) -> Result<RegionLeader> {
+    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_region"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetRegionRequest::new();
+        req.set_header(self.header());
+        req.set_region_key(key.to_vec());
+
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.get_region_opt(req.clone(), option)
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.take_region())
+    }
+
+    fn get_region_leader(&self, key: &[u8]) -> Result<RegionLeader> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
             .start_coarse_timer();

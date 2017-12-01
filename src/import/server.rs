@@ -21,7 +21,7 @@ use kvproto::importpb_grpc::create_import_kv;
 use config::TiKvConfig;
 use import::ImportKVService;
 
-const MAX_GRPC_MSG_LEN: usize = 128 * 1024 * 1024;
+const MAX_GRPC_MSG_LEN: usize = 32 * 1024 * 1024;
 
 pub struct Server {
     grpc_server: GrpcServer,
