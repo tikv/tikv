@@ -296,6 +296,12 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value as f64)
                 .unwrap();
         }
+        TickerType::CompactionOptimizedDelDropObsolete => {
+            STORE_ENGINE_COMPACTION_DROP_VEC
+                .with_label_values(&[name, "optimized_del_drop_obsolete"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
         TickerType::NumberKeysWritten => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "keys_written"])
@@ -305,6 +311,12 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
         TickerType::NumberKeysRead => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "keys_read"])
+                .inc_by(value as f64)
+                .unwrap();
+        }
+        TickerType::NumberKeysUpdated => {
+            STORE_ENGINE_FLOW_VEC
+                .with_label_values(&[name, "keys_updated"])
                 .inc_by(value as f64)
                 .unwrap();
         }
