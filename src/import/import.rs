@@ -40,11 +40,10 @@ pub struct ImportJob {
 }
 
 impl ImportJob {
-    pub fn new(cfg: Config, engine: Engine, address: &str) -> Result<ImportJob> {
-        let client = Client::new(address, cfg.max_import_jobs)?;
+    pub fn new(cfg: Config, engine: Engine, client: Arc<Client>) -> Result<ImportJob> {
         Ok(ImportJob {
             cfg: cfg,
-            client: Arc::new(client),
+            client: client,
             engine: Arc::new(engine),
         })
     }

@@ -19,7 +19,9 @@ use grpc::{ChannelBuilder, EnvBuilder, Server as GrpcServer, ServerBuilder};
 use kvproto::importpb_grpc::create_import_kv;
 
 use config::TiKvConfig;
-use import::ImportKVService;
+use pd::RpcClient;
+
+use super::{ImportKVService, KVImporter};
 
 const MAX_GRPC_MSG_LEN: usize = 32 * 1024 * 1024;
 
@@ -28,10 +30,12 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(tikv: &TiKvConfig) -> Server {
+    pub fn new(tikv: &TiKvConfig, client: RpcClient) -> Server {
         let cfg = &tikv.server;
         let addr = SocketAddr::from_str(&cfg.addr).unwrap();
-        let import_service = ImportKVService::new(&tikv.import, &tikv.rocksdb);
+
+        let importer = KVImporter::new(&tikv.import.import_dir, &tikv.rocksdb).unwrap();
+        let import_service = ImportKVService::new(&tikv.import, client, importer);
 
         let env = Arc::new(
             EnvBuilder::new()

@@ -37,17 +37,16 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(address: &str, cq_count: usize) -> Result<Client> {
-        let rpc = RpcClient::new(&[address.to_owned()])?;
+    pub fn new(rpc: RpcClient, cq_count: usize) -> Client {
         let env = EnvBuilder::new()
             .cq_count(cq_count)
             .name_prefix("import-client")
             .build();
-        Ok(Client {
+        Client {
             rpc: rpc,
             env: Arc::new(env),
             channels: Mutex::new(HashMap::new()),
-        })
+        }
     }
 
     fn resolve(&self, store_id: u64) -> Result<Channel> {

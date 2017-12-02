@@ -284,8 +284,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 }
 
-fn run_import_server(cfg: &TiKvConfig) {
-    let mut server = ImportServer::new(cfg);
+fn run_import_server(cfg: &TiKvConfig, pd_client: RpcClient) {
+    let mut server = ImportServer::new(cfg, pd_client);
     server.start();
     info!("import server started");
     signal_handler::handle_signal(None, "");
@@ -542,6 +542,12 @@ fn main() {
     }
     config.server.cluster_id = cluster_id;
     info!("connect to PD cluster {}", cluster_id);
+
+    // Run as an import server.
+    if matches.is_present("import") {
+        run_import_server(&config, pd_client);
+        return;
+    }
 
     let _m = Monitor::default();
     run_raft_server(pd_client, &config, security_mgr);

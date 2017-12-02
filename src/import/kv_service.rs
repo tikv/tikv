@@ -22,30 +22,32 @@ use futures_cpupool::{Builder, CpuPool};
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
 
-use config::DbConfig;
+use pd::RpcClient;
 use util::time::duration_to_sec;
 
 use super::util::*;
 use super::metrics::*;
-use super::{Config, Error, ImportJob, KVImporter};
+use super::{Client, Config, Error, ImportJob, KVImporter};
 
 #[derive(Clone)]
 pub struct ImportKVService {
     cfg: Config,
     threads: CpuPool,
+    client: Arc<Client>,
     importer: Arc<KVImporter>,
 }
 
 impl ImportKVService {
-    pub fn new(cfg: &Config, db_cfg: &DbConfig) -> ImportKVService {
+    pub fn new(cfg: &Config, rpc: RpcClient, importer: KVImporter) -> ImportKVService {
         let threads = Builder::new()
             .name_prefix("import_kv")
             .pool_size(cfg.num_threads)
             .create();
-        let importer = KVImporter::new(&cfg.import_dir, db_cfg).unwrap();
+        let client = Client::new(rpc, cfg.max_import_jobs);
         ImportKVService {
             cfg: cfg.clone(),
             threads: threads,
+            client: Arc::new(client),
             importer: Arc::new(importer),
         }
     }
@@ -106,6 +108,7 @@ impl ImportKv for ImportKVService {
         let timer = Instant::now();
 
         let cfg = self.cfg.clone();
+        let client = self.client.clone();
         let import = self.importer.clone();
         let threads = self.threads.clone();
 
@@ -114,7 +117,7 @@ impl ImportKv for ImportKVService {
                 .spawn_fn(move || {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     let engine = import.finish(uuid)?;
-                    let job = ImportJob::new(cfg, engine, req.get_address())?;
+                    let job = ImportJob::new(cfg, engine, client)?;
                     job.run()
                 })
                 .map(|_| FlushResponse::new())

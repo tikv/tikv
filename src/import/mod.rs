@@ -33,7 +33,7 @@ use self::import::ImportJob;
 
 pub use self::config::Config;
 pub use self::server::Server;
-pub use self::kv_service::ImportKVService;
 pub use self::kv_importer::KVImporter;
-pub use self::sst_service::ImportSSTService;
+pub use self::kv_service::ImportKVService;
 pub use self::sst_importer::SSTImporter;
+pub use self::sst_service::ImportSSTService;

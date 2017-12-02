@@ -482,6 +482,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value as f64)
                 .unwrap();
         }
+        _ => {}
     }
 }
 
