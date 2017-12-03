@@ -1,10 +1,12 @@
 ENABLE_FEATURES ?= default
 
-ifeq ($(ROCKSDB_SYS_PORTABLE),1)
+# Build portable binary by default unless disable explicitly
+ifneq ($(ROCKSDB_SYS_PORTABLE),0)
 ENABLE_FEATURES += portable
 endif
 
-ifeq ($(ROCKSDB_SYS_SSE),1)
+# Enable sse4.2 by default unless disable explicitly
+ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
@@ -35,12 +37,12 @@ run:
 	cargo run --features "${ENABLE_FEATURES}"
 
 release:
-	@env ROCKSDB_SYS_PORTABLE=1 ROCKSDB_SYS_SSE=1 cargo build --release --features "${ENABLE_FEATURES}"
+	@cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 
 unportable_release:
-	ROCKSDB_SYS_SSE=1  make release
+	ROCKSDB_SYS_PORTABLE=0 make release
 
 prof_release:
 	ENABLE_FEATURES=mem-profiling make release
