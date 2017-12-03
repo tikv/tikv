@@ -15,6 +15,7 @@ use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::{must_get_equal, new_peer};
+use util;
 
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -60,4 +61,18 @@ fn test_node_partition_write() {
 fn test_server_partition_write() {
     let mut cluster = new_server_cluster(0, 5);
     test_partition_write(&mut cluster);
+}
+
+#[test]
+fn test_secure_connect() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.security = util::new_security_cfg();
+    cluster.run_conf_change();
+
+    let (key, value) = (b"k1", b"v1");
+    cluster.must_put(key, value);
+
+    for id in 1..4 {
+        must_get_equal(&cluster.get_engine(id), key, value);
+    }
 }
