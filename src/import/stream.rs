@@ -65,18 +65,12 @@ impl<'a> PartialOrd for RangeEnd<'a> {
 pub struct SSTFile {
     pub meta: SSTMeta,
     pub data: Vec<u8>,
-    next: Option<Vec<u8>>,
+    next: Vec<u8>,
 }
 
 impl SSTFile {
-    // SSTFile's region range extends to the next file.
-    pub fn region_range(&self) -> Range {
-        let start = self.meta.get_range().get_start();
-        let end = match self.next {
-            Some(ref next) => next,
-            None => RANGE_MAX,
-        };
-        new_range(start, end)
+    pub fn covered_range(&self) -> Range {
+        new_range(self.meta.get_range().get_start(), &self.next)
     }
 }
 
@@ -141,9 +135,9 @@ impl SSTFileStream {
         }
 
         let next = if self.db_iter.valid() {
-            Some(self.db_iter.key().to_owned())
+            self.db_iter.key().to_owned()
         } else {
-            None
+            RANGE_MAX.to_owned()
         };
 
         let info = ctx.finish()?;
@@ -169,7 +163,7 @@ impl SSTFileStream {
         ))
     }
 
-    fn new_sst_file(&self, info: &ExternalSstFileInfo, next: Option<Vec<u8>>) -> Result<SSTFile> {
+    fn new_sst_file(&self, info: &ExternalSstFileInfo, next: Vec<u8>) -> Result<SSTFile> {
         let mut f = self.engine.new_sst_reader(info.file_path())?;
         let mut data = Vec::new();
         f.read_to_end(&mut data)?;
@@ -272,6 +266,7 @@ impl RangeIterator {
 
 struct GenSSTContext {
     writer: SstFileWriter,
+    raw_size: u64,
     limit_key: Vec<u8>,
     limit_size: u64,
 }
@@ -280,12 +275,14 @@ impl GenSSTContext {
     fn new(writer: SstFileWriter, limit_key: Vec<u8>, limit_size: u64) -> GenSSTContext {
         GenSSTContext {
             writer: writer,
+            raw_size: 0,
             limit_key: limit_key,
             limit_size: limit_size,
         }
     }
 
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.raw_size += (key.len() + value.len()) as u64;
         let data_key = keys::data_key(key);
         self.writer.put(&data_key, value).map_err(Error::from)
     }
@@ -295,7 +292,7 @@ impl GenSSTContext {
     }
 
     fn should_stop_before(&mut self, key: &[u8]) -> bool {
-        RangeEnd(key) >= RangeEnd(&self.limit_key) || self.writer.file_size() >= self.limit_size
+        RangeEnd(key) >= RangeEnd(&self.limit_key) || self.raw_size >= self.limit_size
     }
 }
 

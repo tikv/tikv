@@ -28,7 +28,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::importpb::*;
 
 use super::{Client, Config, Engine, Error, Result, UploadStream};
-use super::sst_stream::*;
+use super::stream::*;
 
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 3;
@@ -242,6 +242,10 @@ impl ImportSSTJob {
                     Ok(v) => v,
                     Err(e) => {
                         error!("{} get region: {:?}", self.tag, e);
+                        if let Error::SSTFileOutOfRange = e {
+                            // Not retryable in this job.
+                            break;
+                        }
                         continue;
                     }
                 },
@@ -250,7 +254,7 @@ impl ImportSSTJob {
             match self.import(region) {
                 Ok(_) => {
                     info!("{} import {} done", self.tag, self.sst);
-                    return Ok(self.sst.region_range());
+                    return Ok(self.sst.covered_range());
                 }
                 Err(e) => {
                     error!("{} import {}: {:?}", self.tag, self.sst, e);
@@ -265,21 +269,15 @@ impl ImportSSTJob {
     fn prepare(&self) -> Result<RegionLeader> {
         let mut region = self.get_region()?;
 
-        // We don't want a lot of small regions, so don't split if the file is
-        // not that large.
+        // No need to split if the file is not large enough.
         if self.sst.meta.get_length() > self.cfg.region_split_size / 2 {
-            let range = self.sst.region_range();
-            if range.get_start() > region.get_start_key() {
-                let (_, new_region) = self.split_region(&region, range.get_start())?;
-                region = new_region;
-            }
+            let range = self.sst.covered_range();
             if RangeEnd(range.get_end()) < RangeEnd(region.get_end_key()) {
-                let (new_region, _) = self.split_region(&region, range.get_end())?;
-                region = new_region;
+                region = self.split_region(&region, range.get_end())?;
             }
         }
 
-        // TODO: Relocate region
+        // TODO: relocate region
 
         Ok(region)
     }
@@ -395,11 +393,7 @@ impl ImportSSTJob {
         (ctx, peer)
     }
 
-    fn split_region(
-        &self,
-        region: &RegionLeader,
-        split_key: &[u8],
-    ) -> Result<(RegionLeader, RegionLeader)> {
+    fn split_region(&self, region: &RegionLeader, split_key: &[u8]) -> Result<RegionLeader> {
         // The SplitRegion API accepts a raw key.
         let raw_key = Key::from_encoded(split_key.to_owned()).raw()?;
         let (ctx, peer) = self.new_context(region);
@@ -427,22 +421,13 @@ impl ImportSSTJob {
                     resp.get_right(),
                 );
                 // Just assume that new region's leader will be on the same store.
-                let region1 = resp.take_left();
-                let leader1 = region1
+                let region = resp.take_left();
+                let leader = region
                     .get_peers()
                     .iter()
                     .find(|p| p.get_store_id() == store_id)
                     .cloned();
-                let region2 = resp.take_right();
-                let leader2 = region2
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_store_id() == store_id)
-                    .cloned();
-                Ok((
-                    RegionLeader::new(region1, leader1),
-                    RegionLeader::new(region2, leader2),
-                ))
+                Ok(RegionLeader::new(region, leader))
             }
             Err(e) => {
                 error!("{} split {:?}: {:?}", self.tag, region, e);

@@ -12,15 +12,15 @@
 // limitations under the License.
 
 #[macro_use]
-mod util;
-mod errors;
+mod common;
 mod config;
 mod client;
+mod errors;
 mod engine;
 mod import;
+mod stream;
 mod server;
 mod metrics;
-mod sst_stream;
 mod kv_service;
 mod kv_importer;
 mod sst_service;
