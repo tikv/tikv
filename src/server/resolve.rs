@@ -13,13 +13,11 @@
 
 use std::sync::Arc;
 use std::boxed::FnBox;
-use std::net::SocketAddr;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
 use kvproto::metapb;
 
-use util;
 use util::collections::HashMap;
 use util::worker::{Runnable, Scheduler, Worker};
 use pd::PdClient;
@@ -29,7 +27,7 @@ use super::metrics::*;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
-pub type Callback = Box<FnBox(Result<SocketAddr>) + Send>;
+pub type Callback = Box<FnBox(Result<String>) + Send>;
 
 // StoreAddrResolver resolves the store address.
 pub trait StoreAddrResolver: Send + Clone {
@@ -50,7 +48,7 @@ impl Display for Task {
 }
 
 struct StoreAddr {
-    sock: SocketAddr,
+    addr: String,
     last_update: Instant,
 }
 
@@ -60,25 +58,24 @@ pub struct Runner<T: PdClient> {
 }
 
 impl<T: PdClient> Runner<T> {
-    fn resolve(&mut self, store_id: u64) -> Result<SocketAddr> {
+    fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
             let elapsed = now.duration_since(s.last_update);
             if elapsed.as_secs() < STORE_ADDRESS_REFRESH_SECONDS {
-                return Ok(s.sock);
+                return Ok(s.addr.clone());
             }
         }
 
         let addr = self.get_address(store_id)?;
-        let sock = util::to_socket_addr(addr.as_str())?;
 
         let cache = StoreAddr {
-            sock: sock,
+            addr: addr.clone(),
             last_update: Instant::now(),
         };
         self.store_addrs.insert(store_id, cache);
 
-        Ok(sock)
+        Ok(addr)
     }
 
     fn get_address(&mut self, store_id: u64) -> Result<String> {
@@ -151,10 +148,10 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddr;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use std::ops::Sub;
-    use std::net::SocketAddr;
     use std::str::FromStr;
     use std::thread;
 
@@ -281,8 +278,7 @@ mod tests {
 
         let interval = Duration::from_millis(2);
 
-        let sock = runner.resolve(store_id).unwrap();
-        let port = sock.port();
+        let mut sock = runner.resolve(store_id).unwrap();
 
         thread::sleep(interval);
         // Expire the cache, and the address will be refreshed.
@@ -291,20 +287,20 @@ mod tests {
             let now = Instant::now();
             s.last_update = now.sub(Duration::from_secs(STORE_ADDRESS_REFRESH_SECONDS + 1));
         }
-        let sock = runner.resolve(store_id).unwrap();
-        assert!(sock.port() > port);
-        let port = sock.port();
+        let mut new_sock = runner.resolve(store_id).unwrap();
+        assert_ne!(sock, new_sock);
 
         thread::sleep(interval);
         // Remove the cache, and the address will be refreshed.
         runner.store_addrs.remove(&store_id);
-        let sock = runner.resolve(store_id).unwrap();
-        assert!(sock.port() > port);
-        let port = sock.port();
+        sock = new_sock;
+        new_sock = runner.resolve(store_id).unwrap();
+        assert_ne!(sock, new_sock);
 
         thread::sleep(interval);
         // Otherwise, the address will not be refreshed.
-        let sock = runner.resolve(store_id).unwrap();
-        assert_eq!(sock.port(), port);
+        sock = new_sock;
+        new_sock = runner.resolve(store_id).unwrap();
+        assert_eq!(sock, new_sock);
     }
 }

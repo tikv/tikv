@@ -51,9 +51,9 @@ fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
 fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
     let (cluster, leader, ctx) = must_new_cluster();
 
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
     let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
+    let channel =
+        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
 
     (cluster, client, ctx)
@@ -517,9 +517,9 @@ fn test_split_region() {
 fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
     let (cluster, leader, _) = must_new_cluster();
 
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id());
     let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
+    let channel =
+        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = DebugClient::new(channel);
 
     (cluster, client, leader.get_store_id())
