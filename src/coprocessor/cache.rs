@@ -53,6 +53,7 @@ pub struct DistSQLCache {
     max_size: usize,
     map: LinkedHashMap<DistSQLCacheKey, Box<DistSQLCacheEntry>>,
     size: usize,
+    enable_cache: bool,
 }
 
 impl DistSQLCache {
@@ -63,6 +64,7 @@ impl DistSQLCache {
             map: LinkedHashMap::new(),
             max_size: capacity,
             size: 0,
+            enable_cache: true,
         }
     }
 
@@ -74,6 +76,9 @@ impl DistSQLCache {
     }
 
     pub fn put(&mut self, region_id: u64, k: DistSQLCacheKey, version: u64, res: Vec<u8>) {
+        if !self.enable_cache {
+            return;
+        }
         let key_size = k.len();
         let option = match self.map.get_mut(&k) {
             Some(entry) => {
@@ -137,6 +142,10 @@ impl DistSQLCache {
     }
 
     pub fn get(&mut self, region_id: u64, k: &str) -> Option<&Vec<u8>> {
+        if !self.enable_cache {
+            return None;
+        }
+
         self.check_evict_key(region_id, k);
         if let Some(entry) = self.map.get_refresh(k) {
             Some(&entry.result)
@@ -204,6 +213,19 @@ impl DistSQLCache {
         CORP_DISTSQL_CACHE_SIZE_GAUGE_VEC
             .with_label_values(&["count"])
             .set(self.len() as f64);
+    }
+
+    pub fn evict_region_and_enable(&mut self, region_id: u64) {
+        self.evict_region(region_id);
+        self.enable_cache = true;
+    }
+
+    pub fn enable(&mut self) {
+        self.enable_cache = true;
+    }
+
+    pub fn disable(&mut self) {
+        self.enable_cache = false;
     }
 
     pub fn capacity(&self) -> usize {
@@ -372,6 +394,47 @@ mod tests {
             None => (assert!(false)),
             Some(value) => {
                 assert_eq!(&result, value);
+            }
+        }
+    }
+
+    #[test]
+    fn test_disable_distsql_cache_should_not_hit_cache() {
+        let mut cache: DistSQLCache = DistSQLCache::new(200);
+        let key: DistSQLCacheKey = "test1".to_string();
+        let result: Vec<u8> = vec![100, 101, 102];
+        let version = cache.get_region_version(10);
+        cache.put(10, key.clone(), version, result.clone());
+        cache.disable();
+        match cache.get(10, &key) {
+            None => (),
+            Some(_) => {
+                assert!(false);
+            }
+        }
+        cache.enable();
+        match cache.get(10, &key) {
+            None => (assert!(false)),
+            Some(value) => {
+                assert_eq!(&result, value);
+            }
+        }
+    }
+
+    #[test]
+    fn test_disable_distsql_cache_should_not_cache_entry() {
+        let mut cache: DistSQLCache = DistSQLCache::new(200);
+        let key: DistSQLCacheKey = "test1".to_string();
+        let result: Vec<u8> = vec![100, 101, 102];
+        let version = cache.get_region_version(10);
+        cache.disable();
+        cache.get_region_version(10);
+        cache.put(10, key.clone(), version, result.clone());
+        cache.enable();
+        match cache.get(10, &key) {
+            None => (),
+            Some(_) => {
+                assert!(false);
             }
         }
     }

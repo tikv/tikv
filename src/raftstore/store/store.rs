@@ -47,6 +47,7 @@ use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::coprocessor::distsql_cache_observer::DistSQLObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
                     RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
@@ -206,6 +207,12 @@ impl<T, C> Store<T, C> {
         coprocessor_host
             .registry
             .register_admin_observer(100, box SplitObserver);
+        coprocessor_host
+            .registry
+            .register_admin_observer(100, box DistSQLObserver);
+        coprocessor_host
+            .registry
+            .register_query_observer(100, box DistSQLObserver);
 
         let mut s = Store {
             cfg: Rc::new(cfg),

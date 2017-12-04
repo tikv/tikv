@@ -18,6 +18,7 @@ use protobuf::RepeatedField;
 
 pub mod dispatcher;
 pub mod split_observer;
+pub mod distsql_cache_observer;
 pub mod config;
 mod region_snapshot;
 mod error;
