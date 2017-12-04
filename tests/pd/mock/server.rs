@@ -17,6 +17,7 @@ use futures::{Future, Sink, Stream};
 use grpc::{DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
            Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags};
 use tikv::pd::Error as PdError;
+use tikv::util::security::*;
 
 use kvproto::pdpb::*;
 use kvproto::pdpb_grpc::{self, Pd};
@@ -33,10 +34,12 @@ impl Server {
         C: PdMocker + Send + Sync + 'static,
     {
         let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
-        Server::run_with_eps(eps, handler, case)
+        let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
+        Server::run_with_eps(&mgr, eps, handler, case)
     }
 
     pub fn run_with_eps<C>(
+        mgr: &SecurityManager,
         eps: Vec<(String, u16)>,
         handler: Arc<Service>,
         case: Option<Arc<C>>,
@@ -57,7 +60,7 @@ impl Server {
         );
         let mut sb = ServerBuilder::new(env).register_service(service);
         for (host, port) in eps {
-            sb = sb.bind(host, port);
+            sb = mgr.bind(sb, &host, port);
         }
 
         let mut server = sb.build().unwrap();

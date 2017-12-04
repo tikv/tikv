@@ -410,3 +410,9 @@
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
 # wal-bytes-per-sync = 0
+
+[security]
+# set the path for certificates. Empty string means disabling secure connectoins.
+# ca-path = ""
+# cert-path = ""
+# key-path = ""
