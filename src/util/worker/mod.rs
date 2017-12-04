@@ -429,11 +429,15 @@ mod test {
         for _ in 0..10 {
             worker.schedule("normal msg").unwrap();
         }
-        thread::sleep(Duration::from_secs(3));
+        // Here we sleep for ensure that `Scheduler` has already send all mesages to `Worker`.
+        // So when `Worker` calls `fill_task_batch`, it will always get a full batch until the
+        // all tasks are fetched.
+        while worker.scheduler().counter.load(Ordering::SeqCst) < 10 {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         let (tx, rx) = mpsc::channel();
         worker.start(TickRunner { ch: tx }).unwrap();
-
         for i in 0..13 {
             let msg = rx.recv_timeout(Duration::from_secs(3)).unwrap();
             if i != 4 && i != 9 && i != 12 {
