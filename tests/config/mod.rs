@@ -112,7 +112,6 @@ fn test_serde_custom_tikv_config() {
         raft_store_max_leader_lease: ReadableDuration::secs(12),
         right_derive_when_split: false,
         allow_remove_leader: true,
-        enable_distsql_cache: false,
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
     };
@@ -325,7 +324,6 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
-        enable_distsql_cache: false,
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,

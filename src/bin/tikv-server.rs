@@ -485,8 +485,6 @@ fn main() {
 
     // Update enable_distsql_cache config
     let edc = config.server.enable_distsql_cache;
-    config.storage.enable_distsql_cache = edc;
-    config.raft_store.enable_distsql_cache = edc;
     if edc {
         // Update DistSQL Cache Size
         DISTSQL_CACHE

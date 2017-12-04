@@ -16,7 +16,6 @@ use std::sync::Arc;
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest, SelectResponse};
 use kvproto::coprocessor::{KeyRange, Response};
-use kvproto::metapb::RegionEpoch;
 use protobuf::{Message as PbMsg, RepeatedField};
 
 use coprocessor::codec::mysql;
@@ -39,6 +38,7 @@ pub struct DAGContext {
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
     cache_key: String,
+    enable_distsql_cache: bool,
 }
 
 impl DAGContext {
@@ -48,6 +48,7 @@ impl DAGContext {
         snap: Box<Snapshot>,
         req_ctx: Arc<ReqContext>,
         batch_row_limit: usize,
+        enable_distsql_cache: bool,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
@@ -61,7 +62,7 @@ impl DAGContext {
         );
         let cache_key = format!("{:?}, {:?}", ranges, req.get_executors());
 
-        let dag_executor = build_exec(req.get_executors().into_vec(), store, ranges, eval_ctx)?;
+        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
@@ -71,6 +72,7 @@ impl DAGContext {
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
             cache_key: cache_key,
+            enable_distsql_cache: enable_distsql_cache,
         })
     }
 
@@ -122,7 +124,7 @@ impl DAGContext {
                         DISTSQL_CACHE
                             .lock()
                             .unwrap()
-                            .put(region_id, self.cache_key, version, data.clone());
+                            .put(region_id, self.cache_key.clone(), version, data.clone());
                         CORP_DISTSQL_CACHE_COUNT.with_label_values(&["miss"]).inc();
                     }
                     resp.set_data(data);
@@ -147,7 +149,7 @@ impl DAGContext {
     }
 
     pub fn can_cache(&mut self) -> bool {
-        self.has_aggr || self.has_topn
+        self.enable_distsql_cache & (self.has_aggr || self.has_topn)
     }
 }
 

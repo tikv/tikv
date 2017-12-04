@@ -31,7 +31,6 @@ scheduler-messages-per-tick = 123
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
-enable-distsql-cache = false
 
 [pd]
 endpoints = [
@@ -77,7 +76,6 @@ report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
-enable-distsql-cache = false
 
 [coprocessor]
 split-region-on-table = true

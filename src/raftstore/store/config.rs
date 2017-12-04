@@ -92,8 +92,6 @@ pub struct Config {
 
     pub allow_remove_leader: bool,
 
-    pub enable_distsql_cache: bool,
-
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -145,7 +143,6 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
             allow_remove_leader: false,
-            enable_distsql_cache: false,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

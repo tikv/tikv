@@ -54,7 +54,6 @@ use util::transport::{Error as TransportError, SyncSendCh};
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
-use coprocessor::cache::DISTSQL_CACHE;
 
 use super::Result;
 use super::Error;
@@ -328,9 +327,6 @@ pub struct Scheduler {
 
     // used to control write flow
     running_write_bytes: usize,
-
-    // enable distsql cache
-    enable_distsql_cache: bool,
 }
 
 // Make clippy happy.
@@ -378,7 +374,6 @@ impl Scheduler {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
-        enable_distsql_cache: bool,
     ) -> Scheduler {
         Scheduler {
             engine: engine,
@@ -399,7 +394,6 @@ impl Scheduler {
             ).build(),
             has_gc_command: false,
             running_write_bytes: 0,
-            enable_distsql_cache: enable_distsql_cache,
         }
     }
 }
@@ -1098,7 +1092,6 @@ impl Scheduler {
             assert_eq!(ctx.cid, cid);
             ctx.cmd.take().unwrap()
         };
-        let region_id = self.cmd_ctxs.get_mut(&cid).unwrap().region_id;
         if let Some(term) = cb_ctx.term {
             cmd.mut_context().set_term(term);
         }
