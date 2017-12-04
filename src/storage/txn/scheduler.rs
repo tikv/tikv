@@ -376,7 +376,7 @@ impl Scheduler {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
-        r: FutureScheduler<PdTask>,
+        r: Option<FutureScheduler<PdTask>>,
     ) -> Scheduler {
         Scheduler {
             engine: engine,
@@ -1009,7 +1009,7 @@ fn process_write_impl(
 }
 
 struct SchedContextFactory {
-    sender: FutureScheduler<PdTask>,
+    sender: Option<FutureScheduler<PdTask>>,
 }
 
 impl ContextFactory<SchedContext> for SchedContextFactory {
@@ -1023,7 +1023,7 @@ impl ContextFactory<SchedContext> for SchedContextFactory {
 
 struct SchedContext {
     stats: HashMap<&'static str, StatisticsSummary>,
-    sender: FutureScheduler<PdTask>,
+    sender: Option<FutureScheduler<PdTask>>,
 }
 
 impl SchedContext {

@@ -34,7 +34,7 @@ impl Default for AssertionStorage {
     fn default() -> AssertionStorage {
         AssertionStorage {
             ctx: Context::new(),
-            store: SyncStorage::new(&Config::default()),
+            store: SyncStorage::new(&Config::default(), None),
         }
     }
 }
@@ -64,7 +64,7 @@ impl AssertionStorage {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
-        self.store = SyncStorage::from_engine(engine, &Config::default());
+        self.store = SyncStorage::from_engine(engine, &Config::default(), None);
     }
 
     pub fn get_none(&self, key: &[u8], ts: u64) {

@@ -486,7 +486,7 @@ pub struct Storage {
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
 
-    pd_scheduler: FutureScheduler<PdTask>,
+    pd_scheduler: Option<FutureScheduler<PdTask>>,
 
     // Storage configurations.
     gc_ratio_threshold: f64,
@@ -497,7 +497,7 @@ impl Storage {
     pub fn from_engine(
         engine: Box<Engine>,
         config: &Config,
-        pd_scheduler: FutureScheduler<PdTask>,
+        pd_scheduler: Option<FutureScheduler<PdTask>>,
     ) -> Result<Storage> {
         let (tx, rx) = mpsc::sync_channel(config.scheduler_notify_capacity);
         let sendch = SyncSendCh::new(tx, "kv-storage");
@@ -516,7 +516,7 @@ impl Storage {
         })
     }
 
-    pub fn new(config: &Config, pd_scheduler: FutureScheduler<PdTask>) -> Result<Storage> {
+    pub fn new(config: &Config, pd_scheduler: Option<FutureScheduler<PdTask>>) -> Result<Storage> {
         let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
         Storage::from_engine(engine, config, pd_scheduler)
     }
@@ -1065,7 +1065,7 @@ mod tests {
     #[test]
     fn test_get_put() {
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1124,7 +1124,7 @@ mod tests {
         let config = Config::default();
         // New engine lack of some column families.
         let engine = engine::new_local_engine(&config.data_dir, &["default"]).unwrap();
-        let mut storage = Storage::from_engine(engine, &config).unwrap();
+        let mut storage = Storage::from_engine(engine, &config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1148,7 +1148,7 @@ mod tests {
     #[test]
     fn test_scan() {
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1201,7 +1201,7 @@ mod tests {
     #[test]
     fn test_batch_get() {
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1252,7 +1252,7 @@ mod tests {
     #[test]
     fn test_txn() {
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1333,7 +1333,7 @@ mod tests {
     fn test_sched_too_busy() {
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1384,7 +1384,7 @@ mod tests {
     #[test]
     fn test_cleanup() {
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1422,7 +1422,7 @@ mod tests {
     #[test]
     fn test_high_priority_get_put() {
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         let mut ctx = Context::new();
@@ -1480,7 +1480,7 @@ mod tests {
     fn test_high_priority_no_block() {
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage
@@ -1537,7 +1537,7 @@ mod tests {
     #[test]
     fn test_delete_range() {
         let config = Config::default();
-        let mut storage = Storage::new(&config).unwrap();
+        let mut storage = Storage::new(&config, None).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         // Write x and y.

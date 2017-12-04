@@ -829,7 +829,7 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
     let mut engine = util::BlockEngine::new(engine);
     let config = Config::default();
-    let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
+    let mut storage = Storage::from_engine(engine.clone(), &config, None).unwrap();
     storage.start(&config).unwrap();
     let (stx, srx) = channel();
     engine.block_snapshot(stx);
@@ -872,7 +872,7 @@ fn test_conflict_commands_on_fault_engine() {
     let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS).unwrap();
     let box_engine = engine.clone();
     let config = Default::default();
-    let mut store = SyncStorage::prepare(box_engine, &config);
+    let mut store = SyncStorage::prepare(box_engine, &config, None);
     let async_storage = store.get_storage();
     let storage = AssertionStorage {
         store: store.clone(),

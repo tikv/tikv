@@ -42,7 +42,7 @@ pub fn create_raft_storage<S>(
     router: S,
     db: Arc<DB>,
     cfg: &StorageConfig,
-    pd_scheduler: FutureScheduler<PdTask>,
+    pd_scheduler: Option<FutureScheduler<PdTask>>,
 ) -> Result<Storage>
 where
     S: RaftStoreRouter + 'static,

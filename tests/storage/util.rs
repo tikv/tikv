@@ -163,7 +163,7 @@ pub fn new_raft_storage_with_store_count(
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (
         cluster,
-        SyncStorage::from_engine(engine, &Config::default()),
+        SyncStorage::from_engine(engine, &Config::default(), None),
         ctx,
     )
 }

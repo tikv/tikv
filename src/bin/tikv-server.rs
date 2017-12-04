@@ -194,7 +194,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_router.clone(),
         kv_engine.clone(),
         &cfg.storage,
-        pd_worker.scheduler(),
+        Some(pd_worker.scheduler()),
     ).unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.

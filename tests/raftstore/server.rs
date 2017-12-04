@@ -122,7 +122,7 @@ impl Simulator for ServerCluster {
             sim_router.clone(),
             engines.kv_engine.clone(),
             &cfg.storage,
-            pd_worker.scheduler(),
+            Some(pd_worker.scheduler()),
         ).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
