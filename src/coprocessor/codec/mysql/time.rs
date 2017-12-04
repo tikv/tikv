@@ -91,7 +91,7 @@ impl WeekdayExtension for Weekday {
     }
 }
 
-pub trait DateTimeExtension<Tz> {
+pub trait DateTimeExtension {
     fn days(&self) -> i32;
     fn calc_year_week(
         &self,
@@ -102,7 +102,7 @@ pub trait DateTimeExtension<Tz> {
     fn week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> i32;
 }
 
-impl<Tz: TimeZone> DateTimeExtension<Tz> for DateTime<Tz> {
+impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
     /// returns the day of year starting from 1.
     fn days(&self) -> i32 {
         if self.month() == 0 || self.day() == 0 {
