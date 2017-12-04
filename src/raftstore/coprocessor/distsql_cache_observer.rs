@@ -25,7 +25,10 @@ impl DistSQLObserver {
 
     fn evict_region(&self, ctx: &mut ObserverContext) {
         let region_id = ctx.region().get_id();
-        DISTSQL_CACHE.lock().unwrap().evict_region_and_enable(region_id);
+        DISTSQL_CACHE
+            .lock()
+            .unwrap()
+            .evict_region_and_enable(region_id);
     }
 }
 
