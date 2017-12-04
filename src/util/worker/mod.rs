@@ -429,7 +429,6 @@ mod test {
         for _ in 0..10 {
             worker.schedule("normal msg").unwrap();
         }
-
         let (tx, rx) = mpsc::channel();
         worker.start(TickRunner { ch: tx }).unwrap();
         for i in 0..13 {
