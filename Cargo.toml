@@ -80,7 +80,6 @@ git = "https://github.com/pingcap/kvproto.git"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
-branch = "wenxuan/datetime"
 
 [dependencies.prometheus]
 version = "0.3"
