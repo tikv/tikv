@@ -62,15 +62,67 @@ impl<'a> PartialOrd for RangeEnd<'a> {
     }
 }
 
+pub struct SSTInfo {
+    path: PathBuf,
+    range: Range,
+    raw_size: u64,
+    next_start: Vec<u8>,
+}
+
+impl SSTInfo {
+    fn new(info: ExternalSstFileInfo, raw_size: u64, next_start: Vec<u8>) -> SSTInfo {
+        SSTInfo {
+            path: info.file_path(),
+            range: new_range(info.smallest_key(), info.largest_key()),
+            raw_size: raw_size,
+            next_start: next_start,
+        }
+    }
+}
+
 pub struct SSTFile {
     pub meta: SSTMeta,
     pub data: Vec<u8>,
-    next: Vec<u8>,
+    raw_size: u64,
+    next_start: Vec<u8>,
 }
 
 impl SSTFile {
-    pub fn covered_range(&self) -> Range {
-        new_range(self.meta.get_range().get_start(), &self.next)
+    pub fn new(info: SSTInfo, engine: Arc<Engine>, cf_name: String) -> Result<SSTFile> {
+        let mut f = engine.new_sst_reader(info.path)?;
+        let mut data = Vec::new();
+        f.read_to_end(&mut data)?;
+
+        let mut digest = crc32::Digest::new(crc32::IEEE);
+        digest.write(&data);
+
+        // This range doesn't contain the data prefix, like region range.
+        let mut range = Range::new();
+        range.set_start(keys::origin_key(info.range.get_start()).to_owned());
+        range.set_end(keys::origin_key(info.range.get_end()).to_owned());
+
+        let mut meta = SSTMeta::new();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta.set_range(range);
+        meta.set_crc32(digest.sum32());
+        meta.set_length(data.len() as u64);
+        meta.set_cf_name(cf_name);
+
+        Ok(SSTFile {
+            meta: meta,
+            data: data,
+            raw_size: info.raw_size,
+            next_start: info.next_start,
+        })
+    }
+
+    pub fn raw_size(&self) -> u64 {
+        self.raw_size
+    }
+
+    // For region split.
+    pub fn extended_range(&self) -> Range {
+        new_range(self.meta.get_range().get_start(), &self.next_start)
     }
 }
 
@@ -119,7 +171,7 @@ impl SSTFileStream {
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<SSTFile>> {
+    pub fn next(&mut self) -> Result<Option<SSTInfo>> {
         if !self.db_iter.valid() {
             return Ok(None);
         }
@@ -141,8 +193,7 @@ impl SSTFileStream {
         };
 
         let info = ctx.finish()?;
-        let file = self.new_sst_file(&info, next)?;
-        Ok(Some(file))
+        Ok(Some(SSTInfo::new(info, ctx.raw_size(), next)))
     }
 
     fn new_sst_path(&mut self) -> PathBuf {
@@ -161,29 +212,6 @@ impl SSTFileStream {
             limit_key.to_owned(),
             self.cfg.region_split_size,
         ))
-    }
-
-    fn new_sst_file(&self, info: &ExternalSstFileInfo, next: Vec<u8>) -> Result<SSTFile> {
-        let mut f = self.engine.new_sst_reader(info.file_path())?;
-        let mut data = Vec::new();
-        f.read_to_end(&mut data)?;
-
-        let mut digest = crc32::Digest::new(crc32::IEEE);
-        digest.write(&data);
-
-        // This range doesn't contain the data prefix, like region range.
-        let mut range = Range::new();
-        range.set_start(keys::origin_key(info.smallest_key()).to_owned());
-        range.set_end(keys::origin_key(info.largest_key()).to_owned());
-
-        let mut meta = SSTMeta::new();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        meta.set_range(range);
-        meta.set_crc32(digest.sum32());
-        meta.set_length(info.file_size());
-        meta.set_cf_name(self.cf_name.clone());
-
-        Ok(SSTFile { meta, data, next })
     }
 }
 
@@ -291,7 +319,11 @@ impl GenSSTContext {
         self.writer.finish().map_err(Error::from)
     }
 
-    fn should_stop_before(&mut self, key: &[u8]) -> bool {
+    fn raw_size(&self) -> u64 {
+        self.raw_size
+    }
+
+    fn should_stop_before(&self, key: &[u8]) -> bool {
         RangeEnd(key) >= RangeEnd(&self.limit_key) || self.raw_size >= self.limit_size
     }
 }

@@ -64,6 +64,7 @@ impl ImportJob {
     }
 }
 
+#[derive(Clone)]
 struct ImportCFJob {
     tag: String,
     cfg: Config,
@@ -104,9 +105,7 @@ impl ImportCFJob {
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
-            if self.import().is_err() {
-                // Error will be logged inside, so we just need to know some
-                // error occurs, but don't care about what error it is.
+            if !self.import() {
                 continue;
             }
 
@@ -127,28 +126,27 @@ impl ImportCFJob {
         Err(Error::Timeout)
     }
 
-    fn import(&self) -> Result<()> {
+    fn import(&self) -> bool {
         // Use a synchronous channel here as a rate limiter. The import stream
         // will be blocked if the import threads can not handle it fast enough.
         let (tx, rx) = mpsc::sync_channel(1);
         let handles = self.run_import_threads(rx);
 
-        // Return error if any error occrus.
-        let mut res = Ok(());
+        let mut done = true;
         if let Err(e) = self.run_import_stream(tx) {
             error!("{} import stream: {:?}", self.tag, e);
-            res = Err(e);
+            done = false;
         }
         // We should join threads even on error.
         for h in handles {
-            if let Err(e) = h.join().unwrap() {
-                res = Err(e);
+            if !h.join().unwrap() {
+                done = false;
             }
         }
-        res
+        done
     }
 
-    fn run_import_stream(&self, tx: mpsc::SyncSender<SSTFile>) -> Result<()> {
+    fn run_import_stream(&self, tx: mpsc::SyncSender<SSTInfo>) -> Result<()> {
         let temp_dir = TempDir::new_in(self.dir.path(), &self.cf_name)?;
 
         let mut stream = SSTFileStream::new(
@@ -167,31 +165,37 @@ impl ImportCFJob {
         Ok(())
     }
 
-    fn run_import_threads(&self, rx: mpsc::Receiver<SSTFile>) -> Vec<JoinHandle<Result<()>>> {
+    fn run_import_threads(&self, rx: mpsc::Receiver<SSTInfo>) -> Vec<JoinHandle<bool>> {
         let mut handles = Vec::new();
         let rx = Arc::new(Mutex::new(rx));
 
         for _ in 0..self.cfg.max_import_jobs {
             let rx = rx.clone();
-            let cfg = self.cfg.clone();
-            let uuid = self.engine.uuid();
-            let client = self.client.clone();
-            let counter = self.job_counter.clone();
-            let finished = self.finished_ranges.clone();
+            let ctx = self.clone();
 
             let handle = thread::spawn(move || {
-                // Return error if any error occurs.
-                let mut res = Ok(());
-                while let Ok(sst) = rx.lock().unwrap().recv() {
-                    let id = counter.fetch_add(1, Ordering::SeqCst);
-                    let tag = format!("[JOB {}:{}]", uuid, id);
-                    let mut job = ImportSSTJob::new(tag, cfg.clone(), sst, client.clone());
+                let mut done = true;
+                let finished = ctx.finished_ranges.clone();
+                while let Ok(info) = rx.lock().unwrap().recv() {
+                    let id = ctx.job_counter.fetch_add(1, Ordering::SeqCst);
+                    let tag = format!("[JOB {}:{}]", ctx.engine.uuid(), id);
+                    let sst = match SSTFile::new(info, ctx.engine.clone(), ctx.cf_name.clone()) {
+                        Ok(sst) => sst,
+                        Err(_) => {
+                            done = false;
+                            continue;
+                        }
+                    };
+                    let mut job = ImportSSTJob::new(tag, ctx.cfg.clone(), sst, ctx.client.clone());
                     match job.run() {
                         Ok(range) => finished.lock().unwrap().push(range),
-                        Err(e) => res = Err(e),
+                        Err(_) => {
+                            done = false;
+                            continue;
+                        }
                     }
                 }
-                res
+                done
             });
             handles.push(handle);
         }
@@ -254,7 +258,7 @@ impl ImportSSTJob {
             match self.import(region) {
                 Ok(_) => {
                     info!("{} import {} done", self.tag, self.sst);
-                    return Ok(self.sst.covered_range());
+                    return Ok(self.sst.extended_range());
                 }
                 Err(e) => {
                     error!("{} import {}: {:?}", self.tag, self.sst, e);
@@ -270,8 +274,8 @@ impl ImportSSTJob {
         let mut region = self.get_region()?;
 
         // No need to split if the file is not large enough.
-        if self.sst.meta.get_length() > self.cfg.region_split_size / 2 {
-            let range = self.sst.covered_range();
+        if self.sst.raw_size() > self.cfg.region_split_size / 2 {
+            let range = self.sst.extended_range();
             if RangeEnd(range.get_end()) < RangeEnd(region.get_end_key()) {
                 region = self.split_region(&region, range.get_end())?;
             }
