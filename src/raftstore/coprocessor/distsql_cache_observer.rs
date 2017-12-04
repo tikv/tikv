@@ -48,11 +48,16 @@ impl AdminObserver for DistSQLObserver {
     fn pre_propose_admin(&self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> Result<()> {
         let cmd_type = req.get_cmd_type();
         let has_split = req.has_split();
-        if cmd_type == AdminCmdType::Split && has_split {
-            self.evict_region(ctx);
-        } else if cmd_type == AdminCmdType::TransferLeader {
-            self.evict_region(ctx);
-        }
+
+        match cmd_type {
+            AdminCmdType::Split => if has_split {
+                self.evict_region(ctx);
+            },
+            AdminCmdType::TransferLeader => {
+                self.evict_region(ctx);
+            }
+            _ => {}
+        };
         Ok(())
     }
 }
