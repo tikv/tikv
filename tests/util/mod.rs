@@ -16,10 +16,12 @@ use std::io::{self, Write};
 use std::env;
 use std::fmt::Arguments;
 use std::fs::File;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tikv::util;
 use tikv::util::logger::{self, LogWriter};
+use tikv::util::security::SecurityConfig;
 
 
 /// A random generator of kv.
@@ -94,4 +96,14 @@ pub fn init_log() {
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
     let _ = logger::init_log_for_tikv_only(CaseTraceLogger { f: writer }, level);
+}
+
+pub fn new_security_cfg() -> SecurityConfig {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    SecurityConfig {
+        ca_path: format!("{}", p.join("tests/data/ca.crt").display()),
+        cert_path: format!("{}", p.join("tests/data/server.crt").display()),
+        key_path: format!("{}", p.join("tests/data/server.pem").display()),
+        override_ssl_target: "example.com".to_owned(),
+    }
 }
