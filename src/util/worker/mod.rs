@@ -17,14 +17,13 @@
 mod metrics;
 mod future;
 
-use std::{io, u64};
+use std::io;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, SendError, Sender, TryRecvError};
 use std::error::Error;
-use std::time::Duration;
 
 use util::time::SlowTimer;
 use self::metrics::*;
@@ -148,16 +147,9 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 }
 
 #[derive(Copy, Clone)]
-pub enum TickBy {
-    Timeout(Duration),
-    TaskBatch,
-}
-
-#[derive(Copy, Clone)]
 pub struct Builder<S: Into<String>> {
     name: S,
     batch_size: usize,
-    tick_by: TickBy,
 }
 
 impl<S: Into<String>> Builder<S> {
@@ -165,17 +157,11 @@ impl<S: Into<String>> Builder<S> {
         Builder {
             name: name,
             batch_size: 1,
-            tick_by: TickBy::TaskBatch,
         }
     }
 
     pub fn batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
-        self
-    }
-
-    pub fn tick_by(mut self, tick_by: TickBy) -> Self {
-        self.tick_by = tick_by;
         self
     }
 
@@ -186,7 +172,6 @@ impl<S: Into<String>> Builder<S> {
             receiver: Mutex::new(Some(rx)),
             handle: None,
             batch_size: self.batch_size,
-            tick_by: self.tick_by,
         }
     }
 }
@@ -197,32 +182,19 @@ pub struct Worker<T: Display> {
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
     batch_size: usize,
-    tick_by: TickBy,
 }
 
-fn poll<R, T>(
-    mut runner: R,
-    rx: Receiver<Option<T>>,
-    counter: Arc<AtomicUsize>,
-    batch_size: usize,
-    tick_by: TickBy,
-) where
+fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
+where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut batch = Vec::with_capacity(batch_size);
-    let timeout = match tick_by {
-        TickBy::TaskBatch => Duration::from_secs(u64::MAX),
-        TickBy::Timeout(dur) => dur,
-    };
     let mut keep_going = true;
     while keep_going {
-        keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
-        let should_tick = match tick_by {
-            TickBy::TaskBatch => !batch.is_empty(),
-            _ => true,
-        };
+        keep_going = fill_task_batch(&rx, &mut batch, batch_size);
+        let should_tick = !batch.is_empty();
         if !batch.is_empty() {
             counter.fetch_sub(batch.len(), Ordering::SeqCst);
             WORKER_PENDING_TASK_VEC
@@ -243,13 +215,8 @@ fn poll<R, T>(
 }
 
 // Fill buffer with next task batch comes from `rx`.
-fn fill_task_batch<T>(
-    rx: &Receiver<Option<T>>,
-    buffer: &mut Vec<T>,
-    batch_size: usize,
-    timeout: Duration,
-) -> bool {
-    match rx.recv_timeout(timeout) {
+fn fill_task_batch<T>(rx: &Receiver<Option<T>>, buffer: &mut Vec<T>, batch_size: usize) -> bool {
+    match rx.recv() {
         Ok(Some(task)) => {
             buffer.push(task);
             while buffer.len() < batch_size {
@@ -261,7 +228,6 @@ fn fill_task_batch<T>(
             }
             true
         }
-        Err(RecvTimeoutError::Timeout) => true,
         _ => false,
     }
 }
@@ -287,10 +253,9 @@ impl<T: Display + Send + 'static> Worker<T> {
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
         let batch_size = self.batch_size;
-        let tick_by = self.tick_by;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size, tick_by))?;
+            .spawn(move || poll(runner, rx, counter, batch_size))?;
         self.handle = Some(h);
         Ok(())
     }
@@ -459,11 +424,8 @@ mod test {
     }
 
     #[test]
-    fn test_tick_by_batch() {
-        let mut worker = Builder::new("test-worker-tick")
-            .batch_size(4)
-            .tick_by(TickBy::TaskBatch)
-            .create();
+    fn test_on_tick() {
+        let mut worker = Builder::new("test-worker-tick").batch_size(4).create();
         for _ in 0..10 {
             worker.schedule("normal msg").unwrap();
         }
