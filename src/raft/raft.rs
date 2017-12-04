@@ -1306,6 +1306,7 @@ impl<T: Storage> Raft<T> {
             }
             _ => {}
         }
+        self.set_prs(prs);
     }
 
     fn step_leader(&mut self, mut m: Message) {
