@@ -26,6 +26,7 @@ use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
 use util::worker::FutureWorker;
+use util::worker::FutureScheduler;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg,
                        SnapManager, Store, StoreChannel, Transport};
@@ -37,12 +38,17 @@ use super::transport::RaftStoreRouter;
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &StorageConfig) -> Result<Storage>
+pub fn create_raft_storage<S>(
+    router: S,
+    db: Arc<DB>,
+    cfg: &StorageConfig,
+    pd_scheduler: FutureScheduler<PdTask>,
+) -> Result<Storage>
 where
     S: RaftStoreRouter + 'static,
 {
     let engine = box RaftKv::new(db, router);
-    let store = Storage::from_engine(engine, cfg)?;
+    let store = Storage::from_engine(engine, cfg, pd_scheduler)?;
     Ok(store)
 }
 

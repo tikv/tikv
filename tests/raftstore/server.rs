@@ -113,17 +113,22 @@ impl Simulator for ServerCluster {
         let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender);
         let sim_router = SimulateTransport::new(raft_router);
 
+        // Create pd client.
+        let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
+        let pd_worker = FutureWorker::new("test-pd-worker");
+
         // Create storage.
-        let mut store =
-            create_raft_storage(sim_router.clone(), engines.kv_engine.clone(), &cfg.storage)
-                .unwrap();
+        let mut store = create_raft_storage(
+            sim_router.clone(),
+            engines.kv_engine.clone(),
+            &cfg.storage,
+            pd_worker.scheduler(),
+        ).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
-        // Create pd client, snapshot manager, server.
-        let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
+        // Create snapshot manager, server.
         let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let mut server = Server::new(

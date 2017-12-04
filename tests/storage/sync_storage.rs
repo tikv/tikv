@@ -26,8 +26,8 @@ pub struct SyncStorage {
 }
 
 impl SyncStorage {
-    pub fn new(config: &Config) -> SyncStorage {
-        let storage = Storage::new(config).unwrap();
+    pub fn new(config: &Config, pd_scheduler: FutureScheduler<PdTask>) -> SyncStorage {
+        let storage = Storage::new(config, pd_scheduler).unwrap();
         let mut s = SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
@@ -36,14 +36,22 @@ impl SyncStorage {
         s
     }
 
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> SyncStorage {
-        let mut s = SyncStorage::prepare(engine, config);
+    pub fn from_engine(
+        engine: Box<Engine>,
+        config: &Config,
+        pd_scheduler: FutureScheduler<PdTask>,
+    ) -> SyncStorage {
+        let mut s = SyncStorage::prepare(engine, config, pd_scheduler);
         s.start(config);
         s
     }
 
-    pub fn prepare(engine: Box<Engine>, config: &Config) -> SyncStorage {
-        let storage = Storage::from_engine(engine, config).unwrap();
+    pub fn prepare(
+        engine: Box<Engine>,
+        config: &Config,
+        pd_scheduler: FutureScheduler<PdTask>,
+    ) -> SyncStorage {
+        let storage = Storage::from_engine(engine, config, pd_scheduler).unwrap();
         SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),

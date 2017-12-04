@@ -163,6 +163,19 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
     }
 
+    // Create pd client and pd work.
+    let pd_client = Arc::new(pd_client);
+    let pd_worker = FutureWorker::new("pd worker");
+    let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
+        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
+    let limiter = if cfg.server.snap_max_write_bytes_per_sec.0 > 0 {
+        Some(Arc::new(
+            IOLimiter::new(cfg.server.snap_max_write_bytes_per_sec.0),
+        ))
+    } else {
+        None
+    };
+
     // Initialize raftstore channels.
     let mut event_loop = store::create_event_loop(&cfg.raft_store)
         .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
@@ -177,8 +190,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
     );
-    let mut storage = create_raft_storage(raft_router.clone(), kv_engine.clone(), &cfg.storage)
-        .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
+    let mut storage = create_raft_storage(
+        raft_router.clone(),
+        kv_engine.clone(),
+        &cfg.storage,
+        pd_worker.scheduler(),
+    ).unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
@@ -192,18 +209,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
     let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
 
-    // Create pd client and pd work, snapshot manager, server.
-    let pd_client = Arc::new(pd_client);
-    let pd_worker = FutureWorker::new("pd worker");
-    let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
-        .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
-    let limiter = if cfg.server.snap_max_write_bytes_per_sec.0 > 0 {
-        Some(Arc::new(
-            IOLimiter::new(cfg.server.snap_max_write_bytes_per_sec.0),
-        ))
-    } else {
-        None
-    };
+    // Create snapshot manager, server.
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),

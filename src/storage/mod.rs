@@ -22,6 +22,8 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, LockInfo};
 use kvproto::errorpb;
 use util::collections::HashMap;
+use util::worker::FutureScheduler;
+use pd::PdTask;
 use self::metrics::*;
 
 pub mod engine;
@@ -484,13 +486,19 @@ pub struct Storage {
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
 
+    pd_scheduler: FutureScheduler<PdTask>,
+
     // Storage configurations.
     gc_ratio_threshold: f64,
     max_key_size: usize,
 }
 
 impl Storage {
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
+    pub fn from_engine(
+        engine: Box<Engine>,
+        config: &Config,
+        pd_scheduler: FutureScheduler<PdTask>,
+    ) -> Result<Storage> {
         let (tx, rx) = mpsc::sync_channel(config.scheduler_notify_capacity);
         let sendch = SyncSendCh::new(tx, "kv-storage");
 
@@ -502,14 +510,15 @@ impl Storage {
                 handle: None,
                 receiver: Some(rx),
             })),
+            pd_scheduler: pd_scheduler,
             gc_ratio_threshold: config.gc_ratio_threshold,
             max_key_size: config.max_key_size,
         })
     }
 
-    pub fn new(config: &Config) -> Result<Storage> {
+    pub fn new(config: &Config, pd_scheduler: FutureScheduler<PdTask>) -> Result<Storage> {
         let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
-        Storage::from_engine(engine, config)
+        Storage::from_engine(engine, config, pd_scheduler)
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
@@ -524,6 +533,7 @@ impl Storage {
         let sched_concurrency = config.scheduler_concurrency;
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
         let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
+        let pd_scheduler = self.pd_scheduler.clone();
         let ch = self.sendch.clone();
         let h = builder.spawn(move || {
             let mut sched = Scheduler::new(
@@ -532,6 +542,7 @@ impl Storage {
                 sched_concurrency,
                 sched_worker_pool_size,
                 sched_pending_write_threshold,
+                pd_scheduler,
             );
             if let Err(e) = sched.run(rx) {
                 panic!("scheduler run err:{:?}", e);
@@ -915,6 +926,7 @@ impl Clone for Storage {
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
+            pd_scheduler: self.pd_scheduler.clone(),
             gc_ratio_threshold: self.gc_ratio_threshold,
             max_key_size: self.max_key_size,
         }

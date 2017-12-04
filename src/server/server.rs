@@ -54,7 +54,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     pd_scheduler: FutureScheduler<PdTask>,
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(too_many_arguments)]
     pub fn new(
         cfg: &Arc<Config>,
