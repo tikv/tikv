@@ -1891,7 +1891,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn validate_split_region(
         &mut self,
         region_id: u64,
-        _: &metapb::RegionEpoch,
+        epoch: &metapb::RegionEpoch,
         split_key: &[u8], // `split_key` is a encoded key.
     ) -> Result<()> {
         if split_key.is_empty() {
@@ -1901,7 +1901,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 region_id
             ));
         }
-        let _ = match self.region_peers.get(&region_id) {
+        let peer = match self.region_peers.get(&region_id) {
             None => {
                 info!(
                     "[region {}] region on {} doesn't exist, skip.",
