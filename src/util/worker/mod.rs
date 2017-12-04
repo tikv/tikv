@@ -429,12 +429,6 @@ mod test {
         for _ in 0..10 {
             worker.schedule("normal msg").unwrap();
         }
-        // Here we sleep for ensure that `Scheduler` has already send all mesages to `Worker`.
-        // So when `Worker` calls `fill_task_batch`, it will always get a full batch until the
-        // all tasks are fetched.
-        while worker.scheduler().counter.load(Ordering::SeqCst) < 10 {
-            thread::sleep(Duration::from_millis(100));
-        }
 
         let (tx, rx) = mpsc::channel();
         worker.start(TickRunner { ch: tx }).unwrap();
