@@ -20,8 +20,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 use tempdir::TempDir;
 
-use rocksdb::{DBCompactionStyle, DBIterator, Env, EnvOptions, ReadOptions, SequentialFile,
-              SstFileWriter, Writable, WriteBatch as RawBatch, DB};
+use rocksdb::{DBCompactionStyle, DBCompressionType, DBIterator, Env, EnvOptions, ReadOptions,
+              SequentialFile, SstFileWriter, Writable, WriteBatch as RawBatch, DB};
 use kvproto::importpb::*;
 
 use config::DbConfig;
