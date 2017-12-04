@@ -21,12 +21,6 @@ RUN curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar
 	&& make install \
 	&& rm -rf /gflags.tar.gz /gflags-2.1.2
 
-RUN curl -L https://github.com/facebook/rocksdb/archive/v5.6.2.tar.gz -o rocksdb.tar.gz \
-	&& tar xf rocksdb.tar.gz \
-	&& cd rocksdb-5.6.2 \
-	&& make -j install-shared \
-	&& rm -rf /rocksdb.tar.gz /rocksdb-5.6.2
-
 ENV GOLANG_VERSION 1.8
 ENV GOLANG_DOWNLOAD_URL https://golang.org/dl/go$GOLANG_VERSION.linux-amd64.tar.gz
 ENV GOLANG_DOWNLOAD_SHA256 53ab94104ee3923e228a2cb2116e5e462ad3ebaeea06ff04463479d7f12d27ca
