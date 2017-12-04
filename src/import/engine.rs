@@ -44,7 +44,8 @@ impl Engine {
     pub fn new(cfg: &DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
         // Configuration recommendation:
         // 1. Use a large `write_buffer_size`, 1GB should be good enough.
-        // 2. Increase `max_background_jobs`, RocksDB preserves `max_background_jobs/4` for flush.
+        // 2. Choose a reasonable compression algorithm to balance between CPU and IO.
+        // 3. Increase `max_background_jobs`, RocksDB preserves `max_background_jobs/4` for flush.
         let mut db_opts = cfg.build_opt();
         db_opts.set_use_direct_io_for_flush_and_compaction(true);
         let mut cfs_opts = vec![
@@ -58,7 +59,6 @@ impl Engine {
             cf_opts.set_target_file_size_base(GB);
             cf_opts.set_disable_auto_compactions(true);
             cf_opts.set_compaction_style(DBCompactionStyle::None);
-            cf_opts.compression_per_level(&[DBCompressionType::Zstd]);
             cf_opts.set_soft_pending_compaction_bytes_limit(0);
             cf_opts.set_hard_pending_compaction_bytes_limit(0);
             cf_opts.set_level_zero_stop_writes_trigger(DISABLED);
