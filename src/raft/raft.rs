@@ -1732,10 +1732,7 @@ impl<T: Storage> Raft<T> {
         let last_index = self.raft_log.last_index();
         for &n in nodes {
             let next_index = last_index + 1;
-            let mut matched = 0;
-            if n == self_id {
-                matched = next_index - 1;
-            }
+            let matched = if n == self_id { next_index - 1 } else { 0 };
             self.set_progress(n, matched, next_index);
             info!(
                 "{} restored progress of {} [{:?}]",
