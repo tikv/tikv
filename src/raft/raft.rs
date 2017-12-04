@@ -528,15 +528,13 @@ impl<T: Storage> Raft<T> {
 
     // send_append sends RPC, with entries to the given peer.
     pub fn send_append(&mut self, to: u64, pr: &mut Progress) {
-        let (term, ents) = {
-            if pr.is_paused() {
-                return;
-            }
-            (
-                self.raft_log.term(pr.next_idx - 1),
-                self.raft_log.entries(pr.next_idx, self.max_msg_size),
-            )
-        };
+        if pr.is_paused() {
+            return;
+        }
+        let (term, ents) = (
+            self.raft_log.term(pr.next_idx - 1),
+            self.raft_log.entries(pr.next_idx, self.max_msg_size),
+        );
         let mut m = Message::new();
         m.set_to(to);
         if term.is_err() || ents.is_err() {
@@ -576,7 +574,7 @@ impl<T: Storage> Raft<T> {
         let mut prs = self.take_prs();
         prs.iter_mut()
             .filter(|&(id, _)| *id != self_id)
-            .for_each(|(id, ref mut pr)| { self.send_append(*id, pr); });
+            .for_each(|(id, pr)| { self.send_append(*id, pr); });
         self.set_prs(prs);
     }
 
@@ -648,11 +646,12 @@ impl<T: Storage> Raft<T> {
             e.set_index(li + 1 + i as u64);
         }
         self.raft_log.append(es);
-        let mut prs = self.take_prs();
-        prs.get_mut(&self.id)
+        let last_index = self.raft_log.last_index();
+        let self_id = self.id;
+        self.mut_prs()
+            .get_mut(&self_id)
             .unwrap()
-            .maybe_update(self.raft_log.last_index());
-        self.set_prs(prs);
+            .maybe_update(last_index);
         // Regardless of maybe_commit's return, our caller will call bcastAppend.
         self.maybe_commit();
     }

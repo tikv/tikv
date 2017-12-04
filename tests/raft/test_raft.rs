@@ -2816,7 +2816,7 @@ fn test_provide_snap() {
     // force set the next of node 2, so that node 2 needs a snapshot
     sm.mut_prs().get_mut(&2).unwrap().next_idx = sm.raft_log.first_index();
     let mut m = new_message(2, 1, MessageType::MsgAppendResponse, 0);
-    m.set_index(sm.mut_prs()[&2].next_idx - 1);
+    m.set_index(sm.get_prs()[&2].next_idx - 1);
     m.set_reject(true);
     sm.step(m).expect("");
 
