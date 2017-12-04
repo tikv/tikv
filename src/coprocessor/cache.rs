@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use std::option::Option;
 use std::boxed::Box;
 use std::sync::{Arc, Mutex};
-use kvproto::metapb::RegionEpoch;
 use self::linked_hash_map::LinkedHashMap;
 use super::metrics::*;
 
@@ -27,24 +26,16 @@ const DISTSQL_CACHE_ENTRY_ADDITION_SIZE: usize = 40;
 
 pub struct DistSQLCacheEntry {
     region_id: u64,
-    region_epoch: RegionEpoch,
     version: u64,
     result: Vec<u8>,
     size: usize,
 }
 
 impl DistSQLCacheEntry {
-    pub fn new(
-        region_id: u64,
-        epoch: RegionEpoch,
-        version: u64,
-        key_size: usize,
-        r: Vec<u8>,
-    ) -> DistSQLCacheEntry {
+    pub fn new(region_id: u64, version: u64, key_size: usize, r: Vec<u8>) -> DistSQLCacheEntry {
         let size = r.len() + DISTSQL_CACHE_ENTRY_ADDITION_SIZE + 2 * key_size;
         DistSQLCacheEntry {
             region_id: region_id,
-            region_epoch: epoch,
             version: version,
             result: r,
             size: size,
@@ -82,14 +73,7 @@ impl DistSQLCache {
         }
     }
 
-    pub fn put(
-        &mut self,
-        region_id: u64,
-        epoch: RegionEpoch,
-        k: DistSQLCacheKey,
-        version: u64,
-        res: Vec<u8>,
-    ) {
+    pub fn put(&mut self, region_id: u64, k: DistSQLCacheKey, version: u64, res: Vec<u8>) {
         let key_size = k.len();
         let option = match self.map.get_mut(&k) {
             Some(entry) => {
@@ -98,12 +82,11 @@ impl DistSQLCache {
                 entry.version = version;
                 entry.result = res;
                 entry.region_id = region_id;
-                entry.region_epoch = epoch;
                 self.size = self.size - old_size + entry.size;
                 None
             }
             None => {
-                let entry = box DistSQLCacheEntry::new(region_id, epoch, version, key_size, res);
+                let entry = box DistSQLCacheEntry::new(region_id, version, key_size, res);
                 self.size += entry.size;
                 Some(entry)
             }
@@ -131,12 +114,10 @@ impl DistSQLCache {
             .set(self.len() as f64);
     }
 
-    fn check_evict_key(&mut self, region_id: u64, epoch: &RegionEpoch, k: &str) {
+    fn check_evict_key(&mut self, region_id: u64, k: &str) {
         let opt = match self.map.get(k) {
             None => None,
-            Some(entry) => if !validate_epoch(entry, region_id, epoch) {
-                Some(())
-            } else {
+            Some(entry) => {
                 match self.regions.get(&region_id) {
                     None => None,
                     Some(rentry) => {
@@ -148,15 +129,15 @@ impl DistSQLCache {
                         }
                     }
                 }
-            },
+            }
         };
         if opt.is_some() {
             self.remove(k);
         }
     }
 
-    pub fn get(&mut self, region_id: u64, epoch: &RegionEpoch, k: &str) -> Option<&Vec<u8>> {
-        self.check_evict_key(region_id, epoch, k);
+    pub fn get(&mut self, region_id: u64, k: &str) -> Option<&Vec<u8>> {
+        self.check_evict_key(region_id, k);
         if let Some(entry) = self.map.get_refresh(k) {
             Some(&entry.result)
         } else {
@@ -282,19 +263,6 @@ impl DistSQLCache {
     }
 }
 
-fn validate_epoch(entry: &DistSQLCacheEntry, region_id: u64, epoch: &RegionEpoch) -> bool {
-    if entry.region_id != region_id {
-        return false;
-    }
-    if entry.region_epoch.get_conf_ver() != epoch.get_conf_ver() {
-        return false;
-    }
-    if entry.region_epoch.get_version() != epoch.get_version() {
-        return false;
-    }
-    true
-}
-
 // DistSQL Cache Size unit is byte, for now just use 256MB
 pub const DEFAULT_DISTSQL_CACHE_SIZE: usize = 256 * 1024 * 1024;
 
@@ -306,25 +274,16 @@ lazy_static! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kvproto::metapb::RegionEpoch;
-
-    fn create_epoch(version: u64, conf_ver: u64) -> RegionEpoch {
-        let mut ret: RegionEpoch = RegionEpoch::new();
-        ret.set_conf_ver(conf_ver);
-        ret.set_version(version);
-        ret
-    }
 
     #[test]
     fn test_distsql_cache() {
         let mut cache: DistSQLCache = DistSQLCache::new(200);
         let key: DistSQLCacheKey = "test1".to_string();
         let result: Vec<u8> = vec![100, 101, 102];
-        let epoch: RegionEpoch = create_epoch(1, 2);
         let version = cache.get_region_version(10);
-        cache.put(10, epoch.clone(), key.clone(), version, result.clone());
+        cache.put(10, key.clone(), version, result.clone());
         assert_eq!(1, cache.len());
-        match cache.get(10, &epoch, &key) {
+        match cache.get(10, &key) {
             None => (assert!(false)),
             Some(value) => {
                 assert_eq!(&result, value);
@@ -333,44 +292,22 @@ mod tests {
     }
 
     #[test]
-    fn test_distsql_cache_evict_entry_by_stale_epoch() {
-        let mut cache: DistSQLCache = DistSQLCache::new(200);
-        let key: DistSQLCacheKey = "test1".to_string();
-        let epoch: RegionEpoch = create_epoch(1, 2);
-        let epoch2: RegionEpoch = create_epoch(1, 3);
-        let result: Vec<u8> = vec![100, 101, 102];
-        let version = cache.get_region_version(10);
-        cache.put(10, epoch.clone(), key.clone(), version, result.clone());
-        assert_eq!(1, cache.len());
-        match cache.get(10, &epoch2, &key) {
-            None => (),
-            Some(_) => {
-                assert!(false);
-            }
-        }
-        assert_eq!(0, cache.len());
-    }
-
-    #[test]
     fn test_distsql_cache_flush_lru_when_reach_capacity() {
         let result: Vec<u8> = vec![1, 2, 3, 4, 5];
         let mut cache: DistSQLCache = DistSQLCache::new(110);
         let key1: DistSQLCacheKey = "test1".to_string();
-        let epoch1: RegionEpoch = create_epoch(1, 2);
         let version1 = cache.get_region_version(10);
-        cache.put(10, epoch1.clone(), key1.clone(), version1, result.clone());
+        cache.put(10, key1.clone(), version1, result.clone());
         assert_eq!(1, cache.len());
         let key2: DistSQLCacheKey = "test2".to_string();
-        let epoch2: RegionEpoch = create_epoch(1, 2);
         let version2 = cache.get_region_version(11);
-        cache.put(11, epoch2.clone(), key2.clone(), version2, result.clone());
+        cache.put(11, key2.clone(), version2, result.clone());
         assert_eq!(2, cache.len());
         let key3: DistSQLCacheKey = "test3".to_string();
-        let epoch3: RegionEpoch = create_epoch(1, 2);
         let version3 = cache.get_region_version(12);
-        cache.put(12, epoch3.clone(), key3.clone(), version3, result.clone());
+        cache.put(12, key3.clone(), version3, result.clone());
         assert_eq!(2, cache.len());
-        match cache.get(10, &epoch1, &key1) {
+        match cache.get(10, &key1) {
             None => (),
             Some(_) => {
                 assert!(false);
@@ -383,23 +320,21 @@ mod tests {
         let mut cache: DistSQLCache = DistSQLCache::new(200);
         let key: DistSQLCacheKey = "test1".to_string();
         let key2: DistSQLCacheKey = "test2".to_string();
-        let epoch: RegionEpoch = create_epoch(1, 2);
-        let epoch2: RegionEpoch = create_epoch(1, 2);
         let result: Vec<u8> = vec![100, 101, 102];
         let result2: Vec<u8> = vec![103, 104, 105];
         let version = cache.get_region_version(10);
         let version2 = cache.get_region_version(11);
-        cache.put(10, epoch.clone(), key.clone(), version, result.clone());
-        cache.put(11, epoch2.clone(), key2.clone(), version2, result2.clone());
+        cache.put(10, key.clone(), version, result.clone());
+        cache.put(11, key2.clone(), version2, result2.clone());
         cache.evict_region(10);
         assert_eq!(1, cache.len());
-        match cache.get(10, &epoch, &key) {
+        match cache.get(10, &key) {
             None => (),
             Some(_) => {
                 assert!(false);
             }
         }
-        match cache.get(11, &epoch2, &key2) {
+        match cache.get(11, &key2) {
             None => (assert!(false)),
             Some(value) => {
                 assert_eq!(&result2, value);
@@ -411,13 +346,12 @@ mod tests {
     fn test_distsql_cache_should_be_evict() {
         let mut cache: DistSQLCache = DistSQLCache::new(200);
         let key: DistSQLCacheKey = "test1".to_string();
-        let epoch: RegionEpoch = create_epoch(1, 2);
         let result: Vec<u8> = vec![100, 101, 102];
         let version = cache.get_region_version(10);
         cache.evict_region(10);
-        cache.put(10, epoch.clone(), key.clone(), version, result.clone());
+        cache.put(10, key.clone(), version, result.clone());
         assert_eq!(1, cache.len());
-        match cache.get(10, &epoch, &key) {
+        match cache.get(10, &key) {
             None => (),
             Some(_) => {
                 assert!(false);
@@ -428,14 +362,13 @@ mod tests {
     #[test]
     fn test_global_distsql_cache() {
         let key: DistSQLCacheKey = "test1".to_string();
-        let epoch: RegionEpoch = create_epoch(1, 2);
         let result: Vec<u8> = vec![100, 101, 102];
         let version = DISTSQL_CACHE.lock().unwrap().get_region_version(10);
         DISTSQL_CACHE
             .lock()
             .unwrap()
-            .put(10, epoch.clone(), key.clone(), version, result.clone());
-        match DISTSQL_CACHE.lock().unwrap().get(10, &epoch, &key) {
+            .put(10, key.clone(), version, result.clone());
+        match DISTSQL_CACHE.lock().unwrap().get(10, &key) {
             None => (assert!(false)),
             Some(value) => {
                 assert_eq!(&result, value);

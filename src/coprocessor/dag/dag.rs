@@ -38,6 +38,7 @@ pub struct DAGContext {
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
+    cache_key: String,
 }
 
 impl DAGContext {
@@ -58,21 +59,40 @@ impl DAGContext {
             req_ctx.isolation_level,
             req_ctx.fill_cache,
         );
+        let cache_key = format!("{:?}, {:?}", ranges, req.get_executors());
 
-        let dag_executor = build_exec(req.take_executors().into_vec(), store, ranges, eval_ctx)?;
+        let dag_executor = build_exec(req.get_executors().into_vec(), store, ranges, eval_ctx)?;
         Ok(DAGContext {
             columns: dag_executor.columns,
             has_aggr: dag_executor.has_aggr,
+            has_topn: dag_executor.has_topn,
             req_ctx: req_ctx,
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
+            cache_key: cache_key,
         })
     }
 
-    pub fn handle_request(&mut self) -> Result<Response> {
+    pub fn handle_request(&mut self, region_id: u64) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
+        let mut version: u64 = 0;
+        if self.can_cache() {
+            version = DISTSQL_CACHE.lock().unwrap().get_region_version(region_id);
+            if let Some(data) = DISTSQL_CACHE
+                .lock()
+                .unwrap()
+                .get(region_id, &self.cache_key)
+            {
+                debug!("Cache Hit: {}, region_id: {}", self.cache_key, region_id);
+                CORP_DISTSQL_CACHE_COUNT.with_label_values(&["hit"]).inc();
+                let mut resp = Response::new();
+                resp.set_data(data.clone());
+                return Ok(resp);
+            };
+        }
+
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
@@ -98,16 +118,11 @@ impl DAGContext {
                     let data = box_try!(sel_resp.write_to_bytes());
                     // If result data is greater than 5MB should not cache it.
                     if self.can_cache() && data.len() <= 5 * 1024 * 1024 {
-                        debug!(
-                            "Cache It: {}, region_id: {}, epoch: {:?}",
-                            &key,
-                            region_id,
-                            &epoch
-                        );
+                        debug!("Cache It: {}, region_id: {}", &self.cache_key, region_id);
                         DISTSQL_CACHE
                             .lock()
                             .unwrap()
-                            .put(region_id, epoch, key, version, data.clone());
+                            .put(region_id, self.cache_key, version, data.clone());
                         CORP_DISTSQL_CACHE_COUNT.with_label_values(&["miss"]).inc();
                     }
                     resp.set_data(data);
@@ -129,6 +144,10 @@ impl DAGContext {
 
     pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
         self.exec.collect_statistics_into(statistics);
+    }
+
+    pub fn can_cache(&mut self) -> bool {
+        self.has_aggr || self.has_topn
     }
 }
 

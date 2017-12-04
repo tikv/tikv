@@ -1112,10 +1112,6 @@ impl Scheduler {
         } else {
             worker_pool.execute(move |ctx: &mut SchedContext| {
                 let s = process_write(cid, cmd, ch, snapshot);
-                // Eviction region for DistSQL cache
-                if enable_distsql_cache {
-                    DISTSQL_CACHE.lock().unwrap().evict_region(region_id);
-                }
                 ctx.add_statistics(tag, &s);
             });
         }

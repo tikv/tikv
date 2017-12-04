@@ -670,8 +670,9 @@ impl TiDbEndPoint {
         batch_row_limit: usize,
     ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
+        let region_id = t.req.get_context().get_region_id();
         let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
-        let res = ctx.handle_request();
+        let res = ctx.handle_request(region_id);
         ctx.collect_statistics_into(&mut t.statistics);
         res
     }

@@ -136,6 +136,7 @@ pub struct DAGExecutor {
     pub exec: Box<Executor>,
     pub columns: Arc<Vec<ColumnInfo>>,
     pub has_aggr: bool,
+    pub has_topn: bool,
 }
 
 pub fn build_exec(
@@ -150,6 +151,7 @@ pub fn build_exec(
         .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
     let (mut src, columns) = build_first_executor(first, store, ranges)?;
     let mut has_aggr = false;
+    let mut has_topn = false;
     for mut exec in execs {
         let curr: Box<Executor> = match exec.get_tp() {
             ExecType::TypeTableScan | ExecType::TypeIndexScan => {
@@ -170,12 +172,15 @@ pub fn build_exec(
                     src,
                 )?)
             }
-            ExecType::TypeTopN => Box::new(TopNExecutor::new(
-                exec.take_topN(),
-                ctx.clone(),
-                columns.clone(),
-                src,
-            )?),
+            ExecType::TypeTopN => {
+                has_topn = true;
+                Box::new(TopNExecutor::new(
+                    exec.take_topN(),
+                    ctx.clone(),
+                    columns.clone(),
+                    src,
+                )?)
+            }
             ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
         };
         src = curr;
@@ -184,6 +189,7 @@ pub fn build_exec(
         exec: src,
         columns: columns,
         has_aggr: has_aggr,
+        has_topn: has_topn,
     })
 }
 
