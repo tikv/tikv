@@ -90,7 +90,7 @@ impl Scanner {
         let lower_bound = Some(Key::from_raw(&self.range.start).encoded().to_vec());
         let upper_bound = Some(Key::from_raw(&self.range.end).encoded().to_vec());
         self.scanner = store
-        .scanner(self.scan_mode, self.key_only, lower_bound, upper_bound)?;
+            .scanner(self.scan_mode, self.key_only, lower_bound, upper_bound)?;
 
         Ok(())
     }

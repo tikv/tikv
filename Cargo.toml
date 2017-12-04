@@ -10,7 +10,6 @@ time = "0.1"
 [features]
 default = []
 dev = ["clippy"]
-static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 mem-profiling = ["jemallocator"]
@@ -68,13 +67,13 @@ grpcio = "0.1"
 rustc-serialize = "0.3"
 murmur3 = "0.4.0"
 futures-cpupool = "0.1"
+zipf = "0.2.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
-branch = "zhangjinpeng/lower-bound"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"

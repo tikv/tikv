@@ -159,17 +159,33 @@ pub struct RegionIterator {
 }
 
 fn set_lower_bound(iter_opt: IterOption, region: &Region) -> IterOption {
+    let region_start_key = keys::enc_start_key(region);
     let lower_bound = match iter_opt.lower_bound() {
-        Some(k) if !k.is_empty() => keys::data_key(k),
-        _ => keys::enc_start_key(region),
+        Some(k) if !k.is_empty() => {
+            let k = keys::data_key(k);
+            if k > region_start_key {
+                k
+            } else {
+                region_start_key
+            }
+        }
+        _ => region_start_key,
     };
     iter_opt.set_lower_bound(lower_bound)
 }
 
 fn set_upper_bound(iter_opt: IterOption, region: &Region) -> IterOption {
+    let region_end_key = keys::enc_end_key(region);
     let upper_bound = match iter_opt.upper_bound() {
-        Some(k) if !k.is_empty() => keys::data_key(k),
-        _ => keys::enc_end_key(region),
+        Some(k) if !k.is_empty() => {
+            let k = keys::data_key(k);
+            if k < region_end_key {
+                k
+            } else {
+                region_end_key
+            }
+        }
+        _ => region_end_key,
     };
     iter_opt.set_upper_bound(upper_bound)
 }
@@ -611,7 +627,7 @@ mod tests {
         // test lower bound
         let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter_opt = IterOption::default();
+        let iter_opt = IterOption::default();
         let mut iter = snap.iter(iter_opt.set_lower_bound(b"a3".to_vec()));
         assert!(iter.seek_to_last());
         let mut res = vec![];
