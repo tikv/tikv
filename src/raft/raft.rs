@@ -531,10 +531,8 @@ impl<T: Storage> Raft<T> {
         if pr.is_paused() {
             return;
         }
-        let (term, ents) = (
-            self.raft_log.term(pr.next_idx - 1),
-            self.raft_log.entries(pr.next_idx, self.max_msg_size),
-        );
+        let term = self.raft_log.term(pr.next_idx - 1);
+        let ents = self.raft_log.entries(pr.next_idx, self.max_msg_size);
         let mut m = Message::new();
         m.set_to(to);
         if term.is_err() || ents.is_err() {
@@ -1265,7 +1263,7 @@ impl<T: Storage> Raft<T> {
         maybe_commit: &mut bool,
         more_to_send: &mut Option<Message>,
     ) {
-        if self.get_prs().get(&m.get_from()).is_none() {
+        if !self.get_prs().contains_key(&m.get_from()) {
             debug!("{} no progress available for {}", self.tag, m.get_from());
             return;
         }

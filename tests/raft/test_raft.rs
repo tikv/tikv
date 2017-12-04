@@ -588,12 +588,12 @@ fn test_progress_resume_by_heartbeat_resp() {
 
     raft.step(new_message(1, 1, MessageType::MsgBeat, 0))
         .expect("");
-    assert!(raft.mut_prs()[&2].paused);
+    assert!(raft.get_prs()[&2].paused);
 
     raft.mut_prs().get_mut(&2).unwrap().become_replicate();
     raft.step(new_message(2, 1, MessageType::MsgHeartbeatResponse, 0))
         .expect("");
-    assert!(!raft.mut_prs()[&2].paused);
+    assert!(!raft.get_prs()[&2].paused);
 }
 
 #[test]
@@ -2487,19 +2487,19 @@ fn test_leader_append_response() {
         m.set_reject_hint(index);
         sm.step(m).expect("");
 
-        if sm.mut_prs()[&2].matched != wmatch {
+        if sm.get_prs()[&2].matched != wmatch {
             panic!(
                 "#{}: match = {}, want {}",
                 i,
-                sm.mut_prs()[&2].matched,
+                sm.get_prs()[&2].matched,
                 wmatch
             );
         }
-        if sm.mut_prs()[&2].next_idx != wnext {
+        if sm.get_prs()[&2].next_idx != wnext {
             panic!(
                 "#{}: next = {}, want {}",
                 i,
-                sm.mut_prs()[&2].next_idx,
+                sm.get_prs()[&2].next_idx,
                 wnext
             );
         }
@@ -2559,8 +2559,8 @@ fn test_bcast_beat() {
     let mut msgs = sm.read_messages();
     assert_eq!(msgs.len(), 2);
     let mut want_commit_map = HashMap::new();
-    want_commit_map.insert(2, cmp::min(sm.raft_log.committed, sm.mut_prs()[&2].matched));
-    want_commit_map.insert(3, cmp::min(sm.raft_log.committed, sm.mut_prs()[&3].matched));
+    want_commit_map.insert(2, cmp::min(sm.raft_log.committed, sm.get_prs()[&2].matched));
+    want_commit_map.insert(3, cmp::min(sm.raft_log.committed, sm.get_prs()[&3].matched));
     for (i, m) in msgs.drain(..).enumerate() {
         if m.get_msg_type() != MessageType::MsgHeartbeat {
             panic!(
@@ -2654,11 +2654,11 @@ fn test_leader_increase_next() {
         sm.step(new_message(1, 1, MessageType::MsgPropose, 1))
             .expect("");
 
-        if sm.mut_prs()[&2].next_idx != wnext {
+        if sm.get_prs()[&2].next_idx != wnext {
             panic!(
                 "#{}: next = {}, want {}",
                 i,
-                sm.mut_prs()[&2].next_idx,
+                sm.get_prs()[&2].next_idx,
                 wnext
             );
         }
@@ -2686,7 +2686,7 @@ fn test_send_append_for_progress_probe() {
             assert_eq!(msg[0].get_index(), 0);
         }
 
-        assert!(r.mut_prs()[&2].paused);
+        assert!(r.get_prs()[&2].paused);
         for _ in 0..10 {
             r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
             do_send_append(&mut r, 2);
@@ -2698,7 +2698,7 @@ fn test_send_append_for_progress_probe() {
             r.step(new_message(1, 1, MessageType::MsgBeat, 0))
                 .expect("");
         }
-        assert!(r.mut_prs()[&2].paused);
+        assert!(r.get_prs()[&2].paused);
 
         // consume the heartbeat
         let msg = r.read_messages();
@@ -2712,7 +2712,7 @@ fn test_send_append_for_progress_probe() {
     let msg = r.read_messages();
     assert_eq!(msg.len(), 1);
     assert_eq!(msg[0].get_index(), 0);
-    assert!(r.mut_prs()[&2].paused);
+    assert!(r.get_prs()[&2].paused);
 }
 
 #[test]
@@ -2762,8 +2762,8 @@ fn test_recv_msg_unreachable() {
     r.step(new_message(2, 1, MessageType::MsgUnreachable, 0))
         .expect("");
 
-    assert_eq!(r.mut_prs()[&2].state, ProgressState::Probe);
-    assert_eq!(r.mut_prs()[&2].matched + 1, r.mut_prs()[&2].next_idx);
+    assert_eq!(r.get_prs()[&2].state, ProgressState::Probe);
+    assert_eq!(r.get_prs()[&2].matched + 1, r.get_prs()[&2].next_idx);
 }
 
 #[test]
@@ -2887,7 +2887,7 @@ fn test_slow_node_restore() {
     // node 3 will only be considered as active when node 1 receives a reply from it.
     loop {
         nt.send(vec![new_message(1, 1, MessageType::MsgBeat, 0)]);
-        if nt.peers.get_mut(&1).unwrap().mut_prs()[&3].recent_active {
+        if nt.peers[&1].get_prs()[&3].recent_active {
             break;
         }
     }
@@ -3203,7 +3203,7 @@ fn test_leader_transfer_to_slow_follower() {
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
 
     nt.recover();
-    assert_eq!(nt.peers.get_mut(&1).unwrap().mut_prs()[&3].matched, 1);
+    assert_eq!(nt.peers[&1].get_prs()[&3].matched, 1);
 
     // Transfer leadership to 3 when node 3 is lack of log.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
@@ -3232,7 +3232,7 @@ fn test_leader_transfer_after_snapshot() {
         .expect("");
 
     nt.recover();
-    assert_eq!(nt.peers.get_mut(&1).unwrap().mut_prs()[&3].matched, 1);
+    assert_eq!(nt.peers[&1].get_prs()[&3].matched, 1);
 
     // Transfer leadership to 3 when node 3 is lack of snapshot.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
@@ -3299,7 +3299,7 @@ fn test_leader_transfer_ignore_proposal() {
     assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
 
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
-    assert_eq!(nt.peers.get_mut(&1).unwrap().mut_prs()[&1].matched, 1);
+    assert_eq!(nt.peers[&1].get_prs()[&1].matched, 1);
 }
 
 #[test]
