@@ -11,33 +11,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-use server::transport::RaftStoreRouter;
-use raftstore::store;
-use raftstore::errors::Error as RaftServerError;
-use raftstore::coprocessor::{RegionIterator, RegionSnapshot};
-use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
-use rocksdb::TablePropertiesCollection;
-use storage;
-use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
-                          RaftCmdResponse, RaftRequestHeader, Request, Response};
-use kvproto::errorpb;
-use kvproto::kvrpcpb::Context;
-
 use std::sync::Arc;
 use std::fmt::{self, Debug, Formatter};
 use std::io::Error as IoError;
 use std::time::Duration;
 use std::result;
-use rocksdb::DB;
-use protobuf::RepeatedField;
 
-use storage::engine;
+use rocksdb::DB;
+use rocksdb::TablePropertiesCollection;
+use protobuf::RepeatedField;
+use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
+                          RaftCmdResponse, RaftRequestHeader, Request, Response};
+use kvproto::errorpb;
+use kvproto::kvrpcpb::Context;
+
+use server::transport::RaftStoreRouter;
+use raftstore::store::{self, Fuse};
+use raftstore::errors::Error as RaftServerError;
+use raftstore::coprocessor::{RegionIterator, RegionSnapshot};
+use raftstore::store::engine::{IterOption, Peekable, Snapshot as EngineSnapshot};
+use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
+
 use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Iterator as EngineIterator,
             Modify, ScanMode, Snapshot};
-use storage::{CfName, Key, Value, CF_DEFAULT};
 use super::metrics::*;
-use raftstore::store::engine::IterOption;
 
 quick_error! {
     #[derive(Debug)]
@@ -146,6 +143,7 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, resp_cnt: usize) -> Resul
 
 fn on_result(
     mut resp: RaftCmdResponse,
+    fuse: Option<Fuse>,
     resp_cnt: usize,
     db: Arc<DB>,
 ) -> (CbContext, Result<CmdRes>) {
@@ -158,7 +156,12 @@ fn on_result(
         return (cb_ctx, Ok(CmdRes::Resp(resps.into_vec())));
     }
     let snap = RegionSnapshot::from_raw(db, resps[0].take_snap().take_region());
-    (cb_ctx, Ok(CmdRes::Snap(snap)))
+    fuse.map(|f| f.call_box((&mut resp,)));
+    if let Err(e) = check_raft_cmd_response(&mut resp, resp_cnt) {
+        (cb_ctx, Err(e))
+    } else {
+        (cb_ctx, Ok(CmdRes::Snap(snap)))
+    }
 }
 
 impl<S: RaftStoreRouter> RaftKv<S> {
@@ -173,8 +176,8 @@ impl<S: RaftStoreRouter> RaftKv<S> {
     fn call_command(&self, req: RaftCmdRequest, cb: Callback<CmdRes>) -> Result<()> {
         let l = req.get_requests().len();
         let db = self.db.clone();
-        self.router.send_command(req, box move |resp| {
-            let (cb_ctx, res) = on_result(resp, l, db);
+        self.router.send_command(req, box move |resp, fuse| {
+            let (cb_ctx, res) = on_result(resp, fuse, l, db);
             cb((cb_ctx, res.map_err(Error::into)));
         })?;
         Ok(())
@@ -192,36 +195,37 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             ls.push(l);
         }
         let db = self.db.clone();
-        let on_finished: store::BatchCallback = box move |resps: Vec<Option<RaftCmdResponse>>| {
-            assert_eq!(batch_size, resps.len());
-            let mut snap = None;
-            let mut cmd_resps = Vec::with_capacity(resps.len());
-            for (l, resp) in ls.into_iter().zip(resps) {
-                match resp {
-                    Some(mut resp) => {
-                        let cb_ctx = new_ctx(&resp);
-                        if let Err(e) = check_raft_cmd_response(&mut resp, l) {
-                            cmd_resps.push(Some((cb_ctx, Err(Error::into(e)))));
-                            continue;
-                        }
+        let on_finished: store::BatchCallback =
+            box move |resps: Vec<Option<(RaftCmdResponse, Option<Fuse>)>>| {
+                assert_eq!(batch_size, resps.len());
+                let mut snap = None;
+                let mut cmd_resps = Vec::with_capacity(resps.len());
+                for (l, resp) in ls.into_iter().zip(resps) {
+                    match resp {
+                        Some((mut resp, _)) => {
+                            let cb_ctx = new_ctx(&resp);
+                            if let Err(e) = check_raft_cmd_response(&mut resp, l) {
+                                cmd_resps.push(Some((cb_ctx, Err(Error::into(e)))));
+                                continue;
+                            }
 
-                        let mut rs = resp.take_responses();
-                        assert_eq!(rs[0].get_cmd_type(), CmdType::Snap);
-                        if snap.is_none() {
-                            snap = Some(EngineSnapshot::new(db.clone()).into_sync());
-                        }
+                            let mut rs = resp.take_responses();
+                            assert_eq!(rs[0].get_cmd_type(), CmdType::Snap);
+                            if snap.is_none() {
+                                snap = Some(EngineSnapshot::new(db.clone()).into_sync());
+                            }
 
-                        let res = RegionSnapshot::from_snapshot(
-                            snap.clone().unwrap(),
-                            rs[0].take_snap().take_region(),
-                        );
-                        cmd_resps.push(Some((cb_ctx, Ok(CmdRes::Snap(res)))));
+                            let res = RegionSnapshot::from_snapshot(
+                                snap.clone().unwrap(),
+                                rs[0].take_snap().take_region(),
+                            );
+                            cmd_resps.push(Some((cb_ctx, Ok(CmdRes::Snap(res)))));
+                        }
+                        None => cmd_resps.push(None),
                     }
-                    None => cmd_resps.push(None),
                 }
-            }
-            on_finished(cmd_resps);
-        };
+                on_finished(cmd_resps);
+            };
 
         self.router.send_batch_commands(batch, on_finished)?;
         Ok(())

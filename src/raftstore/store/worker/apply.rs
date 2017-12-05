@@ -219,7 +219,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
 pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
-    cb(resp);
+    cb(resp, None);
 }
 
 /// Call the callback of `cmd` when it can not be processed further.
@@ -235,7 +235,7 @@ fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
 
 pub fn notify_stale_req(term: u64, cb: Callback) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
-    cb(resp);
+    cb(resp, None);
 }
 
 fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
@@ -412,7 +412,7 @@ impl ApplyDelegate {
                 // call callback
                 for (cb, mut resp) in apply_ctx.cbs.drain(..) {
                     apply_ctx.host.post_apply(&self.region, &mut resp);
-                    cb(resp);
+                    cb(resp, None);
                 }
                 apply_ctx.mark_last_bytes_and_keys();
             }
@@ -1497,7 +1497,7 @@ impl Runner {
 
         // Call callbacks
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
 
         if !applys_res.is_empty() {
@@ -1915,7 +1915,7 @@ mod tests {
         let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
         assert!(res.is_empty());
         let resp = rx.try_recv().unwrap();
@@ -1942,7 +1942,7 @@ mod tests {
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
         let lock_handle = db.cf_handle(CF_LOCK).unwrap();
         assert_eq!(db.get_cf(lock_handle, &dk_k1).unwrap().unwrap(), b"v1");
@@ -1965,7 +1965,7 @@ mod tests {
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
@@ -1982,7 +1982,7 @@ mod tests {
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -2008,7 +2008,7 @@ mod tests {
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
@@ -2032,7 +2032,7 @@ mod tests {
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
         db.write(apply_ctx.wb).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -2046,7 +2046,7 @@ mod tests {
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -2063,7 +2063,7 @@ mod tests {
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -2084,7 +2084,7 @@ mod tests {
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
         db.write(apply_ctx.wb).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+            cb(resp, None);
         }
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();

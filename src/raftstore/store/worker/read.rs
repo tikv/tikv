@@ -30,7 +30,8 @@ use util::Either;
 use super::metrics::*;
 use super::{apply, MsgSender};
 use super::super::engine::Snapshot;
-use super::super::super::store::{check_epoch, BatchCallback, Callback, Msg as StoreMsg,
+use super::super::cmd_resp;
+use super::super::super::store::{check_epoch, BatchCallback, Callback, Fuse, Msg as StoreMsg,
                                  RequestPolicy};
 
 /// Status for leaders
@@ -118,6 +119,7 @@ impl Task {
         Task::Delete(region_id)
     }
 
+    #[inline]
     pub fn accept(msg: StoreMsg) -> Either<Task, StoreMsg> {
         match msg {
             StoreMsg::RaftCmd {
@@ -385,6 +387,17 @@ impl<C: MsgSender> LocalReader<C> {
         resp
     }
 
+    fn fuse(&self, req: &RaftCmdRequest) -> Fuse {
+        let status = &self.region_leaders[&req.get_header().get_region_id()];
+        let lease = status.leader_lease.as_ref().unwrap().clone();
+        let region_id = status.region.get_id();
+        Box::new(move |resp: &mut RaftCmdResponse| {
+            if !lease.in_safe_lease() {
+                cmd_resp::bind_error(resp, Error::NotLeader(region_id, None))
+            }
+        })
+    }
+
     fn report_region_cache(&self) {
         LOCAL_READ_CACHE.set(self.region_leaders.len() as f64);
     }
@@ -401,7 +414,7 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                 LOCAL_READ.with_label_values(&["handled", "RaftCmd"]).inc();
                 match self.get_handle_policy(&request) {
                     Ok(RequestPolicy::ReadLocal) => {
-                        callback(self.exec_read(&request));
+                        callback(self.exec_read(&request), Some(self.fuse(&request)));
                     }
                     Ok(RequestPolicy::ReadIndex) => self.redirect_cmd(send_time, request, callback),
                     Ok(policy) => unimplemented!("unsuppoted policy {:?}", policy),
@@ -444,7 +457,7 @@ impl<C: MsgSender> Runnable<Task> for LocalReader<C> {
                         .inc();
                     let mut resps = Vec::with_capacity(batch.len());
                     for request in &batch {
-                        resps.push(Some(self.exec_read(request)))
+                        resps.push(Some((self.exec_read(request), Some(self.fuse(request)))));
                     }
                     on_finished(resps);
                 } else {

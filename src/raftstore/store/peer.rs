@@ -877,7 +877,7 @@ impl Peer {
                     // TODO: we should add test case that a split happens before pending
                     // read-index is handled. To do this we need to control async-apply
                     // procedure precisely.
-                    cb(self.handle_read(req));
+                    cb(self.handle_read(req), None);
                 }
                 propose_time = Some(read.renew_lease_time);
             }
@@ -968,7 +968,7 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 for (req, cb) in read.cmds.drain(..) {
-                    cb(self.handle_read(req));
+                    cb(self.handle_read(req), None);
                 }
             }
             self.pending_reads.ready_cnt = 0;
@@ -1133,7 +1133,7 @@ impl Peer {
         match res {
             Err(e) => {
                 cmd_resp::bind_error(&mut err_resp, e);
-                cb(err_resp);
+                cb(err_resp, None);
                 false
             }
             Ok(idx) => {
@@ -1374,7 +1374,7 @@ impl Peer {
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
-        cb(self.handle_read(req));
+        cb(self.handle_read(req), None);
     }
 
     fn read_index(
@@ -1434,7 +1434,7 @@ impl Peer {
                 term: self.term(),
                 renew_lease_time: Some(renew_lease_time),
             };
-            self.post_propose(meta, false, box |_| {});
+            self.post_propose(meta, false, Box::new(|_, _| {}));
         }
 
         true
@@ -1497,7 +1497,7 @@ impl Peer {
 
         // transfer leader command doesn't need to replicate log and apply, so we
         // return immediately. Note that this command may fail, we can view it just as an advice
-        cb(make_transfer_leader_response());
+        cb(make_transfer_leader_response(), None);
 
         transferred
     }

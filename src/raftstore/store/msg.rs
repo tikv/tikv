@@ -21,8 +21,9 @@ use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
 use util::escape;
 
-pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
-pub type BatchCallback = Box<FnBox(Vec<Option<RaftCmdResponse>>) + Send>;
+pub type Fuse = Box<FnBox(&mut RaftCmdResponse) + Send>;
+pub type Callback = Box<FnBox(RaftCmdResponse, Option<Fuse>) + Send>;
+pub type BatchCallback = Box<FnBox(Vec<Option<(RaftCmdResponse, Option<Fuse>)>>) + Send>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Tick {
