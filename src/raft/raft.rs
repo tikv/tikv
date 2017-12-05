@@ -572,7 +572,7 @@ impl<T: Storage> Raft<T> {
         let mut prs = self.take_prs();
         prs.iter_mut()
             .filter(|&(id, _)| *id != self_id)
-            .for_each(|(id, pr)| { self.send_append(*id, pr); });
+            .for_each(|(id, pr)| self.send_append(*id, pr));
         self.set_prs(prs);
     }
 
@@ -587,7 +587,7 @@ impl<T: Storage> Raft<T> {
         let mut prs = self.take_prs();
         prs.iter_mut()
             .filter(|&(id, _)| *id != self_id)
-            .for_each(|(id, pr)| { self.send_heartbeat(*id, pr, ctx.clone()); });
+            .for_each(|(id, pr)| self.send_heartbeat(*id, pr, ctx.clone()));
         self.set_prs(prs);
     }
 
