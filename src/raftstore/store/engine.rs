@@ -220,9 +220,8 @@ impl IterOption {
     }
 
     #[inline]
-    pub fn set_lower_bound(mut self, bound: Vec<u8>) -> IterOption {
+    pub fn set_lower_bound(&mut self, bound: Vec<u8>) {
         self.lower_bound = Some(bound);
-        self
     }
 
     #[inline]
@@ -231,9 +230,8 @@ impl IterOption {
     }
 
     #[inline]
-    pub fn set_upper_bound(mut self, bound: Vec<u8>) -> IterOption {
+    pub fn set_upper_bound(&mut self, bound: Vec<u8>) {
         self.upper_bound = Some(bound);
-        self
     }
 
     #[inline]
