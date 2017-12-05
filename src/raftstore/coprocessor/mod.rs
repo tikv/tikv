@@ -110,3 +110,19 @@ pub trait SplitCheckObserver: Coprocessor {
         None
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub enum Role {
+    Leader,
+    Candidate,
+    Follower,
+}
+
+pub trait RoleObserver: Coprocessor {
+    /// Hook to call when role of a peer changes.
+    /// 
+    /// Please note that, this hook is not called at realtime. There maybe a
+    /// situation that the hook is not called yet, however the role of some peers
+    /// have changed.
+    fn on_role_change(&self, _: &mut ObserverContext, _: Role) {}
+}

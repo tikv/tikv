@@ -31,6 +31,7 @@ struct Entry<T> {
 pub type BoxAdminObserver = Box<AdminObserver + Send + Sync>;
 pub type BoxQueryObserver = Box<QueryObserver + Send + Sync>;
 pub type BoxSplitCheckObserver = Box<SplitCheckObserver + Send + Sync>;
+pub type BoxRoleObserver = Box<RoleObserver + Send + Sync>;
 
 /// Registry contains all registered coprocessors.
 #[derive(Default)]
@@ -38,6 +39,7 @@ pub struct Registry {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
+    role_observers: Vec<Entry<BoxRoleObserver>>,
     // TODO: add endpoint
 }
 
@@ -63,6 +65,42 @@ impl Registry {
     pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver) {
         push!(priority, sco, self.split_check_observers);
     }
+
+    pub fn register_role_observer(&mut self, priority: u32, ro: BoxRoleObserver) {
+        push!(priority, ro, self.role_observers);
+    }
+}
+
+macro_rules! try_loop_ob {
+    ($r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {
+        loop_ob!(_imp _res, $r, $obs, $hook, $($args)*)
+    };
+}
+
+macro_rules! loop_ob {
+    (_exec _res, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
+        $o.$hook($ctx, $($args)*)?
+    };
+    (_exec _tup, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
+        $o.$hook($ctx, $($args)*)
+    };
+    (_done _res) => {
+        Ok(())
+    };
+    (_done _tup) => {{}};
+    (_imp $res:tt, $r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {{
+        let mut ctx = ObserverContext::new($r);
+        for o in $obs {
+            loop_ob!(_exec $res, o.observer, $hook, &mut ctx, $($args)*);
+            if ctx.bypass {
+                return loop_ob!(_done $res);
+            }
+        }
+        loop_ob!(_done $res)
+    }};
+    ($r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {
+        loop_ob!(_imp _tup, $r, $obs, $hook, $($args)*)
+    };
 }
 
 /// Admin and invoke all coprocessors.
@@ -94,64 +132,63 @@ impl CoprocessorHost {
 
     /// Call all prepose hooks until bypass is set to true.
     pub fn pre_propose(&self, region: &Region, req: &mut RaftCmdRequest) -> Result<()> {
-        let mut ctx = ObserverContext::new(region);
         if !req.has_admin_request() {
-            for o in &self.registry.query_observers {
-                o.observer.pre_propose_query(&mut ctx, req.mut_requests())?;
-                if ctx.bypass {
-                    return Ok(());
-                }
-            }
+            let query = req.mut_requests();
+            try_loop_ob!(
+                region,
+                &self.registry.query_observers,
+                pre_propose_query,
+                query
+            )
         } else {
-            for o in &self.registry.admin_observers {
-                o.observer
-                    .pre_propose_admin(&mut ctx, req.mut_admin_request())?;
-                if ctx.bypass {
-                    return Ok(());
-                }
-            }
+            let admin = req.mut_admin_request();
+            try_loop_ob!(
+                region,
+                &self.registry.admin_observers,
+                pre_propose_admin,
+                admin
+            )
         }
-        Ok(())
     }
 
     /// Call all pre apply hook until bypass is set to true.
     pub fn pre_apply(&self, region: &Region, req: &RaftCmdRequest) {
-        let mut ctx = ObserverContext::new(region);
         if !req.has_admin_request() {
-            for o in &self.registry.query_observers {
-                o.observer.pre_apply_query(&mut ctx, req.get_requests());
-                if ctx.bypass {
-                    return;
-                }
-            }
+            let query = req.get_requests();
+            loop_ob!(
+                region,
+                &self.registry.query_observers,
+                pre_apply_query,
+                query
+            );
         } else {
-            for o in &self.registry.admin_observers {
-                o.observer
-                    .pre_apply_admin(&mut ctx, req.get_admin_request());
-                if ctx.bypass {
-                    return;
-                }
-            }
+            let admin = req.get_admin_request();
+            loop_ob!(
+                region,
+                &self.registry.admin_observers,
+                pre_apply_admin,
+                admin
+            );
         }
     }
 
     pub fn post_apply(&self, region: &Region, resp: &mut RaftCmdResponse) {
-        let mut ctx = ObserverContext::new(region);
         if !resp.has_admin_response() {
-            for o in &self.registry.query_observers {
-                o.observer.post_apply_query(&mut ctx, resp.mut_responses());
-                if ctx.bypass {
-                    return;
-                }
-            }
+            let query = resp.mut_responses();
+            loop_ob!(
+                region,
+                &self.registry.query_observers,
+                post_apply_query,
+                query
+            );
         } else {
-            for o in &self.registry.admin_observers {
-                o.observer
-                    .post_apply_admin(&mut ctx, resp.mut_admin_response());
-                if ctx.bypass {
-                    return;
-                }
-            }
+            let admin = resp.mut_admin_response();
+            loop_ob!(
+                region,
+                &self.registry.admin_observers,
+                post_apply_admin,
+                admin
+            );
         }
     }
 
@@ -184,6 +221,10 @@ impl CoprocessorHost {
             }
         }
         None
+    }
+
+    pub fn on_role_change(&self, region: &Region, role: Role) {
+        loop_ob!(region, &self.registry.role_observers, on_role_change, role);
     }
 
     pub fn shutdown(&self) {
@@ -265,6 +306,13 @@ mod test {
         }
     }
 
+    impl RoleObserver for TestCoprocessor {
+        fn on_role_change(&self, ctx: &mut ObserverContext, _: Role) {
+            self.called.fetch_add(7, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+    }
+
     macro_rules! assert_all {
         ($target:expr, $expect:expr) => ({
             for (c, e) in ($target).iter().zip($expect) {
@@ -289,6 +337,8 @@ mod test {
             .register_admin_observer(1, Box::new(ob.clone()));
         host.registry
             .register_query_observer(1, Box::new(ob.clone()));
+        host.registry
+            .register_role_observer(1, Box::new(ob.clone()));
         let region = Region::new();
         let mut admin_req = RaftCmdRequest::new();
         admin_req.set_admin_request(AdminRequest::new());
@@ -309,6 +359,9 @@ mod test {
         assert_all!(&[&ob.called], &[15]);
         host.post_apply(&region, &mut RaftCmdResponse::new());
         assert_all!(&[&ob.called], &[21]);
+
+        host.on_role_change(&region, Role::Leader);
+        assert_all!(&[&ob.called], &[28]);
     }
 
     #[test]
