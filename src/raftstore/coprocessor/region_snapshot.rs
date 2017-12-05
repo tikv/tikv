@@ -616,9 +616,14 @@ mod tests {
         let mut expect = test_data.clone();
         expect.reverse();
         assert_eq!(res, expect);
+    }
 
-        // test lower bound
-        let store = new_peer_storage(engine.clone(), raft_engine.clone(), &region);
+    #[test]
+    fn test_reverse_iterate_with_lower_bound() {
+        let path = TempDir::new("test-raftstore").unwrap();
+        let (engine, raft_engine) = new_temp_engine(&path);
+        let (store, test_data) = load_default_dataset(engine.clone(), raft_engine.clone());
+
         let snap = RegionSnapshot::new(&store);
         let mut iter_opt = IterOption::default();
         iter_opt.set_lower_bound(b"a3".to_vec());
@@ -632,6 +637,6 @@ mod tests {
             }
         }
         res.sort();
-        assert_eq!(res, test_data[1..].to_vec());
+        assert_eq!(res, test_data[1..3].to_vec());
     }
 }
