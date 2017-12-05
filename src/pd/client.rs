@@ -26,7 +26,7 @@ use util::{Either, HandyRwLock};
 use util::security::SecurityManager;
 use util::time::duration_to_sec;
 use pd::{Config, PdFuture};
-use super::{Error, PdClient, RegionLeader, RegionStat, Result, REQUEST_TIMEOUT};
+use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::metrics::*;
 
@@ -204,7 +204,7 @@ impl PdClient for RpcClient {
         Ok(resp.take_region())
     }
 
-    fn get_region_leader(&self, key: &[u8]) -> Result<RegionLeader> {
+    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
             .start_coarse_timer();
@@ -229,7 +229,7 @@ impl PdClient for RpcClient {
         } else {
             None
         };
-        Ok(RegionLeader::new(region, leader))
+        Ok(RegionInfo::new(region, leader))
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {

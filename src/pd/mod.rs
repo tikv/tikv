@@ -69,21 +69,21 @@ impl RegionStat {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct RegionLeader {
+pub struct RegionInfo {
     pub region: metapb::Region,
     pub leader: Option<metapb::Peer>,
 }
 
-impl RegionLeader {
-    pub fn new(region: metapb::Region, leader: Option<metapb::Peer>) -> RegionLeader {
-        RegionLeader {
+impl RegionInfo {
+    pub fn new(region: metapb::Region, leader: Option<metapb::Peer>) -> RegionInfo {
+        RegionInfo {
             region: region,
             leader: leader,
         }
     }
 }
 
-impl Deref for RegionLeader {
+impl Deref for RegionInfo {
     type Target = metapb::Region;
 
     fn deref(&self) -> &Self::Target {
@@ -91,15 +91,15 @@ impl Deref for RegionLeader {
     }
 }
 
-impl DerefMut for RegionLeader {
+impl DerefMut for RegionInfo {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.region
     }
 }
 
-impl From<metapb::Region> for RegionLeader {
-    fn from(region: metapb::Region) -> RegionLeader {
-        RegionLeader::new(region, None)
+impl From<metapb::Region> for RegionInfo {
+    fn from(region: metapb::Region) -> RegionInfo {
+        RegionInfo::new(region, None)
     }
 }
 
@@ -158,10 +158,10 @@ pub trait PdClient: Send + Sync {
     // Get region which the key belong to.
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
 
-    // Get region and leader which the key belong to.
+    // Get region info which the key belong to.
     // We can return leader in `get_region` too, but that will break a lot of code.
     // In most cases we just need the region, so just leave it for convenience.
-    fn get_region_leader(&self, key: &[u8]) -> Result<RegionLeader> {
+    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
         self.get_region(key).map(|region| region.into())
     }
 
