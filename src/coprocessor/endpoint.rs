@@ -773,7 +773,7 @@ mod tests {
     use tipb::expression::Expr;
     use tipb::executor::Executor;
 
-    use util::worker::{FutureWorker, Worker};
+    use util::worker::{Builder as WorkerBuilder, FutureWorker};
     use util::time::Instant;
 
     #[test]
@@ -791,13 +791,13 @@ mod tests {
 
     #[test]
     fn test_req_outdated() {
-        let mut worker = Worker::new("test-endpoint");
+        let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
-        worker.start_batch(end_point, 30).unwrap();
+        worker.start(end_point).unwrap();
 
         let mut req = Request::new();
         req.set_tp(REQ_TYPE_DAG);
@@ -814,14 +814,14 @@ mod tests {
 
     #[test]
     fn test_too_many_reqs() {
-        let mut worker = Worker::new("test-endpoint");
+        let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         end_point.max_running_task_count = 3;
-        worker.start_batch(end_point, 30).unwrap();
+        worker.start(end_point).unwrap();
         let (tx, rx) = mpsc::channel();
         for pos in 0..30 * 4 {
             let tx = tx.clone();
