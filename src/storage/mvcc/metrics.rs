@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, CounterVec, Histogram};
+use prometheus::*;
 
 lazy_static! {
     pub static ref MVCC_VERSIONS_HISTOGRAM: Histogram =
@@ -34,5 +34,11 @@ lazy_static! {
             "tikv_storage_mvcc_conflict_counter",
             "Total number of conflict error",
             &["type"]
+        ).unwrap();
+
+    pub static ref MVCC_DUPLICATE_PREWRITE_COUNTER: Counter =
+        register_counter!(
+            "tikv_storage_mvcc_duplicate_prewrite_counter",
+            "Total number of duplicated prewrite"
         ).unwrap();
 }

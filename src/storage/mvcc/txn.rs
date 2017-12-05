@@ -147,10 +147,7 @@ impl MvccTxn {
             }
             // No need to overwrite the lock and data.
             // If we use single delete, we can't put a key multiple times.
-            info!(
-                "duplicated prewrite with start_ts {}, ignore it.",
-                self.start_ts
-            );
+            MVCC_DUPLICATE_PREWRITE_COUNTER.inc();
             return Ok(());
         }
 
