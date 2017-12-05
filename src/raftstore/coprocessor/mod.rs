@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use raft::StateRole;
 use rocksdb::DB;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use kvproto::metapb::Region;
@@ -111,18 +112,11 @@ pub trait SplitCheckObserver: Coprocessor {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Role {
-    Leader,
-    Candidate,
-    Follower,
-}
-
 pub trait RoleObserver: Coprocessor {
     /// Hook to call when role of a peer changes.
-    /// 
+    ///
     /// Please note that, this hook is not called at realtime. There maybe a
     /// situation that the hook is not called yet, however the role of some peers
     /// have changed.
-    fn on_role_change(&self, _: &mut ObserverContext, _: Role) {}
+    fn on_role_change(&self, _: &mut ObserverContext, _: StateRole) {}
 }

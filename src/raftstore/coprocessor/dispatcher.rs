@@ -223,7 +223,7 @@ impl CoprocessorHost {
         None
     }
 
-    pub fn on_role_change(&self, region: &Region, role: Role) {
+    pub fn on_role_change(&self, region: &Region, role: StateRole) {
         loop_ob!(region, &self.registry.role_observers, on_role_change, role);
     }
 
@@ -307,7 +307,7 @@ mod test {
     }
 
     impl RoleObserver for TestCoprocessor {
-        fn on_role_change(&self, ctx: &mut ObserverContext, _: Role) {
+        fn on_role_change(&self, ctx: &mut ObserverContext, _: StateRole) {
             self.called.fetch_add(7, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -360,7 +360,7 @@ mod test {
         host.post_apply(&region, &mut RaftCmdResponse::new());
         assert_all!(&[&ob.called], &[21]);
 
-        host.on_role_change(&region, Role::Leader);
+        host.on_role_change(&region, StateRole::Leader);
         assert_all!(&[&ob.called], &[28]);
     }
 
