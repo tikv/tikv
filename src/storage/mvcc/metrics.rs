@@ -36,9 +36,10 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref MVCC_DUPLICATE_PREWRITE_COUNTER: Counter =
-        register_counter!(
-            "tikv_storage_mvcc_duplicate_prewrite_counter",
-            "Total number of duplicated prewrite"
+    pub static ref MVCC_DUPLICATE_CMD_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_storage_mvcc_duplicate_cmd_counter",
+            "Total number of duplicated commands",
+            &["type"]
         ).unwrap();
 }
