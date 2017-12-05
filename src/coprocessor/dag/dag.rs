@@ -152,7 +152,7 @@ impl DAGContext {
         self.enable_distsql_cache && (self.has_aggr || self.has_topn)
     }
 
-    pub fn can_cache_with_size(&mut self, data: &Vec<u8>) -> bool {
+    pub fn can_cache_with_size(&mut self, data: &[u8]) -> bool {
         if data.len() > 5 * 1024 * 1024 {
             false
         } else {
