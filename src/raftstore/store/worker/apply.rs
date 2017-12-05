@@ -14,10 +14,13 @@
 
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::time::Instant;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::collections::VecDeque;
 use std::mem;
+
+use prometheus::Histogram;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -1353,7 +1356,7 @@ pub struct Destroy {
 
 /// region related task.
 pub enum Task {
-    Applies(Vec<Apply>),
+    Applies((Vec<Apply>, Instant)),
     Registration(Registration),
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
@@ -1361,7 +1364,7 @@ pub enum Task {
 
 impl Task {
     pub fn applies(applies: Vec<Apply>) -> Task {
-        Task::Applies(applies)
+        Task::Applies((applies, Instant::now()))
     }
 
     pub fn register(peer: &Peer) -> Task {
@@ -1378,7 +1381,7 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Applies(ref a) => write!(f, "async applys count {}", a.len()),
+            Task::Applies((ref a, _)) => write!(f, "async applys count {}", a.len()),
             Task::Proposals(ref p) => write!(f, "region proposal count {}", p.len()),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
@@ -1423,6 +1426,7 @@ pub struct Runner {
     notifier: Sender<TaskRes>,
     sync_log: bool,
     tag: String,
+    apply_task_wait_time: Histogram,
 }
 
 impl Runner {
@@ -1439,6 +1443,7 @@ impl Runner {
             notifier: notifier,
             sync_log: sync_log,
             tag: format!("[store {}]", store.store_id()),
+            apply_task_wait_time: APPLY_TASK_WAIT_TIME_HISTOGRAM.clone(),
         }
     }
 
@@ -1586,7 +1591,11 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Applies(a) => self.handle_applies(a),
+            Task::Applies((a, start_time)) => {
+                let elapsed = duration_to_sec(start_time.elapsed()) as f64;
+                self.apply_task_wait_time.observe(elapsed);
+                self.handle_applies(a);
+            }
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
@@ -1628,6 +1637,7 @@ mod tests {
             notifier: tx,
             sync_log: false,
             tag: "".to_owned(),
+            apply_task_wait_time: APPLY_TASK_WAIT_TIME_HISTOGRAM.clone(),
         }
     }
 
