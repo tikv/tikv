@@ -14,13 +14,10 @@
 
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
-use std::time::Instant;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::collections::VecDeque;
 use std::mem;
-
-use prometheus::Histogram;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -34,7 +31,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerR
 
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
-use util::time::{duration_to_sec, SlowTimer};
+use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use raftstore::{Error, Result};
@@ -1364,7 +1361,7 @@ pub enum Task {
 
 impl Task {
     pub fn applies(applies: Vec<Apply>) -> Task {
-        Task::Applies((applies, Instant::now()))
+        Task::Applies((applies, Instant::now_coarse()))
     }
 
     pub fn register(peer: &Peer) -> Task {
@@ -1426,7 +1423,6 @@ pub struct Runner {
     notifier: Sender<TaskRes>,
     sync_log: bool,
     tag: String,
-    apply_task_wait_time: Histogram,
 }
 
 impl Runner {
@@ -1443,7 +1439,6 @@ impl Runner {
             notifier: notifier,
             sync_log: sync_log,
             tag: format!("[store {}]", store.store_id()),
-            apply_task_wait_time: APPLY_TASK_WAIT_TIME_HISTOGRAM.clone(),
         }
     }
 
@@ -1593,7 +1588,7 @@ impl Runnable<Task> for Runner {
         match task {
             Task::Applies((a, start_time)) => {
                 let elapsed = duration_to_sec(start_time.elapsed()) as f64;
-                self.apply_task_wait_time.observe(elapsed);
+                APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
                 self.handle_applies(a);
             }
             Task::Proposals(props) => self.handle_proposals(props),
@@ -1637,7 +1632,6 @@ mod tests {
             notifier: tx,
             sync_log: false,
             tag: "".to_owned(),
-            apply_task_wait_time: APPLY_TASK_WAIT_TIME_HISTOGRAM.clone(),
         }
     }
 
