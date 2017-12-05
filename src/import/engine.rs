@@ -47,6 +47,7 @@ impl Engine {
         // 2. Choose a reasonable compression algorithm to balance between CPU and IO.
         // 3. Increase `max_background_jobs`, RocksDB preserves `max_background_jobs/4` for flush.
         let mut db_opts = cfg.build_opt();
+        db_opts.enable_statistics(false);
         db_opts.set_use_direct_io_for_flush_and_compaction(true);
         let mut cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, cfg.defaultcf.build_opt()),
@@ -122,6 +123,7 @@ impl Engine {
         // Don't need to cache since it is unlikely to read more than once.
         let mut ropts = ReadOptions::new();
         ropts.fill_cache(false);
+        ropts.set_verify_checksums(false);
         DBIterator::new_cf(self.db.clone(), cf_handle, ropts)
     }
 
