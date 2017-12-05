@@ -15,7 +15,6 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
-use std::boxed::FnBox;
 
 use grpc::EnvBuilder;
 use tempdir::TempDir;
@@ -28,7 +27,7 @@ use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{store, Error, Result};
-use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
@@ -214,14 +213,13 @@ impl Simulator for ServerCluster {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.router.clone(),
         };
-        wait_op!(
-            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                router.send_command(request, cb).unwrap()
-            },
+        wait_op2!(
+            |cb: Callback| { router.send_command(request, cb).unwrap() },
             timeout
-        ).ok_or_else(|| {
-            Error::Timeout(format!("request timeout for {:?}", timeout))
-        })
+        ).map(|(res, _)| res)
+            .ok_or_else(|| {
+                Error::Timeout(format!("request timeout for {:?}", timeout))
+            })
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {

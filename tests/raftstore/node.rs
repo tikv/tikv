@@ -15,7 +15,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
-use std::boxed::FnBox;
 use std::ops::Deref;
 
 use tempdir::TempDir;
@@ -257,14 +256,13 @@ impl Simulator for NodeCluster {
         }
 
         let router = self.trans.rl().routers.get(&node_id).cloned().unwrap();
-        wait_op!(
-            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                router.send_command(request, cb).unwrap()
-            },
+        wait_op2!(
+            |cb: Callback| { router.send_command(request, cb).unwrap() },
             timeout
-        ).ok_or_else(|| {
-            Error::Timeout(format!("request timeout for {:?}", timeout))
-        })
+        ).map(|(res, _): (RaftCmdResponse, Option<Fuse>)| res)
+            .ok_or_else(|| {
+                Error::Timeout(format!("request timeout for {:?}", timeout))
+            })
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

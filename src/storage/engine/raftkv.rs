@@ -126,15 +126,19 @@ fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
     cb_ctx
 }
 
-fn check_raft_cmd_response(resp: &mut RaftCmdResponse, resp_cnt: usize) -> Result<()> {
+fn check_raft_cmd_response_header(resp: &mut RaftCmdResponse) -> Result<()> {
     if resp.get_header().has_error() {
-        return Err(Error::RequestFailed(resp.take_header().take_error()));
+        Err(Error::RequestFailed(resp.take_header().take_error()))
+    } else {
+        Ok(())
     }
+}
+
+fn check_raft_cmd_response(resp: &mut RaftCmdResponse, resp_cnt: usize) -> Result<()> {
+    check_raft_cmd_response_header(resp)?;
     if resp_cnt != resp.get_responses().len() {
         return Err(Error::InvalidResponse(
-            "response count is not equal to requests, something \
-             must go wrong."
-                .to_owned(),
+            "response count is not equal to requests".to_owned(),
         ));
     }
 
@@ -157,7 +161,7 @@ fn on_result(
     }
     let snap = RegionSnapshot::from_raw(db, resps[0].take_snap().take_region());
     fuse.map(|f| f.call_box((&mut resp,)));
-    if let Err(e) = check_raft_cmd_response(&mut resp, resp_cnt) {
+    if let Err(e) = check_raft_cmd_response_header(&mut resp) {
         (cb_ctx, Err(e))
     } else {
         (cb_ctx, Ok(CmdRes::Snap(snap)))

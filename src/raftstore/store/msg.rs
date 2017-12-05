@@ -165,14 +165,15 @@ mod tests {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse, Error> {
-        wait_op!(
-            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
+        wait_op2!(
+            |cb: Box<FnBox(RaftCmdResponse, Option<Fuse>) + 'static + Send>| {
                 sendch.try_send(Msg::new_raft_cmd(request, cb)).unwrap()
             },
             timeout
-        ).ok_or_else(|| {
-            Error::Timeout(format!("request timeout for {:?}", timeout))
-        })
+        ).map(|(resp, _)| resp)
+            .ok_or_else(|| {
+                Error::Timeout(format!("request timeout for {:?}", timeout))
+            })
     }
 
     struct TestHandler;
@@ -191,7 +192,7 @@ mod tests {
                     if request.get_header().get_region_id() == u64::max_value() {
                         thread::sleep(Duration::from_millis(100));
                     }
-                    callback.call_box((RaftCmdResponse::new(),));
+                    callback.call_box((RaftCmdResponse::new(), None));
                 }
                 // we only test above message types, others panic.
                 _ => unreachable!(),

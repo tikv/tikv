@@ -1697,7 +1697,7 @@ mod tests {
             false,
             1,
             0,
-            box move |resp| { resp_tx.send(resp).unwrap(); },
+            box move |resp, _| { resp_tx.send(resp).unwrap(); },
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
         runner.run(Task::Proposals(vec![region_proposal]));
@@ -1708,8 +1708,13 @@ mod tests {
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
-            Proposal::new(false, 2, 0, box |_| {}),
-            Proposal::new(true, 3, 0, box move |resp| { cc_tx.send(resp).unwrap(); }),
+            Proposal::new(false, 2, 0, box |_, _| {}),
+            Proposal::new(
+                true,
+                3,
+                0,
+                box move |resp, _| { cc_tx.send(resp).unwrap(); },
+            ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
         runner.run(Task::Proposals(vec![region_proposal]));
@@ -1724,7 +1729,7 @@ mod tests {
             assert_eq!(cc.as_ref().map(|c| c.index), Some(3));
         }
 
-        let p = Proposal::new(true, 4, 0, box move |_| {});
+        let p = Proposal::new(true, 4, 0, box move |_, _| {});
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
         runner.run(Task::Proposals(vec![region_proposal]));
         assert!(rx.try_recv().is_err());
@@ -1807,11 +1812,10 @@ mod tests {
             delegate: &mut ApplyDelegate,
             tx: Sender<RaftCmdResponse>,
         ) -> EntryBuilder {
-            let cmd = PendingCmd::new(
-                self.entry.get_index(),
-                self.entry.get_term(),
-                box move |r| tx.send(r).unwrap(),
-            );
+            let cmd = PendingCmd::new(self.entry.get_index(), self.entry.get_term(), box move |r,
+                      _| {
+                tx.send(r).unwrap()
+            });
             delegate.pending_cmds.append_normal(cmd);
             self
         }
