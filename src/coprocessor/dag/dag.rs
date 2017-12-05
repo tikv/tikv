@@ -87,7 +87,7 @@ impl DAGContext {
                 .unwrap()
                 .get(region_id, &self.cache_key)
             {
-                debug!("Cache Hit: {}, region_id: {}", self.cache_key, region_id);
+                info!("Cache Hit: {}, region_id: {}", self.cache_key, region_id);
                 CORP_DISTSQL_CACHE_COUNT.with_label_values(&["hit"]).inc();
                 let mut resp = Response::new();
                 resp.set_data(data.clone());
@@ -119,8 +119,8 @@ impl DAGContext {
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                     let data = box_try!(sel_resp.write_to_bytes());
                     // If result data is greater than 5MB should not cache it.
-                    if self.can_cache() && data.len() <= 5 * 1024 * 1024 {
-                        debug!("Cache It: {}, region_id: {}", &self.cache_key, region_id);
+                    if self.can_cache_with_size(&data) {
+                        info!("Cache It: {}, region_id: {}", &self.cache_key, region_id);
                         DISTSQL_CACHE
                             .lock()
                             .unwrap()
@@ -149,7 +149,15 @@ impl DAGContext {
     }
 
     pub fn can_cache(&mut self) -> bool {
-        self.enable_distsql_cache & (self.has_aggr || self.has_topn)
+        self.enable_distsql_cache && (self.has_aggr || self.has_topn)
+    }
+
+    pub fn can_cache_with_size(&mut self, data: &Vec<u8>) -> bool {
+        if data.len() > 5 * 1024 * 1024 {
+            false
+        } else {
+            self.can_cache()
+        }
     }
 }
 

@@ -13,7 +13,7 @@
 
 use super::{AdminObserver, Coprocessor, ObserverContext, QueryObserver, Result};
 use coprocessor::cache::DISTSQL_CACHE;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, Request, Response};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, Request, Response};
 use protobuf::RepeatedField;
 
 pub struct DistSQLObserver;
@@ -35,11 +35,13 @@ impl DistSQLObserver {
 impl Coprocessor for DistSQLObserver {}
 
 impl QueryObserver for DistSQLObserver {
-    fn pre_apply_query(&self, _: &mut ObserverContext, _: &[Request]) {
+    fn pre_apply_query(&self, _: &mut ObserverContext, req: &[Request]) {
+        info!("Disable cache at pre_apply_query, req: {:?}", req);
         self.disable_cache();
     }
 
     fn post_apply_query(&self, ctx: &mut ObserverContext, _: &mut RepeatedField<Response>) {
+        info!("Evict region and enable cache at post_apply_query");
         self.evict_region(ctx);
     }
 }
@@ -59,5 +61,15 @@ impl AdminObserver for DistSQLObserver {
             _ => {}
         };
         Ok(())
+    }
+
+    fn pre_apply_admin(&self, _: &mut ObserverContext, req: &AdminRequest) {
+        info!("Disable cache at pre_apply_admin, req: {:?}", req);
+        self.disable_cache();
+    }
+
+    fn post_apply_admin(&self, ctx: &mut ObserverContext, _: &mut AdminResponse) {
+        info!("Evict region and enable cache at post_apply_admin");
+        self.evict_region(ctx);
     }
 }
