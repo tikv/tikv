@@ -407,6 +407,7 @@ fn process_read(
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
 ) -> Statistics {
+    fail_point!("before_process_read");
     debug!("process read cmd(cid={}) in worker pool.", cid);
     let tag = cmd.tag();
 
@@ -762,6 +763,7 @@ fn process_write(
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
 ) -> Statistics {
+    fail_point!("before_process_write");
     let mut statistics = Statistics::default();
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot, &mut statistics) {
         if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
@@ -1182,6 +1184,7 @@ impl Scheduler {
     }
 
     fn too_busy(&self) -> bool {
+        fail_point!("scheduler_busy", |_| true);
         self.running_write_bytes >= self.sched_pending_write_threshold
     }
 

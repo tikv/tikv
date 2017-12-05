@@ -568,6 +568,7 @@ impl Storage {
     }
 
     fn send(&self, cmd: Command, cb: StorageCb) -> Result<()> {
+        fail_point!("drop_message", |_| Ok(()));
         box_try!(self.sendch.try_send(Msg::RawCmd { cmd: cmd, cb: cb }));
         Ok(())
     }
