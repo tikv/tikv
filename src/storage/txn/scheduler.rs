@@ -51,7 +51,7 @@ use storage::engine::{self, Callback as EngineCallback, CbContext, Error as Engi
                       Result as EngineResult};
 use raftstore::store::engine::IterOption;
 use util::transport::{Error as TransportError, SyncSendCh};
-use util::threadpool::{Context as ThreadContext, ContextFactory, ThreadPool, ThreadPoolBuilder};
+use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
 use util::worker::FutureScheduler;
@@ -389,14 +389,11 @@ impl Scheduler {
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_pending_write_threshold: sched_pending_write_threshold,
-            worker_pool: ThreadPoolBuilder::new(
-                thd_name!("sched-worker-pool"),
-                SchedContextFactory { sender: r.clone() },
-            ).thread_count(worker_pool_size)
+            worker_pool: ThreadPoolBuilder::with_default_factory(thd_name!("sched-worker-pool"))
+                .thread_count(worker_pool_size)
                 .build(),
-            high_priority_pool: ThreadPoolBuilder::new(
+            high_priority_pool: ThreadPoolBuilder::with_default_factory(
                 thd_name!("sched-high-pri-pool"),
-                SchedContextFactory { sender: r.clone() },
             ).build(),
             has_gc_command: false,
             running_write_bytes: 0,
@@ -1008,22 +1005,9 @@ fn process_write_impl(
     Ok(())
 }
 
-struct SchedContextFactory {
-    sender: Option<FutureScheduler<PdTask>>,
-}
-
-impl ContextFactory<SchedContext> for SchedContextFactory {
-    fn create(&self) -> SchedContext {
-        SchedContext {
-            sender: self.sender.clone(),
-            stats: Default::default(),
-        }
-    }
-}
-
+#[derive(Default)]
 struct SchedContext {
     stats: HashMap<&'static str, StatisticsSummary>,
-    sender: Option<FutureScheduler<PdTask>>,
 }
 
 impl SchedContext {
