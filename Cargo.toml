@@ -10,7 +10,6 @@ time = "0.1"
 [features]
 default = []
 dev = ["clippy"]
-static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 mem-profiling = ["jemallocator"]
