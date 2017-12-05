@@ -1941,7 +1941,7 @@ pub trait DecimalDecoder: BytesDecoder {
             if d.word_buf[word_idx] >= TEN_POW[leading_digits + 1] {
                 return Err(box_err!("invalid leading digits for decimal number"));
             }
-            if word_idx > 0 || d.word_buf[word_idx] != 0 {
+            if d.word_buf[word_idx] != 0 {
                 word_idx += 1;
             } else {
                 d.int_cnt -= leading_digits as u8;
