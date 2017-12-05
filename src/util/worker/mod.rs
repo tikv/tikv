@@ -439,5 +439,6 @@ mod test {
                 assert_eq!(msg, "tick msg");
             }
         }
+        worker.stop().unwrap().join().unwrap();
     }
 }
