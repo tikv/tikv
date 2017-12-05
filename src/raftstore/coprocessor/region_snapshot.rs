@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::cmp;
 use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use kvproto::metapb::Region;
 
@@ -163,11 +164,7 @@ fn set_lower_bound(iter_opt: &mut IterOption, region: &Region) {
     let lower_bound = match iter_opt.lower_bound() {
         Some(k) if !k.is_empty() => {
             let k = keys::data_key(k);
-            if k > region_start_key {
-                k
-            } else {
-                region_start_key
-            }
+            cmp::max(k, region_start_key)
         }
         _ => region_start_key,
     };
@@ -179,11 +176,7 @@ fn set_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     let upper_bound = match iter_opt.upper_bound() {
         Some(k) if !k.is_empty() => {
             let k = keys::data_key(k);
-            if k < region_end_key {
-                k
-            } else {
-                region_end_key
-            }
+            cmp::min(k, region_end_key)
         }
         _ => region_end_key,
     };
