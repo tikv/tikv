@@ -404,15 +404,6 @@ impl<T: Storage> Raft<T> {
         quorum(self.get_prs().voters.len())
     }
 
-    pub fn nodes(&self) -> Vec<u64> {
-        let prs = self.get_prs();
-        let mut nodes = Vec::with_capacity(prs.voters.len() + prs.learners.len());
-        nodes.extend(prs.voters.keys());
-        nodes.extend(prs.learners.keys());
-        nodes.sort();
-        nodes
-    }
-
     pub fn set_progress(&mut self, id: u64, matched: u64, next_idx: u64, is_learner: bool) {
         let mut p = new_progress(next_idx, self.max_inflight);
         p.matched = matched;
@@ -462,6 +453,15 @@ impl<T: Storage> Raft<T> {
 
     pub fn get_randomized_election_timeout(&self) -> usize {
         self.randomized_election_timeout
+    }
+
+    pub fn nodes(&self) -> Vec<u64> {
+        let prs = self.get_prs();
+        let mut nodes = Vec::with_capacity(prs.voters.len() + prs.learners.len());
+        nodes.extend(prs.voters.keys());
+        nodes.extend(prs.learners.keys());
+        nodes.sort();
+        nodes
     }
 
     // send persists state to stable storage and then sends to its mailbox.
@@ -630,9 +630,9 @@ impl<T: Storage> Raft<T> {
         let mut prs = self.take_prs();
         prs.voters
             .iter_mut()
-            .chain(prs.learners.iter_mut())
+            .chain(&mut prs.learners)
             .filter(|&(id, _)| *id != self_id)
-            .for_each(|(id, ref mut pr)| { self.send_append(*id, pr); });
+            .for_each(|(id, pr)| self.send_append(*id, pr));
         self.set_prs(prs);
     }
 
@@ -705,9 +705,7 @@ impl<T: Storage> Raft<T> {
         let prs = self.mut_prs();
         prs.voters
             .iter_mut()
-            .for_each(|(&id, pr)| rebuild_progress(id, pr));
-        prs.learners
-            .iter_mut()
+            .chain(&mut prs.learners)
             .for_each(|(&id, pr)| rebuild_progress(id, pr));
     }
 
