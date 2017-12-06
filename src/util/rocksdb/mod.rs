@@ -56,16 +56,6 @@ pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
         .ok_or_else(|| format!("cf {} not found.", cf))
 }
 
-pub fn open(path: &str, cfs: &[&str]) -> Result<DB, String> {
-    let mut opts = DBOptions::new();
-    opts.create_if_missing(false);
-    let mut cfs_opts = vec![];
-    for _ in 0..cfs.len() {
-        cfs_opts.push(ColumnFamilyOptions::new());
-    }
-    open_opt(opts, path, cfs.to_vec(), cfs_opts)
-}
-
 pub fn open_opt(
     opts: DBOptions,
     path: &str,
