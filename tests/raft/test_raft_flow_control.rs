@@ -38,7 +38,7 @@ fn test_msg_app_flow_control_full() {
     r.become_leader();
 
     // force the progress to be in replicate state
-    r.prs.get_mut(&2).unwrap().become_replicate();
+    r.mut_prs().get_mut(&2).unwrap().become_replicate();
     // fill in the inflights window
     for i in 0..r.max_inflight {
         r.step(new_message(1, 1, MessageType::MsgPropose, 1))
@@ -50,7 +50,7 @@ fn test_msg_app_flow_control_full() {
     }
 
     // ensure 1
-    assert!(r.prs[&2].ins.full());
+    assert!(r.get_prs()[&2].ins.full());
 
     // ensure 2
     for i in 0..10 {
@@ -74,7 +74,7 @@ fn test_msg_app_flow_control_move_forward() {
     r.become_leader();
 
     // force the progress to be in replicate state
-    r.prs.get_mut(&2).unwrap().become_replicate();
+    r.mut_prs().get_mut(&2).unwrap().become_replicate();
     // fill in the inflights window
     for _ in 0..r.max_inflight {
         r.step(new_message(1, 1, MessageType::MsgPropose, 1))
@@ -100,18 +100,18 @@ fn test_msg_app_flow_control_move_forward() {
         }
 
         // ensure 1
-        assert!(r.prs[&2].ins.full());
+        assert!(r.get_prs()[&2].ins.full());
 
         // ensure 2
         for i in 0..tt {
             let mut m = new_message(2, 1, MessageType::MsgAppendResponse, 0);
             m.set_index(i as u64);
             r.step(m).expect("");
-            if !r.prs[&2].ins.full() {
+            if !r.get_prs()[&2].ins.full() {
                 panic!(
                     "#{}: inflights.full = {}, want true",
                     tt,
-                    r.prs[&2].ins.full()
+                    r.get_prs()[&2].ins.full()
                 );
             }
         }
@@ -127,7 +127,7 @@ fn test_msg_app_flow_control_recv_heartbeat() {
     r.become_leader();
 
     // force the progress to be in replicate state
-    r.prs.get_mut(&2).unwrap().become_replicate();
+    r.mut_prs().get_mut(&2).unwrap().become_replicate();
     // fill in the inflights window
     for _ in 0..r.max_inflight {
         r.step(new_message(1, 1, MessageType::MsgPropose, 1))
@@ -136,11 +136,11 @@ fn test_msg_app_flow_control_recv_heartbeat() {
     }
 
     for tt in 1..5 {
-        if !r.prs[&2].ins.full() {
+        if !r.get_prs()[&2].ins.full() {
             panic!(
                 "#{}: inflights.full = {}, want true",
                 tt,
-                r.prs[&2].ins.full()
+                r.get_prs()[&2].ins.full()
             );
         }
 
@@ -149,12 +149,12 @@ fn test_msg_app_flow_control_recv_heartbeat() {
             r.step(new_message(2, 1, MessageType::MsgHeartbeatResponse, 0))
                 .expect("");
             r.read_messages();
-            if r.prs[&2].ins.full() {
+            if r.get_prs()[&2].ins.full() {
                 panic!(
                     "#{}.{}: inflights.full = {}, want false",
                     tt,
                     i,
-                    r.prs[&2].ins.full()
+                    r.get_prs()[&2].ins.full()
                 );
             }
         }
