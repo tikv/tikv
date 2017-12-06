@@ -18,6 +18,7 @@
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
+#![feature(iterator_for_each)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
@@ -50,6 +51,7 @@ extern crate libc;
 extern crate crc;
 extern crate alloc;
 extern crate chrono;
+extern crate zipf;
 #[macro_use]
 extern crate prometheus;
 #[macro_use]

@@ -290,10 +290,10 @@ impl<T: Storage> RawNode<T> {
             return cs;
         }
         let nid = cc.get_node_id();
-        assert!(cc.has_change_type(), "unexpected conf type");
         match cc.get_change_type() {
             ConfChangeType::AddNode => self.raft.add_node(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
+            ConfChangeType::AddLearnerNode => unimplemented!(),
         }
         let mut cs = ConfState::new();
         cs.set_nodes(self.raft.nodes());
@@ -306,7 +306,7 @@ impl<T: Storage> RawNode<T> {
         if is_local_msg(m.get_msg_type()) {
             return Err(Error::StepLocalMsg);
         }
-        if self.raft.prs.contains_key(&m.get_from()) || !is_response_msg(m.get_msg_type()) {
+        if self.raft.get_prs().contains_key(&m.get_from()) || !is_response_msg(m.get_msg_type()) {
             return self.raft.step(m);
         }
         Err(Error::StepPeerNotFound)

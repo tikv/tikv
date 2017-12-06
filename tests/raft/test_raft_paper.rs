@@ -47,7 +47,7 @@ fn commit_noop_entry(r: &mut Interface, s: &MemStorage) {
     for m in msgs {
         assert_eq!(m.get_msg_type(), MessageType::MsgAppend);
         assert_eq!(m.get_entries().len(), 1);
-        assert!(!m.get_entries()[0].has_data());
+        assert!(m.get_entries()[0].get_data().is_empty());
         r.step(accept_and_reply(m)).expect("");
     }
     // ignore further messages to refresh followers' commit index

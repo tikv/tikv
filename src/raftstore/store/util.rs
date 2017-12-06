@@ -87,6 +87,7 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
     match *conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
+        ConfChangeType::AddLearnerNode => unimplemented!(),
     }
 }
 
@@ -106,7 +107,7 @@ pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<
 
 pub fn delete_all_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
     let handle = rocksdb_util::get_cf_handle(db, cf)?;
-    let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
+    let iter_opt = IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), false);
     let mut it = db.new_iterator_cf(cf, iter_opt)?;
     let mut wb = WriteBatch::new();
     it.seek(start_key.into());

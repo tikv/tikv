@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
 
@@ -30,6 +29,7 @@ use tikv::raftstore::{store, Error, Result};
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
+use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
 use tikv::storage::{CfName, Engine};
 use kvproto::raft_serverpb::{self, RaftMessage};
@@ -55,7 +55,7 @@ struct ServerMeta {
 
 pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
-    addrs: HashMap<u64, SocketAddr>,
+    addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
@@ -70,18 +70,19 @@ impl ServerCluster {
                 .name_prefix(thd_name!("server-cluster"))
                 .build(),
         );
+        let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         ServerCluster {
             metas: HashMap::new(),
             addrs: HashMap::new(),
             pd_client: pd_client,
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
-            raft_client: RaftClient::new(env, Config::default()),
+            raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
         }
     }
 
-    pub fn get_addr(&self, node_id: u64) -> SocketAddr {
-        self.addrs[&node_id]
+    pub fn get_addr(&self, node_id: u64) -> &str {
+        &self.addrs[&node_id]
     }
 }
 
@@ -101,7 +102,7 @@ impl Simulator for ServerCluster {
         // Now we cache the store address, so here we should re-use last
         // listening address for the same store.
         if let Some(addr) = self.addrs.get(&node_id) {
-            cfg.server.addr = format!("{}", addr)
+            cfg.server.addr = addr.clone();
         }
 
         // Initialize raftstore channels.
@@ -121,10 +122,13 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
-        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch));
+        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
         let pd_worker = FutureWorker::new("test-pd-worker");
+        let server_cfg = Arc::new(cfg.server.clone());
+        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let mut server = Server::new(
-            &cfg.server,
+            &server_cfg,
+            &security_mgr,
             cfg.coprocessor.region_split_size.0 as usize,
             store.clone(),
             sim_router.clone(),
@@ -137,6 +141,7 @@ impl Simulator for ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
+        let server_cfg = Arc::new(cfg.server.clone());
 
         // Create node.
         let mut node = Node::new(
@@ -165,7 +170,7 @@ impl Simulator for ServerCluster {
             self.snap_paths.insert(node_id, tmp);
         }
 
-        server.start(&cfg.server).unwrap();
+        server.start(server_cfg, security_mgr).unwrap();
 
         self.metas.insert(
             node_id,
@@ -178,7 +183,7 @@ impl Simulator for ServerCluster {
                 worker: worker,
             },
         );
-        self.addrs.insert(node_id, addr);
+        self.addrs.insert(node_id, format!("{}", addr));
 
         node_id
     }
@@ -224,8 +229,8 @@ impl Simulator for ServerCluster {
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
         let store_id = raft_msg.get_to_peer().get_store_id();
-        let addr = self.get_addr(store_id);
-        self.raft_client.send(store_id, addr, raft_msg).unwrap();
+        let addr = self.get_addr(store_id).to_owned();
+        self.raft_client.send(store_id, &addr, raft_msg).unwrap();
         self.raft_client.flush();
         Ok(())
     }
