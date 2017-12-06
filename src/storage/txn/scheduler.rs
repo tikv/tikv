@@ -489,7 +489,7 @@ fn process_read(
                 !ctx.get_not_fill_cache(),
             );
             let res = snap_store
-                .scanner(ScanMode::Forward, options.key_only, None)
+                .scanner(ScanMode::Forward, options.key_only, None, None)
                 .and_then(|mut scanner| {
                     let res = scanner.scan(start_key.clone(), limit);
                     statistics.add(scanner.get_statistics());
@@ -518,6 +518,7 @@ fn process_read(
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
+                None,
                 ctx.get_isolation_level(),
             );
             let res = match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
@@ -538,6 +539,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -571,6 +573,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -607,6 +610,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -652,6 +656,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
