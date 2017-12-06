@@ -1347,13 +1347,18 @@ impl RegionProposal {
     }
 }
 
+pub struct ApplyBatch {
+    vec: Vec<Apply>,
+    start: Instant,
+}
+
 pub struct Destroy {
     region_id: u64,
 }
 
 /// region related task.
 pub enum Task {
-    Applies((Vec<Apply>, Instant)),
+    Applies(ApplyBatch),
     Registration(Registration),
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
@@ -1361,7 +1366,10 @@ pub enum Task {
 
 impl Task {
     pub fn applies(applies: Vec<Apply>) -> Task {
-        Task::Applies((applies, Instant::now_coarse()))
+        Task::Applies(ApplyBatch {
+            vec: applies,
+            start: Instant::now_coarse(),
+        })
     }
 
     pub fn register(peer: &Peer) -> Task {
@@ -1378,7 +1386,7 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Applies((ref a, _)) => write!(f, "async applys count {}", a.len()),
+            Task::Applies(ref a) => write!(f, "async applys count {}", a.vec.len()),
             Task::Proposals(ref p) => write!(f, "region proposal count {}", p.len()),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
@@ -1586,10 +1594,10 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Applies((a, start_time)) => {
-                let elapsed = duration_to_sec(start_time.elapsed()) as f64;
+            Task::Applies(a) => {
+                let elapsed = duration_to_sec(a.start.elapsed());
                 APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
-                self.handle_applies(a);
+                self.handle_applies(a.vec);
             }
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
