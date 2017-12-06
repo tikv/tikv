@@ -82,7 +82,7 @@ impl<'a> CFOptions<'a> {
 
 pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     let mut db_opts = DBOptions::new();
-    db_opts.enable_statistics();
+    db_opts.enable_statistics(true);
     let mut cfs_opts = Vec::with_capacity(cfs.len());
     for cf in cfs {
         cfs_opts.push(CFOptions::new(*cf, ColumnFamilyOptions::new()));
