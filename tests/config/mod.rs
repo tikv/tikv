@@ -133,8 +133,8 @@ fn test_serde_custom_tikv_config() {
         info_log_roll_time: ReadableDuration::secs(12),
         info_log_dir: "/var".to_owned(),
         rate_bytes_per_sec: ReadableSize::kb(1),
-        bytes_per_sync: ReadableSize::mb(1);
-        wal_bytes_per_sync: ReadableSize::kb(32);
+        bytes_per_sync: ReadableSize::mb(1),
+        wal_bytes_per_sync: ReadableSize::kb(32),
         max_sub_compactions: 12,
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,

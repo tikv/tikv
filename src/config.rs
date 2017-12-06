@@ -38,8 +38,8 @@ const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
 
-const DEFAULT_BYTES_PER_SYNC_MB: usize = 1;
-const DEFAULT_WAL_BYTES_PER_SYNC_KB: usize = 32;
+const DEFAULT_BYTES_PER_SYNC_MB: u64 = 1;
+const DEFAULT_WAL_BYTES_PER_SYNC_KB: u64 = 32;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
