@@ -592,7 +592,7 @@ impl FnCall {
 
     /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces
     /// a new string according to `flen` and `chs`.
-    pub fn produce_str_with_specified_tp<'a, 'b: 'a>(
+    fn produce_str_with_specified_tp<'a, 'b: 'a>(
         &'b self,
         ctx: &StatementContext,
         s: Cow<'a, [u8]>,
