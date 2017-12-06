@@ -164,6 +164,7 @@ enum SeekMode {
 }
 
 pub struct IterOption {
+    lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
     prefix_same_as_start: bool,
     fill_cache: bool,
@@ -171,8 +172,13 @@ pub struct IterOption {
 }
 
 impl IterOption {
-    pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool) -> IterOption {
+    pub fn new(
+        lower_bound: Option<Vec<u8>>,
+        upper_bound: Option<Vec<u8>>,
+        fill_cache: bool,
+    ) -> IterOption {
         IterOption {
+            lower_bound: lower_bound,
             upper_bound: upper_bound,
             prefix_same_as_start: false,
             fill_cache: fill_cache,
@@ -192,14 +198,23 @@ impl IterOption {
     }
 
     #[inline]
+    pub fn lower_bound(&self) -> Option<&[u8]> {
+        self.lower_bound.as_ref().map(|v| v.as_slice())
+    }
+
+    #[inline]
+    pub fn set_lower_bound(&mut self, bound: Vec<u8>) {
+        self.lower_bound = Some(bound);
+    }
+
+    #[inline]
     pub fn upper_bound(&self) -> Option<&[u8]> {
         self.upper_bound.as_ref().map(|v| v.as_slice())
     }
 
     #[inline]
-    pub fn set_upper_bound(mut self, bound: Vec<u8>) -> IterOption {
+    pub fn set_upper_bound(&mut self, bound: Vec<u8>) {
         self.upper_bound = Some(bound);
-        self
     }
 
     #[inline]
@@ -216,6 +231,9 @@ impl IterOption {
         } else if self.prefix_same_as_start {
             opts.set_prefix_same_as_start(true);
         }
+        if let Some(ref key) = self.lower_bound {
+            opts.set_iterate_lower_bound(key);
+        }
         if let Some(ref key) = self.upper_bound {
             opts.set_iterate_upper_bound(key);
         }
@@ -226,6 +244,7 @@ impl IterOption {
 impl Default for IterOption {
     fn default() -> IterOption {
         IterOption {
+            lower_bound: None,
             upper_bound: None,
             prefix_same_as_start: false,
             fill_cache: true,
@@ -245,7 +264,8 @@ pub trait Iterable {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        let iter_opt =
+            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
         scan_impl(self.new_iterator(iter_opt), start_key, f)
     }
 
@@ -261,7 +281,8 @@ pub trait Iterable {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        let iter_opt =
+            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
         scan_impl(self.new_iterator_cf(cf, iter_opt)?, start_key, f)
     }
 

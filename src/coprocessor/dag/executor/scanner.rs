@@ -94,16 +94,21 @@ impl<'a> Scanner<'a> {
     }
 
     pub fn init_with_range(&mut self, range: &KeyRange) -> Result<()> {
-        let upper_bound = if self.scan_mode == ScanMode::Backward {
-            self.seek_key = Some(range.get_end().to_vec());
-            None
-        } else {
-            self.seek_key = Some(range.get_start().to_vec());
-            Some(Key::from_raw(range.get_end()).encoded().to_vec())
-        };
+        match self.scan_mode {
+            ScanMode::Backward => self.seek_key = Some(range.get_end().to_vec()),
+            ScanMode::Forward => self.seek_key = Some(range.get_start().to_vec()),
+            _ => unreachable!(),
+        }
+        let lower_bound = Some(Key::from_raw(range.get_start()).encoded().to_vec());
+        let upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
         let statistics = self.take_statistics();
-        let scanner = self.store
-            .scanner(self.scan_mode, self.key_only, upper_bound, statistics)?;
+        let scanner = self.store.scanner(
+            self.scan_mode,
+            self.key_only,
+            lower_bound,
+            upper_bound,
+            statistics,
+        )?;
         self.scanner = Some(scanner);
         Ok(())
     }

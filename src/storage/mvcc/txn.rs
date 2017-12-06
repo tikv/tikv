@@ -54,6 +54,7 @@ impl<'a> MvccTxn<'a> {
                 mode,
                 fill_cache,
                 None,
+                None,
                 isolation_level,
             ),
             start_ts: start_ts,
@@ -1069,6 +1070,7 @@ mod tests {
             None,
             true,
             None,
+            None,
             IsolationLevel::SI,
         );
         let lock = reader.load_lock(&make_key(key)).unwrap().unwrap();
@@ -1083,6 +1085,7 @@ mod tests {
             &mut statistics,
             None,
             true,
+            None,
             None,
             IsolationLevel::SI,
         );
@@ -1107,6 +1110,7 @@ mod tests {
             None,
             true,
             None,
+            None,
             IsolationLevel::SI,
         );
         assert!(reader.seek_write(&make_key(key), ts).unwrap().is_none());
@@ -1128,6 +1132,7 @@ mod tests {
             None,
             true,
             None,
+            None,
             IsolationLevel::SI,
         );
         let (t, write) = reader.seek_write(&make_key(key), ts).unwrap().unwrap();
@@ -1144,6 +1149,7 @@ mod tests {
             &mut statistics,
             None,
             true,
+            None,
             None,
             IsolationLevel::SI,
         );
@@ -1171,6 +1177,7 @@ mod tests {
             None,
             true,
             None,
+            None,
             IsolationLevel::SI,
         );
         let (t, write) = reader
@@ -1191,6 +1198,7 @@ mod tests {
             None,
             true,
             None,
+            None,
             IsolationLevel::SI,
         );
         let (ts, write_type) = reader
@@ -1209,6 +1217,7 @@ mod tests {
             &mut statistics,
             None,
             true,
+            None,
             None,
             IsolationLevel::SI,
         );
@@ -1241,6 +1250,7 @@ mod tests {
             &mut statistics,
             Some(ScanMode::Mixed),
             false,
+            None,
             None,
             IsolationLevel::SI,
         );
@@ -1300,6 +1310,7 @@ mod tests {
             Some(ScanMode::Forward),
             true,
             None,
+            None,
             IsolationLevel::SI,
         );
 
@@ -1346,6 +1357,7 @@ mod tests {
             &mut statistics,
             Some(ScanMode::Forward),
             true,
+            None,
             None,
             IsolationLevel::SI,
         );
