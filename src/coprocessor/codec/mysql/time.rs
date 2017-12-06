@@ -184,19 +184,18 @@ fn abbr_day_of_month(day: i32) -> &'static str {
 }
 
 // calculates days since 0000-00-00.
-fn calc_day_number(year: i32, month: i32, day: i32) -> i32 {
+fn calc_day_number(mut year: i32, month: i32, day: i32) -> i32 {
     if year == 0 && month == 0 {
         return 0;
     }
-    let mut year2 = year;
     let mut delsum = 365 * year + 31 * (month - 1) + day;
     if month <= 2 {
-        year2 -= 1;
+        year -= 1;
     } else {
         delsum -= (month * 4 + 23) / 10;
     }
-    let temp = ((year2 / 100 + 1) * 3) / 4;
-    delsum + year2 / 4 - temp
+    let temp = ((year / 100 + 1) * 3) / 4;
+    delsum + year / 4 - temp
 }
 
 /// calculates days in one year, it works with 0 <= year <= 99.
@@ -208,12 +207,12 @@ fn calc_days_in_year(year: i32) -> i32 {
 }
 
 /// calculates weekday from daynr, returns 0 for Monday, 1 for Tuesday ...
-fn calc_weekday(daynr: i32, sunday_first_day: bool) -> i32 {
-    let mut daynr2 = daynr + 5;
+fn calc_weekday(mut daynr: i32, sunday_first_day: bool) -> i32 {
+    daynr += 5;
     if sunday_first_day {
-        daynr2 += 1;
+        daynr += 1;
     }
-    daynr2 % 7
+    daynr % 7
 }
 
 #[inline]
