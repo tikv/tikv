@@ -40,6 +40,7 @@ use std::u64;
 use std::mem;
 
 use prometheus::HistogramTimer;
+use prometheus::local::LocalHistogramVec;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
@@ -1000,9 +1001,20 @@ fn process_write_impl(
     Ok(())
 }
 
-#[derive(Default)]
 struct SchedContext {
     stats: HashMap<&'static str, StatisticsSummary>,
+    processing_read_duration: LocalHistogramVec,
+    processing_write_duration: LocalHistogramVec,
+}
+
+impl Default for SchedContext {
+    fn default() -> SchedContext {
+        SchedContext {
+            stats: HashMap::default(),
+            processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
+            processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
+        }
+    }
 }
 
 impl SchedContext {
@@ -1024,6 +1036,8 @@ impl ThreadContext for SchedContext {
                 }
             }
         }
+        self.processing_read_duration.flush();
+        self.processing_write_duration.flush();
     }
 }
 
@@ -1099,7 +1113,7 @@ impl Scheduler {
         let tag = cmd.tag();
         if readcmd {
             worker_pool.execute(move |ctx: &mut SchedContext| {
-                let _processing_read_timer = SCHED_PROCESSING_READ_HISTOGRAM_VEC
+                let _processing_read_timer = ctx.processing_read_duration
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
@@ -1108,7 +1122,7 @@ impl Scheduler {
             });
         } else {
             worker_pool.execute(move |ctx: &mut SchedContext| {
-                let _processing_write_timer = SCHED_PROCESSING_WRITE_HISTOGRAM_VEC
+                let _processing_write_timer = ctx.processing_write_duration
                     .with_label_values(&[tag])
                     .start_coarse_timer();
 
