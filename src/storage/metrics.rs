@@ -40,13 +40,6 @@ lazy_static! {
             "Total number of pending commands."
         ).unwrap();
 
-    pub static ref SCHED_WORKER_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_scheduler_worker_command_total",
-            "Total number of commands executed by worker pool.",
-            &["type", "rw_type"]
-        ).unwrap();
-
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_scheduler_command_duration_seconds",
@@ -59,6 +52,22 @@ lazy_static! {
         register_histogram_vec!(
             "tikv_scheduler_latch_wait_duration_seconds",
             "Bucketed histogram of latch wait",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref SCHED_PROCESSING_READ_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_scheduler_processing_read_duration_seconds",
+            "Bucketed histogram of processing read duration",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref SCHED_PROCESSING_WRITE_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_scheduler_processing_write_duration_seconds",
+            "Bucketed histogram of processing write duration",
             &["type"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
