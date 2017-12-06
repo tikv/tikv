@@ -152,8 +152,8 @@ impl<'a> SelectContext<'a> {
             } else {
                 range.get_start().to_vec()
             };
-            let lower_bound = Some(Key::from_raw(r.get_start()).encoded().clone());
-            let upper_bound = Some(Key::from_raw(r.get_end()).encoded().clone());
+            let lower_bound = Some(Key::from_raw(range.get_start()).encoded().clone());
+            let upper_bound = Some(Key::from_raw(range.get_end()).encoded().clone());
             let mut scanner = self.snap.scanner(
                 if self.core.desc_scan {
                     ScanMode::Backward
