@@ -152,16 +152,8 @@ impl<'a> SelectContext<'a> {
             } else {
                 range.get_start().to_vec()
             };
-            let lower_bound = if !range.get_start().is_empty() {
-                Some(Key::from_raw(range.get_start()).encoded().clone())
-            } else {
-                None
-            };
-            let upper_bound = if !range.get_end().is_empty() {
-                Some(Key::from_raw(range.get_end()).encoded().clone())
-            } else {
-                None
-            };
+            let lower_bound = Some(Key::from_raw(r.get_start()).encoded().clone());
+            let upper_bound = Some(Key::from_raw(r.get_end()).encoded().clone());
             let mut scanner = self.snap.scanner(
                 if self.core.desc_scan {
                     ScanMode::Backward
@@ -237,16 +229,8 @@ impl<'a> SelectContext<'a> {
             r.get_start().to_vec()
         };
         CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
-        let lower_bound = if !r.get_start().is_empty() {
-            Some(Key::from_raw(r.get_start()).encoded().clone())
-        } else {
-            None
-        };
-        let upper_bound = if !r.get_end().is_empty() {
-            Some(Key::from_raw(r.get_end()).encoded().clone())
-        } else {
-            None
-        };
+        let lower_bound = Some(Key::from_raw(r.get_start()).encoded().clone());
+        let upper_bound = Some(Key::from_raw(r.get_end()).encoded().clone());
         let mut scanner = self.snap.scanner(
             if self.core.desc_scan {
                 ScanMode::Backward
