@@ -26,6 +26,7 @@ use storage::types::Key;
 use kvproto::metapb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::importpb::*;
+use kvproto::errorpb::NotLeader;
 
 use super::{Client, Config, Engine, Error, Result, UploadStream};
 use super::stream::*;
@@ -129,7 +130,7 @@ impl ImportCFJob {
     fn import(&self) -> bool {
         // Use a synchronous channel here as a rate limiter. The import stream
         // will be blocked if the import threads can not handle it fast enough.
-        let (tx, rx) = mpsc::sync_channel(1);
+        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_jobs);
         let handles = self.run_import_threads(rx);
 
         let mut done = true;
@@ -169,13 +170,15 @@ impl ImportCFJob {
         let mut handles = Vec::new();
         let rx = Arc::new(Mutex::new(rx));
 
-        for _ in 0..self.cfg.max_import_jobs {
+        for i in 0..self.cfg.max_import_jobs {
             let rx = rx.clone();
             let ctx = self.clone();
 
-            let handle = thread::spawn(move || {
+            let name = format!("import-sst-{}", i);
+            let handle = thread::Builder::new().name(name).spawn(move || {
                 let mut done = true;
                 let finished = ctx.finished_ranges.clone();
+
                 while let Ok(info) = rx.lock().unwrap().recv() {
                     let id = ctx.job_counter.fetch_add(1, Ordering::SeqCst);
                     let tag = format!("[JOB {}:{}]", ctx.engine.uuid(), id);
@@ -186,6 +189,7 @@ impl ImportCFJob {
                             continue;
                         }
                     };
+
                     let mut job = ImportSSTJob::new(tag, ctx.cfg.clone(), sst, ctx.client.clone());
                     match job.run() {
                         Ok(range) => finished.lock().unwrap().push(range),
@@ -195,9 +199,11 @@ impl ImportCFJob {
                         }
                     }
                 }
+
                 done
             });
-            handles.push(handle);
+
+            handles.push(handle.unwrap());
         }
 
         handles
@@ -305,9 +311,11 @@ impl ImportSSTJob {
         for _ in 0..10 {
             match self.ingest(&region)? {
                 None => return Ok(()),
-                Some(leader) => region.leader = Some(leader),
+                Some(mut error) => if error.has_leader() {
+                    region.leader = Some(error.take_leader());
+                },
             }
-            thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_millis(300));
         }
 
         Err(Error::Timeout)
@@ -333,7 +341,7 @@ impl ImportSSTJob {
         Ok(())
     }
 
-    fn ingest(&self, region: &RegionLeader) -> Result<Option<Peer>> {
+    fn ingest(&self, region: &RegionLeader) -> Result<Option<NotLeader>> {
         let (ctx, peer) = self.new_context(region);
         let mut ingest = IngestRequest::new();
         ingest.set_context(ctx);
@@ -342,8 +350,8 @@ impl ImportSSTJob {
         let res = match self.client.ingest_sst(peer.get_store_id(), ingest) {
             Ok(mut resp) => if resp.has_error() {
                 let mut error = resp.take_error();
-                if error.get_not_leader().has_leader() {
-                    return Ok(Some(error.take_not_leader().take_leader()));
+                if error.has_not_leader() {
+                    return Ok(Some(error.take_not_leader()));
                 }
                 Err(Error::TikvRPC(error))
             } else {

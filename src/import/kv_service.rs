@@ -17,6 +17,7 @@ use std::time::Instant;
 use uuid::Uuid;
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::{Future, Stream};
+use futures::sync::mpsc;
 use futures_cpupool::{Builder, CpuPool};
 
 use kvproto::importpb::*;
@@ -66,37 +67,30 @@ impl ImportKv for ImportKVService {
         let token = self.importer.token();
         let import1 = self.importer.clone();
         let import2 = self.importer.clone();
-        let threads1 = self.threads.clone();
-        let threads2 = self.threads.clone();
+        let bounded_stream = mpsc::spawn(stream, &self.threads, 4);
 
         ctx.spawn(
-            stream
+            bounded_stream
                 .map_err(Error::from)
                 .for_each(move |mut chunk| {
-                    let import1 = import1.clone();
-                    threads1.spawn_fn(move || {
-                        if chunk.has_head() {
-                            let head = chunk.get_head();
-                            let uuid = Uuid::from_bytes(head.get_uuid())?;
-                            import1.open(token, uuid)?;
-                        }
-                        if chunk.has_batch() {
-                            import1.write(token, chunk.take_batch())?;
-                        }
-                        Ok(())
-                    })
+                    if chunk.has_head() {
+                        let head = chunk.get_head();
+                        let uuid = Uuid::from_bytes(head.get_uuid())?;
+                        import1.open(token, uuid)?;
+                    }
+                    if chunk.has_batch() {
+                        import1.write(token, chunk.take_batch())?;
+                    }
+                    Ok(())
                 })
-                .then(move |res| {
-                    let import2 = import2.clone();
-                    threads2.spawn_fn(move || match res {
-                        Ok(_) => import2.close(token),
-                        Err(e) => {
-                            if let Some(engine) = import2.remove(token) {
-                                error!("remove {}: {:?}", engine, e);
-                            }
-                            Err(e)
+                .then(move |res| match res {
+                    Ok(_) => import2.close(token),
+                    Err(e) => {
+                        if let Some(engine) = import2.remove(token) {
+                            error!("remove {}: {:?}", engine, e);
                         }
-                    })
+                        Err(e)
+                    }
                 })
                 .map(|_| WriteResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),

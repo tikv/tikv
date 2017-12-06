@@ -51,7 +51,7 @@ impl<'a> Ord for RangeEnd<'a> {
         } else if other.0 == RANGE_MAX {
             Ordering::Less
         } else {
-            self.0.cmp(&other.0)
+            self.0.cmp(other.0)
         }
     }
 }
@@ -256,7 +256,7 @@ impl RangeIterator {
             return false;
         }
         {
-            let range = self.ranges.get(self.ranges_index).unwrap();
+            let range = &self.ranges[self.ranges_index];
             if RangeEnd(self.iter.key()) < RangeEnd(range.get_end()) {
                 return true;
             }
@@ -266,8 +266,15 @@ impl RangeIterator {
     }
 
     fn seek_next(&mut self) -> bool {
-        while let Some(ref range) = self.ranges.get(self.ranges_index) {
-            if !self.iter.seek(SeekKey::Key(range.get_start())) {
+        while let Some(range) = self.ranges.get(self.ranges_index) {
+            // Write CF use a slice transform with fixed size, so we can not
+            // just seek to RANGE_MIN.
+            let seek_key = if range.get_start() == RANGE_MIN {
+                SeekKey::Start
+            } else {
+                SeekKey::Key(range.get_start())
+            };
+            if !self.iter.seek(seek_key) {
                 break;
             }
             assert!(self.iter.key() >= range.get_start());
