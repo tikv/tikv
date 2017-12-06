@@ -1565,7 +1565,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_ready_merge(&mut self, region: metapb::Region, source_region: metapb::Region) {
         let source_peer = {
-            let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
+            let peer = self.region_peers.get_mut(&source_region.get_id()).unwrap();
             peer.become_readonly();
             peer.peer.clone()
         };
