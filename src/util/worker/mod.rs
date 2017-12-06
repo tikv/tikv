@@ -17,12 +17,13 @@
 mod metrics;
 mod future;
 
-use std::io;
+use std::{io, u64};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SendError, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender, TryRecvError};
 use std::error::Error;
 
 use util::time::SlowTimer;
@@ -54,6 +55,7 @@ impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T);
+    fn on_timeout(&mut self) {}
     fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
 }
@@ -63,6 +65,9 @@ pub trait BatchRunnable<T: Display> {
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
+    /// `on_timeout` will be called after every timeout or tasks batch finished.
+    fn on_timeout(&mut self) {}
+    /// `on_tick` will be called after every tasks batch finished.
     fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
 }
@@ -75,6 +80,10 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
             self.run(t);
             slow_log!(timer, "handle task {}", task_str);
         }
+    }
+
+    fn on_timeout(&mut self) {
+        Runnable::on_timeout(self)
     }
 
     fn on_tick(&mut self) {
@@ -150,6 +159,7 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 pub struct Builder<S: Into<String>> {
     name: S,
     batch_size: usize,
+    timeout: Option<Duration>,
 }
 
 impl<S: Into<String>> Builder<S> {
@@ -157,11 +167,17 @@ impl<S: Into<String>> Builder<S> {
         Builder {
             name: name,
             batch_size: 1,
+            timeout: None,
         }
     }
 
     pub fn batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
         self
     }
 
@@ -172,6 +188,8 @@ impl<S: Into<String>> Builder<S> {
             receiver: Mutex::new(Some(rx)),
             handle: None,
             batch_size: self.batch_size,
+            timeout: self.timeout
+                .unwrap_or_else(|| Duration::from_millis(u64::MAX)),
         }
     }
 }
@@ -182,10 +200,16 @@ pub struct Worker<T: Display> {
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
     batch_size: usize,
+    timeout: Duration,
 }
 
-fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
-where
+fn poll<R, T>(
+    mut runner: R,
+    rx: Receiver<Option<T>>,
+    counter: Arc<AtomicUsize>,
+    batch_size: usize,
+    timeout: Duration,
+) where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
@@ -193,7 +217,7 @@ where
     let mut batch = Vec::with_capacity(batch_size);
     let mut keep_going = true;
     while keep_going {
-        keep_going = fill_task_batch(&rx, &mut batch, batch_size);
+        keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
         let should_tick = !batch.is_empty();
         if !batch.is_empty() {
             counter.fetch_sub(batch.len(), Ordering::SeqCst);
@@ -207,6 +231,7 @@ where
             runner.run_batch(&mut batch);
             batch.clear();
         }
+        runner.on_timeout();
         if should_tick {
             runner.on_tick();
         }
@@ -215,8 +240,13 @@ where
 }
 
 // Fill buffer with next task batch comes from `rx`.
-fn fill_task_batch<T>(rx: &Receiver<Option<T>>, buffer: &mut Vec<T>, batch_size: usize) -> bool {
-    match rx.recv() {
+fn fill_task_batch<T>(
+    rx: &Receiver<Option<T>>,
+    buffer: &mut Vec<T>,
+    batch_size: usize,
+    timeout: Duration,
+) -> bool {
+    match rx.recv_timeout(timeout) {
         Ok(Some(task)) => {
             buffer.push(task);
             while buffer.len() < batch_size {
@@ -228,6 +258,7 @@ fn fill_task_batch<T>(rx: &Receiver<Option<T>>, buffer: &mut Vec<T>, batch_size:
             }
             true
         }
+        Err(RecvTimeoutError::Timeout) => true,
         _ => false,
     }
 }
@@ -253,9 +284,10 @@ impl<T: Display + Send + 'static> Worker<T> {
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
         let batch_size = self.batch_size;
+        let timeout = self.timeout;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size))?;
+            .spawn(move || poll(runner, rx, counter, batch_size, timeout))?;
         self.handle = Some(h);
         Ok(())
     }
@@ -343,6 +375,22 @@ mod test {
         }
         fn on_tick(&mut self) {
             self.ch.send("tick msg").unwrap();
+        }
+        fn shutdown(&mut self) {
+            self.ch.send("").unwrap();
+        }
+    }
+
+    struct TimeoutRunner {
+        ch: Sender<&'static str>,
+    }
+
+    impl Runnable<&'static str> for TimeoutRunner {
+        fn run(&mut self, msg: &'static str) {
+            self.ch.send(msg).unwrap();
+        }
+        fn on_timeout(&mut self) {
+            self.ch.send("timeout msg").unwrap();
         }
         fn shutdown(&mut self) {
             self.ch.send("").unwrap();
@@ -439,6 +487,32 @@ mod test {
                 assert_eq!(msg, "tick msg");
             }
         }
+        worker.stop().unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn test_on_timeout() {
+        let mut worker = Builder::new("test-worker-tick")
+            .batch_size(4)
+            .timeout(Duration::from_secs(2))
+            .create();
+        for _ in 0..10 {
+            worker.schedule("normal msg").unwrap();
+        }
+        let (tx, rx) = mpsc::channel();
+        worker.start(TimeoutRunner { ch: tx }).unwrap();
+        for i in 0..13 {
+            let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            if i != 4 && i != 9 && i != 12 {
+                assert_eq!(msg, "normal msg");
+            } else {
+                assert_eq!(msg, "timeout msg");
+            }
+        }
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            "timeout msg"
+        );
         worker.stop().unwrap().join().unwrap();
     }
 }
