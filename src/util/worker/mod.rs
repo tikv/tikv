@@ -91,6 +91,7 @@ pub struct Scheduler<T> {
     name: Arc<String>,
     counter: Arc<AtomicUsize>,
     sender: Sender<Option<T>>,
+    busy_limit: usize,
 }
 
 impl<T: Display> Scheduler<T> {
@@ -98,11 +99,13 @@ impl<T: Display> Scheduler<T> {
         name: S,
         counter: AtomicUsize,
         sender: Sender<Option<T>>,
+        busy_limit: usize,
     ) -> Scheduler<T> {
         Scheduler {
             name: Arc::new(name.into()),
             counter: Arc::new(counter),
             sender: sender,
+            busy_limit: busy_limit,
         }
     }
 
@@ -123,7 +126,7 @@ impl<T: Display> Scheduler<T> {
 
     /// Check if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.counter.load(Ordering::SeqCst) > 0
+        self.counter.load(Ordering::SeqCst) >= self.busy_limit
     }
 }
 
@@ -133,6 +136,7 @@ impl<T: Display> Clone for Scheduler<T> {
             name: self.name.clone(),
             counter: self.counter.clone(),
             sender: self.sender.clone(),
+            busy_limit: self.busy_limit,
         }
     }
 }
@@ -143,13 +147,14 @@ impl<T: Display> Clone for Scheduler<T> {
 #[cfg(test)]
 pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
     let (tx, _) = mpsc::channel();
-    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
+    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx, 1)
 }
 
 #[derive(Copy, Clone)]
 pub struct Builder<S: Into<String>> {
     name: S,
     batch_size: usize,
+    busy_limit: usize,
 }
 
 impl<S: Into<String>> Builder<S> {
@@ -157,6 +162,7 @@ impl<S: Into<String>> Builder<S> {
         Builder {
             name: name,
             batch_size: 1,
+            busy_limit: 1,
         }
     }
 
@@ -165,10 +171,16 @@ impl<S: Into<String>> Builder<S> {
         self
     }
 
+    /// Pending tasks won't exceed `busy_limit`.
+    pub fn busy_limit(mut self, busy_limit: usize) -> Self {
+        self.busy_limit = busy_limit;
+        self
+    }
+
     pub fn create<T: Display>(self) -> Worker<T> {
         let (tx, rx) = mpsc::channel::<Option<T>>();
         Worker {
-            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx),
+            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx, self.busy_limit),
             receiver: Mutex::new(Some(rx)),
             handle: None,
             batch_size: self.batch_size,
@@ -440,5 +452,28 @@ mod test {
             }
         }
         worker.stop().unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn test_busy_limit() {
+        let mut worker = Builder::new("test-worker-busy")
+            .batch_size(4)
+            .busy_limit(3)
+            .create();
+
+        for i in 0..2 {
+            worker.schedule(i).unwrap();
+            assert!(!worker.scheduler().is_busy());
+        }
+        worker.schedule(2).unwrap();
+        assert!(worker.is_busy());
+
+        let (tx, rx) = mpsc::channel();
+        worker.start(BatchRunner { ch: tx }).unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+        assert!(!worker.is_busy());
+
+        worker.stop().unwrap().join().unwrap();
+        drop(rx);
     }
 }
