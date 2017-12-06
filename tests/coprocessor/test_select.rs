@@ -28,7 +28,7 @@ use tikv::util::codec::number::*;
 use tikv::storage::{Key, Mutation, ALL_CFS};
 use tikv::server::Config;
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::util::worker::{FutureWorker, Worker};
+use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use tipb::select::{Chunk, DAGRequest, SelectRequest, SelectResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
@@ -698,7 +698,9 @@ fn init_data_with_details(
     if commit {
         store.commit_with_ctx(ctx);
     }
-    let mut end_point = Worker::new("test select worker");
+    let mut end_point = WorkerBuilder::new("test select worker")
+        .batch_size(5)
+        .create();
     let pd_worker = FutureWorker::new("test pd worker");
     let runner = EndPointHost::new(
         store.get_engine(),
@@ -706,7 +708,7 @@ fn init_data_with_details(
         &cfg,
         pd_worker.scheduler(),
     );
-    end_point.start_batch(runner, 5).unwrap();
+    end_point.start(runner).unwrap();
 
     (store, end_point)
 }
