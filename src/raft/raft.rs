@@ -559,7 +559,6 @@ impl<T: Storage> Raft<T> {
         &mut self,
         m: &mut Message,
         pr: &mut Progress,
-        to: u64,
         term: u64,
         ents: Vec<Entry>,
     ) {
@@ -577,9 +576,8 @@ impl<T: Storage> Raft<T> {
                 }
                 ProgressState::Probe => pr.pause(),
                 _ => panic!(
-                    "{} is sending append to {} in unhandled state {:?}",
+                    "{} is sending append in unhandled state {:?}",
                     self.tag,
-                    to,
                     pr.state
                 ),
             }
@@ -588,15 +586,11 @@ impl<T: Storage> Raft<T> {
 
     // send_append sends RPC, with entries to the given peer.
     pub fn send_append(&mut self, to: u64, pr: &mut Progress) {
-        let (term, ents) = {
-            if pr.is_paused() {
-                return;
-            }
-            (
-                self.raft_log.term(pr.next_idx - 1),
-                self.raft_log.entries(pr.next_idx, self.max_msg_size),
-            )
-        };
+        if pr.is_paused() {
+            return;
+        }
+        let term = self.raft_log.term(pr.next_idx - 1);
+        let ents = self.raft_log.entries(pr.next_idx, self.max_msg_size);
         let mut m = Message::new();
         m.set_to(to);
         if term.is_err() || ents.is_err() {
@@ -605,7 +599,7 @@ impl<T: Storage> Raft<T> {
                 return;
             }
         } else {
-            self.prepare_send_entries(&mut m, pr, to, term.unwrap(), ents.unwrap());
+            self.prepare_send_entries(&mut m, pr, term.unwrap(), ents.unwrap());
         }
         self.send(m);
     }
@@ -630,7 +624,7 @@ impl<T: Storage> Raft<T> {
     }
 
     // bcast_append sends RPC, with entries to all peers that are not up-to-date
-    // according to the progress recorded in r.prs.
+    // according to the progress recorded in r.get_prs().
     pub fn bcast_append(&mut self) {
         let self_id = self.id;
         let mut prs = self.take_prs();
@@ -650,14 +644,12 @@ impl<T: Storage> Raft<T> {
 
     pub fn bcast_heartbeat_with_ctx(&mut self, ctx: Option<Vec<u8>>) {
         let self_id = self.id;
-        let prs = self.take_prs();
-        for (id, pr) in prs.voters
-            .iter()
-            .chain(&prs.learners)
+        let mut prs = self.take_prs();
+        prs.voters
+            .iter_mut()
+            .chain(&mut prs.learners)
             .filter(|&(id, _)| *id != self_id)
-        {
-            self.send_heartbeat(*id, pr, ctx.clone());
-        }
+            .for_each(|(id, pr)| self.send_heartbeat(*id, pr, ctx.clone()));
         self.set_prs(prs);
     }
 
@@ -1409,14 +1401,7 @@ impl<T: Storage> Raft<T> {
             }
             MessageType::MsgTransferLeader => {
                 let pr = prs.get_mut_progress(m.get_from()).unwrap();
-                if !pr.is_learner {
-                    self.handle_transfer_leader(m, pr);
-                } else {
-                    debug!(
-                        "{} is learner. Ignored transferring leadership",
-                        m.get_from()
-                    );
-                }
+                self.handle_transfer_leader(m, pr);
             }
             _ => {}
         }
