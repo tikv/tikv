@@ -174,10 +174,11 @@ fn check_key(status: &mut TableStatus, current_data_key: &[u8]) -> Option<Vec<u8
 }
 
 fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
+    let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let mut last_key = None;
 
-    let iter_opt = IterOption::new(Some(end_key), false);
+    let iter_opt = IterOption::new(Some(start_key), Some(end_key), false);
     let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
 
     // the last key
