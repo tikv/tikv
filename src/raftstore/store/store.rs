@@ -156,7 +156,7 @@ pub struct Store<T, C: 'static> {
 
     pub coprocessor_host: Arc<CoprocessorHost>,
 
-    pub sst_importer: Arc<SSTImporter>,
+    pub importer: Arc<SSTImporter>,
 
     snap_mgr: SnapManager,
 
@@ -199,7 +199,7 @@ impl<T, C> Store<T, C> {
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         mut coprocessor_host: CoprocessorHost,
-        sst_importer: Arc<SSTImporter>,
+        importer: Arc<SSTImporter>,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -234,7 +234,7 @@ impl<T, C> Store<T, C> {
             trans: trans,
             pd_client: pd_client,
             coprocessor_host: Arc::new(coprocessor_host),
-            sst_importer: sst_importer,
+            importer: importer,
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),

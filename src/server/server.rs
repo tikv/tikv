@@ -20,7 +20,7 @@ use kvproto::tikvpb_grpc::*;
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::importpb_grpc::create_import_sst;
 
-use import::{ImportSSTService, SSTImporter};
+use import::ImportSSTService;
 use util::worker::{Builder as WorkerBuilder, FutureScheduler, Worker};
 use util::security::SecurityManager;
 use storage::Storage;
@@ -68,7 +68,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snap_mgr: SnapManager,
         pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
-        sst_importer: Option<Arc<SSTImporter>>,
+        import_service: Option<ImportSSTService>,
     ) -> Result<Server<T, S>> {
         let env = Arc::new(
             EnvBuilder::new()
@@ -110,12 +110,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             if let Some(engines) = debug_engines {
                 sb = sb.register_service(create_debug(DebugService::new(engines)));
             }
-            if let Some(importer) = sst_importer {
-                let service = ImportSSTService::new(
-                    cfg.import_concurrency,
-                    storage.clone(),
-                    importer.clone(),
-                );
+            if let Some(service) = import_service {
                 sb = sb.register_service(create_import_sst(service));
             }
             sb.build()?

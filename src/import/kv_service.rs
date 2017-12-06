@@ -33,23 +33,23 @@ use super::{Client, Config, Error, ImportJob, KVImporter};
 #[derive(Clone)]
 pub struct ImportKVService {
     cfg: Config,
-    threads: CpuPool,
+    pool: CpuPool,
     client: Arc<Client>,
     importer: Arc<KVImporter>,
 }
 
 impl ImportKVService {
-    pub fn new(cfg: &Config, rpc: RpcClient, importer: KVImporter) -> ImportKVService {
-        let threads = Builder::new()
+    pub fn new(cfg: &Config, rpc: Arc<RpcClient>, importer: Arc<KVImporter>) -> ImportKVService {
+        let pool = Builder::new()
             .name_prefix("import_kv")
             .pool_size(cfg.num_threads)
             .create();
-        let client = Client::new(rpc, cfg.max_import_jobs);
+        let client = Arc::new(Client::new(rpc, cfg.max_import_jobs));
         ImportKVService {
             cfg: cfg.clone(),
-            threads: threads,
-            client: Arc::new(client),
-            importer: Arc::new(importer),
+            pool: pool,
+            client: client,
+            importer: importer,
         }
     }
 }
@@ -67,7 +67,7 @@ impl ImportKv for ImportKVService {
         let token = self.importer.token();
         let import1 = self.importer.clone();
         let import2 = self.importer.clone();
-        let bounded_stream = mpsc::spawn(stream, &self.threads, 4);
+        let bounded_stream = mpsc::spawn(stream, &self.pool, self.cfg.stream_channel_size);
 
         ctx.spawn(
             bounded_stream
@@ -104,10 +104,9 @@ impl ImportKv for ImportKVService {
         let cfg = self.cfg.clone();
         let client = self.client.clone();
         let import = self.importer.clone();
-        let threads = self.threads.clone();
 
         ctx.spawn(
-            threads
+            self.pool
                 .spawn_fn(move || {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     let engine = import.finish(uuid)?;

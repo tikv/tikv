@@ -16,7 +16,6 @@ end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
 end-point-batch-row-limit = 64
 snap-max-write-bytes-per-sec = "10MB"
-import-concurrency = 123
 
 [server.labels]
 a = "b"
@@ -309,3 +308,4 @@ key-path = "invalid path"
 import-dir = "/tmp/test/import"
 num-threads = 123
 max-import-jobs = 123
+stream-channel-size = 123

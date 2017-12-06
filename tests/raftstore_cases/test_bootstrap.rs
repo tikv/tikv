@@ -103,8 +103,9 @@ fn test_node_bootstrap_with_prepared_data() {
     // Create coprocessor.
     let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
-    let import_dir = TempDir::new("test-import").unwrap();
-    let sst_importer = Arc::new(SSTImporter::new(import_dir.path()).unwrap());
+    // Create importer.
+    let temp_dir = TempDir::new("test-import").unwrap();
+    let importer = Arc::new(SSTImporter::new(temp_dir.path()).unwrap());
 
     // try to restart this node, will clear the prepare data
     node.start(
@@ -115,7 +116,7 @@ fn test_node_bootstrap_with_prepared_data() {
         snapshot_status_receiver,
         pd_worker,
         coprocessor_host,
-        sst_importer,
+        importer,
     ).unwrap();
     assert!(
         engine

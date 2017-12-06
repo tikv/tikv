@@ -1536,7 +1536,7 @@ impl Runner {
         Runner {
             db: store.kv_engine(),
             host: store.coprocessor_host.clone(),
-            importer: store.sst_importer.clone(),
+            importer: store.importer.clone(),
             delegates: delegates,
             notifier: notifier,
             sync_log: sync_log,

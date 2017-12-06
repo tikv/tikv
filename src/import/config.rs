@@ -22,6 +22,7 @@ pub struct Config {
     pub import_dir: String,
     pub num_threads: usize,
     pub max_import_jobs: usize,
+    pub stream_channel_size: usize,
     #[serde(skip)]
     pub region_split_size: u64,
 }
@@ -31,8 +32,9 @@ impl Default for Config {
         let cpu_num = sys_info::cpu_num().unwrap() as usize;
         Config {
             import_dir: "/tmp/tikv/import".to_owned(),
-            num_threads: cpu_num,
+            num_threads: 4,
             max_import_jobs: cpu_num,
+            stream_channel_size: 128,
             region_split_size: ReadableSize::mb(96).0,
         }
     }

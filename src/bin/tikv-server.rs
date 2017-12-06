@@ -74,7 +74,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::import::{SSTImporter, Server as ImportServer};
+use tikv::import::{ImportSSTService, SSTImporter, Server as ImportServer};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -213,7 +213,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
 
     let server_cfg = Arc::new(cfg.server.clone());
-    let sst_importer = Arc::new(SSTImporter::new(import_path).unwrap());
+
+    let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+    let import_service = ImportSSTService::new(&cfg.import, storage.clone(), importer.clone());
 
     // Create server
     let mut server = Server::new(
@@ -226,7 +228,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         pd_worker.scheduler(),
         Some(engines.clone()),
-        Some(sst_importer.clone()),
+        Some(import_service),
     ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
@@ -244,7 +246,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         significant_msg_receiver,
         pd_worker,
         coprocessor_host,
-        sst_importer,
+        importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
@@ -285,7 +287,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 }
 
 fn run_import_server(cfg: &TiKvConfig, pd_client: RpcClient) {
-    let mut server = ImportServer::new(cfg, pd_client);
+    let mut server = ImportServer::new(cfg, Arc::new(pd_client));
     server.start();
     info!("import server started");
     signal_handler::handle_signal(None, "");

@@ -183,8 +183,8 @@ impl Simulator for NodeCluster {
         // Create coprocessor.
         let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
-        let import_path = TempDir::new("test-import").unwrap().into_path();
-        let sst_importer = Arc::new(SSTImporter::new(import_path).unwrap());
+        let temp_dir = TempDir::new("test-import").unwrap().into_path();
+        let importer = Arc::new(SSTImporter::new(temp_dir).unwrap());
 
         node.start(
             event_loop,
@@ -194,7 +194,7 @@ impl Simulator for NodeCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
-            sst_importer,
+            importer,
         ).unwrap();
         assert!(
             engines

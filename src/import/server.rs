@@ -30,11 +30,12 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(tikv: &TiKvConfig, client: RpcClient) -> Server {
+    pub fn new(tikv: &TiKvConfig, client: Arc<RpcClient>) -> Server {
         let cfg = &tikv.server;
         let addr = SocketAddr::from_str(&cfg.addr).unwrap();
 
-        let importer = KVImporter::new(&tikv.import.import_dir, &tikv.rocksdb).unwrap();
+        let dir = &tikv.import.import_dir;
+        let importer = Arc::new(KVImporter::new(dir, &tikv.rocksdb).unwrap());
         let import_service = ImportKVService::new(&tikv.import, client, importer);
 
         let env = Arc::new(

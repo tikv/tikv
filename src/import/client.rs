@@ -31,13 +31,13 @@ use pd::{PdClient, RpcClient};
 use super::{Error, Result};
 
 pub struct Client {
-    rpc: RpcClient,
+    rpc: Arc<RpcClient>,
     env: Arc<Environment>,
     channels: Mutex<HashMap<u64, Channel>>,
 }
 
 impl Client {
-    pub fn new(rpc: RpcClient, cq_count: usize) -> Client {
+    pub fn new(rpc: Arc<RpcClient>, cq_count: usize) -> Client {
         let env = EnvBuilder::new()
             .cq_count(cq_count)
             .name_prefix("import-client")

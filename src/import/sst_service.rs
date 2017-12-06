@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::{future, Future, Stream};
+use futures::sync::mpsc;
 use futures_cpupool::{Builder, CpuPool};
 
 use kvproto::importpb::*;
@@ -27,27 +28,25 @@ use util::time::duration_to_sec;
 
 use super::common::*;
 use super::metrics::*;
-use super::{Error, SSTImporter};
+use super::{Config, Error, SSTImporter};
 
 #[derive(Clone)]
 pub struct ImportSSTService {
-    threads: CpuPool,
+    cfg: Config,
+    pool: CpuPool,
     storage: Storage,
     importer: Arc<SSTImporter>,
 }
 
 impl ImportSSTService {
-    pub fn new(
-        num_threads: usize,
-        storage: Storage,
-        importer: Arc<SSTImporter>,
-    ) -> ImportSSTService {
-        let threads = Builder::new()
+    pub fn new(cfg: &Config, storage: Storage, importer: Arc<SSTImporter>) -> ImportSSTService {
+        let pool = Builder::new()
             .name_prefix("import_sst")
-            .pool_size(num_threads)
+            .pool_size(cfg.num_threads)
             .create();
         ImportSSTService {
-            threads: threads,
+            cfg: cfg.clone(),
+            pool: pool,
             storage: storage,
             importer: importer,
         }
@@ -67,35 +66,28 @@ impl ImportSst for ImportSSTService {
         let token = self.importer.token();
         let import1 = self.importer.clone();
         let import2 = self.importer.clone();
-        let threads1 = self.threads.clone();
-        let threads2 = self.threads.clone();
+        let bounded_stream = mpsc::spawn(stream, &self.pool, self.cfg.stream_channel_size);
 
         ctx.spawn(
-            stream
+            bounded_stream
                 .map_err(Error::from)
                 .for_each(move |chunk| {
-                    let import1 = import1.clone();
-                    threads1.spawn_fn(move || {
-                        if chunk.has_meta() {
-                            import1.create(token, chunk.get_meta())?;
-                        }
-                        if !chunk.get_data().is_empty() {
-                            import1.append(token, chunk.get_data())?;
-                        }
-                        Ok(())
-                    })
+                    if chunk.has_meta() {
+                        import1.create(token, chunk.get_meta())?;
+                    }
+                    if !chunk.get_data().is_empty() {
+                        import1.append(token, chunk.get_data())?;
+                    }
+                    Ok(())
                 })
-                .then(move |res| {
-                    let import2 = import2.clone();
-                    threads2.spawn_fn(move || match res {
-                        Ok(_) => import2.finish(token),
-                        Err(e) => {
-                            if let Some(f) = import2.remove(token) {
-                                error!("remove {}: {:?}", f, e);
-                            }
-                            Err(e)
+                .then(move |res| match res {
+                    Ok(_) => import2.finish(token),
+                    Err(e) => {
+                        if let Some(f) = import2.remove(token) {
+                            error!("remove {}: {:?}", f, e);
                         }
-                    })
+                        Err(e)
+                    }
                 })
                 .map(|_| UploadResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
