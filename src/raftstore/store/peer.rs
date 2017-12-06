@@ -896,8 +896,6 @@ impl Peer {
             }
         }
 
-        self.apply_reads(&ready);
-
         self.raft_group.advance_append(ready);
         if self.is_applying_snapshot() {
             // Because we only handle raft ready when not applying snapshot, so following
@@ -906,7 +904,7 @@ impl Peer {
         }
     }
 
-    fn apply_reads(&mut self, ready: &Ready) {
+    pub fn apply_reads(&mut self, ready: Ready) {
         let mut propose_time = None;
         if self.ready_to_handle_read() {
             for state in &ready.read_states {
@@ -922,20 +920,10 @@ impl Peer {
             }
         } else {
             for state in &ready.read_states {
-                if let Some(read) = self.pending_reads.reads.get(self.pending_reads.ready_cnt) {
-                    assert_eq!(
-                        state.request_ctx.as_slice(),
-                        read.binary_id(),
-                        "{} read index context mismatch, ready read {:?}, pending read {:?}",
-                        self.tag,
-                        state.request_ctx.as_slice(),
-                        read.binary_id()
-                    );
-                    self.pending_reads.ready_cnt += 1;
-                    propose_time = Some(read.renew_lease_time);
-                } else {
-                    break;
-                }
+                let read = &self.pending_reads.reads[self.pending_reads.ready_cnt];
+                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
+                self.pending_reads.ready_cnt += 1;
+                propose_time = Some(read.renew_lease_time);
             }
         }
 
@@ -946,6 +934,8 @@ impl Peer {
             // all uncommitted reads will be dropped silently in raft.
             self.pending_reads.clear_uncommitted(term);
         }
+
+        self.raft_group.commit_ready(ready);
 
         if let Some(Either::Right(_)) = self.leader_lease_expired_time {
             return;

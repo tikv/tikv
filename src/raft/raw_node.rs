@@ -214,7 +214,7 @@ impl<T: Storage> RawNode<T> {
         Ok(rn)
     }
 
-    fn commit_ready(&mut self, rd: Ready) {
+    pub fn commit_ready(&mut self, rd: Ready) {
         if rd.ss.is_some() {
             self.prev_ss = rd.ss.unwrap();
         }
@@ -233,7 +233,7 @@ impl<T: Storage> RawNode<T> {
                 .stable_snap_to(rd.snapshot.get_metadata().get_index());
         }
         if !rd.read_states.is_empty() {
-            self.raft.erase_old_ready_read(rd.read_states.len());
+            self.raft.read_states.clear();
         }
     }
 

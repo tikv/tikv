@@ -359,11 +359,6 @@ impl<T: Storage> Raft<T> {
         self.read_states.len()
     }
 
-    #[inline]
-    pub fn erase_old_ready_read(&mut self, len: usize) {
-        self.read_states = self.read_states.split_off(len);
-    }
-
     pub fn soft_state(&self) -> SoftState {
         SoftState {
             leader_id: self.leader_id,

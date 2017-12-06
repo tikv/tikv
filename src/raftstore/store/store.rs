@@ -20,6 +20,8 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
+use std::mem;
+
 use rocksdb::{WriteBatch, DB};
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -1108,6 +1110,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
+        let mut ready_reads = Vec::new();
         let mut ready_res_cnt = 0;
         let mut region_proposals = Vec::with_capacity(pending_count);
         {
@@ -1120,6 +1123,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     }
                     if !peer.handle_raft_ready_append(&mut ctx, &mut ready_res, &self.pd_worker) {
                         regions_not_handled.insert(region_id);
+                    }
+                    // Handle ready read_states ASAP.
+                    if let Some(&mut (ref mut ready, ref invoke_ctx)) = ready_res.last_mut() {
+                        let mut read = Ready::default();
+                        mem::swap(&mut ready.read_states, &mut read.read_states);
+                        ready_reads.push((invoke_ctx.region_id, read));
                     }
                 }
             }
@@ -1186,6 +1195,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.raft_metrics.ready.message - previous_ready_metrics.message,
             self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot
         );
+
+        for (region_id, ready) in ready_reads {
+            self.region_peers
+                .get_mut(&region_id)
+                .unwrap()
+                .apply_reads(ready);
+        }
 
         let mut apply_tasks = Vec::with_capacity(ready_results.len());
         for (region_id, ready, res) in ready_results {
