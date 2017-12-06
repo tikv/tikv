@@ -81,6 +81,23 @@ impl Snapshot {
     pub fn get_db(&self) -> Arc<DB> {
         self.db.clone()
     }
+
+    pub fn db_iterator(&self, iter_opt: IterOption) -> DBIterator<Arc<DB>> {
+        let mut opt = iter_opt.build_read_opts();
+        unsafe {
+            opt.set_snapshot(&self.snap);
+        }
+        DBIterator::new(self.db.clone(), opt)
+    }
+
+    pub fn db_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
+        let handle = rocksdb::get_cf_handle(&self.db, cf)?;
+        let mut opt = iter_opt.build_read_opts();
+        unsafe {
+            opt.set_snapshot(&self.snap);
+        }
+        Ok(DBIterator::new_cf(self.db.clone(), handle, opt))
+    }
 }
 
 impl Debug for Snapshot {
@@ -164,6 +181,7 @@ enum SeekMode {
 }
 
 pub struct IterOption {
+    lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
     prefix_same_as_start: bool,
     fill_cache: bool,
@@ -171,8 +189,13 @@ pub struct IterOption {
 }
 
 impl IterOption {
-    pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool) -> IterOption {
+    pub fn new(
+        lower_bound: Option<Vec<u8>>,
+        upper_bound: Option<Vec<u8>>,
+        fill_cache: bool,
+    ) -> IterOption {
         IterOption {
+            lower_bound: lower_bound,
             upper_bound: upper_bound,
             prefix_same_as_start: false,
             fill_cache: fill_cache,
@@ -192,14 +215,23 @@ impl IterOption {
     }
 
     #[inline]
+    pub fn lower_bound(&self) -> Option<&[u8]> {
+        self.lower_bound.as_ref().map(|v| v.as_slice())
+    }
+
+    #[inline]
+    pub fn set_lower_bound(&mut self, bound: Vec<u8>) {
+        self.lower_bound = Some(bound);
+    }
+
+    #[inline]
     pub fn upper_bound(&self) -> Option<&[u8]> {
         self.upper_bound.as_ref().map(|v| v.as_slice())
     }
 
     #[inline]
-    pub fn set_upper_bound(mut self, bound: Vec<u8>) -> IterOption {
+    pub fn set_upper_bound(&mut self, bound: Vec<u8>) {
         self.upper_bound = Some(bound);
-        self
     }
 
     #[inline]
@@ -216,6 +248,9 @@ impl IterOption {
         } else if self.prefix_same_as_start {
             opts.set_prefix_same_as_start(true);
         }
+        if let Some(ref key) = self.lower_bound {
+            opts.set_iterate_lower_bound(key);
+        }
         if let Some(ref key) = self.upper_bound {
             opts.set_iterate_upper_bound(key);
         }
@@ -226,6 +261,7 @@ impl IterOption {
 impl Default for IterOption {
     fn default() -> IterOption {
         IterOption {
+            lower_bound: None,
             upper_bound: None,
             prefix_same_as_start: false,
             fill_cache: true,
@@ -238,14 +274,14 @@ impl Default for IterOption {
 pub trait Iterable {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB>;
     fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
-
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        let iter_opt =
+            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
         scan_impl(self.new_iterator(iter_opt), start_key, f)
     }
 
@@ -261,7 +297,8 @@ pub trait Iterable {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        let iter_opt =
+            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
         scan_impl(self.new_iterator_cf(cf, iter_opt)?, start_key, f)
     }
 

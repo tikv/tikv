@@ -134,6 +134,10 @@ impl Config {
             return Err(box_err!("server.end-point-stack-size is too small."));
         }
 
+        if self.end_point_recursion_limit < 100 {
+            return Err(box_err!("server.end-point-recursion-limit is too small"));
+        }
+
         for (k, v) in &self.labels {
             validate_label(k, "key")?;
             validate_label(v, "value")?;
@@ -195,6 +199,10 @@ mod tests {
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_max_tasks = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.end_point_recursion_limit = 0;
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();
