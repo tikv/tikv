@@ -394,15 +394,16 @@ impl RequestTask {
     fn stop_record_handling(&mut self) {
         self.stop_record_waiting();
 
-        let handle_time = duration_to_sec(self.timer.elapsed());
+        let query_time = duration_to_sec(self.timer.elapsed());
         let type_str = self.ctx.get_scan_tag();
         COPR_REQ_HISTOGRAM_VEC
             .with_label_values(&[type_str])
-            .observe(handle_time);
+            .observe(query_time);
         let wait_time = self.wait_time.unwrap();
+        let handle_time = query_time - wait_time;
         COPR_REQ_HANDLE_TIME
             .with_label_values(&[type_str])
-            .observe(handle_time - wait_time);
+            .observe(handle_time);
 
         COPR_SCAN_KEYS
             .with_label_values(&[type_str])
@@ -411,13 +412,12 @@ impl RequestTask {
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
-                "[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
+                "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.req.get_context().get_region_id(),
                 self.start_ts,
                 type_str,
                 handle_time,
-                wait_time,
                 self.statistics.total_op_count(),
                 self.statistics.total_processed(),
                 self.req.get_ranges().len(),
@@ -750,7 +750,7 @@ mod tests {
     use tipb::expression::Expr;
     use tipb::executor::Executor;
 
-    use util::worker::{FutureWorker, Worker};
+    use util::worker::{Builder as WorkerBuilder, FutureWorker};
     use util::time::Instant;
 
     #[test]
@@ -768,13 +768,13 @@ mod tests {
 
     #[test]
     fn test_req_outdated() {
-        let mut worker = Worker::new("test-endpoint");
+        let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
         let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
-        worker.start_batch(end_point, 30).unwrap();
+        worker.start(end_point).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(
             Request::new(),
@@ -795,14 +795,14 @@ mod tests {
     }
     #[test]
     fn test_too_many_reqs() {
-        let mut worker = Worker::new("test-endpoint");
+        let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
         cfg.end_point_concurrency = 1;
         let pd_worker = FutureWorker::new("test-pd-worker");
         let mut end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
         end_point.max_running_task_count = 3;
-        worker.start_batch(end_point, 30).unwrap();
+        worker.start(end_point).unwrap();
         let (tx, rx) = mpsc::channel();
         for pos in 0..30 * 4 {
             let tx = tx.clone();

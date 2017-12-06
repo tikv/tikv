@@ -190,7 +190,7 @@ pub struct RunningCtx {
     region_id: u64,
     latch_timer: Option<HistogramTimer>,
     _timer: HistogramTimer,
-    slow_timer: SlowTimer,
+    slow_timer: Option<SlowTimer>,
 }
 
 impl RunningCtx {
@@ -217,20 +217,22 @@ impl RunningCtx {
             _timer: SCHED_HISTOGRAM_VEC
                 .with_label_values(&[tag])
                 .start_coarse_timer(),
-            slow_timer: SlowTimer::new(),
+            slow_timer: None,
         }
     }
 }
 
 impl Drop for RunningCtx {
     fn drop(&mut self) {
-        slow_log!(
-            self.slow_timer,
-            "[region {}] scheduler handle command: {}, ts: {}",
-            self.region_id,
-            self.tag,
-            self.ts
-        );
+        if let Some(ref mut timer) = self.slow_timer {
+            slow_log!(
+                timer,
+                "[region {}] scheduler handle command: {}, ts: {}",
+                self.region_id,
+                self.tag,
+                self.ts
+            );
+        }
     }
 }
 
@@ -487,7 +489,7 @@ fn process_read(
                 !ctx.get_not_fill_cache(),
             );
             let res = snap_store
-                .scanner(ScanMode::Forward, options.key_only, None)
+                .scanner(ScanMode::Forward, options.key_only, None, None)
                 .and_then(|mut scanner| {
                     let res = scanner.scan(start_key.clone(), limit);
                     statistics.add(scanner.get_statistics());
@@ -516,6 +518,7 @@ fn process_read(
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
+                None,
                 ctx.get_isolation_level(),
             );
             let res = match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
@@ -536,6 +539,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -569,6 +573,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -605,6 +610,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -650,6 +656,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -1203,6 +1210,7 @@ impl Scheduler {
         let ok = self.latches.acquire(&mut ctx.lock, cid);
         if ok {
             ctx.latch_timer.take();
+            ctx.slow_timer = Some(SlowTimer::new());
         }
         ok
     }

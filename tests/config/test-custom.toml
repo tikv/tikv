@@ -15,6 +15,7 @@ end-point-max-tasks = 12
 end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
 end-point-batch-row-limit = 64
+snap-max-write-bytes-per-sec = "10MB"
 
 [server.labels]
 a = "b"
@@ -276,3 +277,8 @@ level0-slowdown-writes-trigger = 123
 level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
 compaction-pri = 3
+
+[security]
+ca-path = "invalid path"
+cert-path = "invalid path"
+key-path = "invalid path"
