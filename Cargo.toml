@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "1.0.2"
+version = "1.0.3"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -10,7 +10,6 @@ time = "0.1"
 [features]
 default = []
 dev = ["clippy"]
-static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 mem-profiling = ["jemallocator"]

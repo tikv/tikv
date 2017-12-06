@@ -395,7 +395,7 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(
     } else {
         encode_bytes(unescape(key_prefix).as_slice())
     };
-    let iter_opt = IterOption::new(None, false);
+    let iter_opt = IterOption::new(None, None, false);
     let mut iter = db.new_iterator_cf(mvcc_type, iter_opt).unwrap();
     iter.seek(keys::data_key(&encoded_prefix).as_slice().into());
     if !iter.valid() {

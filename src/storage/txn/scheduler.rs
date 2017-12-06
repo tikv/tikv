@@ -483,7 +483,13 @@ fn process_read(
                 !ctx.get_not_fill_cache(),
             );
             let res = snap_store
-                .scanner(ScanMode::Forward, options.key_only, None, &mut statistics)
+                .scanner(
+                    ScanMode::Forward,
+                    options.key_only,
+                    None,
+                    None,
+                    &mut statistics,
+                )
                 .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
                 .and_then(|mut results| {
                     KV_COMMAND_KEYREAD_HISTOGRAM_VEC
@@ -509,6 +515,7 @@ fn process_read(
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
+                None,
                 ctx.get_isolation_level(),
             );
             match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
@@ -528,6 +535,7 @@ fn process_read(
                 &mut statistics,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -560,6 +568,7 @@ fn process_read(
                 &mut statistics,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -599,6 +608,7 @@ fn process_read(
                 &mut statistics,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -645,6 +655,7 @@ fn process_read(
                 &mut statistics,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
