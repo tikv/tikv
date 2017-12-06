@@ -36,7 +36,7 @@ impl FnCall {
 #[cfg(test)]
 mod test {
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::{convert, Datum};
+    use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Time;
     use coprocessor::dag::expr::test::fncall_expr;
     use coprocessor::dag::expr::{Expression, StatementContext};
