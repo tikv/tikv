@@ -324,8 +324,6 @@ impl<T: PdClient> Runner<T> {
         stats.is_busy = self.store_stat.busy_store || self.store_stat.busy_scheduler ||
             self.store_stat.busy_coprocessor;
 
-        info!("store is_busy = {}", stats.is_busy);
-
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
             .set(capacity as f64);
