@@ -533,6 +533,7 @@ impl Storage {
         let sched_concurrency = config.scheduler_concurrency;
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
         let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
+        let sched_busy_check_interval = config.scheduler_busy_check_interval.as_millis();
         let pd_scheduler = self.pd_scheduler.clone();
         let ch = self.sendch.clone();
         let h = builder.spawn(move || {
@@ -542,6 +543,7 @@ impl Storage {
                 sched_concurrency,
                 sched_worker_pool_size,
                 sched_pending_write_threshold,
+                sched_busy_check_interval,
                 pd_scheduler,
             );
             if let Err(e) = sched.run(rx) {

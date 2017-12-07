@@ -71,6 +71,7 @@ pub enum Task {
         peer: metapb::Peer,
     },
     ReadStats { read_stats: HashMap<u64, FlowStatistics>, },
+    SchedulerBusyStats { is_busy: bool },
     DestroyPeer { region_id: u64 },
 }
 
@@ -84,6 +85,10 @@ pub struct StoreStat {
     pub region_keys_read: LocalHistogram,
     pub region_bytes_written: LocalHistogram,
     pub region_keys_written: LocalHistogram,
+
+    pub busy_scheduler: bool,
+    pub busy_store: bool,
+    pub busy_coprocessor: bool,
 }
 
 impl Default for StoreStat {
@@ -98,6 +103,10 @@ impl Default for StoreStat {
             engine_total_keys_read: 0,
             engine_last_total_bytes_read: 0,
             engine_last_total_keys_read: 0,
+
+            busy_scheduler: false,
+            busy_store: false,
+            busy_coprocessor: false,
         }
     }
 }
@@ -148,6 +157,9 @@ impl Display for Task {
             } => write!(f, "validate peer {:?} with region {:?}", peer, region),
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
+            }
+            Task::SchedulerBusyStats { ref is_busy } => {
+                write!(f, "get scheduler busy stats {:?}", is_busy)
             }
             Task::DestroyPeer { ref region_id } => write!(f, "destroy peer {}", region_id),
         }
@@ -307,6 +319,13 @@ impl<T: PdClient> Runner<T> {
         self.store_stat.region_bytes_read.flush();
         self.store_stat.region_keys_read.flush();
 
+        // Update busy stat according to multiple factors
+        self.store_stat.busy_store = stats.is_busy;
+        stats.is_busy = self.store_stat.busy_store || self.store_stat.busy_scheduler ||
+            self.store_stat.busy_coprocessor;
+
+        info!("store is_busy = {}", stats.is_busy);
+
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
             .set(capacity as f64);
@@ -452,6 +471,10 @@ impl<T: PdClient> Runner<T> {
         }
     }
 
+    fn handle_scheduler_busy_stats(&mut self, is_busy: bool) {
+        self.store_stat.busy_scheduler = is_busy;
+    }
+
     fn handle_destroy_peer(&mut self, region_id: u64) {
         match self.region_peers.remove(&region_id) {
             None => return,
@@ -529,6 +552,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
+            Task::SchedulerBusyStats { is_busy } => self.handle_scheduler_busy_stats(is_busy),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
         };
     }

@@ -33,7 +33,7 @@
 
 use std::fmt::{self, Debug, Formatter};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::thread;
 use std::hash::{Hash, Hasher};
 use std::u64;
@@ -329,6 +329,15 @@ pub struct Scheduler {
 
     // used to control write flow
     running_write_bytes: usize,
+
+    // how often busy status is checked
+    sched_busy_check_interval: u64,
+
+    // pd task sender
+    sender: Option<FutureScheduler<PdTask>>,
+
+    // the report time of the previous busy status
+    last_busy_report_time: Instant,
 }
 
 // Make clippy happy.
@@ -376,6 +385,7 @@ impl Scheduler {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
+        sched_busy_check_interval: u64,
         r: Option<FutureScheduler<PdTask>>,
     ) -> Scheduler {
         Scheduler {
@@ -397,6 +407,9 @@ impl Scheduler {
             ).build(),
             has_gc_command: false,
             running_write_bytes: 0,
+            sched_busy_check_interval: sched_busy_check_interval,
+            sender: r.clone(),
+            last_busy_report_time: Instant::now(),
         }
     }
 }
@@ -1480,8 +1493,7 @@ impl Scheduler {
     pub fn run(&mut self, receiver: Receiver<Msg>) -> Result<()> {
         let mut msgs = Vec::with_capacity(CMD_BATCH_SIZE);
         loop {
-            info!("schedule main iter");
-            match receiver.recv_timeout(Duration::from_secs(5)) {
+            match receiver.recv_timeout(Duration::from_millis(self.sched_busy_check_interval / 2)) {
                 Ok(msg) => {
                     msgs.push(msg);
                     while let Ok(msg) = receiver.try_recv() {
@@ -1494,15 +1506,35 @@ impl Scheduler {
                     if quit_loop {
                         return Ok(());
                     }
+                    self.report_busy_status()?;
                 }
-                Err(RecvTimeoutError::Timeout) => {
-                    info!("time out");
-                }
+                Err(RecvTimeoutError::Timeout) => self.report_busy_status()?,
                 Err(e) => {
                     return Err(box_err!(e));
                 }
             }
         }
+    }
+
+    fn report_busy_status(&mut self) -> Result<()> {
+        if self.last_busy_report_time.elapsed().as_secs() * 1000 < self.sched_busy_check_interval {
+            return Ok(());
+        }
+        self.last_busy_report_time = Instant::now();
+
+        // `self.sender` is optional.
+        if self.sender.is_none() {
+            return Ok(());
+        }
+
+        let sender = self.sender.clone().unwrap();
+        if let Err(e) = sender.schedule(PdTask::SchedulerBusyStats {
+            is_busy: self.too_busy(),
+        }) {
+            error!("send coprocessor statistics: {:?}", e);
+        };
+
+        Ok(())
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<Msg>) -> Result<bool> {
