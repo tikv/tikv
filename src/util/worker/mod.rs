@@ -17,12 +17,12 @@
 mod metrics;
 mod future;
 
-use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder, JoinHandle};
 use std::io;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SendError, Sender};
+use std::sync::mpsc::{self, Receiver, SendError, Sender, TryRecvError};
 use std::error::Error;
 
 use util::time::SlowTimer;
@@ -54,14 +54,16 @@ impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T);
+    fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
 }
 
 pub trait BatchRunnable<T: Display> {
-    /// run a batch of tasks.
+    /// Run a batch of tasks.
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
+    fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
 }
 
@@ -73,6 +75,10 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
             self.run(t);
             slow_log!(timer, "handle task {}", task_str);
         }
+    }
+
+    fn on_tick(&mut self) {
+        Runnable::on_tick(self)
     }
 
     fn shutdown(&mut self) {
@@ -140,11 +146,42 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
     Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
 }
 
+#[derive(Copy, Clone)]
+pub struct Builder<S: Into<String>> {
+    name: S,
+    batch_size: usize,
+}
+
+impl<S: Into<String>> Builder<S> {
+    pub fn new(name: S) -> Self {
+        Builder {
+            name: name,
+            batch_size: 1,
+        }
+    }
+
+    pub fn batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    pub fn create<T: Display>(self) -> Worker<T> {
+        let (tx, rx) = mpsc::channel::<Option<T>>();
+        Worker {
+            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx),
+            receiver: Mutex::new(Some(rx)),
+            handle: None,
+            batch_size: self.batch_size,
+        }
+    }
+}
+
 /// A worker that can schedule time consuming tasks.
 pub struct Worker<T: Display> {
     scheduler: Scheduler<T>,
     receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
+    batch_size: usize,
 }
 
 fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
@@ -153,55 +190,56 @@ where
     T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
+    let mut batch = Vec::with_capacity(batch_size);
     let mut keep_going = true;
-    let mut buffer = Vec::with_capacity(batch_size);
     while keep_going {
-        let t = rx.recv();
-        match t {
-            Ok(Some(t)) => buffer.push(t),
-            _ => break,
+        keep_going = fill_task_batch(&rx, &mut batch, batch_size);
+        let should_tick = !batch.is_empty();
+        if !batch.is_empty() {
+            counter.fetch_sub(batch.len(), Ordering::SeqCst);
+            WORKER_PENDING_TASK_VEC
+                .with_label_values(&[&name])
+                .sub(batch.len() as f64);
+            WORKER_HANDLED_TASK_VEC
+                .with_label_values(&[&name])
+                .inc_by(batch.len() as f64)
+                .unwrap();
+            runner.run_batch(&mut batch);
+            batch.clear();
         }
-        while buffer.len() < batch_size {
-            match rx.try_recv() {
-                Ok(None) => {
-                    keep_going = false;
-                    break;
-                }
-                Ok(Some(t)) => buffer.push(t),
-                _ => break,
-            }
+        if should_tick {
+            runner.on_tick();
         }
-        counter.fetch_sub(buffer.len(), Ordering::SeqCst);
-        WORKER_PENDING_TASK_VEC
-            .with_label_values(&[&name])
-            .sub(buffer.len() as f64);
-        WORKER_HANDLED_TASK_VEC
-            .with_label_values(&[&name])
-            .inc_by(buffer.len() as f64)
-            .unwrap();
-        runner.run_batch(&mut buffer);
-        buffer.clear();
     }
     runner.shutdown();
+}
+
+// Fill buffer with next task batch comes from `rx`.
+fn fill_task_batch<T>(rx: &Receiver<Option<T>>, buffer: &mut Vec<T>, batch_size: usize) -> bool {
+    match rx.recv() {
+        Ok(Some(task)) => {
+            buffer.push(task);
+            while buffer.len() < batch_size {
+                match rx.try_recv() {
+                    Ok(Some(t)) => buffer.push(t),
+                    Err(TryRecvError::Empty) => break,
+                    Ok(None) | Err(_) => return false,
+                }
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
     /// Create a worker.
     pub fn new<S: Into<String>>(name: S) -> Worker<T> {
-        let (tx, rx) = mpsc::channel();
-        Worker {
-            scheduler: Scheduler::new(name, AtomicUsize::new(0), tx),
-            receiver: Mutex::new(Some(rx)),
-            handle: None,
-        }
+        Builder::new(name).create()
     }
 
     /// Start the worker.
-    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<(), io::Error> {
-        self.start_batch(runner, 1)
-    }
-
-    pub fn start_batch<R>(&mut self, runner: R, batch_size: usize) -> Result<(), io::Error>
+    pub fn start<R>(&mut self, runner: R) -> Result<(), io::Error>
     where
         R: BatchRunnable<T> + Send + 'static,
     {
@@ -214,7 +252,8 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
-        let h = Builder::new()
+        let batch_size = self.batch_size;
+        let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
             .spawn(move || poll(runner, rx, counter, batch_size))?;
         self.handle = Some(h);
@@ -294,6 +333,22 @@ mod test {
         }
     }
 
+    struct TickRunner {
+        ch: Sender<&'static str>,
+    }
+
+    impl Runnable<&'static str> for TickRunner {
+        fn run(&mut self, msg: &'static str) {
+            self.ch.send(msg).unwrap();
+        }
+        fn on_tick(&mut self) {
+            self.ch.send("tick msg").unwrap();
+        }
+        fn shutdown(&mut self) {
+            self.ch.send("").unwrap();
+        }
+    }
+
     #[test]
     fn test_worker() {
         let mut worker = Worker::new("test-worker");
@@ -333,9 +388,9 @@ mod test {
 
     #[test]
     fn test_batch() {
-        let mut worker = Worker::new("test-worker-batch");
+        let mut worker = Builder::new("test-worker-batch").batch_size(10).create();
         let (tx, rx) = mpsc::channel();
-        worker.start_batch(BatchRunner { ch: tx }, 10).unwrap();
+        worker.start(BatchRunner { ch: tx }).unwrap();
         for _ in 0..20 {
             worker.schedule(50).unwrap();
         }
@@ -355,9 +410,9 @@ mod test {
 
     #[test]
     fn test_autowired_batch() {
-        let mut worker = Worker::new("test-worker-batch");
+        let mut worker = Builder::new("test-worker-batch").batch_size(10).create();
         let (tx, rx) = mpsc::channel();
-        worker.start_batch(StepRunner { ch: tx }, 10).unwrap();
+        worker.start(StepRunner { ch: tx }).unwrap();
         for _ in 0..20 {
             worker.schedule(50).unwrap();
         }
@@ -366,5 +421,24 @@ mod test {
             rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         assert_eq!(rx.recv().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_on_tick() {
+        let mut worker = Builder::new("test-worker-tick").batch_size(4).create();
+        for _ in 0..10 {
+            worker.schedule("normal msg").unwrap();
+        }
+        let (tx, rx) = mpsc::channel();
+        worker.start(TickRunner { ch: tx }).unwrap();
+        for i in 0..13 {
+            let msg = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            if i != 4 && i != 9 && i != 12 {
+                assert_eq!(msg, "normal msg");
+            } else {
+                assert_eq!(msg, "tick msg");
+            }
+        }
+        worker.stop().unwrap().join().unwrap();
     }
 }

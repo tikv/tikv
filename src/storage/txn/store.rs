@@ -44,6 +44,7 @@ impl SnapshotStore {
             None,
             self.fill_cache,
             None,
+            None,
             self.isolation_level,
         );
         let v = reader.get(key, self.start_ts)?;
@@ -62,6 +63,7 @@ impl SnapshotStore {
             None,
             self.fill_cache,
             None,
+            None,
             self.isolation_level,
         );
         let mut results = Vec::with_capacity(keys.len());
@@ -78,12 +80,14 @@ impl SnapshotStore {
         &self,
         mode: ScanMode,
         key_only: bool,
+        lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
     ) -> Result<StoreScanner> {
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
             Some(mode),
             self.fill_cache,
+            lower_bound,
             upper_bound,
             self.isolation_level,
         );
@@ -296,7 +300,7 @@ mod test {
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
         let mut scanner = snapshot_store
-            .scanner(ScanMode::Forward, false, None)
+            .scanner(ScanMode::Forward, false, None, None)
             .unwrap();
 
         let key = format!("{}{}", KEY_PREFIX, START_ID);
@@ -319,7 +323,7 @@ mod test {
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
         let mut scanner = snapshot_store
-            .scanner(ScanMode::Backward, false, None)
+            .scanner(ScanMode::Backward, false, None, None)
             .unwrap();
 
         let half = (key_num / 2) as usize;
@@ -344,7 +348,7 @@ mod test {
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
         let mut scanner = snapshot_store
-            .scanner(ScanMode::Forward, false, None)
+            .scanner(ScanMode::Forward, false, None, None)
             .unwrap();
 
         let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
@@ -363,7 +367,7 @@ mod test {
         let snapshot_store = store.store();
 
         let mut scanner = snapshot_store
-            .scanner(ScanMode::Backward, false, None)
+            .scanner(ScanMode::Backward, false, None, None)
             .unwrap();
 
         let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
