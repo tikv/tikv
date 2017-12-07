@@ -71,33 +71,45 @@ impl Registry {
     }
 }
 
+/// A macro that loops over all observers and returns early when error is found or
+/// bypass is set. `try_loop_ob` is expected to be used for hook that returns a `Result`.
 macro_rules! try_loop_ob {
     ($r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {
         loop_ob!(_imp _res, $r, $obs, $hook, $($args)*)
     };
 }
 
+/// A macro that loops over all observers and returns early when bypass is set.
+///
+/// Using a macro so we don't need to write tests for every observers.
 macro_rules! loop_ob {
+    // Execute a hook, return early if error is found.
     (_exec _res, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
         $o.$hook($ctx, $($args)*)?
     };
+    // Execute a hook.
     (_exec _tup, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
         $o.$hook($ctx, $($args)*)
     };
+    // When the try loop finish successfully, the value to be returned.
     (_done _res) => {
         Ok(())
     };
+    // When the loop finish successfully, the value to be returned.
     (_done _tup) => {{}};
-    (_imp $res:tt, $r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {{
+    // Actual implementation of the for loop.
+    (_imp $res_type:tt, $r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {{
         let mut ctx = ObserverContext::new($r);
         for o in $obs {
-            loop_ob!(_exec $res, o.observer, $hook, &mut ctx, $($args)*);
+            loop_ob!(_exec $res_type, o.observer, $hook, &mut ctx, $($args)*);
             if ctx.bypass {
-                return loop_ob!(_done $res);
+                return loop_ob!(_done $res_type);
             }
         }
-        loop_ob!(_done $res)
+        loop_ob!(_done $res_type)
     }};
+    // Loops over all observers and return early when bypass is set.
+    // This macro is expected to be used for hook that returns `()`.
     ($r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {
         loop_ob!(_imp _tup, $r, $obs, $hook, $($args)*)
     };
