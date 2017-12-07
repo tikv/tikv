@@ -167,33 +167,10 @@ pub enum ExecResult {
     DeleteRange { ranges: Vec<Range> },
 }
 
-struct ApplyCallBack {
-    region: Region,
-    cbs: Vec<(Callback, RaftCmdResponse)>,
-}
-
-impl ApplyCallBack {
-    fn new(region: Region) -> ApplyCallBack {
-        let cbs = vec![];
-        ApplyCallBack { region, cbs }
-    }
-
-    fn invoke_all(self, host: &CoprocessorHost) {
-        for (cb, mut resp) in self.cbs {
-            host.post_apply(&self.region, &mut resp);
-            cb(resp);
-        }
-    }
-
-    fn push(&mut self, cb: Callback, resp: RaftCmdResponse) {
-        self.cbs.push((cb, resp));
-    }
-}
-
 struct ApplyContext<'a> {
     host: &'a CoprocessorHost,
     wb: WriteBatch,
-    cbs: MustConsumeVec<ApplyCallBack>,
+    cbs: MustConsumeVec<(Callback, RaftCmdResponse)>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
     sync_log: bool,
@@ -211,10 +188,6 @@ impl<'a> ApplyContext<'a> {
             sync_log: false,
             exec_ctx: None,
         }
-    }
-
-    fn prepare_for(&mut self, delegate: &ApplyDelegate) {
-        self.cbs.push(ApplyCallBack::new(delegate.region.clone()));
     }
 
     pub fn mark_last_bytes_and_keys(&mut self) {
@@ -348,7 +321,6 @@ impl ApplyDelegate {
         if committed_entries.is_empty() {
             return vec![];
         }
-        apply_ctx.prepare_for(self);
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -438,10 +410,10 @@ impl ApplyDelegate {
                     });
 
                 // call callback
-                for cbs in apply_ctx.cbs.drain(..) {
-                    cbs.invoke_all(apply_ctx.host);
+                for (cb, mut resp) in apply_ctx.cbs.drain(..) {
+                    apply_ctx.host.post_apply(&self.region, &mut resp);
+                    cb(resp);
                 }
-                apply_ctx.prepare_for(self);
                 apply_ctx.mark_last_bytes_and_keys();
             }
 
@@ -456,10 +428,10 @@ impl ApplyDelegate {
         assert!(term > 0);
         while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
             // apprently, all the callbacks whose term is less than entry's term are stale.
-            apply_ctx.cbs.last_mut().unwrap().push(
+            apply_ctx.cbs.push((
                 cmd.cb.take().unwrap(),
                 cmd_resp::err_resp(Error::StaleCommand, term),
-            );
+            ));
         }
         None
     }
@@ -552,7 +524,7 @@ impl ApplyDelegate {
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        apply_ctx.cbs.last_mut().unwrap().push(cb, resp);
+        apply_ctx.cbs.push((cb, resp));
 
         exec_result
     }
@@ -1525,8 +1497,8 @@ impl Runner {
         }
 
         // Call callbacks
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&self.host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
 
         if !applys_res.is_empty() {
@@ -1943,8 +1915,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
         assert!(res.is_empty());
         let resp = rx.try_recv().unwrap();
@@ -1970,8 +1942,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
         let lock_handle = db.cf_handle(CF_LOCK).unwrap();
         assert_eq!(db.get_cf(lock_handle, &dk_k1).unwrap().unwrap(), b"v1");
@@ -1993,8 +1965,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
@@ -2010,8 +1982,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -2036,8 +2008,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
@@ -2060,8 +2032,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -2074,8 +2046,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -2091,8 +2063,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -2112,8 +2084,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
         db.write(apply_ctx.wb).unwrap();
-        for cbs in apply_ctx.cbs.drain(..) {
-            cbs.invoke_all(&host);
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
