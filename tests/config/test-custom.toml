@@ -109,6 +109,7 @@ backup-dir = "/var"
 [rocksdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -139,6 +140,7 @@ compaction-pri = 3
 [rocksdb.writecf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -169,6 +171,7 @@ compaction-pri = 3
 [rocksdb.lockcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -199,6 +202,7 @@ compaction-pri = 3
 [rocksdb.raftcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -251,6 +255,7 @@ wal-bytes-per-sync = "1MB"
 [raftdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false

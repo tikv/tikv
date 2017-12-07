@@ -144,6 +144,7 @@ fn test_serde_custom_tikv_config() {
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
@@ -174,6 +175,7 @@ fn test_serde_custom_tikv_config() {
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
@@ -204,6 +206,7 @@ fn test_serde_custom_tikv_config() {
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
@@ -234,6 +237,7 @@ fn test_serde_custom_tikv_config() {
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
@@ -286,6 +290,7 @@ fn test_serde_custom_tikv_config() {
         defaultcf: RaftDefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
