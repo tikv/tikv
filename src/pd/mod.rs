@@ -26,8 +26,6 @@ pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::RECONNECT_INTERVAL_SEC;
 pub use self::config::Config;
 
-use std::ops::{Deref, DerefMut};
-
 use kvproto::metapb;
 use kvproto::pdpb;
 use futures::Future;
@@ -80,26 +78,6 @@ impl RegionInfo {
             region: region,
             leader: leader,
         }
-    }
-}
-
-impl Deref for RegionInfo {
-    type Target = metapb::Region;
-
-    fn deref(&self) -> &Self::Target {
-        &self.region
-    }
-}
-
-impl DerefMut for RegionInfo {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.region
-    }
-}
-
-impl From<metapb::Region> for RegionInfo {
-    fn from(region: metapb::Region) -> RegionInfo {
-        RegionInfo::new(region, None)
     }
 }
 
@@ -159,10 +137,9 @@ pub trait PdClient: Send + Sync {
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
 
     // Get region info which the key belong to.
-    // We can return leader in `get_region` too, but that will break a lot of code.
-    // In most cases we just need the region, so just leave it for convenience.
     fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
-        self.get_region(key).map(|region| region.into())
+        self.get_region(key)
+            .map(|region| RegionInfo::new(region, None))
     }
 
     // Get region by region id.
