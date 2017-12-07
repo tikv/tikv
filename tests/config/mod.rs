@@ -17,12 +17,14 @@ use std::fs::File;
 
 use log::LogLevelFilter;
 use rocksdb::{CompactionPriority, DBCompressionType, DBRecoveryMode};
+use tikv::pd::Config as PdConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::config::*;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
+use tikv::util::security::SecurityConfig;
 
 use toml;
 
@@ -140,6 +142,7 @@ fn test_serde_custom_tikv_config() {
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
@@ -170,6 +173,7 @@ fn test_serde_custom_tikv_config() {
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
@@ -200,6 +204,7 @@ fn test_serde_custom_tikv_config() {
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
@@ -230,6 +235,7 @@ fn test_serde_custom_tikv_config() {
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
@@ -282,6 +288,7 @@ fn test_serde_custom_tikv_config() {
         defaultcf: RaftDefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
@@ -325,6 +332,12 @@ fn test_serde_custom_tikv_config() {
         split_region_on_table: true,
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
+    };
+    value.security = SecurityConfig {
+        ca_path: "invalid path".to_owned(),
+        cert_path: "invalid path".to_owned(),
+        key_path: "invalid path".to_owned(),
+        override_ssl_target: "".to_owned(),
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");

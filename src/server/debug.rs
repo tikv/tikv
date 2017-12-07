@@ -15,7 +15,7 @@ use std::{error, result};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use protobuf::{Message, RepeatedField};
+use protobuf::RepeatedField;
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::{Region, RegionEpoch};
@@ -24,7 +24,6 @@ use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
-use raftstore::store::write_peer_state;
 use raftstore::store::{keys, Engines, Iterable, Peekable};
 use raftstore::store::engine::{IterOption, Mutable};
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -228,12 +227,12 @@ impl Debugger {
         let db = &self.engines.kv_engine;
         let key = keys::region_state_key(id);
 
-        let old_region = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key))
-            .ok_or_else(|| Error::Other("Not a valid region".into()))
-            .map(|mut region_local_state| region_local_state.take_region())?;
+        let mut region_state = box_try!(db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key))
+            .ok_or_else(|| Error::Other("Not a valid region".into()))?;
 
         let store_id = self.get_store_id()?;
-        let peer_id = old_region
+        let peer_id = region_state
+            .get_region()
             .get_peers()
             .iter()
             .find(|p| p.get_store_id() == store_id)
@@ -243,7 +242,7 @@ impl Debugger {
             })?;
 
         let new_conf_ver = region.get_region_epoch().get_conf_ver();
-        let old_conf_ver = old_region.get_region_epoch().get_conf_ver();
+        let old_conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
 
         // If the store is not in peers, or it's still in but its peer_id
         // has changed, we know the peer is marked as tombstone success.
@@ -255,8 +254,9 @@ impl Debugger {
 
         if new_conf_ver > old_conf_ver && scheduled {
             let wb = WriteBatch::new();
-            // Here we can keep the other metas as original.
-            box_try!(write_peer_state(db, &wb, &old_region, PeerState::Tombstone));
+            let handle = box_try!(get_cf_handle(db.as_ref(), CF_RAFT));
+            region_state.set_state(PeerState::Tombstone);
+            box_try!(wb.put_msg_cf(handle, &key, &region_state));
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             box_try!(db.write_opt(wb, &write_opts));
@@ -275,9 +275,8 @@ impl Debugger {
         }
 
         let store_id = self.get_store_id()?;
-        let wb = WriteBatch::new();
-
         let peers = region_state.mut_region().take_peers();
+        let peers_len = peers.len() as u64;
         let peer = match peers.into_iter().find(|p| p.get_store_id() == store_id) {
             Some(p) => p.clone(),
             None => {
@@ -287,15 +286,14 @@ impl Debugger {
         };
 
         let conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
-        let ver = region_state.get_region().get_region_epoch().get_version();
         let mut new_epoch = RegionEpoch::new();
-        new_epoch.set_conf_ver(conf_ver + 10);
-        new_epoch.set_version(ver + 10);
+        new_epoch.set_conf_ver(conf_ver + peers_len - 1);
 
         region_state.mut_region().mut_peers().clear();
         region_state.mut_region().mut_peers().push(peer);
         region_state.mut_region().set_region_epoch(new_epoch);
 
+        let wb = WriteBatch::new();
         let handle = box_try!(get_cf_handle(db.as_ref(), CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &key, &region_state));
 
@@ -305,6 +303,7 @@ impl Debugger {
         Ok(())
     }
 
+    /*********************
     pub fn do_unsafe_recover_all(&self) -> Result<()> {
         let db = &self.engines.kv_engine;
         let upper_bound = keys::REGION_META_MAX_KEY.to_owned();
@@ -339,6 +338,7 @@ impl Debugger {
         box_try!(db.write_opt(wb, &write_opts));
         Ok(())
     }
+    *********************/
 
     fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
@@ -369,7 +369,7 @@ impl MvccInfoIterator {
 
         let gen_iter = |cf: &str| -> Result<_> {
             let to = if to.is_empty() { None } else { Some(to) };
-            let readopts = IterOption::new(to.map(Vec::from), false).build_read_opts();
+            let readopts = IterOption::new(None, to.map(Vec::from), false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(db.clone(), handle, readopts);
             iter.seek(SeekKey::from(from));

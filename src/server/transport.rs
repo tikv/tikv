@@ -13,7 +13,6 @@
 
 use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
-use std::net::SocketAddr;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 
@@ -182,9 +181,10 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
 
     fn send_store(&self, store_id: u64, msg: RaftMessage) {
         // check the corresponding token for store.
+        // TODO: avoid clone
         let addr = self.raft_client.rl().addrs.get(&store_id).cloned();
         if let Some(addr) = addr {
-            self.write_data(store_id, addr, msg);
+            self.write_data(store_id, &addr, msg);
             return;
         }
 
@@ -213,7 +213,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
     fn resolve(&self, store_id: u64, msg: RaftMessage) {
         let trans = self.clone();
         let msg1 = msg.clone();
-        let cb = box move |addr| {
+        let cb = box move |addr: Result<String>| {
             // clear resolving.
             trans.resolving.wl().remove(&store_id);
 
@@ -227,8 +227,8 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
             RESOLVE_STORE_COUNTER.with_label_values(&["success"]).inc();
             let addr = addr.unwrap();
             info!("resolve store {} address ok, addr {}", store_id, addr);
-            trans.raft_client.wl().addrs.insert(store_id, addr);
-            trans.write_data(store_id, addr, msg);
+            trans.raft_client.wl().addrs.insert(store_id, addr.clone());
+            trans.write_data(store_id, &addr, msg);
             // There may be no messages in the near future, so flush it immediately.
             trans.raft_client.wl().flush();
         };
@@ -241,7 +241,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         }
     }
 
-    fn write_data(&self, store_id: u64, addr: SocketAddr, msg: RaftMessage) {
+    fn write_data(&self, store_id: u64, addr: &str, msg: RaftMessage) {
         if msg.get_message().has_snapshot() {
             return self.send_snapshot_sock(addr, msg);
         }
@@ -250,7 +250,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         }
     }
 
-    fn send_snapshot_sock(&self, sock_addr: SocketAddr, msg: RaftMessage) {
+    fn send_snapshot_sock(&self, addr: &str, msg: RaftMessage) {
         let rep = self.new_snapshot_reporter(&msg);
         let cb = box move |res: Result<()>| if res.is_err() {
             rep.report(SnapshotStatus::Failure);
@@ -259,14 +259,11 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         };
         if let Err(Stopped(SnapTask::SendTo { cb, .. })) =
             self.snap_scheduler.schedule(SnapTask::SendTo {
-                addr: sock_addr,
+                addr: addr.to_owned(),
                 msg: msg,
                 cb: cb,
             }) {
-            error!(
-                "channel is closed, failed to schedule snapshot to {}",
-                sock_addr
-            );
+            error!("channel is closed, failed to schedule snapshot to {}", addr);
             cb(Err(box_err!("failed to schedule snapshot")));
         }
     }

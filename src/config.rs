@@ -21,6 +21,7 @@ use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBComp
 use sys_info;
 
 use server::Config as ServerConfig;
+use pd::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::keys::region_raft_prefix_len;
@@ -30,6 +31,7 @@ use util::config::{self, compression_type_level_serde, ReadableDuration, Readabl
 use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
 use util::rocksdb::{db_exist, CFOptions, EventListener, FixedPrefixSliceTransform,
                     FixedSuffixSliceTransform, NoopSliceTransform};
+use util::security::SecurityConfig;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -62,6 +64,7 @@ macro_rules! cf_config {
         pub struct $name {
             pub block_size: ReadableSize,
             pub block_cache_size: ReadableSize,
+            pub disable_block_cache: bool,
             pub cache_index_and_filter_blocks: bool,
             pub pin_l0_filter_and_index_blocks: bool,
             pub use_bloom_filter: bool,
@@ -90,6 +93,7 @@ macro_rules! build_cf_opt {
     ($opt:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
+        block_base_opts.set_no_block_cache($opt.disable_block_cache);
         block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
         block_base_opts.set_pin_l0_filter_and_index_blocks_in_cache(
@@ -124,6 +128,7 @@ impl Default for DefaultCfConfig {
         DefaultCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_DEFAULT) as u64),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
@@ -170,6 +175,7 @@ impl Default for WriteCfConfig {
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
@@ -226,6 +232,7 @@ impl Default for LockCfConfig {
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
@@ -267,6 +274,7 @@ impl Default for RaftCfConfig {
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
@@ -381,10 +389,8 @@ impl DbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        if self.enable_statistics {
-            opts.enable_statistics();
-            opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
-        }
+        opts.enable_statistics(self.enable_statistics);
+        opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
@@ -437,6 +443,7 @@ impl Default for RaftDefaultCfConfig {
         RaftDefaultCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(true, CF_DEFAULT) as u64),
+            disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: false,
@@ -551,10 +558,8 @@ impl RaftDbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        if self.enable_statistics {
-            opts.enable_statistics();
-            opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
-        }
+        opts.enable_statistics(self.enable_statistics);
+        opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
@@ -584,25 +589,6 @@ impl RaftDbConfig {
 
     pub fn build_cf_opts(&self) -> Vec<CFOptions> {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct PdConfig {
-    pub endpoints: Vec<String>,
-}
-
-impl PdConfig {
-    fn validate(&self) -> Result<(), Box<Error>> {
-        if self.endpoints.is_empty() {
-            return Err("please specify pd.endpoints.".into());
-        }
-        for addr in &self.endpoints {
-            config::check_addr(addr)?;
-        }
-        Ok(())
     }
 }
 
@@ -653,6 +639,7 @@ pub struct TiKvConfig {
     pub coprocessor: CopConfig,
     pub rocksdb: DbConfig,
     pub raftdb: RaftDbConfig,
+    pub security: SecurityConfig,
 }
 
 impl Default for TiKvConfig {
@@ -668,6 +655,7 @@ impl Default for TiKvConfig {
             rocksdb: DbConfig::default(),
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -709,6 +697,7 @@ impl TiKvConfig {
         self.raft_store.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
+        self.security.validate()?;
         Ok(())
     }
 
