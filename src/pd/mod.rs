@@ -26,6 +26,8 @@ pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::RECONNECT_INTERVAL_SEC;
 pub use self::config::Config;
 
+use std::ops::Deref;
+
 use kvproto::metapb;
 use kvproto::pdpb;
 use futures::Future;
@@ -78,6 +80,14 @@ impl RegionInfo {
             region: region,
             leader: leader,
         }
+    }
+}
+
+impl Deref for RegionInfo {
+    type Target = metapb::Region;
+
+    fn deref(&self) -> &Self::Target {
+        &self.region
     }
 }
 
