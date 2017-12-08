@@ -114,19 +114,17 @@ impl ImportJob {
 
         // Calculate the range info of each sub import job.
         let mut size = 0;
-        let mut start = RANGE_MIN.to_owned();
+        let mut start = RANGE_MIN;
         let mut ranges = Vec::new();
         for i in 0..cf_ranges.len() {
             size += cf_ranges[i].size;
-            let end = cf_ranges[i].end.clone();
-            // Check that all ranges are continuous.
-            assert!(start.as_slice() == RANGE_MIN || start == cf_ranges[i].start);
+            let end = &cf_ranges[i].end;
             if size >= job_size || i == (cf_ranges.len() - 1) {
-                size = 0;
-                let range = RangeInfo::new(start, end.clone(), size);
+                let range = RangeInfo::new(start.to_owned(), end.to_owned(), size);
                 ranges.push(range);
+                size = 0;
+                start = end;
             }
-            start = end;
         }
 
         // Run sub import jobs and wait for them to finish.
