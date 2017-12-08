@@ -11,23 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[macro_use]
-mod common;
 mod config;
 mod client;
 mod errors;
 mod engine;
+mod server;
+mod region;
 mod import;
 mod stream;
-mod server;
+mod prepare;
 mod metrics;
+#[macro_use]
+mod service;
 mod kv_service;
 mod kv_importer;
 mod sst_service;
 mod sst_importer;
 
-use self::errors::{Error, Result};
 use self::client::{Client, UploadStream};
+use self::errors::{Error, Result};
 use self::engine::Engine;
 use self::import::ImportJob;
 

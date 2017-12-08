@@ -26,7 +26,7 @@ use storage::{Error as StorageError, Storage};
 use storage::engine::Error as EngineError;
 use util::time::duration_to_sec;
 
-use super::common::*;
+use super::service::*;
 use super::metrics::*;
 use super::{Config, Error, SSTImporter};
 

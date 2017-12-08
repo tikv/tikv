@@ -429,7 +429,9 @@
 # import-dir = "/tmp/tikv/import"
 # number of threads to handle RPC requests.
 # num-threads = 4
-# maximum concurrent import jobs, default to number of CPU cores.
-# max-import-jobs =
+# maximum concurrent import jobs.
+# max-import-jobs = 4
+# maximum concurrent import sst jobs.
+# max-import-sst-jobs = 8
 # stream channel buffer size, stream will be blocked on channel full.
 # stream-channel-size = 128

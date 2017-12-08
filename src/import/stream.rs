@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp::{Ord, Ordering, PartialOrd};
 use std::fmt;
 use std::io::Read;
 use std::path::PathBuf;
@@ -21,60 +20,25 @@ use crc::crc32::{self, Hasher32};
 use tempdir::TempDir;
 use uuid::Uuid;
 
-use pd::PdClient;
 use raftstore::store::keys;
 
 use rocksdb::{DBIterator, ExternalSstFileInfo, SeekKey, SstFileWriter, DB};
 use kvproto::importpb::*;
 
-use super::{Client, Config, Engine, Error, Result};
-
-pub const RANGE_MIN: &'static [u8] = &[];
-pub const RANGE_MAX: &'static [u8] = &[];
-
-pub fn new_range(start: &[u8], end: &[u8]) -> Range {
-    let mut range = Range::new();
-    range.set_start(start.to_owned());
-    range.set_end(end.to_owned());
-    range
-}
-
-#[derive(Eq, PartialEq)]
-pub struct RangeEnd<'a>(pub &'a [u8]);
-
-impl<'a> Ord for RangeEnd<'a> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        if self.0 == RANGE_MAX && other.0 == RANGE_MAX {
-            Ordering::Equal
-        } else if self.0 == RANGE_MAX {
-            Ordering::Greater
-        } else if other.0 == RANGE_MAX {
-            Ordering::Less
-        } else {
-            self.0.cmp(other.0)
-        }
-    }
-}
-
-impl<'a> PartialOrd for RangeEnd<'a> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+use super::{Client, Config, Engine, Result};
+use super::region::*;
 
 pub struct SSTInfo {
     path: PathBuf,
     range: Range,
-    raw_size: u64,
     next_start: Vec<u8>,
 }
 
 impl SSTInfo {
-    fn new(info: ExternalSstFileInfo, raw_size: u64, next_start: Vec<u8>) -> SSTInfo {
+    fn new(info: ExternalSstFileInfo, next_start: Vec<u8>) -> SSTInfo {
         SSTInfo {
             path: info.file_path(),
             range: new_range(info.smallest_key(), info.largest_key()),
-            raw_size: raw_size,
             next_start: next_start,
         }
     }
@@ -83,7 +47,6 @@ impl SSTInfo {
 pub struct SSTFile {
     pub meta: SSTMeta,
     pub data: Vec<u8>,
-    raw_size: u64,
     next_start: Vec<u8>,
 }
 
@@ -111,16 +74,10 @@ impl SSTFile {
         Ok(SSTFile {
             meta: meta,
             data: data,
-            raw_size: info.raw_size,
             next_start: info.next_start,
         })
     }
 
-    pub fn raw_size(&self) -> u64 {
-        self.raw_size
-    }
-
-    // For region split.
     pub fn extended_range(&self) -> Range {
         new_range(self.meta.get_range().get_start(), &self.next_start)
     }
@@ -141,13 +98,12 @@ impl fmt::Display for SSTFile {
 }
 
 pub struct SSTFileStream {
-    cfg: Config,
     dir: TempDir,
-    file_number: u64,
-    client: Arc<Client>,
+    fileno: u64,
     engine: Arc<Engine>,
     cf_name: String,
-    db_iter: RangeIterator,
+    range_iter: RangeIterator,
+    region_ctx: RegionContext,
 }
 
 impl SSTFileStream {
@@ -159,59 +115,53 @@ impl SSTFileStream {
         cf_name: String,
         skip_ranges: Vec<Range>,
     ) -> SSTFileStream {
-        let iter = engine.new_iter(&cf_name);
+        let iter = engine.new_iter(&cf_name, true);
+        let range_iter = RangeIterator::new(iter, skip_ranges);
+        let region_ctx = RegionContext::new(client, cfg.region_split_size);
+
         SSTFileStream {
-            cfg: cfg,
             dir: dir,
-            file_number: 0,
-            client: client,
+            fileno: 0,
             engine: engine,
             cf_name: cf_name,
-            db_iter: RangeIterator::new(iter, skip_ranges),
+            range_iter: range_iter,
+            region_ctx: region_ctx,
         }
     }
 
     pub fn next(&mut self) -> Result<Option<SSTInfo>> {
-        if !self.db_iter.valid() {
+        if !self.range_iter.valid() {
             return Ok(None);
         }
 
-        let region = self.client.get_region(self.db_iter.key())?;
-        let mut ctx = self.new_sst_context(region.get_end_key())?;
+        let mut writer = self.new_sst_writer()?;
+        self.region_ctx.reset(self.range_iter.key());
 
         loop {
-            ctx.put(self.db_iter.key(), self.db_iter.value())?;
-            if !self.db_iter.next() || ctx.should_stop_before(self.db_iter.key()) {
+            writer.put(self.range_iter.key(), self.range_iter.value())?;
+            if !self.range_iter.next() ||
+                self.region_ctx.should_stop_before(self.range_iter.key())
+            {
                 break;
             }
         }
 
-        let next = if self.db_iter.valid() {
-            self.db_iter.key().to_owned()
+        let next = if self.range_iter.valid() {
+            self.range_iter.key().to_owned()
         } else {
             RANGE_MAX.to_owned()
         };
 
-        let info = ctx.finish()?;
-        Ok(Some(SSTInfo::new(info, ctx.raw_size(), next)))
+        let info = writer.finish()?;
+        Ok(Some(SSTInfo::new(info, next)))
     }
 
-    fn new_sst_path(&mut self) -> PathBuf {
-        self.file_number += 1;
-        let file_name = format!("{}.sst", self.file_number);
-        let file_path = self.dir.path().join(file_name);
-        assert!(!file_path.exists());
-        file_path
-    }
-
-    fn new_sst_context(&mut self, limit_key: &[u8]) -> Result<GenSSTContext> {
-        let path = self.new_sst_path();
-        let writer = self.engine.new_sst_writer(&self.cf_name, path)?;
-        Ok(GenSSTContext::new(
-            writer,
-            limit_key.to_owned(),
-            self.cfg.region_split_size,
-        ))
+    fn new_sst_writer(&mut self) -> Result<SstFileWriter> {
+        self.fileno += 1;
+        let name = format!("{}.sst", self.fileno);
+        let path = self.dir.path().join(name);
+        assert!(!path.exists());
+        self.engine.new_sst_writer(&self.cf_name, path)
     }
 }
 
@@ -296,42 +246,6 @@ impl RangeIterator {
 
     pub fn valid(&self) -> bool {
         self.iter.valid() && self.ranges_index < self.ranges.len()
-    }
-}
-
-struct GenSSTContext {
-    writer: SstFileWriter,
-    raw_size: u64,
-    limit_key: Vec<u8>,
-    limit_size: u64,
-}
-
-impl GenSSTContext {
-    fn new(writer: SstFileWriter, limit_key: Vec<u8>, limit_size: u64) -> GenSSTContext {
-        GenSSTContext {
-            writer: writer,
-            raw_size: 0,
-            limit_key: limit_key,
-            limit_size: limit_size,
-        }
-    }
-
-    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.raw_size += (key.len() + value.len()) as u64;
-        let data_key = keys::data_key(key);
-        self.writer.put(&data_key, value).map_err(Error::from)
-    }
-
-    fn finish(&mut self) -> Result<ExternalSstFileInfo> {
-        self.writer.finish().map_err(Error::from)
-    }
-
-    fn raw_size(&self) -> u64 {
-        self.raw_size
-    }
-
-    fn should_stop_before(&self, key: &[u8]) -> bool {
-        RangeEnd(key) >= RangeEnd(&self.limit_key) || self.raw_size >= self.limit_size
     }
 }
 

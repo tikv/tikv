@@ -41,18 +41,23 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(cfg: &DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
+    pub fn new(mut cfg: DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
         // Configuration recommendation:
         // 1. Use a large `write_buffer_size`, 1GB should be good enough.
         // 2. Choose a reasonable compression algorithm to balance between CPU and IO.
         // 3. Increase `max_background_jobs`, RocksDB preserves `max_background_jobs/4` for flush.
-        let mut db_opts = cfg.build_opt();
-        db_opts.enable_statistics(false);
-        db_opts.set_use_direct_io_for_flush_and_compaction(true);
+
+        cfg.enable_statistics = false;
+        cfg.writecf.disable_block_cache = true;
+        cfg.defaultcf.disable_block_cache = true;
+        cfg.use_direct_io_for_flush_and_compaction = true;
+
+        let db_opts = cfg.build_opt();
         let mut cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, cfg.defaultcf.build_opt()),
             CFOptions::new(CF_WRITE, cfg.writecf.build_opt()),
+            CFOptions::new(CF_DEFAULT, cfg.defaultcf.build_opt()),
         ];
+
         for cf_opts in &mut cfs_opts {
             const DISABLED: i32 = i32::MAX;
             // Disable compaction and rate limit.
@@ -66,6 +71,7 @@ impl Engine {
             cf_opts.set_level_zero_slowdown_writes_trigger(DISABLED);
             cf_opts.set_level_zero_file_num_compaction_trigger(DISABLED);
         }
+
         let db = new_engine_opt(temp_dir.path().to_str().unwrap(), db_opts, cfs_opts)?;
         Ok(Engine {
             db: Arc::new(db),
@@ -100,8 +106,8 @@ impl Engine {
 
     fn txn_write(&self, mut batch: WriteBatch) -> RawBatch {
         let wb = RawBatch::new();
-        let default_cf = self.cf_handle(CF_DEFAULT).unwrap();
         let write_cf = self.cf_handle(CF_WRITE).unwrap();
+        let default_cf = self.cf_handle(CF_DEFAULT).unwrap();
         let commit_ts = batch.get_commit_ts();
         for m in batch.take_mutations().iter_mut() {
             let key = Key::from_raw(m.get_key()).append_ts(commit_ts);
@@ -118,12 +124,12 @@ impl Engine {
         wb
     }
 
-    pub fn new_iter(&self, cf_name: &str) -> DBIterator<Arc<DB>> {
+    pub fn new_iter(&self, cf_name: &str, verify_checksum: bool) -> DBIterator<Arc<DB>> {
         let cf_handle = self.cf_handle(cf_name).unwrap();
         // Don't need to cache since it is unlikely to read more than once.
         let mut ropts = ReadOptions::new();
         ropts.fill_cache(false);
-        ropts.set_verify_checksums(false);
+        ropts.set_verify_checksums(verify_checksum);
         DBIterator::new_cf(self.db.clone(), cf_handle, ropts)
     }
 

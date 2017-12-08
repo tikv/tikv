@@ -91,8 +91,6 @@ quick_error! {
             display("Engine {} not found", uuid)
         }
         Timeout {}
-        ChannelClosed {}
-        ThreadPanicked {}
         SSTFileOutOfRange {}
     }
 }

@@ -26,7 +26,7 @@ use kvproto::tikvpb_grpc::*;
 use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
 
-use pd::{PdClient, RpcClient};
+use pd::{PdClient, RegionInfo, RpcClient};
 
 use super::{Error, Result};
 
@@ -72,10 +72,13 @@ impl Client {
         })
     }
 
-    fn call_opt(&self, timeout_secs: u64) -> CallOption {
-        let timeout = Duration::from_secs(timeout_secs);
-        let flags = WriteFlags::default().buffer_hint(true);
-        CallOption::default().timeout(timeout).write_flags(flags)
+    fn call_opt(&self) -> CallOption {
+        let timeout = Duration::from_secs(30);
+        CallOption::default().timeout(timeout)
+    }
+
+    pub fn get_region(&self, key: &[u8]) -> Result<RegionInfo> {
+        self.rpc.get_region_info(key).map_err(Error::from)
     }
 
     pub fn split_region(
@@ -85,14 +88,14 @@ impl Client {
     ) -> Result<SplitRegionResponse> {
         let ch = self.resolve(store_id)?;
         let client = TikvClient::new(ch);
-        let res = client.split_region_opt(req, self.call_opt(30));
+        let res = client.split_region_opt(req, self.call_opt());
         self.post_resolve(store_id, res.map_err(Error::from))
     }
 
     pub fn upload_sst(&self, store_id: u64, req: UploadStream) -> Result<UploadResponse> {
         let ch = self.resolve(store_id)?;
         let client = ImportSstClient::new(ch);
-        let (tx, rx) = client.upload_opt(self.call_opt(60));
+        let (tx, rx) = client.upload_opt(self.call_opt());
         let res = req.forward(tx).and_then(|_| rx.map_err(Error::from)).wait();
         self.post_resolve(store_id, res.map_err(Error::from))
     }
@@ -100,7 +103,7 @@ impl Client {
     pub fn ingest_sst(&self, store_id: u64, req: IngestRequest) -> Result<IngestResponse> {
         let ch = self.resolve(store_id)?;
         let client = ImportSstClient::new(ch);
-        let res = client.ingest_opt(req, self.call_opt(30));
+        let res = client.ingest_opt(req, self.call_opt());
         self.post_resolve(store_id, res.map_err(Error::from))
     }
 }
@@ -136,7 +139,7 @@ impl<'a> Stream for UploadStream<'a> {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Error> {
-        let flags = WriteFlags::default().buffer_hint(true);
+        let flags = WriteFlags::default();
 
         if let Some(meta) = self.meta.take() {
             let mut chunk = UploadRequest::new();

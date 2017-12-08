@@ -11,9 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use sys_info;
-
-use util::config::ReadableSize;
+use std::error::Error;
+use std::result::Result;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
@@ -22,20 +21,42 @@ pub struct Config {
     pub import_dir: String,
     pub num_threads: usize,
     pub max_import_jobs: usize,
+    pub max_import_sst_jobs: usize,
     pub stream_channel_size: usize,
     #[serde(skip)]
-    pub region_split_size: u64,
+    pub region_split_size: usize,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = sys_info::cpu_num().unwrap() as usize;
         Config {
             import_dir: "/tmp/tikv/import".to_owned(),
             num_threads: 4,
-            max_import_jobs: cpu_num,
+            max_import_jobs: 4,
+            max_import_sst_jobs: 8,
             stream_channel_size: 128,
-            region_split_size: ReadableSize::mb(96).0,
+            region_split_size: 0, // Should derive from coprocessor.
         }
+    }
+}
+
+impl Config {
+    pub fn validate(&self) -> Result<(), Box<Error>> {
+        if self.num_threads == 0 {
+            return Err("import.num_threads can not be 0".into());
+        }
+        if self.max_import_jobs == 0 {
+            return Err("import.max_import_jobs can not be 0".into());
+        }
+        if self.max_import_sst_jobs == 0 {
+            return Err("import.max_import_sst_jobs can not be 0".into());
+        }
+        if self.stream_channel_size == 0 {
+            return Err("import.stream_channel_size can not be 0".into());
+        }
+        if self.region_split_size == 0 {
+            return Err("import.region_split_size can not be 0".into());
+        }
+        Ok(())
     }
 }

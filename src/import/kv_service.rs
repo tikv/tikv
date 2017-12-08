@@ -26,7 +26,7 @@ use kvproto::importpb_grpc::*;
 use pd::RpcClient;
 use util::time::duration_to_sec;
 
-use super::common::*;
+use super::service::*;
 use super::metrics::*;
 use super::{Client, Config, Error, ImportJob, KVImporter};
 

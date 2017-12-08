@@ -725,7 +725,7 @@ impl TiKvConfig {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
-        self.import.region_split_size = self.coprocessor.region_split_size.0;
+        self.import.region_split_size = self.coprocessor.region_split_size.0 as usize;
 
         self.rocksdb.validate()?;
         self.server.validate()?;
@@ -733,6 +733,7 @@ impl TiKvConfig {
         self.pd.validate()?;
         self.coprocessor.validate()?;
         self.security.validate()?;
+        self.import.validate()?;
         Ok(())
     }
 

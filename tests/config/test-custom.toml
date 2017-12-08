@@ -308,4 +308,5 @@ key-path = "invalid path"
 import-dir = "/tmp/test/import"
 num-threads = 123
 max-import-jobs = 123
+max-import-sst-jobs = 123
 stream-channel-size = 123

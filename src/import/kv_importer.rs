@@ -154,6 +154,6 @@ impl EngineDir {
     pub fn create(&self, uuid: Uuid) -> Result<Engine> {
         let path = format!("{}", uuid);
         let temp_dir = TempDir::new_in(&self.root, &path)?;
-        Engine::new(&self.opts, uuid, temp_dir)
+        Engine::new(self.opts.clone(), uuid, temp_dir)
     }
 }

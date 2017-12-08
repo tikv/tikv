@@ -20,53 +20,131 @@ use std::thread::{self, JoinHandle};
 use tempdir::TempDir;
 use uuid::Uuid;
 
-use pd::{PdClient, RegionLeader};
-use storage::types::Key;
+use pd::RegionInfo;
 
-use kvproto::metapb::*;
-use kvproto::kvrpcpb::*;
 use kvproto::importpb::*;
 use kvproto::errorpb::NotLeader;
 
 use super::{Client, Config, Engine, Error, Result, UploadStream};
+use super::region::*;
 use super::stream::*;
+use super::prepare::*;
 
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 3;
 
+#[derive(Clone)]
 pub struct ImportJob {
     cfg: Config,
+    dir: Arc<TempDir>,
     client: Arc<Client>,
     engine: Arc<Engine>,
+    job_counter: Arc<AtomicUsize>,
 }
 
 impl ImportJob {
     pub fn new(cfg: Config, engine: Engine, client: Arc<Client>) -> Result<ImportJob> {
+        let dir = TempDir::new_in(engine.path(), ".temp")?;
         Ok(ImportJob {
             cfg: cfg,
+            dir: Arc::new(dir),
             client: client,
             engine: Arc::new(engine),
+            job_counter: Arc::new(AtomicUsize::new(1)),
         })
     }
 
     pub fn run(&self) -> Result<()> {
-        let temp_dir = Arc::new(TempDir::new_in(self.engine.path(), ".temp")?);
+        let mut handles = Vec::new();
+
         for cf_name in self.engine.cf_names() {
-            let job = ImportCFJob::new(
-                self.cfg.clone(),
-                temp_dir.clone(),
-                self.client.clone(),
-                self.engine.clone(),
-                cf_name.to_owned(),
-            );
-            job.run()?;
+            let ctx = self.clone();
+            let cfg = self.cfg.clone();
+            let client = self.client.clone();
+            let engine = self.engine.clone();
+            let cf_name = cf_name.to_owned();
+
+            let handle = thread::Builder::new()
+                .name(format!("import-{}", cf_name))
+                .spawn(move || {
+                    let job = PrepareJob::new(cfg, client, engine, cf_name.clone());
+                    let cf_ranges = job.run();
+                    ctx.run_import_threads(cf_name, cf_ranges)
+                })
+                .unwrap();
+
+            handles.push(handle);
         }
-        Ok(())
+
+        let mut res = Ok(());
+        for h in handles {
+            if let Err(e) = h.join().unwrap() {
+                res = Err(e);
+            }
+        }
+        res
+    }
+
+    fn new_import_thread(&self, cf_name: String, range: RangeInfo) -> JoinHandle<Result<()>> {
+        let cfg = self.cfg.clone();
+        let dir = self.dir.clone();
+        let client = self.client.clone();
+        let engine = self.engine.clone();
+        let job_counter = self.job_counter.clone();
+
+        thread::Builder::new()
+            .name("import-job".to_owned())
+            .spawn(move || {
+                let job = SubImportJob::new(cfg, dir, client, engine, cf_name, job_counter, range);
+                job.run()
+            })
+            .unwrap()
+    }
+
+    fn run_import_threads(&self, cf_name: String, cf_ranges: Vec<RangeInfo>) -> Result<()> {
+        // Calculate the range size of each sub import job.
+        let cf_size = cf_ranges.iter().fold(0, |acc, r| acc + r.size);
+        info!(
+            "{} cf contains {} bytes and {} ranges",
+            cf_name,
+            cf_size,
+            cf_ranges.len()
+        );
+        let job_size = cf_size / self.cfg.max_import_jobs;
+
+        // Calculate the range info of each sub import job.
+        let mut size = 0;
+        let mut start = RANGE_MIN.to_owned();
+        let mut ranges = Vec::new();
+        for i in 0..cf_ranges.len() {
+            size += cf_ranges[i].size;
+            let end = cf_ranges[i].end.clone();
+            // Check that all ranges are continuous.
+            assert!(start.as_slice() == RANGE_MIN || start == cf_ranges[i].start);
+            if size >= job_size || i == (cf_ranges.len() - 1) {
+                size = 0;
+                let range = RangeInfo::new(start, end.clone(), size);
+                ranges.push(range);
+            }
+            start = end;
+        }
+
+        // Run sub import jobs and wait for them to finish.
+        let mut handles = Vec::new();
+        for range in ranges {
+            handles.push(self.new_import_thread(cf_name.clone(), range));
+        }
+        let mut res = Ok(());
+        for h in handles {
+            if let Err(e) = h.join().unwrap() {
+                res = Err(e);
+            }
+        }
+        res
     }
 }
 
-#[derive(Clone)]
-struct ImportCFJob {
+struct SubImportJob {
     tag: String,
     cfg: Config,
     dir: Arc<TempDir>,
@@ -74,53 +152,58 @@ struct ImportCFJob {
     engine: Arc<Engine>,
     cf_name: String,
     job_counter: Arc<AtomicUsize>,
+    import_range: RangeInfo,
     finished_ranges: Arc<Mutex<Vec<Range>>>,
 }
 
-impl ImportCFJob {
+impl SubImportJob {
     fn new(
         cfg: Config,
         dir: Arc<TempDir>,
         client: Arc<Client>,
         engine: Arc<Engine>,
         cf_name: String,
-    ) -> ImportCFJob {
-        ImportCFJob {
-            tag: format!("[JOB {}:{}]", engine.uuid(), cf_name),
+        job_counter: Arc<AtomicUsize>,
+        import_range: RangeInfo,
+    ) -> SubImportJob {
+        SubImportJob {
+            tag: format!("[ImportJob {}:{}]", engine.uuid(), cf_name),
             cfg: cfg,
             dir: dir,
             client: client,
             engine: engine,
             cf_name: cf_name,
-            job_counter: Arc::new(AtomicUsize::new(0)),
+            job_counter: job_counter,
+            import_range: import_range,
             finished_ranges: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     fn run(&self) -> Result<()> {
         let start = Instant::now();
+        info!("{} start with range {}", self.tag, self.import_range);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                info!("{} run #{}", self.tag, i);
+                info!("{} retry #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
             if !self.import() {
                 continue;
             }
+            // Make sure that we don't miss some ranges.
+            let stream = self.new_import_stream();
+            assert!(stream.unwrap().next().unwrap().is_none());
 
-            let ranges = self.finished_ranges.lock().unwrap().clone();
+            let range_count = self.finished_ranges.lock().unwrap().len();
             info!(
-                "{} import {} ranges takes {:?}",
+                "{} with {} ranges takes {:?}",
                 self.tag,
-                ranges.len(),
-                start.elapsed()
+                range_count,
+                start.elapsed(),
             );
 
-            // Make sure we don't miss any ranges.
-            let iter = self.engine.new_iter(&self.cf_name);
-            assert!(!RangeIterator::new(iter, ranges).valid());
             return Ok(());
         }
 
@@ -128,17 +211,13 @@ impl ImportCFJob {
     }
 
     fn import(&self) -> bool {
-        // Use a synchronous channel here as a rate limiter. The import stream
-        // will be blocked if the import threads can not handle it fast enough.
-        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_jobs);
+        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_sst_jobs);
         let handles = self.run_import_threads(rx);
-
         let mut done = true;
         if let Err(e) = self.run_import_stream(tx) {
             error!("{} import stream: {:?}", self.tag, e);
             done = false;
         }
-        // We should join threads even on error.
         for h in handles {
             if !h.join().unwrap() {
                 done = false;
@@ -147,52 +226,67 @@ impl ImportCFJob {
         done
     }
 
-    fn run_import_stream(&self, tx: mpsc::SyncSender<SSTInfo>) -> Result<()> {
-        let temp_dir = TempDir::new_in(self.dir.path(), &self.cf_name)?;
+    fn new_import_stream(&self) -> Result<SSTFileStream> {
+        let mut skip_ranges = self.finished_ranges.lock().unwrap().clone();
+        // Add ranges outside of the import range to the skip ranges.
+        {
+            let start = self.import_range.start.as_slice();
+            if start != RANGE_MIN {
+                skip_ranges.push(new_range(RANGE_MIN, start));
+            }
+            let end = self.import_range.end.as_slice();
+            if end != RANGE_MAX {
+                skip_ranges.push(new_range(end, RANGE_MAX));
+            }
+        }
 
-        let mut stream = SSTFileStream::new(
+        let temp_dir = TempDir::new_in(self.dir.path(), &self.cf_name)?;
+        Ok(SSTFileStream::new(
             self.cfg.clone(),
             temp_dir,
             self.client.clone(),
             self.engine.clone(),
             self.cf_name.clone(),
-            self.finished_ranges.lock().unwrap().clone(),
-        );
+            skip_ranges,
+        ))
+    }
 
+    fn run_import_stream(&self, tx: mpsc::SyncSender<SSTInfo>) -> Result<()> {
+        let mut stream = self.new_import_stream()?;
         while let Some(sst) = stream.next()? {
-            tx.send(sst).map_err(|_| Error::ChannelClosed)?;
+            tx.send(sst).unwrap();
         }
-
         Ok(())
     }
 
-    fn run_import_threads(&self, rx: mpsc::Receiver<SSTInfo>) -> Vec<JoinHandle<bool>> {
-        let mut handles = Vec::new();
-        let rx = Arc::new(Mutex::new(rx));
+    fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<SSTInfo>>>) -> JoinHandle<bool> {
+        let client = self.client.clone();
+        let engine = self.engine.clone();
+        let cf_name = self.cf_name.clone();
+        let job_counter = self.job_counter.clone();
+        let finished_ranges = self.finished_ranges.clone();
 
-        for i in 0..self.cfg.max_import_jobs {
-            let rx = rx.clone();
-            let ctx = self.clone();
-
-            let name = format!("import-sst-{}", i);
-            let handle = thread::Builder::new().name(name).spawn(move || {
+        thread::Builder::new()
+            .name("import-sst".to_owned())
+            .spawn(move || {
+                // Done if no error occurs.
                 let mut done = true;
-                let finished = ctx.finished_ranges.clone();
 
                 while let Ok(info) = rx.lock().unwrap().recv() {
-                    let id = ctx.job_counter.fetch_add(1, Ordering::SeqCst);
-                    let tag = format!("[JOB {}:{}]", ctx.engine.uuid(), id);
-                    let sst = match SSTFile::new(info, ctx.engine.clone(), ctx.cf_name.clone()) {
-                        Ok(sst) => sst,
+                    let id = job_counter.fetch_add(1, Ordering::SeqCst);
+                    let tag = format!("[ImportJob {}:{}:{}]", engine.uuid(), cf_name, id);
+
+                    let sst = match SSTFile::new(info, engine.clone(), cf_name.clone()) {
+                        Ok(v) => v,
                         Err(_) => {
                             done = false;
                             continue;
                         }
                     };
 
-                    let mut job = ImportSSTJob::new(tag, ctx.cfg.clone(), sst, ctx.client.clone());
+                    let mut job = ImportSSTJob::new(tag, sst, client.clone());
                     match job.run() {
-                        Ok(range) => finished.lock().unwrap().push(range),
+                        Ok(v) => finished_ranges.lock().unwrap().push(v),
                         Err(_) => {
                             done = false;
                             continue;
@@ -201,73 +295,63 @@ impl ImportCFJob {
                 }
 
                 done
-            });
+            })
+            .unwrap()
+    }
 
-            handles.push(handle.unwrap());
+    fn run_import_threads(&self, rx: mpsc::Receiver<SSTInfo>) -> Vec<JoinHandle<bool>> {
+        let mut handles = Vec::new();
+        let rx = Arc::new(Mutex::new(rx));
+        for _ in 0..self.cfg.max_import_sst_jobs {
+            handles.push(self.new_import_thread(rx.clone()));
         }
-
         handles
     }
 }
 
 struct ImportSSTJob {
     tag: String,
-    cfg: Config,
     sst: SSTFile,
     client: Arc<Client>,
 }
 
 impl ImportSSTJob {
-    fn new(tag: String, cfg: Config, sst: SSTFile, client: Arc<Client>) -> ImportSSTJob {
+    fn new(tag: String, sst: SSTFile, client: Arc<Client>) -> ImportSSTJob {
         ImportSSTJob {
             tag: tag,
-            cfg: cfg,
             sst: sst,
             client: client,
         }
     }
 
     fn run(&mut self) -> Result<Range> {
-        // Prepare does some optimizations, but it's fine to go on even if it failed.
-        let mut prepared = match self.prepare() {
-            Ok(region) => {
-                info!("{} prepare {:?}", self.tag, region);
-                Some(region)
-            }
-            Err(e) => {
-                error!("{} prepare: {:?}", self.tag, e);
-                None
-            }
-        };
+        let start = Instant::now();
+        info!("{} start", self.tag);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                info!("{} run #{}", self.tag, i);
+                info!("{} retry #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
-            let region = match prepared.take() {
-                Some(v) => v,
-                None => match self.get_region() {
-                    Ok(v) => v,
-                    Err(e) => {
-                        error!("{} get region: {:?}", self.tag, e);
-                        if let Error::SSTFileOutOfRange = e {
-                            // Not retryable in this job.
-                            break;
-                        }
-                        continue;
+            let region = match self.region() {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("{}: {:?}", self.tag, e);
+                    if let Error::SSTFileOutOfRange = e {
+                        break; // Not retryable inside this job.
                     }
-                },
+                    continue;
+                }
             };
 
             match self.import(region) {
                 Ok(_) => {
-                    info!("{} import {} done", self.tag, self.sst);
+                    info!("{} takes {:?}", self.tag, start.elapsed());
                     return Ok(self.sst.extended_range());
                 }
                 Err(e) => {
-                    error!("{} import {}: {:?}", self.tag, self.sst, e);
+                    error!("{}: {:?}", self.tag, e);
                     continue;
                 }
             }
@@ -276,23 +360,18 @@ impl ImportSSTJob {
         Err(Error::Timeout)
     }
 
-    fn prepare(&self) -> Result<RegionLeader> {
-        let mut region = self.get_region()?;
-
-        // No need to split if the file is not large enough.
-        if self.sst.raw_size() > self.cfg.region_split_size / 2 {
-            let range = self.sst.extended_range();
-            if RangeEnd(range.get_end()) < RangeEnd(region.get_end_key()) {
-                region = self.split_region(&region, range.get_end())?;
-            }
+    fn region(&self) -> Result<RegionInfo> {
+        let range = self.sst.meta.get_range();
+        let region = self.client.get_region(range.get_start())?;
+        if range.get_start() >= region.get_start_key() &&
+            RangeEnd(range.get_end()) < RangeEnd(region.get_end_key())
+        {
+            return Ok(region);
         }
-
-        // TODO: relocate region
-
-        Ok(region)
+        Err(Error::SSTFileOutOfRange)
     }
 
-    fn import(&mut self, mut region: RegionLeader) -> Result<()> {
+    fn import(&mut self, mut region: RegionInfo) -> Result<()> {
         // Update SST meta for this region.
         {
             let meta = &mut self.sst.meta;
@@ -302,7 +381,13 @@ impl ImportSSTJob {
             meta.set_region_epoch(region.get_region_epoch().clone());
         }
 
-        info!("{} import {} to {:?}", self.tag, self.sst, region);
+        info!(
+            "{} import {} to region {} peers {:?}",
+            self.tag,
+            self.sst,
+            region.get_id(),
+            region.get_peers()
+        );
 
         self.upload(&region)?;
 
@@ -321,19 +406,14 @@ impl ImportSSTJob {
         Err(Error::Timeout)
     }
 
-    fn upload(&self, region: &RegionLeader) -> Result<()> {
+    fn upload(&self, region: &RegionInfo) -> Result<()> {
         for peer in region.get_peers() {
             let upload = UploadStream::new(self.sst.meta.clone(), &self.sst.data);
-            match self.client.upload_sst(peer.get_store_id(), upload) {
-                Ok(_) => info!("{} upload {} to peer {:?}", self.tag, self.sst, peer),
+            let store_id = peer.get_store_id();
+            match self.client.upload_sst(store_id, upload) {
+                Ok(_) => info!("{} upload to store {}", self.tag, store_id),
                 Err(e) => {
-                    error!(
-                        "{} upload {} to peer {:?}: {:?}",
-                        self.tag,
-                        self.sst,
-                        peer,
-                        e
-                    );
+                    error!("{} upload to store {}: {:?}", self.tag, store_id, e);
                     return Err(e);
                 }
             }
@@ -341,13 +421,15 @@ impl ImportSSTJob {
         Ok(())
     }
 
-    fn ingest(&self, region: &RegionLeader) -> Result<Option<NotLeader>> {
-        let (ctx, peer) = self.new_context(region);
+    fn ingest(&self, region: &RegionInfo) -> Result<Option<NotLeader>> {
+        let ctx = new_context(region);
+        let store_id = ctx.get_peer().get_store_id();
+
         let mut ingest = IngestRequest::new();
         ingest.set_context(ctx);
         ingest.set_sst(self.sst.meta.clone());
 
-        let res = match self.client.ingest_sst(peer.get_store_id(), ingest) {
+        let res = match self.client.ingest_sst(store_id, ingest) {
             Ok(mut resp) => if resp.has_error() {
                 let mut error = resp.take_error();
                 if error.has_not_leader() {
@@ -362,87 +444,11 @@ impl ImportSSTJob {
 
         match res {
             Ok(_) => {
-                info!("{} ingest {} to peer {:?}", self.tag, self.sst, peer);
+                info!("{} ingest to store {}", self.tag, store_id);
                 Ok(None)
             }
             Err(e) => {
-                error!(
-                    "{} ingest {} to peer {:?}: {:?}",
-                    self.tag,
-                    self.sst,
-                    peer,
-                    e
-                );
-                Err(e)
-            }
-        }
-    }
-
-    fn get_region(&self) -> Result<RegionLeader> {
-        let range = self.sst.meta.get_range();
-        let region = self.client.get_region_leader(range.get_start())?;
-        if range.get_start() >= region.get_start_key() &&
-            RangeEnd(range.get_end()) < RangeEnd(region.get_end_key())
-        {
-            Ok(region)
-        } else {
-            Err(Error::SSTFileOutOfRange)
-        }
-    }
-
-    fn new_context(&self, region: &RegionLeader) -> (Context, Peer) {
-        let peer = if let Some(ref leader) = region.leader {
-            leader.clone()
-        } else {
-            // We don't know the leader, just choose the first one.
-            region.get_peers().first().unwrap().clone()
-        };
-
-        let mut ctx = Context::new();
-        ctx.set_region_id(region.get_id());
-        ctx.set_region_epoch(region.get_region_epoch().clone());
-        ctx.set_peer(peer.clone());
-        (ctx, peer)
-    }
-
-    fn split_region(&self, region: &RegionLeader, split_key: &[u8]) -> Result<RegionLeader> {
-        // The SplitRegion API accepts a raw key.
-        let raw_key = Key::from_encoded(split_key.to_owned()).raw()?;
-        let (ctx, peer) = self.new_context(region);
-        let mut req = SplitRegionRequest::new();
-        req.set_context(ctx);
-        req.set_split_key(raw_key);
-
-        let store_id = peer.get_store_id();
-        let res = match self.client.split_region(store_id, req) {
-            Ok(mut resp) => if resp.has_region_error() {
-                Err(Error::SplitRegion(resp.take_region_error()))
-            } else {
-                Ok(resp)
-            },
-            Err(e) => Err(e),
-        };
-
-        match res {
-            Ok(mut resp) => {
-                info!(
-                    "{} split {:?} to {:?} and {:?}",
-                    self.tag,
-                    region,
-                    resp.get_left(),
-                    resp.get_right(),
-                );
-                // Just assume that new region's leader will be on the same store.
-                let region = resp.take_left();
-                let leader = region
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_store_id() == store_id)
-                    .cloned();
-                Ok(RegionLeader::new(region, leader))
-            }
-            Err(e) => {
-                error!("{} split {:?}: {:?}", self.tag, region, e);
+                error!("{} ingest to store {}: {:?}", self.tag, store_id, e);
                 Err(e)
             }
         }

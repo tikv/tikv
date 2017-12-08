@@ -362,6 +362,7 @@ fn test_serde_custom_tikv_config() {
         import_dir: "/tmp/test/import".to_owned(),
         num_threads: 123,
         max_import_jobs: 123,
+        max_import_sst_jobs: 123,
         stream_channel_size: 123,
         region_split_size: 123,
     };

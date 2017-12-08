@@ -204,7 +204,7 @@ impl PdClient for RpcClient {
         Ok(resp.take_region())
     }
 
-    fn get_region_leader(&self, key: &[u8]) -> Result<RegionLeader> {
+    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
             .start_coarse_timer();
@@ -229,7 +229,7 @@ impl PdClient for RpcClient {
         } else {
             None
         };
-        Ok(RegionLeader::new(region, leader))
+        Ok(RegionInfo::new(region, leader))
     }
 
     fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
