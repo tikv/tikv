@@ -167,15 +167,15 @@ pub enum ExecResult {
     DeleteRange { ranges: Vec<Range> },
 }
 
-struct ApplyCallBack {
+struct ApplyCallback {
     region: Region,
     cbs: Vec<(Option<Callback>, RaftCmdResponse)>,
 }
 
-impl ApplyCallBack {
-    fn new(region: Region) -> ApplyCallBack {
+impl ApplyCallback {
+    fn new(region: Region) -> ApplyCallback {
         let cbs = vec![];
-        ApplyCallBack { region, cbs }
+        ApplyCallback { region, cbs }
     }
 
     fn invoke_all(self, host: &CoprocessorHost) {
@@ -193,7 +193,7 @@ impl ApplyCallBack {
 struct ApplyContext<'a> {
     host: &'a CoprocessorHost,
     wb: WriteBatch,
-    cbs: MustConsumeVec<ApplyCallBack>,
+    cbs: MustConsumeVec<ApplyCallback>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
     sync_log: bool,
@@ -214,7 +214,7 @@ impl<'a> ApplyContext<'a> {
     }
 
     fn prepare_for(&mut self, delegate: &ApplyDelegate) {
-        self.cbs.push(ApplyCallBack::new(delegate.region.clone()));
+        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
     }
 
     pub fn mark_last_bytes_and_keys(&mut self) {
