@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::fmt::{self, Display, Formatter};
 
 use futures::Future;
-use tokio_core::reactor::Handle;
+use futures_cpupool::CpuPool;
 
 use kvproto::metapb;
 use kvproto::eraftpb::ConfChangeType;
@@ -179,7 +179,7 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_ask_split(
         &self,
-        handle: &Handle,
+        handle: &CpuPool,
         mut region: metapb::Region,
         split_key: Vec<u8>,
         peer: metapb::Peer,
@@ -211,14 +211,14 @@ impl<T: PdClient> Runner<T> {
                     debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
                 }
             }
-            Ok(())
+            Ok(()) as Result<(), ()>
         });
-        handle.spawn(f)
+        handle.spawn(f).forget()
     }
 
     fn handle_heartbeat(
         &self,
-        handle: &Handle,
+        handle: &CpuPool,
         region: metapb::Region,
         peer: metapb::Peer,
         region_stat: RegionStat,
@@ -246,12 +246,12 @@ impl<T: PdClient> Runner<T> {
                     e
                 );
             });
-        handle.spawn(f);
+        handle.spawn(f).forget()
     }
 
     fn handle_store_heartbeat(
         &mut self,
-        handle: &Handle,
+        handle: &CpuPool,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo,
     ) {
@@ -317,19 +317,19 @@ impl<T: PdClient> Runner<T> {
         let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
             error!("store heartbeat failed {:?}", e);
         });
-        handle.spawn(f);
+        handle.spawn(f).forget()
     }
 
-    fn handle_report_split(&self, handle: &Handle, left: metapb::Region, right: metapb::Region) {
+    fn handle_report_split(&self, handle: &CpuPool, left: metapb::Region, right: metapb::Region) {
         let f = self.pd_client.report_split(left, right).map_err(|e| {
             debug!("report split failed {:?}", e);
         });
-        handle.spawn(f);
+        handle.spawn(f).forget()
     }
 
     fn handle_validate_peer(
         &self,
-        handle: &Handle,
+        handle: &CpuPool,
         local_region: metapb::Region,
         peer: metapb::Peer,
     ) {
@@ -351,7 +351,7 @@ impl<T: PdClient> Runner<T> {
                                pd_region.get_region_epoch());
                         PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region epoch error"])
                             .inc();
-                        return Ok(());
+                        return Ok(()) as Result<(), ()>;
                     }
 
                     if pd_region.get_peers().into_iter().all(|p| p != &peer) {
@@ -382,10 +382,10 @@ impl<T: PdClient> Runner<T> {
             }
             Ok(())
         });
-        handle.spawn(f);
+        handle.spawn(f).forget()
     }
 
-    fn schedule_heartbeat_receiver(&mut self, handle: &Handle) {
+    fn schedule_heartbeat_receiver(&mut self, handle: &CpuPool) {
         let ch = self.ch.clone();
         let store_id = self.store_id;
         let f = self.pd_client
@@ -436,7 +436,7 @@ impl<T: PdClient> Runner<T> {
                     store_id
                 )
             });
-        handle.spawn(f);
+        handle.spawn(f).forget();
         self.is_hb_receiver_scheduled = true;
     }
 
@@ -461,7 +461,7 @@ impl<T: PdClient> Runner<T> {
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
-    fn run(&mut self, task: Task, handle: &Handle) {
+    fn run(&mut self, task: Task, handle: &CpuPool) {
         debug!("executing task {}", task);
 
         if !self.is_hb_receiver_scheduled {

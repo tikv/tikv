@@ -18,9 +18,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
-use std::thread;
 use std::u64;
 
+use futures::Future;
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
@@ -555,12 +555,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         // Wait all workers finish.
-        let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
+        let mut handles = vec![];
         handles.push(self.split_check_worker.stop());
         handles.push(self.region_worker.stop());
         handles.push(self.raftlog_gc_worker.stop());
         handles.push(self.compact_worker.stop());
-        handles.push(self.pd_worker.stop());
+        let f = self.pd_worker.stop();
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.apply_worker.stop());
 
@@ -568,6 +568,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if let Some(h) = h {
                 h.join().unwrap();
             }
+        }
+        if let Some(f) = f {
+            f.wait().unwrap();
         }
 
         self.coprocessor_host.shutdown();
