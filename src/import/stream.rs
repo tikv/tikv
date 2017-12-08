@@ -138,7 +138,8 @@ impl SSTFileStream {
         self.region_ctx.reset(self.range_iter.key());
 
         loop {
-            writer.put(self.range_iter.key(), self.range_iter.value())?;
+            let data_key = keys::data_key(self.range_iter.key());
+            writer.put(&data_key, self.range_iter.value())?;
             if !self.range_iter.next() ||
                 self.region_ctx.should_stop_before(self.range_iter.key())
             {

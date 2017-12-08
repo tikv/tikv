@@ -48,9 +48,9 @@ impl Engine {
         // 3. Increase `max_background_jobs`, RocksDB preserves `max_background_jobs/4` for flush.
 
         cfg.enable_statistics = false;
+        cfg.use_direct_io_for_flush_and_compaction = true;
         cfg.writecf.disable_block_cache = true;
         cfg.defaultcf.disable_block_cache = true;
-        cfg.use_direct_io_for_flush_and_compaction = true;
 
         let db_opts = cfg.build_opt();
         let mut cfs_opts = vec![
