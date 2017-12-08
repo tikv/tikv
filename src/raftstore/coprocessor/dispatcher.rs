@@ -91,11 +91,11 @@ macro_rules! loop_ob {
     (_exec _tup, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
         $o.$hook($ctx, $($args)*)
     };
-    // When the try loop finish successfully, the value to be returned.
+    // When the try loop finishes successfully, the value to be returned.
     (_done _res) => {
         Ok(())
     };
-    // When the loop finish successfully, the value to be returned.
+    // When the loop finishes successfully, the value to be returned.
     (_done _tup) => {{}};
     // Actual implementation of the for loop.
     (_imp $res_type:tt, $r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {{
@@ -108,7 +108,7 @@ macro_rules! loop_ob {
         }
         loop_ob!(_done $res_type)
     }};
-    // Loops over all observers and return early when bypass is set.
+    // Loop over all observers and return early when bypass is set.
     // This macro is expected to be used for hook that returns `()`.
     ($r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {
         loop_ob!(_imp _tup, $r, $obs, $hook, $($args)*)
