@@ -161,7 +161,7 @@ impl Config {
 
 // SoftState provides state that is useful for logging and debugging.
 // The state is volatile and does not need to be persisted to the WAL.
-#[derive(Default, PartialEq, Debug)]
+#[derive(Default, PartialEq, Debug, Clone)]
 pub struct SoftState {
     pub leader_id: u64,
     pub raft_state: StateRole,

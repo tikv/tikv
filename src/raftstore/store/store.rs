@@ -1124,15 +1124,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     if !peer.handle_raft_ready_append(&mut ctx, &mut ready_res, &self.pd_worker) {
                         regions_not_handled.insert(region_id);
                     }
-                    // Handle ready read_states ASAP.
-                    if let Some(&mut (ref mut ready, ref invoke_ctx)) = ready_res.last_mut() {
-                        let mut read = Ready::default();
-                        mem::swap(&mut ready.read_states, &mut read.read_states);
-                        ready_reads.push((invoke_ctx.region_id, read));
-                    }
                 }
             }
             self.pending_raft_groups = regions_not_handled;
+
+            // Handle ready read_states ASAP.
+            for &mut (ref mut ready, ref invoke_ctx) in
+                ctx.ready_res.iter_mut().chain(ready_res.iter_mut())
+            {
+                let mut ready_read = if !ready.read_states.is_empty() {
+                    let mut read = Ready::default();
+                    mem::swap(&mut ready.read_states, &mut read.read_states);
+                    Some(read)
+                } else {
+                    None
+                };
+                // May handle ss twice, one for ready_reads
+                // and the other froms the async ready(the append worker).
+                // TODO: unset ss before commit_ready() in apply_read().
+                if let Some(ref ss) = ready.ss {
+                    let mut read = ready_read.unwrap_or_default();
+                    read.ss = Some(ss.clone());
+                    ready_read = Some(read);
+                }
+                if let Some(ready_read) = ready_read {
+                    ready_reads.push((invoke_ctx.region_id, ready_read));
+                }
+            }
 
             // Needs to schedule Ready logs.
             if !ctx.ready_res.is_empty() {
@@ -1160,9 +1178,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         self.raft_metrics.ready.has_ready_region += ready_res_cnt as u64;
-
-        let mut new_res = self.poll_append();
-        ready_res.append(&mut new_res);
 
         let mut ready_results = Vec::with_capacity(ready_res.len());
         for (mut ready, invoke_ctx) in ready_res {

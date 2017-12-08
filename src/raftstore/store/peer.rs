@@ -77,6 +77,7 @@ struct ReadIndexQueue {
     id_allocator: u64,
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
+    term: u64,
 }
 
 impl ReadIndexQueue {
@@ -86,6 +87,10 @@ impl ReadIndexQueue {
     }
 
     fn clear_uncommitted(&mut self, term: u64) {
+        if self.term >= term {
+            return;
+        }
+        self.term = term;
         for mut read in self.reads.drain(self.ready_cnt..) {
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
