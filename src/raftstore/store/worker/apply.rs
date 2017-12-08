@@ -31,7 +31,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerR
 
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
-use util::time::{duration_to_sec, SlowTimer};
+use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use raftstore::{Error, Result};
@@ -167,10 +167,33 @@ pub enum ExecResult {
     DeleteRange { ranges: Vec<Range> },
 }
 
+struct ApplyCallBack {
+    region: Region,
+    cbs: Vec<(Option<Callback>, RaftCmdResponse)>,
+}
+
+impl ApplyCallBack {
+    fn new(region: Region) -> ApplyCallBack {
+        let cbs = vec![];
+        ApplyCallBack { region, cbs }
+    }
+
+    fn invoke_all(self, host: &CoprocessorHost) {
+        for (cb, mut resp) in self.cbs {
+            host.post_apply(&self.region, &mut resp);
+            cb.map(|cb| cb(resp));
+        }
+    }
+
+    fn push(&mut self, cb: Option<Callback>, resp: RaftCmdResponse) {
+        self.cbs.push((cb, resp));
+    }
+}
+
 struct ApplyContext<'a> {
     host: &'a CoprocessorHost,
     wb: WriteBatch,
-    cbs: MustConsumeVec<(Callback, RaftCmdResponse)>,
+    cbs: MustConsumeVec<ApplyCallBack>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
     sync_log: bool,
@@ -188,6 +211,10 @@ impl<'a> ApplyContext<'a> {
             sync_log: false,
             exec_ctx: None,
         }
+    }
+
+    fn prepare_for(&mut self, delegate: &ApplyDelegate) {
+        self.cbs.push(ApplyCallBack::new(delegate.region.clone()));
     }
 
     pub fn mark_last_bytes_and_keys(&mut self) {
@@ -321,6 +348,7 @@ impl ApplyDelegate {
         if committed_entries.is_empty() {
             return vec![];
         }
+        apply_ctx.prepare_for(self);
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -410,10 +438,10 @@ impl ApplyDelegate {
                     });
 
                 // call callback
-                for (cb, mut resp) in apply_ctx.cbs.drain(..) {
-                    apply_ctx.host.post_apply(&self.region, &mut resp);
-                    cb(resp);
+                for cbs in apply_ctx.cbs.drain(..) {
+                    cbs.invoke_all(apply_ctx.host);
                 }
+                apply_ctx.prepare_for(self);
                 apply_ctx.mark_last_bytes_and_keys();
             }
 
@@ -428,10 +456,11 @@ impl ApplyDelegate {
         assert!(term > 0);
         while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
             // apprently, all the callbacks whose term is less than entry's term are stale.
-            apply_ctx.cbs.push((
-                cmd.cb.take().unwrap(),
-                cmd_resp::err_resp(Error::StaleCommand, term),
-            ));
+            apply_ctx
+                .cbs
+                .last_mut()
+                .unwrap()
+                .push(cmd.cb.take(), cmd_resp::err_resp(Error::StaleCommand, term));
         }
         None
     }
@@ -516,15 +545,10 @@ impl ApplyDelegate {
 
         debug!("{} applied command at log index {}", self.tag, index);
 
-        let cb = match cmd_cb {
-            None => return exec_result,
-            Some(cb) => cb,
-        };
-
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        apply_ctx.cbs.push((cb, resp));
+        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
 
         exec_result
     }
@@ -1347,13 +1371,18 @@ impl RegionProposal {
     }
 }
 
+pub struct ApplyBatch {
+    vec: Vec<Apply>,
+    start: Instant,
+}
+
 pub struct Destroy {
     region_id: u64,
 }
 
 /// region related task.
 pub enum Task {
-    Applies(Vec<Apply>),
+    Applies(ApplyBatch),
     Registration(Registration),
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
@@ -1361,7 +1390,10 @@ pub enum Task {
 
 impl Task {
     pub fn applies(applies: Vec<Apply>) -> Task {
-        Task::Applies(applies)
+        Task::Applies(ApplyBatch {
+            vec: applies,
+            start: Instant::now_coarse(),
+        })
     }
 
     pub fn register(peer: &Peer) -> Task {
@@ -1378,7 +1410,7 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Applies(ref a) => write!(f, "async applys count {}", a.len()),
+            Task::Applies(ref a) => write!(f, "async applys count {}", a.vec.len()),
             Task::Proposals(ref p) => write!(f, "region proposal count {}", p.len()),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
@@ -1497,8 +1529,8 @@ impl Runner {
         }
 
         // Call callbacks
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&self.host);
         }
 
         if !applys_res.is_empty() {
@@ -1586,7 +1618,11 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Applies(a) => self.handle_applies(a),
+            Task::Applies(a) => {
+                let elapsed = duration_to_sec(a.start.elapsed());
+                APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+                self.handle_applies(a.vec);
+            }
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
@@ -1601,12 +1637,14 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use std::sync::*;
+    use std::sync::atomic::*;
 
     use tempdir::TempDir;
     use rocksdb::{Writable, WriteBatch, DB};
     use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::CmdType;
+    use raftstore::coprocessor::*;
 
     use super::*;
     use storage::{ALL_CFS, CF_WRITE};
@@ -1895,6 +1933,27 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct ApplyObserver {
+        pre_admin_count: Arc<AtomicUsize>,
+        pre_query_count: Arc<AtomicUsize>,
+        post_admin_count: Arc<AtomicUsize>,
+        post_query_count: Arc<AtomicUsize>,
+    }
+
+
+    impl Coprocessor for ApplyObserver {}
+
+    impl QueryObserver for ApplyObserver {
+        fn pre_apply_query(&self, _: &mut ObserverContext, _: &[Request]) {
+            self.pre_query_count.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn post_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Response>) {
+            self.post_query_count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     #[test]
     fn test_handle_raft_committed_entries() {
         let (_path, db) = create_tmp_engine("test-delegate");
@@ -1911,12 +1970,15 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::default();
+        let obs = ApplyObserver::default();
+        host.registry
+            .register_query_observer(1, Box::new(obs.clone()));
         let mut apply_ctx = ApplyContext::new(&host);
         let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&host);
         }
         assert!(res.is_empty());
         let resp = rx.try_recv().unwrap();
@@ -1942,8 +2004,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&host);
         }
         let lock_handle = db.cf_handle(CF_LOCK).unwrap();
         assert_eq!(db.get_cf(lock_handle, &dk_k1).unwrap().unwrap(), b"v1");
@@ -1965,8 +2027,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&host);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
@@ -1982,8 +2044,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&host);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -2008,8 +2070,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&host);
         }
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
@@ -2032,8 +2094,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&host);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -2046,8 +2108,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&host);
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -2063,8 +2125,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&host);
         }
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -2084,8 +2146,8 @@ mod tests {
         let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
         db.write(apply_ctx.wb).unwrap();
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        for cbs in apply_ctx.cbs.drain(..) {
+            cbs.invoke_all(&host);
         }
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
@@ -2093,6 +2155,15 @@ mod tests {
         assert_eq!(
             delegate.apply_state.get_applied_index(),
             WRITE_BATCH_MAX_KEYS as u64 + 8
+        );
+
+        assert_eq!(
+            obs.pre_query_count.load(Ordering::SeqCst),
+            8 + WRITE_BATCH_MAX_KEYS
+        );
+        assert_eq!(
+            obs.post_query_count.load(Ordering::SeqCst),
+            8 + WRITE_BATCH_MAX_KEYS
         );
     }
 }
