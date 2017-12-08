@@ -25,7 +25,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::cmp;
 
 use rand::{self, Rng};
@@ -37,7 +36,7 @@ use super::progress::{Inflights, Progress, ProgressSet, ProgressState};
 use super::errors::{Error, Result, StorageError};
 use super::raft_log::{self, RaftLog};
 use super::read_only::{ReadOnly, ReadOnlyOption, ReadState};
-use super::FlatMap;
+use super::{FlatMap, FlatMapEntry};
 
 // CAMPAIGN_PRE_ELECTION represents the first phase of a normal election when
 // Config.pre_vote is true.
@@ -402,40 +401,6 @@ impl<T: Storage> Raft<T> {
 
     fn quorum(&self) -> usize {
         quorum(self.get_prs().voters.len())
-    }
-
-    pub fn set_progress(&mut self, id: u64, matched: u64, next_idx: u64, is_learner: bool) {
-        let mut p = new_progress(next_idx, self.max_inflight);
-        p.matched = matched;
-        p.is_learner = is_learner;
-
-        if is_learner {
-            self.mut_prs().learners.insert(id, p);
-        } else {
-            self.mut_prs().voters.insert(id, p);
-        }
-    }
-
-    pub fn del_progress(&mut self, id: u64) {
-        if self.mut_prs().voters.remove(&id).is_none() {
-            self.mut_prs().learners.remove(&id);
-        }
-    }
-
-    pub fn take_prs(&mut self) -> ProgressSet {
-        self.prs.take().unwrap()
-    }
-
-    pub fn set_prs(&mut self, prs: ProgressSet) {
-        self.prs = Some(prs);
-    }
-
-    pub fn get_prs(&self) -> &ProgressSet {
-        self.prs.as_ref().unwrap()
-    }
-
-    pub fn mut_prs(&mut self) -> &mut ProgressSet {
-        self.prs.as_mut().unwrap()
     }
 
     // for testing leader lease
@@ -1028,7 +993,6 @@ impl<T: Storage> Raft<T> {
                 return Ok(());
             }
         }
-
 
         match m.get_msg_type() {
             MessageType::MsgHup => if self.state != StateRole::Leader {
@@ -1898,23 +1862,28 @@ impl<T: Storage> Raft<T> {
         }
 
         let mut prs = self.take_prs();
-        if let Some(mut pr) = prs.learners.remove(&id) {
-            if !is_learner {
-                pr.is_learner = false;
-                if self.id == id {
-                    self.is_learner = false;
+        let replace_learner = match prs.learners.entry(id) {
+            FlatMapEntry::Occupied(ent) => {
+                if !is_learner {
+                    let mut pr = ent.remove();
+                    pr.is_learner = false;
+                    if self.id == id {
+                        self.is_learner = false;
+                    }
+                    prs.voters.insert(id, pr);
                 }
-                prs.voters.insert(id, pr);
+                true
             }
-            self.set_prs(prs);
-            return;
-        }
-
-        // New progress.
+            _ => false,
+        };
         self.set_prs(prs);
-        let last_index = self.raft_log.last_index();
-        self.set_progress(id, 0, last_index + 1, is_learner);
-        self.mut_prs().get_mut_progress(id).unwrap().recent_active = true;
+
+        if !replace_learner {
+            // New progress.
+            let last_index = self.raft_log.last_index();
+            self.set_progress(id, 0, last_index + 1, is_learner);
+            self.mut_prs().get_mut_progress(id).unwrap().recent_active = true;
+        }
     }
 
     pub fn add_node(&mut self, id: u64) {
@@ -1947,6 +1916,40 @@ impl<T: Storage> Raft<T> {
 
     pub fn reset_pending_conf(&mut self) {
         self.pending_conf = false;
+    }
+
+    pub fn set_progress(&mut self, id: u64, matched: u64, next_idx: u64, is_learner: bool) {
+        let mut p = new_progress(next_idx, self.max_inflight);
+        p.matched = matched;
+        p.is_learner = is_learner;
+
+        if is_learner {
+            self.mut_prs().learners.insert(id, p);
+        } else {
+            self.mut_prs().voters.insert(id, p);
+        }
+    }
+
+    pub fn del_progress(&mut self, id: u64) {
+        if self.mut_prs().voters.remove(&id).is_none() {
+            self.mut_prs().learners.remove(&id);
+        }
+    }
+
+    pub fn take_prs(&mut self) -> ProgressSet {
+        self.prs.take().unwrap()
+    }
+
+    pub fn set_prs(&mut self, prs: ProgressSet) {
+        self.prs = Some(prs);
+    }
+
+    pub fn get_prs(&self) -> &ProgressSet {
+        self.prs.as_ref().unwrap()
+    }
+
+    pub fn mut_prs(&mut self) -> &mut ProgressSet {
+        self.prs.as_mut().unwrap()
     }
 
     // TODO: revoke pub when there is a better way to test.
