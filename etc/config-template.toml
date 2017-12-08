@@ -247,10 +247,10 @@
 
 # Allows OS to incrementally sync files to disk while they are being
 # written, asynchronously, in the background.
-# bytes-per-sync = "1MB"
+# bytes-per-sync = "0MB"
 
 # Allows OS to incrementally sync WAL to disk while it is being written.
-# wal-bytes-per-sync = "32KB"
+# wal-bytes-per-sync = "0KB"
 
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
