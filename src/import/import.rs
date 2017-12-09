@@ -333,15 +333,9 @@ impl ImportSSTJob {
                 }
             };
 
-            match self.import(region) {
-                Ok(_) => {
-                    info!("{} takes {:?}", self.tag, start.elapsed());
-                    return Ok(self.sst.extended_range());
-                }
-                Err(e) => {
-                    error!("{}: {:?}", self.tag, e);
-                    continue;
-                }
+            if self.import(region).is_ok() {
+                info!("{} takes {:?}", self.tag, start.elapsed());
+                return Ok(self.sst.extended_range());
             }
         }
 
