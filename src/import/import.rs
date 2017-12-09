@@ -182,6 +182,12 @@ impl SubImportJob {
     fn run(&self) -> Result<()> {
         let start = Instant::now();
         info!("{} start with {}", self.tag, self.import_range);
+        // TODO: Remove this log when stable.
+        info!(
+            "{} finished ranges {:?}",
+            self.tag,
+            self.finished_ranges.lock().unwrap()
+        );
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -314,7 +320,7 @@ impl ImportSSTJob {
 
     fn run(&mut self) -> Result<Range> {
         let start = Instant::now();
-        info!("{} start", self.tag);
+        info!("{} start with {}", self.tag, self.sst);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -325,7 +331,6 @@ impl ImportSSTJob {
             let region = match self.region() {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("{}: {:?}", self.tag, e);
                     if let Error::SSTFileOutOfRange = e {
                         break; // Not retryable inside this job.
                     }
@@ -350,6 +355,7 @@ impl ImportSSTJob {
         {
             return Ok(region);
         }
+        error!("{}: outside of region {:?}", self.tag, region);
         Err(Error::SSTFileOutOfRange)
     }
 
@@ -364,9 +370,8 @@ impl ImportSSTJob {
         }
 
         info!(
-            "{} import {} to region {} peers {:?}",
+            "{} import to region {} peers {:?}",
             self.tag,
-            self.sst,
             region.get_id(),
             region.get_peers()
         );

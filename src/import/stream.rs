@@ -87,8 +87,15 @@ impl fmt::Display for SSTFile {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "SSTFile {{uuid: {}, length: {}, cf_name: {}, region_id: {}, region_epoch: {:?}}}",
+            "SSTFile {{\
+             uuid: {}, \
+             range: {:?}, \
+             length: {}, \
+             cf_name: {}, \
+             region_id: {}, \
+             region_epoch: {:?}}}",
             Uuid::from_bytes(self.meta.get_uuid()).unwrap(),
+            self.meta.get_range(),
             self.meta.get_length(),
             self.meta.get_cf_name(),
             self.meta.get_region_id(),
@@ -139,6 +146,7 @@ impl SSTFileStream {
 
         let mut writer = self.new_sst_writer()?;
         self.region_ctx.reset(self.range_iter.key());
+        assert!(self.range_iter.key() >= self.sst_range.get_start());
 
         loop {
             let data_key = keys::data_key(self.range_iter.key());
@@ -155,6 +163,7 @@ impl SSTFileStream {
         } else {
             self.sst_range.get_end().to_owned()
         };
+        assert!(RangeEnd(&next) <= RangeEnd(self.sst_range.get_end()));
 
         let info = writer.finish()?;
         Ok(Some(SSTInfo::new(info, next)))
