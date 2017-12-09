@@ -89,13 +89,11 @@ impl fmt::Display for SSTFile {
             f,
             "SSTFile {{\
              uuid: {}, \
-             range: {:?}, \
              length: {}, \
              cf_name: {}, \
              region_id: {}, \
              region_epoch: {:?}}}",
             Uuid::from_bytes(self.meta.get_uuid()).unwrap(),
-            self.meta.get_range(),
             self.meta.get_length(),
             self.meta.get_cf_name(),
             self.meta.get_region_id(),
