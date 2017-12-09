@@ -102,6 +102,7 @@ pub struct SSTFileStream {
     fileno: u64,
     engine: Arc<Engine>,
     cf_name: String,
+    sst_range: Range,
     range_iter: RangeIterator,
     region_ctx: RegionContext,
 }
@@ -113,10 +114,11 @@ impl SSTFileStream {
         client: Arc<Client>,
         engine: Arc<Engine>,
         cf_name: String,
-        skip_ranges: Vec<Range>,
+        sst_range: Range,
+        finished_ranges: Vec<Range>,
     ) -> SSTFileStream {
         let iter = engine.new_iter(&cf_name, true);
-        let range_iter = RangeIterator::new(iter, skip_ranges);
+        let range_iter = RangeIterator::new(iter, sst_range.clone(), finished_ranges);
         let region_ctx = RegionContext::new(client, cfg.region_split_size);
 
         SSTFileStream {
@@ -124,6 +126,7 @@ impl SSTFileStream {
             fileno: 0,
             engine: engine,
             cf_name: cf_name,
+            sst_range: sst_range,
             range_iter: range_iter,
             region_ctx: region_ctx,
         }
@@ -150,7 +153,7 @@ impl SSTFileStream {
         let next = if self.range_iter.valid() {
             self.range_iter.key().to_owned()
         } else {
-            RANGE_MAX.to_owned()
+            self.sst_range.get_end().to_owned()
         };
 
         let info = writer.finish()?;
@@ -173,22 +176,36 @@ pub struct RangeIterator {
 }
 
 impl RangeIterator {
-    pub fn new(iter: DBIterator<Arc<DB>>, mut skip_ranges: Vec<Range>) -> RangeIterator {
-        // Ranges are guaranteed to be not overlapped with each other,
-        // so we just need to sort them by the start.
-        skip_ranges.sort_by(|a, b| a.get_start().cmp(b.get_start()));
+    pub fn new(
+        iter: DBIterator<Arc<DB>>,
+        range: Range,
+        mut finished_ranges: Vec<Range>,
+    ) -> RangeIterator {
+        // Just treat the ranges outside of the target range as finished ranges.
+        {
+            if range.get_start() != RANGE_MIN {
+                finished_ranges.push(new_range(RANGE_MIN, range.get_start()));
+            }
+            if range.get_end() != RANGE_MAX {
+                finished_ranges.push(new_range(range.get_end(), RANGE_MAX));
+            }
+        }
 
-        // Collect unskipped ranges.
-        let mut ranges = Vec::new();
+        // Finished ranges are guaranteed to be not overlapped with each other,
+        // so we just need to sort them by the start.
+        finished_ranges.sort_by(|a, b| a.get_start().cmp(b.get_start()));
+
+        // Collect unfinished ranges.
         let mut start = RANGE_MIN;
-        for range in &skip_ranges {
-            assert!(start <= range.get_start());
+        let mut ranges = Vec::new();
+        for range in &finished_ranges {
+            assert!(start == RANGE_MIN || RangeEnd(start) <= RangeEnd(range.get_start()));
             if start != range.get_start() {
                 ranges.push(new_range(start, range.get_start()));
             }
             start = range.get_end();
         }
-        if start != RANGE_MAX || skip_ranges.is_empty() {
+        if start != RANGE_MAX || finished_ranges.is_empty() {
             ranges.push(new_range(start, RANGE_MAX));
         }
 
@@ -280,10 +297,10 @@ mod tests {
         range
     }
 
-    fn new_range_iter(db: Arc<DB>, skip_ranges: Vec<Range>) -> RangeIterator {
+    fn new_range_iter(db: Arc<DB>, range: Range, skip_ranges: Vec<Range>) -> RangeIterator {
         let ropts = ReadOptions::new();
         let iter = DBIterator::new(db.clone(), ropts);
-        RangeIterator::new(iter, skip_ranges)
+        RangeIterator::new(iter, range, skip_ranges)
     }
 
     fn check_range_iter(iter: &mut RangeIterator, start: i32, end: i32) {
@@ -309,73 +326,121 @@ mod tests {
             db.put(k.as_bytes(), v.as_bytes()).unwrap();
         }
 
-        // Skip none.
+        // No finished ranges.
         {
-            let skip_ranges = Vec::new();
-            let mut iter = new_range_iter(db.clone(), skip_ranges);
+            let range = new_int_range(None, None);
+            let finished_ranges = Vec::new();
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
             check_range_iter(&mut iter, 0, num_keys);
             assert!(!iter.valid());
         }
 
-        // Skip all.
+        // Range [0, 25) with no finished ranges.
         {
-            let mut skip_ranges = Vec::new();
-            skip_ranges.push(new_int_range(Some(0), Some(100)));
-            let mut iter = new_range_iter(db.clone(), skip_ranges);
+            let range = new_int_range(None, Some(25));
+            let finished_ranges = Vec::new();
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
+            check_range_iter(&mut iter, 0, 25);
+            assert!(!iter.valid());
+        }
+
+        // Range [25, 75) with no finished ranges.
+        {
+            let range = new_int_range(Some(25), Some(75));
+            let finished_ranges = Vec::new();
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
+            check_range_iter(&mut iter, 25, 75);
+            assert!(!iter.valid());
+        }
+
+        // Range [75, 100) with no finished ranges.
+        {
+            let range = new_int_range(Some(75), None);
+            let finished_ranges = Vec::new();
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
+            check_range_iter(&mut iter, 75, 100);
+            assert!(!iter.valid());
+        }
+
+        // Finished all ranges.
+        {
+            let range = new_int_range(None, None);
+            let mut finished_ranges = Vec::new();
+            finished_ranges.push(new_int_range(Some(0), Some(100)));
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
             assert!(!iter.next());
             assert!(!iter.valid());
         }
 
-        // Skip all segment ranges.
+        // Range [25, 75) with some finished ranges.
         {
-            let mut skip_ranges = Vec::new();
-            skip_ranges.push(new_int_range(Some(0), Some(10)));
-            skip_ranges.push(new_int_range(Some(30), Some(60)));
-            skip_ranges.push(new_int_range(Some(10), Some(30)));
-            skip_ranges.push(new_int_range(Some(60), Some(100)));
-            skip_ranges.push(new_int_range(Some(100), Some(1000)));
-            let mut iter = new_range_iter(db.clone(), skip_ranges);
+            let range = new_int_range(Some(25), Some(75));
+            let mut finished_ranges = Vec::new();
+            finished_ranges.push(new_int_range(Some(30), Some(40)));
+            finished_ranges.push(new_int_range(Some(40), Some(50)));
+            finished_ranges.push(new_int_range(Some(60), Some(70)));
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
+            check_range_iter(&mut iter, 25, 30);
+            check_range_iter(&mut iter, 50, 60);
+            check_range_iter(&mut iter, 70, 75);
             assert!(!iter.next());
             assert!(!iter.valid());
         }
 
-        // Skip head and tail.
+        // Finished all segment ranges.
         {
-            let mut skip_ranges = Vec::new();
-            skip_ranges.push(new_int_range(Some(90), None));
-            skip_ranges.push(new_int_range(None, Some(10)));
-            let mut iter = new_range_iter(db.clone(), skip_ranges);
-            check_range_iter(&mut iter, 10, 90);
+            let range = new_int_range(None, None);
+            let mut finished_ranges = Vec::new();
+            finished_ranges.push(new_int_range(Some(0), Some(10)));
+            finished_ranges.push(new_int_range(Some(30), Some(60)));
+            finished_ranges.push(new_int_range(Some(10), Some(30)));
+            finished_ranges.push(new_int_range(Some(60), Some(100)));
+            finished_ranges.push(new_int_range(Some(100), Some(1000)));
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
             assert!(!iter.next());
             assert!(!iter.valid());
         }
 
-        // Skip head and middle.
+        // Finished head and tail.
         {
-            let mut skip_ranges = Vec::new();
-            skip_ranges.push(new_int_range(None, Some(10)));
-            skip_ranges.push(new_int_range(Some(60), Some(80)));
-            skip_ranges.push(new_int_range(Some(20), Some(30)));
-            skip_ranges.push(new_int_range(Some(30), Some(40)));
-            let mut iter = new_range_iter(db.clone(), skip_ranges);
+            let range = new_int_range(Some(20), Some(80));
+            let mut finished_ranges = Vec::new();
+            finished_ranges.push(new_int_range(Some(20), Some(50)));
+            finished_ranges.push(new_int_range(Some(70), Some(80)));
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
+            check_range_iter(&mut iter, 50, 70);
+            assert!(!iter.next());
+            assert!(!iter.valid());
+        }
+
+        // Finished head and middle.
+        {
+            let range = new_int_range(None, Some(90));
+            let mut finished_ranges = Vec::new();
+            finished_ranges.push(new_int_range(None, Some(10)));
+            finished_ranges.push(new_int_range(Some(60), Some(80)));
+            finished_ranges.push(new_int_range(Some(20), Some(30)));
+            finished_ranges.push(new_int_range(Some(30), Some(40)));
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
             check_range_iter(&mut iter, 10, 20);
             check_range_iter(&mut iter, 40, 60);
-            check_range_iter(&mut iter, 80, 100);
+            check_range_iter(&mut iter, 80, 90);
             assert!(!iter.next());
             assert!(!iter.valid());
         }
 
-        // Skip middle and tail.
+        // Finished middle and tail.
         {
-            let mut skip_ranges = Vec::new();
-            skip_ranges.push(new_int_range(Some(90), None));
-            skip_ranges.push(new_int_range(Some(60), Some(70)));
-            skip_ranges.push(new_int_range(Some(30), Some(40)));
-            skip_ranges.push(new_int_range(Some(40), Some(50)));
-            skip_ranges.push(new_int_range(Some(70), Some(80)));
-            skip_ranges.push(new_int_range(Some(10), Some(30)));
-            let mut iter = new_range_iter(db.clone(), skip_ranges);
-            check_range_iter(&mut iter, 0, 10);
+            let range = new_int_range(Some(10), None);
+            let mut finished_ranges = Vec::new();
+            finished_ranges.push(new_int_range(Some(90), None));
+            finished_ranges.push(new_int_range(Some(60), Some(70)));
+            finished_ranges.push(new_int_range(Some(30), Some(40)));
+            finished_ranges.push(new_int_range(Some(40), Some(50)));
+            finished_ranges.push(new_int_range(Some(70), Some(80)));
+            finished_ranges.push(new_int_range(Some(20), Some(30)));
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
+            check_range_iter(&mut iter, 10, 20);
             check_range_iter(&mut iter, 50, 60);
             check_range_iter(&mut iter, 80, 90);
             assert!(!iter.next());

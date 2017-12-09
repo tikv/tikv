@@ -115,12 +115,14 @@ impl ImportJob {
         // Calculate the range info of each sub import job.
         let mut size = 0;
         let mut start = RANGE_MIN;
+        let mut end = RANGE_MIN;
         let mut ranges = Vec::new();
         for i in 0..cf_ranges.len() {
             size += cf_ranges[i].size;
-            let end = &cf_ranges[i].end;
+            assert!(end == RANGE_MIN || end == cf_ranges[i].get_start());
+            end = cf_ranges[i].get_end();
             if size >= job_size || i == (cf_ranges.len() - 1) {
-                let range = RangeInfo::new(start.to_owned(), end.to_owned(), size);
+                let range = RangeInfo::new(start, end, size);
                 ranges.push(range);
                 size = 0;
                 start = end;
@@ -179,7 +181,7 @@ impl SubImportJob {
 
     fn run(&self) -> Result<()> {
         let start = Instant::now();
-        info!("{} start with range {}", self.tag, self.import_range);
+        info!("{} start with {}", self.tag, self.import_range);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -225,19 +227,6 @@ impl SubImportJob {
     }
 
     fn new_import_stream(&self) -> Result<SSTFileStream> {
-        let mut skip_ranges = self.finished_ranges.lock().unwrap().clone();
-        // Add ranges outside of the import range to the skip ranges.
-        {
-            let start = self.import_range.start.as_slice();
-            if start != RANGE_MIN {
-                skip_ranges.push(new_range(RANGE_MIN, start));
-            }
-            let end = self.import_range.end.as_slice();
-            if end != RANGE_MAX {
-                skip_ranges.push(new_range(end, RANGE_MAX));
-            }
-        }
-
         let temp_dir = TempDir::new_in(self.dir.path(), &self.cf_name)?;
         Ok(SSTFileStream::new(
             self.cfg.clone(),
@@ -245,7 +234,8 @@ impl SubImportJob {
             self.client.clone(),
             self.engine.clone(),
             self.cf_name.clone(),
-            skip_ranges,
+            self.import_range.range.clone(),
+            self.finished_ranges.lock().unwrap().clone(),
         ))
     }
 

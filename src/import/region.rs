@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Deref;
 use std::fmt;
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::sync::Arc;
@@ -58,18 +59,24 @@ impl<'a> PartialOrd for RangeEnd<'a> {
 
 #[derive(Clone, Debug)]
 pub struct RangeInfo {
-    pub start: Vec<u8>,
-    pub end: Vec<u8>,
+    pub range: Range,
     pub size: usize,
 }
 
 impl RangeInfo {
-    pub fn new(start: Vec<u8>, end: Vec<u8>, size: usize) -> RangeInfo {
+    pub fn new(start: &[u8], end: &[u8], size: usize) -> RangeInfo {
         RangeInfo {
-            start: start,
-            end: end,
+            range: new_range(start, end),
             size: size,
         }
+    }
+}
+
+impl Deref for RangeInfo {
+    type Target = Range;
+
+    fn deref(&self) -> &Self::Target {
+        &self.range
     }
 }
 
@@ -78,8 +85,8 @@ impl fmt::Display for RangeInfo {
         write!(
             f,
             "RangeInfo {{start: {:?}, end: {:?}, size: {}}}",
-            escape(&self.start),
-            escape(&self.end),
+            escape(self.get_start()),
+            escape(self.get_end()),
             self.size,
         )
     }
