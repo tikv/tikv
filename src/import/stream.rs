@@ -23,6 +23,7 @@ use uuid::Uuid;
 use raftstore::store::keys;
 
 use rocksdb::{DBIterator, ExternalSstFileInfo, SeekKey, SstFileWriter, DB};
+use kvproto::metapb::*;
 use kvproto::importpb::*;
 
 use super::{Client, Config, Engine, Result};
@@ -78,6 +79,12 @@ impl SSTFile {
         })
     }
 
+    pub fn is_inside(&self, region: &Region) -> bool {
+        let range = self.meta.get_range();
+        range.get_start() >= region.get_start_key() &&
+            RangeEnd(range.get_end()) < RangeEnd(region.get_end_key())
+    }
+
     pub fn extended_range(&self) -> Range {
         new_range(self.meta.get_range().get_start(), &self.next_start)
     }
@@ -87,17 +94,11 @@ impl fmt::Display for SSTFile {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "SSTFile {{\
-             uuid: {}, \
-             length: {}, \
-             cf_name: {}, \
-             region_id: {}, \
-             region_epoch: {:?}}}",
+            "SSTFile {{uuid: {}, range: {{{:?}}}, length: {}, cf_name: {}}}",
             Uuid::from_bytes(self.meta.get_uuid()).unwrap(),
+            self.meta.get_range(),
             self.meta.get_length(),
             self.meta.get_cf_name(),
-            self.meta.get_region_id(),
-            self.meta.get_region_epoch(),
         )
     }
 }
@@ -107,7 +108,6 @@ pub struct SSTFileStream {
     fileno: u64,
     engine: Arc<Engine>,
     cf_name: String,
-    sst_range: Range,
     range_iter: RangeIterator,
     region_ctx: RegionContext,
 }
@@ -123,7 +123,7 @@ impl SSTFileStream {
         finished_ranges: Vec<Range>,
     ) -> SSTFileStream {
         let iter = engine.new_iter(&cf_name, true);
-        let range_iter = RangeIterator::new(iter, sst_range.clone(), finished_ranges);
+        let range_iter = RangeIterator::new(iter, sst_range, finished_ranges);
         let region_ctx = RegionContext::new(client, cfg.region_split_size);
 
         SSTFileStream {
@@ -131,7 +131,6 @@ impl SSTFileStream {
             fileno: 0,
             engine: engine,
             cf_name: cf_name,
-            sst_range: sst_range,
             range_iter: range_iter,
             region_ctx: region_ctx,
         }
@@ -144,7 +143,6 @@ impl SSTFileStream {
 
         let mut writer = self.new_sst_writer()?;
         self.region_ctx.reset(self.range_iter.key());
-        assert!(self.range_iter.key() >= self.sst_range.get_start());
 
         loop {
             let data_key = keys::data_key(self.range_iter.key());
@@ -159,9 +157,8 @@ impl SSTFileStream {
         let next = if self.range_iter.valid() {
             self.range_iter.key().to_owned()
         } else {
-            self.sst_range.get_end().to_owned()
+            RANGE_MAX.to_owned()
         };
-        assert!(RangeEnd(&next) <= RangeEnd(self.sst_range.get_end()));
 
         let info = writer.finish()?;
         Ok(Some(SSTInfo::new(info, next)))
@@ -188,32 +185,25 @@ impl RangeIterator {
         range: Range,
         mut finished_ranges: Vec<Range>,
     ) -> RangeIterator {
-        // Just treat the ranges outside of the target range as finished ranges.
-        {
-            if range.get_start() != RANGE_MIN {
-                finished_ranges.push(new_range(RANGE_MIN, range.get_start()));
-            }
-            if range.get_end() != RANGE_MAX {
-                finished_ranges.push(new_range(range.get_end(), RANGE_MAX));
-            }
-        }
-
         // Finished ranges are guaranteed to be not overlapped with each other,
         // so we just need to sort them by the start.
         finished_ranges.sort_by(|a, b| a.get_start().cmp(b.get_start()));
 
         // Collect unfinished ranges.
-        let mut start = RANGE_MIN;
         let mut ranges = Vec::new();
+        let mut start = range.get_start();
         for range in &finished_ranges {
-            assert!(start == RANGE_MIN || RangeEnd(start) <= RangeEnd(range.get_start()));
-            if start != range.get_start() {
+            assert!(start <= range.get_start());
+            if start < range.get_start() {
                 ranges.push(new_range(start, range.get_start()));
             }
             start = range.get_end();
+            if start == RANGE_MAX {
+                break;
+            }
         }
-        if start != RANGE_MAX || finished_ranges.is_empty() {
-            ranges.push(new_range(start, RANGE_MAX));
+        if RangeEnd(start) < RangeEnd(range.get_end()) || finished_ranges.is_empty() {
+            ranges.push(new_range(start, range.get_end()));
         }
 
         let mut res = RangeIterator {
@@ -413,6 +403,19 @@ mod tests {
             let range = new_int_range(Some(20), Some(80));
             let mut finished_ranges = Vec::new();
             finished_ranges.push(new_int_range(Some(20), Some(50)));
+            finished_ranges.push(new_int_range(Some(70), None));
+            finished_ranges.push(new_int_range(Some(60), None));
+            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
+            check_range_iter(&mut iter, 50, 60);
+            assert!(!iter.next());
+            assert!(!iter.valid());
+        }
+
+        // Finished head and tail.
+        {
+            let range = new_int_range(Some(20), Some(80));
+            let mut finished_ranges = Vec::new();
+            finished_ranges.push(new_int_range(Some(20), Some(50)));
             finished_ranges.push(new_int_range(Some(70), Some(80)));
             let mut iter = new_range_iter(db.clone(), range, finished_ranges);
             check_range_iter(&mut iter, 50, 70);
@@ -441,15 +444,15 @@ mod tests {
             let range = new_int_range(Some(10), None);
             let mut finished_ranges = Vec::new();
             finished_ranges.push(new_int_range(Some(90), None));
+            finished_ranges.push(new_int_range(Some(80), None));
             finished_ranges.push(new_int_range(Some(60), Some(70)));
             finished_ranges.push(new_int_range(Some(30), Some(40)));
             finished_ranges.push(new_int_range(Some(40), Some(50)));
-            finished_ranges.push(new_int_range(Some(70), Some(80)));
             finished_ranges.push(new_int_range(Some(20), Some(30)));
             let mut iter = new_range_iter(db.clone(), range, finished_ranges);
             check_range_iter(&mut iter, 10, 20);
             check_range_iter(&mut iter, 50, 60);
-            check_range_iter(&mut iter, 80, 90);
+            check_range_iter(&mut iter, 70, 80);
             assert!(!iter.next());
             assert!(!iter.valid());
         }

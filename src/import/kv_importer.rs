@@ -137,16 +137,14 @@ pub struct EngineDir {
 }
 
 impl EngineDir {
-    const TEMP_DIR: &'static str = ".temp";
-
     pub fn new<P: AsRef<Path>>(root: P, opts: &DbConfig) -> Result<EngineDir> {
-        let temp_dir = root.as_ref().join(Self::TEMP_DIR);
-        if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir)?;
+        let root_dir = root.as_ref().join("engine");
+        if root_dir.exists() {
+            fs::remove_dir_all(&root_dir)?;
         }
-        fs::create_dir_all(&temp_dir)?;
+        fs::create_dir_all(&root_dir)?;
         Ok(EngineDir {
-            root: temp_dir,
+            root: root_dir,
             opts: opts.clone(),
         })
     }

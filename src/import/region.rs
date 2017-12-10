@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::ops::Deref;
-use std::fmt;
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::sync::Arc;
 
@@ -20,7 +19,6 @@ use kvproto::kvrpcpb::*;
 use kvproto::importpb::*;
 
 use pd::RegionInfo;
-use util::escape;
 
 use super::Client;
 
@@ -77,18 +75,6 @@ impl Deref for RangeInfo {
 
     fn deref(&self) -> &Self::Target {
         &self.range
-    }
-}
-
-impl fmt::Display for RangeInfo {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "RangeInfo {{start: {:?}, end: {:?}, size: {}}}",
-            escape(self.get_start()),
-            escape(self.get_end()),
-            self.size,
-        )
     }
 }
 

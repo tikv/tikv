@@ -149,15 +149,15 @@ impl PrepareRangeJob {
 
     fn run(&self) -> Result<()> {
         let start = Instant::now();
-        info!("{} start with {:?}", self.tag, self.range);
+        info!("{} start {:?}", self.tag, self.range);
 
         let mut region = self.client.get_region(&self.range.start)?;
 
         // No need to split if the file is not large enough.
         if self.range.size > self.cfg.region_split_size / 2 &&
-            RangeEnd(&self.range.end) < RangeEnd(region.get_end_key())
+            RangeEnd(self.range.get_end()) < RangeEnd(region.get_end_key())
         {
-            region = self.split_region(region, self.range.end.clone())?;
+            region = self.split_region(region, self.range.get_end().to_owned())?;
         }
 
         self.relocate_region(region)?;

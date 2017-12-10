@@ -33,7 +33,6 @@ use super::prepare::*;
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 3;
 
-#[derive(Clone)]
 pub struct ImportJob {
     cfg: Config,
     dir: Arc<TempDir>,
@@ -58,22 +57,18 @@ impl ImportJob {
         let mut handles = Vec::new();
 
         for cf_name in self.engine.cf_names() {
-            let ctx = self.clone();
             let cfg = self.cfg.clone();
             let client = self.client.clone();
             let engine = self.engine.clone();
             let cf_name = cf_name.to_owned();
 
-            let handle = thread::Builder::new()
-                .name(format!("import-{}", cf_name))
-                .spawn(move || {
-                    let job = PrepareJob::new(cfg, client, engine, cf_name.clone());
-                    let cf_ranges = job.run();
-                    ctx.run_import_threads(cf_name, cf_ranges)
-                })
-                .unwrap();
+            // We should prepare different column families one by one, since
+            // they contain overlapped ranges.
+            let job = PrepareJob::new(cfg, client, engine, cf_name.clone());
+            let cf_ranges = job.run();
 
-            handles.push(handle);
+            let cf_handles = self.run_import_threads(cf_name, cf_ranges);
+            handles.extend(cf_handles);
         }
 
         let mut res = Ok(());
@@ -85,7 +80,11 @@ impl ImportJob {
         res
     }
 
-    fn new_import_thread(&self, cf_name: String, range: RangeInfo) -> JoinHandle<Result<()>> {
+    fn new_import_thread(
+        &self,
+        cf_name: String,
+        import_range: RangeInfo,
+    ) -> JoinHandle<Result<()>> {
         let cfg = self.cfg.clone();
         let dir = self.dir.clone();
         let client = self.client.clone();
@@ -95,13 +94,18 @@ impl ImportJob {
         thread::Builder::new()
             .name("import-job".to_owned())
             .spawn(move || {
-                let job = SubImportJob::new(cfg, dir, client, engine, cf_name, job_counter, range);
+                let job =
+                    SubImportJob::new(cfg, dir, client, engine, cf_name, job_counter, import_range);
                 job.run()
             })
             .unwrap()
     }
 
-    fn run_import_threads(&self, cf_name: String, cf_ranges: Vec<RangeInfo>) -> Result<()> {
+    fn run_import_threads(
+        &self,
+        cf_name: String,
+        cf_ranges: Vec<RangeInfo>,
+    ) -> Vec<JoinHandle<Result<()>>> {
         // Calculate the range size of each sub import job.
         let cf_size = cf_ranges.iter().fold(0, |acc, r| acc + r.size);
         info!(
@@ -129,18 +133,11 @@ impl ImportJob {
             }
         }
 
-        // Run sub import jobs and wait for them to finish.
         let mut handles = Vec::new();
         for range in ranges {
             handles.push(self.new_import_thread(cf_name.clone(), range));
         }
-        let mut res = Ok(());
-        for h in handles {
-            if let Err(e) = h.join().unwrap() {
-                res = Err(e);
-            }
-        }
-        res
+        handles
     }
 }
 
@@ -181,13 +178,7 @@ impl SubImportJob {
 
     fn run(&self) -> Result<()> {
         let start = Instant::now();
-        info!("{} start with {}", self.tag, self.import_range);
-        // TODO: Remove this log when stable.
-        info!(
-            "{} finished ranges {:?}",
-            self.tag,
-            &self.finished_ranges.lock().unwrap()
-        );
+        info!("{} start {:?}", self.tag, self.import_range);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -204,7 +195,7 @@ impl SubImportJob {
 
             let range_count = self.finished_ranges.lock().unwrap().len();
             info!(
-                "{} with {} ranges takes {:?}",
+                "{} finished {} ranges takes {:?}",
                 self.tag,
                 range_count,
                 start.elapsed(),
@@ -320,7 +311,8 @@ impl ImportSSTJob {
 
     fn run(&mut self) -> Result<Range> {
         let start = Instant::now();
-        info!("{} start", self.tag);
+        let range = self.sst.extended_range();
+        info!("{} start {}", self.tag, self.sst);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -328,40 +320,26 @@ impl ImportSSTJob {
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
-            let region = match self.region() {
-                Ok(v) => v,
+            let region = match self.client.get_region(range.get_start()) {
+                Ok(region) => if self.sst.is_inside(&region) {
+                    region
+                } else {
+                    error!("{} outside of region {:?}", self.tag, region);
+                    return Err(Error::SSTFileOutOfRange);
+                },
                 Err(e) => {
-                    if let Error::SSTFileOutOfRange = e {
-                        break; // Not retryable inside this job.
-                    }
+                    error!("{}: {:?}", self.tag, e);
                     continue;
                 }
             };
 
             if self.import(region).is_ok() {
                 info!("{} takes {:?}", self.tag, start.elapsed());
-                return Ok(self.sst.extended_range());
+                return Ok(range);
             }
         }
 
         Err(Error::Timeout)
-    }
-
-    fn region(&self) -> Result<RegionInfo> {
-        let range = self.sst.meta.get_range();
-        let region = self.client.get_region(range.get_start())?;
-        if range.get_start() >= region.get_start_key() &&
-            RangeEnd(range.get_end()) < RangeEnd(region.get_end_key())
-        {
-            return Ok(region);
-        }
-        error!(
-            "{}: range {:?} outside of region {:?}",
-            self.tag,
-            self.sst.meta.get_range(),
-            region
-        );
-        Err(Error::SSTFileOutOfRange)
     }
 
     fn import(&mut self, mut region: RegionInfo) -> Result<()> {
@@ -374,12 +352,7 @@ impl ImportSSTJob {
             meta.set_region_epoch(region.get_region_epoch().clone());
         }
 
-        info!(
-            "{} import to region {} peers {:?}",
-            self.tag,
-            region.get_id(),
-            region.get_peers()
-        );
+        info!("{} import to {:?}", self.tag, region);
 
         self.upload(&region)?;
 
