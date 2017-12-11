@@ -31,7 +31,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerR
 
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
-use util::time::{duration_to_sec, SlowTimer};
+use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use raftstore::{Error, Result};
@@ -167,15 +167,15 @@ pub enum ExecResult {
     DeleteRange { ranges: Vec<Range> },
 }
 
-struct ApplyCallBack {
+struct ApplyCallback {
     region: Region,
     cbs: Vec<(Option<Callback>, RaftCmdResponse)>,
 }
 
-impl ApplyCallBack {
-    fn new(region: Region) -> ApplyCallBack {
+impl ApplyCallback {
+    fn new(region: Region) -> ApplyCallback {
         let cbs = vec![];
-        ApplyCallBack { region, cbs }
+        ApplyCallback { region, cbs }
     }
 
     fn invoke_all(self, host: &CoprocessorHost) {
@@ -193,7 +193,7 @@ impl ApplyCallBack {
 struct ApplyContext<'a> {
     host: &'a CoprocessorHost,
     wb: WriteBatch,
-    cbs: MustConsumeVec<ApplyCallBack>,
+    cbs: MustConsumeVec<ApplyCallback>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
     sync_log: bool,
@@ -214,7 +214,7 @@ impl<'a> ApplyContext<'a> {
     }
 
     fn prepare_for(&mut self, delegate: &ApplyDelegate) {
-        self.cbs.push(ApplyCallBack::new(delegate.region.clone()));
+        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
     }
 
     pub fn mark_last_bytes_and_keys(&mut self) {
@@ -1371,13 +1371,18 @@ impl RegionProposal {
     }
 }
 
+pub struct ApplyBatch {
+    vec: Vec<Apply>,
+    start: Instant,
+}
+
 pub struct Destroy {
     region_id: u64,
 }
 
 /// region related task.
 pub enum Task {
-    Applies(Vec<Apply>),
+    Applies(ApplyBatch),
     Registration(Registration),
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
@@ -1385,7 +1390,10 @@ pub enum Task {
 
 impl Task {
     pub fn applies(applies: Vec<Apply>) -> Task {
-        Task::Applies(applies)
+        Task::Applies(ApplyBatch {
+            vec: applies,
+            start: Instant::now_coarse(),
+        })
     }
 
     pub fn register(peer: &Peer) -> Task {
@@ -1402,7 +1410,7 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Applies(ref a) => write!(f, "async applys count {}", a.len()),
+            Task::Applies(ref a) => write!(f, "async applys count {}", a.vec.len()),
             Task::Proposals(ref p) => write!(f, "region proposal count {}", p.len()),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
@@ -1610,7 +1618,11 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Applies(a) => self.handle_applies(a),
+            Task::Applies(a) => {
+                let elapsed = duration_to_sec(a.start.elapsed());
+                APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+                self.handle_applies(a.vec);
+            }
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
