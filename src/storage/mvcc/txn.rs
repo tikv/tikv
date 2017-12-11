@@ -152,10 +152,9 @@ impl<'a> MvccTxn<'a> {
             }
             // No need to overwrite the lock and data.
             // If we use single delete, we can't put a key multiple times.
-            info!(
-                "duplicated prewrite with start_ts {}, ignore it.",
-                self.start_ts
-            );
+            MVCC_DUPLICATE_CMD_COUNTER_VEC
+                .with_label_values(&["prewrite"])
+                .inc();
             return Ok(());
         }
 
@@ -214,7 +213,12 @@ impl<'a> MvccTxn<'a> {
                     // Committed by concurrent transaction.
                     Some((_, WriteType::Put)) |
                     Some((_, WriteType::Delete)) |
-                    Some((_, WriteType::Lock)) => Ok(()),
+                    Some((_, WriteType::Lock)) => {
+                        MVCC_DUPLICATE_CMD_COUNTER_VEC
+                            .with_label_values(&["commit"])
+                            .inc();
+                        Ok(())
+                    }
                 };
             }
         };
@@ -241,6 +245,9 @@ impl<'a> MvccTxn<'a> {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
+                            MVCC_DUPLICATE_CMD_COUNTER_VEC
+                                .with_label_values(&["rollback"])
+                                .inc();
                             Ok(())
                         } else {
                             MVCC_CONFLICT_COUNTER

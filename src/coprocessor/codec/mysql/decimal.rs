@@ -1952,7 +1952,7 @@ pub trait DecimalDecoder: BytesDecoder {
             if d.word_buf[word_idx] > WORD_MAX {
                 return Err(box_err!("invalid int part for decimal number"));
             }
-            if d.word_buf[word_idx] != 0 {
+            if word_idx > 0 || d.word_buf[word_idx] != 0 {
                 word_idx += 1;
             } else {
                 d.int_cnt -= DIGITS_PER_WORD;
@@ -2667,6 +2667,12 @@ mod test {
             ("000000000.01", 7, 3, Res::Ok("0.010")),
             ("123.4", 10, 2, Res::Ok("123.40")),
             ("1000", 3, 0, Res::Overflow("0")),
+            (
+                "10000000000000000000.23",
+                23,
+                2,
+                Res::Ok("10000000000000000000.23"),
+            ),
         ];
 
         for (dec_str, prec, frac, exp) in cases {
