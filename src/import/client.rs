@@ -33,7 +33,7 @@ use super::{Error, Result};
 pub struct Client {
     rpc: Arc<RpcClient>,
     env: Arc<Environment>,
-    channels: Mutex<HashMap<u64, Channel>>,
+    addrs: Mutex<HashMap<u64, String>>,
 }
 
 impl Client {
@@ -45,21 +45,20 @@ impl Client {
         Client {
             rpc: rpc,
             env: Arc::new(env),
-            channels: Mutex::new(HashMap::new()),
+            addrs: Mutex::new(HashMap::new()),
         }
     }
 
     fn resolve(&self, store_id: u64) -> Result<Channel> {
-        let env = self.env.clone();
-        let mut channels = self.channels.lock().unwrap();
-        match channels.entry(store_id) {
-            Entry::Occupied(e) => Ok(e.get().clone()),
+        let builder = ChannelBuilder::new(self.env.clone());
+        let mut addrs = self.addrs.lock().unwrap();
+        match addrs.entry(store_id) {
+            Entry::Occupied(e) => Ok(builder.connect(e.get())),
             Entry::Vacant(e) => self.rpc
                 .get_store(store_id)
-                .map(|store| {
-                    let ch = ChannelBuilder::new(env).connect(store.get_address());
-                    e.insert(ch.clone());
-                    ch
+                .map(|mut store| {
+                    let addr = store.take_address();
+                    builder.connect(e.insert(addr))
                 })
                 .map_err(Error::from),
         }
@@ -67,7 +66,7 @@ impl Client {
 
     fn post_resolve<T>(&self, store_id: u64, res: Result<T>) -> Result<T> {
         res.map_err(|e| {
-            self.channels.lock().unwrap().remove(&store_id);
+            self.addrs.lock().unwrap().remove(&store_id);
             e
         })
     }

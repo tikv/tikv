@@ -42,6 +42,8 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(mut cfg: DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
+        // TODO: Use VectorMemtable instead of SkipList.
+
         // Configuration recommendation:
         // 1. Use a large `write_buffer_size`, 1GB should be good enough.
         // 2. Choose a reasonable compression algorithm to balance between CPU and IO.

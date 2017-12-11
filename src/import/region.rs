@@ -93,6 +93,7 @@ pub fn new_context(region: &RegionInfo) -> Context {
     ctx
 }
 
+/// A helper to decide how to cut ranges according to the size and region ranges.
 pub struct RegionContext {
     client: Arc<Client>,
     region: Option<RegionInfo>,
@@ -114,6 +115,7 @@ impl RegionContext {
         self.raw_size += key.len() + value.len()
     }
 
+    /// Reset size and region for the next key.
     pub fn reset(&mut self, key: &[u8]) {
         self.raw_size = 0;
         if let Some(ref region) = self.region {
@@ -135,6 +137,7 @@ impl RegionContext {
         self.raw_size
     }
 
+    /// Check size and region range to see if we should stop before this key.
     pub fn should_stop_before(&self, key: &[u8]) -> bool {
         if self.raw_size >= self.limit_size {
             return true;
