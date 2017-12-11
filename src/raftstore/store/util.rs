@@ -410,7 +410,7 @@ mod tests {
         for (i, key) in keys.iter().enumerate() {
             kvs.push((key.encoded().as_slice(), b"value"));
         }
-        let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, b"value"), (kvs[3].0, b"value")];
+        let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
         for &(k, v) in kvs.as_slice() {
             for cf in ALL_CFS {
                 let handle = get_cf_handle(&db, cf).unwrap();
