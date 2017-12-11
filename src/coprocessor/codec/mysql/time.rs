@@ -60,6 +60,24 @@ const MONTH_NAMES_ABBR: &'static [&'static str] = &[
     "Dec",
 ];
 
+bitflags! {
+    pub struct WeekMode: u32 {
+        const BEHAVIOR_MONDAY_FIRST  = 0b00000001;
+        const BEHAVIOR_YEAR          = 0b00000010;
+        const BEHAVIOR_FIRST_WEEKDAY = 0b00000100;
+    }
+}
+
+impl WeekMode {
+    pub fn to_normalized(self) -> WeekMode {
+        let mut mode = self;
+        if !mode.contains(WeekMode::BEHAVIOR_MONDAY_FIRST) {
+            mode ^= WeekMode::BEHAVIOR_FIRST_WEEKDAY;
+        }
+        mode
+    }
+}
+
 pub trait WeekdayExtension {
     fn name(&self) -> &'static str;
     fn name_abbr(&self) -> &'static str;
@@ -99,11 +117,14 @@ pub trait DateTimeExtension {
         zero_week: bool,
         first_weekday: bool,
     ) -> (i32, i32);
-    fn week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> i32;
+    fn calc_year_week_by_week_mode(&self, week_mode: WeekMode) -> (i32, i32);
+    fn week(&self, mode: WeekMode) -> i32;
+    fn year_week(&self, mode: WeekMode) -> (i32, i32);
 }
 
 impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
     /// returns the day of year starting from 1.
+    /// implements TiDB YearDay().
     fn days(&self) -> i32 {
         if self.month() == 0 || self.day() == 0 {
             (0)
@@ -112,7 +133,7 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
         }
     }
 
-    /// returns the week of year.
+    /// returns the week of year and year. should not be called directly.
     /// when monday_first == true, Monday is considered as the first day in the week,
     ///         otherwise Sunday.
     /// when zero_week == true, week is from 0 to 53, otherwise from 1 to 53.
@@ -161,16 +182,30 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
         (year, week)
     }
 
-    fn week(&self, monday_first: bool, zero_week: bool, first_weekday: bool) -> i32 {
+    /// returns the week of year according to week mode. should not be called directly.
+    /// implements TiDB calcWeek()
+    fn calc_year_week_by_week_mode(&self, week_mode: WeekMode) -> (i32, i32) {
+        let mode = week_mode.to_normalized();
+        let monday_first = mode.contains(WeekMode::BEHAVIOR_MONDAY_FIRST);
+        let zero_week = !mode.contains(WeekMode::BEHAVIOR_YEAR);
+        let first_weekday = mode.contains(WeekMode::BEHAVIOR_FIRST_WEEKDAY);
+        self.calc_year_week(monday_first, zero_week, first_weekday)
+    }
+
+    /// returns the week of year.
+    /// implementes TiDB Week().
+    fn week(&self, mode: WeekMode) -> i32 {
         if self.month() == 0 || self.day() == 0 {
             return 0;
         }
-        let (_, week) = self.calc_year_week(
-            monday_first,
-            zero_week,
-            if monday_first { false } else { first_weekday },
-        );
+        let (_, week) = self.calc_year_week_by_week_mode(mode);
         week
+    }
+
+    /// returns the week of year and year.
+    /// implements TiDB YearWeek().
+    fn year_week(&self, mode: WeekMode) -> (i32, i32) {
+        self.calc_year_week_by_week_mode(mode | WeekMode::BEHAVIOR_YEAR)
     }
 }
 
@@ -673,26 +708,26 @@ impl Time {
             'S' | 's' => Ok(format!("{:02}", self.time.second())),
             'f' => Ok(format!("{:06}", self.time.nanosecond() / 1000)),
             'U' => {
-                let w = self.time.week(false, true, true);
+                let w = self.time.week(WeekMode::from_bits_truncate(0));
                 Ok(format!("{:02}", w))
             }
             'u' => {
-                let w = self.time.week(true, true, false);
+                let w = self.time.week(WeekMode::from_bits_truncate(1));
                 Ok(format!("{:02}", w))
             }
             'V' => {
-                let w = self.time.week(false, false, true);
+                let w = self.time.week(WeekMode::from_bits_truncate(2));
                 Ok(format!("{:02}", w))
             }
             'v' => {
-                let (_, w) = self.time.calc_year_week(true, false, false);
+                let (_, w) = self.time.year_week(WeekMode::from_bits_truncate(3));
                 Ok(format!("{:02}", w))
             }
             'a' => Ok(self.time.weekday().name_abbr().to_string()),
             'W' => Ok(self.time.weekday().name().to_string()),
             'w' => Ok(format!("{}", self.time.weekday().num_days_from_sunday())),
             'X' => {
-                let (year, _) = self.time.calc_year_week(false, false, true);
+                let (year, _) = self.time.year_week(WeekMode::from_bits_truncate(2));
                 if year < 0 {
                     Ok(u32::max_value().to_string())
                 } else {
@@ -700,7 +735,7 @@ impl Time {
                 }
             }
             'x' => {
-                let (year, _) = self.time.calc_year_week(true, false, false);
+                let (year, _) = self.time.year_week(WeekMode::from_bits_truncate(3));
                 if year < 0 {
                     Ok(u32::max_value().to_string())
                 } else {
