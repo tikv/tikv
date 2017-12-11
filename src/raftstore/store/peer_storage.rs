@@ -1409,10 +1409,10 @@ mod test {
     use super::*;
 
     fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
-        let kv_db = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
+        let kv_db = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));
         let raft_db = Arc::new(
-            new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
+            new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
         );
         let engines = Engines::new(kv_db.clone(), raft_db.clone());
         bootstrap::bootstrap_store(&engines, 1, 1).expect("");

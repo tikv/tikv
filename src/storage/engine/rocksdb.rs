@@ -21,6 +21,7 @@ use raftstore::store::engine::{IterOption, Peekable, SyncSnapshot as RocksSnapsh
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Scheduler, Worker};
+use util::rocksdb::CFOptions;
 use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator,
             Modify, Result, ScanMode, Snapshot, TEMP_DIR};
 use tempdir::TempDir;
@@ -86,7 +87,7 @@ pub struct EngineRocksdb {
 }
 
 impl EngineRocksdb {
-    pub fn new(path: &str, cfs: &[CfName]) -> Result<EngineRocksdb> {
+    pub fn new(path: &str, cfs: &[CfName], cfs_opts: Option<Vec<CFOptions>>) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
@@ -96,7 +97,7 @@ impl EngineRocksdb {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = rocksdb::new_engine(&path, cfs)?;
+        let db = rocksdb::new_engine(&path, cfs, cfs_opts)?;
         box_try!(worker.start(Runner(Arc::new(db))));
         Ok(EngineRocksdb {
             sched: worker.scheduler(),

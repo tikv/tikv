@@ -1641,7 +1641,7 @@ mod tests {
     pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
         let path = TempDir::new(path).unwrap();
         let db = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
+            rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
         );
         (path, db)
     }

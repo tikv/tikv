@@ -18,10 +18,14 @@ use std::boxed::FnBox;
 use std::time::Duration;
 
 pub use self::rocksdb::EngineRocksdb;
-use rocksdb::TablePropertiesCollection;
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
+use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
+
+use config;
+
+use util::rocksdb::CFOptions;
 
 mod rocksdb;
 pub mod raftkv;
@@ -518,7 +522,19 @@ impl Cursor {
 
 /// Create a local Rocskdb engine. (Whihout raft, mainly for tests).
 pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<Box<Engine>> {
-    EngineRocksdb::new(path, cfs).map(|engine| -> Box<Engine> { Box::new(engine) })
+    let mut cfs_opts = Vec::with_capacity(cfs.len());
+    let cfg_rocksdb = config::DbConfig::default();
+    for cf in cfs {
+        let cf_opt = match *cf {
+            CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt()),
+            CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
+            CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
+            CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
+            _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
+        };
+        cfs_opts.push(cf_opt);
+    };
+    EngineRocksdb::new(path, cfs, Some(cfs_opts)).map(|engine| -> Box<Engine> { Box::new(engine) })
 }
 
 quick_error! {
