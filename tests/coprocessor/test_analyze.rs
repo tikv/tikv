@@ -31,14 +31,18 @@ fn new_analyze_req(data: Vec<u8>, range: KeyRange) -> Request {
 fn new_analyze_column_req(
     table: &Table,
     bucket_size: i64,
-    sketch_size: i64,
+    fm_sketch_size: i64,
     sample_size: i64,
+    cm_sketch_depth: i32,
+    cm_sketch_width: i32,
 ) -> Request {
     let mut col_req = AnalyzeColumnsReq::new();
     col_req.set_columns_info(RepeatedField::from_vec(table.get_table_columns()));
     col_req.set_bucket_size(bucket_size);
-    col_req.set_sketch_size(sketch_size);
+    col_req.set_sketch_size(fm_sketch_size);
     col_req.set_sample_size(sample_size);
+    col_req.set_cmsketch_depth(cm_sketch_depth);
+    col_req.set_cmsketch_width(cm_sketch_width);
     let mut analy_req = AnalyzeReq::new();
     analy_req.set_tp(AnalyzeType::TypeColumn);
     analy_req.set_start_ts(next_id() as u64);
@@ -49,10 +53,18 @@ fn new_analyze_column_req(
     )
 }
 
-fn new_analyze_index_req(table: &Table, bucket_size: i64, idx: i64) -> Request {
+fn new_analyze_index_req(
+    table: &Table,
+    bucket_size: i64,
+    idx: i64,
+    cm_sketch_depth: i32,
+    cm_sketch_width: i32,
+) -> Request {
     let mut idx_req = AnalyzeIndexReq::new();
     idx_req.set_num_columns(2);
     idx_req.set_bucket_size(bucket_size);
+    idx_req.set_cmsketch_depth(cm_sketch_depth);
+    idx_req.set_cmsketch_width(cm_sketch_width);
     let mut analy_req = AnalyzeReq::new();
     analy_req.set_tp(AnalyzeType::TypeIndex);
     analy_req.set_start_ts(next_id() as u64);
@@ -76,7 +88,7 @@ fn test_analyze_column_with_lock() {
     for &iso_level in &[IsolationLevel::SI, IsolationLevel::RC] {
         let (_, mut end_point) = init_data_with_commit(&product, &data, false);
 
-        let mut req = new_analyze_column_req(&product.table, 3, 3, 3);
+        let mut req = new_analyze_column_req(&product.table, 3, 3, 3, 4, 32);
         let mut ctx = Context::new();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
@@ -111,7 +123,7 @@ fn test_analyze_column() {
     let product = ProductTable::new();
     let (_, mut end_point) = init_data_with_commit(&product, &data, true);
 
-    let req = new_analyze_column_req(&product.table, 3, 3, 3);
+    let req = new_analyze_column_req(&product.table, 3, 3, 3, 4, 32);
     let resp = handle_request(&end_point, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::new();
@@ -126,6 +138,10 @@ fn test_analyze_column() {
     );
     assert_eq!(collectors[0].get_null_count(), 1);
     assert_eq!(collectors[0].get_count(), 3);
+    let rows = collectors[0].get_cm_sketch().get_rows();
+    assert_eq!(rows.len(), 4);
+    let sum: u32 = rows.first().unwrap().get_counters().iter().sum();
+    assert_eq!(sum, 3);
     end_point.stop().unwrap().join().unwrap();
 }
 
@@ -143,7 +159,7 @@ fn test_analyze_index_with_lock() {
     for &iso_level in &[IsolationLevel::SI, IsolationLevel::RC] {
         let (_, end_point) = init_data_with_commit(&product, &data, false);
 
-        let mut req = new_analyze_index_req(&product.table, 3, product.name.index);
+        let mut req = new_analyze_index_req(&product.table, 3, product.name.index, 4, 32);
         let mut ctx = Context::new();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
@@ -177,7 +193,7 @@ fn test_analyze_index() {
     let product = ProductTable::new();
     let (_, mut end_point) = init_data_with_commit(&product, &data, true);
 
-    let req = new_analyze_index_req(&product.table, 3, product.name.index);
+    let req = new_analyze_index_req(&product.table, 3, product.name.index, 4, 32);
     let resp = handle_request(&end_point, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeIndexResp::new();
@@ -185,5 +201,9 @@ fn test_analyze_index() {
     let hist = analyze_resp.get_hist();
     assert_eq!(hist.get_ndv(), 4);
     assert_eq!(hist.get_buckets().len(), 2);
+    let rows = analyze_resp.get_cms().get_rows();
+    assert_eq!(rows.len(), 4);
+    let sum: u32 = rows.first().unwrap().get_counters().iter().sum();
+    assert_eq!(sum, 4);
     end_point.stop().unwrap().join().unwrap();
 }

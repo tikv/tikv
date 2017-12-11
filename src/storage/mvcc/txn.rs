@@ -47,7 +47,7 @@ impl MvccTxn {
     ) -> MvccTxn {
         MvccTxn {
             // Todo: use session variable to indicate fill cache or not
-            reader: MvccReader::new(snapshot, mode, fill_cache, None, isolation_level),
+            reader: MvccReader::new(snapshot, mode, fill_cache, None, None, isolation_level),
             start_ts: start_ts,
             writes: vec![],
             write_size: 0,
@@ -147,10 +147,9 @@ impl MvccTxn {
             }
             // No need to overwrite the lock and data.
             // If we use single delete, we can't put a key multiple times.
-            info!(
-                "duplicated prewrite with start_ts {}, ignore it.",
-                self.start_ts
-            );
+            MVCC_DUPLICATE_CMD_COUNTER_VEC
+                .with_label_values(&["prewrite"])
+                .inc();
             return Ok(());
         }
 
@@ -209,7 +208,12 @@ impl MvccTxn {
                     // Committed by concurrent transaction.
                     Some((_, WriteType::Put)) |
                     Some((_, WriteType::Delete)) |
-                    Some((_, WriteType::Lock)) => Ok(()),
+                    Some((_, WriteType::Lock)) => {
+                        MVCC_DUPLICATE_CMD_COUNTER_VEC
+                            .with_label_values(&["commit"])
+                            .inc();
+                        Ok(())
+                    }
                 };
             }
         };
@@ -236,6 +240,9 @@ impl MvccTxn {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
+                            MVCC_DUPLICATE_CMD_COUNTER_VEC
+                                .with_label_values(&["rollback"])
+                                .inc();
                             Ok(())
                         } else {
                             MVCC_CONFLICT_COUNTER
@@ -921,14 +928,14 @@ mod tests {
 
     fn must_locked(engine: &Engine, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         let lock = reader.load_lock(&make_key(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
     }
 
     fn must_unlocked(engine: &Engine, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         assert!(reader.load_lock(&make_key(key)).unwrap().is_none());
     }
 
@@ -943,7 +950,7 @@ mod tests {
 
     fn must_seek_write_none(engine: &Engine, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         assert!(reader.seek_write(&make_key(key), ts).unwrap().is_none());
     }
 
@@ -956,7 +963,7 @@ mod tests {
         write_type: WriteType,
     ) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         let (t, write) = reader.seek_write(&make_key(key), ts).unwrap().unwrap();
         assert_eq!(t, commit_ts);
         assert_eq!(write.start_ts, start_ts);
@@ -965,7 +972,7 @@ mod tests {
 
     fn must_reverse_seek_write_none(engine: &Engine, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         assert!(
             reader
                 .reverse_seek_write(&make_key(key), ts)
@@ -983,7 +990,7 @@ mod tests {
         write_type: WriteType,
     ) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         let (t, write) = reader
             .reverse_seek_write(&make_key(key), ts)
             .unwrap()
@@ -995,7 +1002,7 @@ mod tests {
 
     fn must_get_commit_ts(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         let (ts, write_type) = reader
             .get_txn_commit_info(&make_key(key), start_ts)
             .unwrap()
@@ -1006,7 +1013,7 @@ mod tests {
 
     fn must_get_commit_ts_none(engine: &Engine, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
 
         let ret = reader.get_txn_commit_info(&make_key(key), start_ts);
         assert!(ret.is_ok());
@@ -1034,6 +1041,7 @@ mod tests {
             snapshot,
             Some(ScanMode::Mixed),
             false,
+            None,
             None,
             IsolationLevel::SI,
         );
@@ -1091,6 +1099,7 @@ mod tests {
             Some(ScanMode::Forward),
             true,
             None,
+            None,
             IsolationLevel::SI,
         );
 
@@ -1135,6 +1144,7 @@ mod tests {
             snapshot,
             Some(ScanMode::Forward),
             true,
+            None,
             None,
             IsolationLevel::SI,
         );

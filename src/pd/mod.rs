@@ -18,10 +18,13 @@ mod util;
 
 pub mod errors;
 pub mod pd;
+mod config;
 pub use self::errors::{Error, Result};
 pub use self::client::RpcClient;
 pub use self::util::validate_endpoints;
 pub use self::pd::{Runner as PdRunner, Task as PdTask};
+pub use self::util::RECONNECT_INTERVAL_SEC;
+pub use self::config::Config;
 
 use kvproto::metapb;
 use kvproto::pdpb;

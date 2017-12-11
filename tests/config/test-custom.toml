@@ -15,6 +15,7 @@ end-point-max-tasks = 12
 end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
 end-point-batch-row-limit = 64
+snap-max-write-bytes-per-sec = "10MB"
 
 [server.labels]
 a = "b"
@@ -97,7 +98,8 @@ info-log-max-size = "1KB"
 info-log-roll-time = "12s"
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
-wal-bytes-per-sync = "1MB"
+bytes-per-sync = "1MB"
+wal-bytes-per-sync = "32KB"
 max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
@@ -107,9 +109,7 @@ backup-dir = "/var"
 [rocksdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
-num-shard-bits = 16
-strict-capacity-limit = true
-high-pri-pool-ratio = 0.1
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -140,9 +140,7 @@ compaction-pri = 3
 [rocksdb.writecf]
 block-size = "12KB"
 block-cache-size = "12GB"
-num-shard-bits = 16
-strict-capacity-limit = true
-high-pri-pool-ratio = 0.1
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -173,9 +171,7 @@ compaction-pri = 3
 [rocksdb.lockcf]
 block-size = "12KB"
 block-cache-size = "12GB"
-num-shard-bits = 16
-strict-capacity-limit = true
-high-pri-pool-ratio = 0.1
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -206,9 +202,7 @@ compaction-pri = 3
 [rocksdb.raftcf]
 block-size = "12KB"
 block-cache-size = "12GB"
-num-shard-bits = 16
-strict-capacity-limit = true
-high-pri-pool-ratio = 0.1
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -256,14 +250,13 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 allow-concurrent-memtable-write = true
-wal-bytes-per-sync = "1MB"
+bytes-per-sync = "1MB"
+wal-bytes-per-sync = "32KB"
 
 [raftdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
-num-shard-bits = 16
-strict-capacity-limit = true
-high-pri-pool-ratio = 0.1
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -290,3 +283,8 @@ level0-slowdown-writes-trigger = 123
 level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
 compaction-pri = 3
+
+[security]
+ca-path = "invalid path"
+cert-path = "invalid path"
+key-path = "invalid path"

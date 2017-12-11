@@ -40,6 +40,7 @@ use std::u64;
 use std::mem;
 
 use prometheus::HistogramTimer;
+use prometheus::local::LocalHistogramVec;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
@@ -190,7 +191,7 @@ pub struct RunningCtx {
     region_id: u64,
     latch_timer: Option<HistogramTimer>,
     _timer: HistogramTimer,
-    slow_timer: SlowTimer,
+    slow_timer: Option<SlowTimer>,
 }
 
 impl RunningCtx {
@@ -217,20 +218,22 @@ impl RunningCtx {
             _timer: SCHED_HISTOGRAM_VEC
                 .with_label_values(&[tag])
                 .start_coarse_timer(),
-            slow_timer: SlowTimer::new(),
+            slow_timer: None,
         }
     }
 }
 
 impl Drop for RunningCtx {
     fn drop(&mut self) {
-        slow_log!(
-            self.slow_timer,
-            "[region {}] scheduler handle command: {}, ts: {}",
-            self.region_id,
-            self.tag,
-            self.ts
-        );
+        if let Some(ref mut timer) = self.slow_timer {
+            slow_log!(
+                timer,
+                "[region {}] scheduler handle command: {}, ts: {}",
+                self.region_id,
+                self.tag,
+                self.ts
+            );
+        }
     }
 }
 
@@ -316,10 +319,10 @@ pub struct Scheduler {
     sched_pending_write_threshold: usize,
 
     // worker pool
-    worker_pool: ThreadPool<ScheContext>,
+    worker_pool: ThreadPool<SchedContext>,
 
     // high priority commands will be delivered to this pool
-    high_priority_pool: ThreadPool<ScheContext>,
+    high_priority_pool: ThreadPool<SchedContext>,
 
     has_gc_command: bool,
 
@@ -405,9 +408,6 @@ fn process_read(
     snapshot: Box<Snapshot>,
 ) -> Statistics {
     debug!("process read cmd(cid={}) in worker pool.", cid);
-    SCHED_WORKER_COUNTER_VEC
-        .with_label_values(&[cmd.tag(), "read"])
-        .inc();
     let tag = cmd.tag();
 
     let mut statistics = Statistics::default();
@@ -487,7 +487,7 @@ fn process_read(
                 !ctx.get_not_fill_cache(),
             );
             let res = snap_store
-                .scanner(ScanMode::Forward, options.key_only, None)
+                .scanner(ScanMode::Forward, options.key_only, None, None)
                 .and_then(|mut scanner| {
                     let res = scanner.scan(start_key.clone(), limit);
                     statistics.add(scanner.get_statistics());
@@ -516,6 +516,7 @@ fn process_read(
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
                 None,
+                None,
                 ctx.get_isolation_level(),
             );
             let res = match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
@@ -536,6 +537,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -569,6 +571,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -605,6 +608,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -650,6 +654,7 @@ fn process_read(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
+                None,
                 None,
                 ctx.get_isolation_level(),
             );
@@ -757,10 +762,6 @@ fn process_write(
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
 ) -> Statistics {
-    SCHED_WORKER_COUNTER_VEC
-        .with_label_values(&[cmd.tag(), "write"])
-        .inc();
-
     let mut statistics = Statistics::default();
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot, &mut statistics) {
         if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
@@ -1000,19 +1001,30 @@ fn process_write_impl(
     Ok(())
 }
 
-#[derive(Default)]
-struct ScheContext {
+struct SchedContext {
     stats: HashMap<&'static str, StatisticsSummary>,
+    processing_read_duration: LocalHistogramVec,
+    processing_write_duration: LocalHistogramVec,
 }
 
-impl ScheContext {
+impl Default for SchedContext {
+    fn default() -> SchedContext {
+        SchedContext {
+            stats: HashMap::default(),
+            processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
+            processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
+        }
+    }
+}
+
+impl SchedContext {
     fn add_statistics(&mut self, cmd_tag: &'static str, stat: &Statistics) {
         let entry = self.stats.entry(cmd_tag).or_insert_with(Default::default);
         entry.add_statistics(stat);
     }
 }
 
-impl ThreadContext for ScheContext {
+impl ThreadContext for SchedContext {
     fn on_tick(&mut self) {
         for (cmd, stat) in self.stats.drain() {
             for (cf, details) in stat.stat.details() {
@@ -1024,6 +1036,8 @@ impl ThreadContext for ScheContext {
                 }
             }
         }
+        self.processing_read_duration.flush();
+        self.processing_write_duration.flush();
     }
 }
 
@@ -1068,7 +1082,7 @@ impl Scheduler {
         ctx.tag
     }
 
-    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool<ScheContext> {
+    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool<SchedContext> {
         match priority {
             CommandPri::Low | CommandPri::Normal => &self.worker_pool,
             CommandPri::High => &self.high_priority_pool,
@@ -1098,12 +1112,20 @@ impl Scheduler {
         let worker_pool = self.fetch_worker_pool(cmd.priority());
         let tag = cmd.tag();
         if readcmd {
-            worker_pool.execute(move |ctx: &mut ScheContext| {
+            worker_pool.execute(move |ctx: &mut SchedContext| {
+                let _processing_read_timer = ctx.processing_read_duration
+                    .with_label_values(&[tag])
+                    .start_coarse_timer();
+
                 let s = process_read(cid, cmd, ch, snapshot);
                 ctx.add_statistics(tag, &s);
             });
         } else {
-            worker_pool.execute(move |ctx: &mut ScheContext| {
+            worker_pool.execute(move |ctx: &mut SchedContext| {
+                let _processing_write_timer = ctx.processing_write_duration
+                    .with_label_values(&[tag])
+                    .start_coarse_timer();
+
                 let s = process_write(cid, cmd, ch, snapshot);
                 ctx.add_statistics(tag, &s);
             });
@@ -1203,6 +1225,7 @@ impl Scheduler {
         let ok = self.latches.acquire(&mut ctx.lock, cid);
         if ok {
             ctx.latch_timer.take();
+            ctx.slow_timer = Some(SlowTimer::new());
         }
         ok
     }
@@ -1333,6 +1356,7 @@ impl Scheduler {
             cids,
             cb_ctx
         );
+
         match snapshot {
             Ok(snapshot) => for cid in cids {
                 SCHED_STAGE_COUNTER_VEC

@@ -1,14 +1,12 @@
 ENABLE_FEATURES ?= default
 
-ifeq ($(ROCKSDB_SYS_STATIC),1)
-ENABLE_FEATURES += static-link
-endif
-
-ifeq ($(ROCKSDB_SYS_PORTABLE),1)
+# Build portable binary by default unless disable explicitly
+ifneq ($(ROCKSDB_SYS_PORTABLE),0)
 ENABLE_FEATURES += portable
 endif
 
-ifeq ($(ROCKSDB_SYS_SSE),1)
+# Enable sse4.2 by default unless disable explicitly
+ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
@@ -29,8 +27,8 @@ default: release
 
 all: format build test
 
-dev:
-	@env ENABLE_FEATURES=dev FAIL_POINT=1 make all
+dev: format
+	@env ENABLE_FEATURES=dev FAIL_POINT=1 make test
 
 build:
 	cargo build --features "${ENABLE_FEATURES}"
@@ -39,27 +37,22 @@ run:
 	cargo run --features "${ENABLE_FEATURES}"
 
 release:
-	cargo build --release --features "${ENABLE_FEATURES}"
+	@cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
-	cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 
-static_release:
-	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 ROCKSDB_SYS_SSE=1  make release
+unportable_release:
+	ROCKSDB_SYS_PORTABLE=0 make release
 
-static_unportable_release:
-	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_SSE=1  make release
+prof_release:
+	ENABLE_FEATURES=mem-profiling make release
 
-static_prof_release:
-	ENABLE_FEATURES=mem-profiling make static_release
-
-static_fail_release:
-	FAIL_POINT=1 make static_release
+fail_release:
+	FAIL_POINT=1 make release
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
-	export CI=true && \
-	export SKIP_FORMAT_CHECK=true && \
-	${PROJECT_DIR}/ci-build/test.sh
+	env CI=true SKIP_FORMAT_CHECK=true FAIL_POINT=1 ${PROJECT_DIR}/ci-build/test.sh
 
 test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it

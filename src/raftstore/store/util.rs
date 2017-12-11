@@ -20,7 +20,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use storage::{Key, CF_RAFT, CF_WRITE, LARGE_CFS};
+use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use util::properties::SizeProperties;
 use util::rocksdb as rocksdb_util;
 use super::engine::{IterOption, Iterable};
@@ -88,10 +88,11 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
     match *conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
+        ConfChangeType::AddLearnerNode => unimplemented!(),
     }
 }
 
-const MAX_DELETE_KEYS_COUNT: usize = 10000;
+const MAX_WRITE_BATCH_SIZE: usize = 4 * 1024 * 1024;
 
 pub fn delete_all_in_range(
     db: &DB,
@@ -104,10 +105,6 @@ pub fn delete_all_in_range(
     }
 
     for cf in db.cf_names() {
-        // Skip raft column family
-        if cf == CF_RAFT {
-            continue;
-        }
         delete_all_in_range_cf(db, cf, start_key, end_key, use_delete_range)?;
     }
 
@@ -123,7 +120,9 @@ pub fn delete_all_in_range_cf(
 ) -> Result<()> {
     let handle = rocksdb_util::get_cf_handle(db, cf)?;
     let mut wb = WriteBatch::new();
-    if use_delete_range {
+    // Since CF_RAFT and CF_LOCK is usually small, so using
+    // traditional way to cleanup.
+    if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
         if cf == CF_WRITE {
             let start = Key::from_encoded(start_key.to_vec()).append_ts(u64::MAX);
             wb.delete_range_cf(handle, start.encoded(), end_key)?;
@@ -131,12 +130,12 @@ pub fn delete_all_in_range_cf(
             wb.delete_range_cf(handle, start_key, end_key)?;
         }
     } else {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
+        let iter_opt = IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), false);
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
         it.seek(start_key.into());
         while it.valid() {
             wb.delete_cf(handle, it.key())?;
-            if wb.count() == MAX_DELETE_KEYS_COUNT {
+            if wb.data_size() >= MAX_WRITE_BATCH_SIZE {
                 // Can't use write_without_wal here.
                 // Otherwise it may cause dirty data when applying snapshot.
                 db.write(wb)?;
@@ -215,7 +214,7 @@ mod tests {
 
     use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
-    use storage::ALL_CFS;
+    use storage::{Key, ALL_CFS};
     use tempdir::TempDir;
 
     // Tests the util function `check_key_in_region`.
@@ -399,14 +398,19 @@ mod tests {
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
         let wb = WriteBatch::new();
-        let kvs: Vec<(&[u8], &[u8])> = vec![
-            (b"k1", b"v1"),
-            (b"k2", b"v2"),
-            (b"k3", b"v3"),
-            (b"k4", b"v4"),
+        let ts: u64 = 12345;
+        let keys = vec![
+            Key::from_raw(b"k1").append_ts(ts),
+            Key::from_raw(b"k2").append_ts(ts),
+            Key::from_raw(b"k3").append_ts(ts),
+            Key::from_raw(b"k4").append_ts(ts),
         ];
-        let kvs_left: Vec<(&[u8], &[u8])> = vec![(b"k1", b"v1"), (b"k4", b"v4")];
 
+        let mut kvs: Vec<(&[u8], &[u8])> = vec![];
+        for (i, key) in keys.iter().enumerate() {
+            kvs.push((key.encoded().as_slice(), b"value"));
+        }
+        let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, b"value"), (kvs[3].0, b"value")];
         for &(k, v) in kvs.as_slice() {
             for cf in ALL_CFS {
                 let handle = get_cf_handle(&db, cf).unwrap();
@@ -417,7 +421,14 @@ mod tests {
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         // Delete all in ["k2", "k4").
-        delete_all_in_range(&db, b"k2", b"k4", use_delete_range).unwrap();
+        let start = Key::from_raw(b"k2");
+        let end = Key::from_raw(b"k4");
+        delete_all_in_range(
+            &db,
+            start.encoded().as_slice(),
+            end.encoded().as_slice(),
+            use_delete_range,
+        ).unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
