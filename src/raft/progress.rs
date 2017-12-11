@@ -127,8 +127,8 @@ impl<'a> ProgressSet {
 
     pub fn delete(&mut self, id: u64) -> Option<Progress> {
         match self.voters.remove(&id) {
-            Some(t) => return Some(t),
             None => self.learners.remove(&id),
+            some => some,
         }
     }
 
