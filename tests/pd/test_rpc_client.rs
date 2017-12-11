@@ -21,10 +21,24 @@ use futures_cpupool::Builder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use tikv::pd::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
+use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use tikv::util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
+use util;
+
+fn new_config(eps: Vec<String>) -> Config {
+    let mut cfg = Config::default();
+    cfg.endpoints = eps;
+    cfg
+}
+
+fn new_client(eps: Vec<String>) -> RpcClient {
+    let cfg = new_config(eps);
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    RpcClient::new(&cfg, mgr).unwrap()
+}
 
 #[test]
 fn test_rpc_client() {
@@ -39,7 +53,7 @@ fn test_rpc_client() {
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps).unwrap();
+    let client = new_client(eps.clone());
     assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
@@ -66,12 +80,16 @@ fn test_rpc_client() {
     let tmp_store = client.get_store(store_id).unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
+    let region_key = region.get_start_key();
+    let tmp_region = client.get_region(region_key).unwrap();
+    assert_eq!(tmp_region.get_id(), region.get_id());
+
     let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
     let mut prev_id = 0;
     for _ in 0..100 {
-        let client = RpcClient::new(&eps).unwrap();
+        let client = new_client(eps.clone());
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
@@ -118,7 +136,7 @@ fn test_reboot() {
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps).unwrap();
+    let client = new_client(eps);
 
     assert!(!client.is_cluster_bootstrapped().unwrap());
 
@@ -150,7 +168,8 @@ fn test_validate_endpoints() {
 
     thread::sleep(Duration::from_secs(1));
 
-    assert!(validate_endpoints(env, &eps).is_err());
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    assert!(validate_endpoints(env, &new_config(eps), &mgr).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
@@ -167,7 +186,7 @@ fn test_retry<F: Fn(&RpcClient)>(func: F) {
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps).unwrap();
+    let client = new_client(eps);
 
     for _ in 0..3 {
         func(&client);
@@ -204,7 +223,7 @@ fn test_restart_leader() {
 
     thread::sleep(Duration::from_secs(2));
 
-    let client = RpcClient::new(&eps).unwrap();
+    let client = new_client(eps);
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::new();
@@ -223,8 +242,11 @@ fn test_restart_leader() {
         .bootstrap_cluster(store.clone(), region.clone())
         .unwrap();
 
-    let region = client.get_region_by_id(1);
-    region.wait().unwrap();
+    let region = client
+        .get_region_by_id(region.get_id())
+        .wait()
+        .unwrap()
+        .unwrap();
 
     // Get the random binded addrs.
     let eps = server.bind_addrs();
@@ -232,13 +254,70 @@ fn test_restart_leader() {
     // Kill servers.
     drop(server);
     // Restart them again.
-    let _server = MockServer::run_with_eps::<Service>(eps, se.clone(), None);
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, se.clone(), None);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
 
-    let region = client.get_region_by_id(1);
+    let region = client.get_region_by_id(region.get_id());
     region.wait().unwrap();
+}
+
+// A copy of test_restart_leader with secure connections
+#[test]
+fn test_secure_restart_leader() {
+    // Service has only one GetMembersResponse, so the leader never changes.
+    let se = Arc::new(Service::new());
+    let security_cfg = util::new_security_cfg();
+    let mgr = Arc::new(SecurityManager::new(&security_cfg).unwrap());
+    // Start mock servers.
+    let eps: Vec<(String, u16)> = (0..3).map(|_| ("127.0.0.1".to_owned(), 0)).collect();
+    let server = MockServer::run_with_eps::<Service>(&mgr, eps, se.clone(), None);
+    let eps: Vec<String> = server
+        .bind_addrs()
+        .into_iter()
+        .map(|addr| format!("{}:{}", addr.0, addr.1))
+        .collect();
+
+    thread::sleep(Duration::from_secs(2));
+
+    let cfg = new_config(eps);
+    let client = RpcClient::new(&cfg, mgr.clone()).unwrap();
+    // Put a region.
+    let store_id = client.alloc_id().unwrap();
+    let mut store = metapb::Store::new();
+    store.set_id(store_id);
+
+    let peer_id = client.alloc_id().unwrap();
+    let mut peer = metapb::Peer::new();
+    peer.set_id(peer_id);
+    peer.set_store_id(store_id);
+
+    let region_id = client.alloc_id().unwrap();
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.mut_peers().push(peer);
+    client
+        .bootstrap_cluster(store.clone(), region.clone())
+        .unwrap();
+
+    let region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
+    assert_eq!(region.get_id(), region_id);
+
+    // Get the random binded addrs.
+    let eps = server.bind_addrs().into_iter().collect();
+
+    // Kill servers.
+    drop(server);
+    // Restart them again.
+    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, se.clone(), None);
+
+    // RECONNECT_INTERVAL_SEC is 1s.
+    thread::sleep(Duration::from_secs(1));
+
+    let region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
+    assert_eq!(region.get_id(), region_id);
 }
 
 #[test]
@@ -255,7 +334,7 @@ fn test_change_leader_async() {
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps).unwrap();
+    let client = new_client(eps);
     let leader = client.get_leader();
 
     for _ in 0..5 {
