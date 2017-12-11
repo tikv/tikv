@@ -26,7 +26,7 @@
 // limitations under the License.
 
 use std::cmp;
-use super::FlatMap;
+use super::{FlatMap, FlatMapEntry};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {
@@ -45,11 +45,11 @@ impl Default for ProgressState {
 /// which could be `Leader`, `Follower` and `Learner`.
 #[derive(Default, Clone)]
 pub struct ProgressSet {
-    pub voters: FlatMap<u64, Progress>,
-    pub learners: FlatMap<u64, Progress>,
+    voters: FlatMap<u64, Progress>,
+    learners: FlatMap<u64, Progress>,
 }
 
-impl ProgressSet {
+impl<'a> ProgressSet {
     pub fn new(voter_size: usize, learner_size: usize) -> Self {
         ProgressSet {
             voters: FlatMap::with_capacity(voter_size),
@@ -57,11 +57,27 @@ impl ProgressSet {
         }
     }
 
-    pub fn get_progress(&self, id: u64) -> Option<&Progress> {
+    pub fn voters(&self) -> &FlatMap<u64, Progress> {
+        &self.voters
+    }
+
+    pub fn learners(&self) -> &FlatMap<u64, Progress> {
+        &self.learners
+    }
+
+    pub fn nodes(&self) -> Vec<u64> {
+        let mut nodes = Vec::with_capacity(self.voters.len() + self.learners.len());
+        nodes.extend(self.voters.keys());
+        nodes.extend(self.learners.keys());
+        nodes.sort();
+        nodes
+    }
+
+    pub fn get(&self, id: u64) -> Option<&Progress> {
         self.voters.get(&id).or_else(|| self.learners.get(&id))
     }
 
-    pub fn get_mut_progress(&mut self, id: u64) -> Option<&mut Progress> {
+    pub fn get_mut(&mut self, id: u64) -> Option<&mut Progress> {
         let progress = self.voters.get_mut(&id);
         if progress.is_none() {
             return self.learners.get_mut(&id);
@@ -69,12 +85,62 @@ impl ProgressSet {
         progress
     }
 
-    pub fn check_intersect(&self) {
-        if let Some(p) = self.voters
-            .keys()
-            .find(|id| self.learners.get(id).is_some())
-        {
-            panic!("node {} is in both learner and peer list", p);
+    pub fn iter(&'a self) -> impl Iterator<Item = (&'a u64, &'a Progress)> {
+        self.voters.iter().chain(&self.learners)
+    }
+
+    pub fn iter_mut(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
+        self.voters.iter_mut().chain(&mut self.learners)
+    }
+
+    pub fn iter_voters(&'a self) -> impl Iterator<Item = (&'a u64, &'a Progress)> {
+        self.voters.iter()
+    }
+
+    pub fn iter_mut_voters(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
+        self.voters.iter_mut()
+    }
+
+    pub fn iter_mut_learners(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
+        self.learners.iter_mut()
+    }
+
+    pub fn insert(&mut self, id: u64, pr: Progress, is_learner: bool) -> &mut Progress {
+        if !is_learner {
+            if self.learners.contains_key(&id) {
+                panic!("insert voter {} but already in learners", id);
+            }
+            match self.voters.entry(id) {
+                FlatMapEntry::Occupied(_) => panic!("insert voter {} twice", id),
+                FlatMapEntry::Vacant(ent) => ent.insert(pr),
+            }
+        } else {
+            if self.voters.contains_key(&id) {
+                panic!("insert learner {} but already in voters", id);
+            }
+            match self.learners.entry(id) {
+                FlatMapEntry::Occupied(_) => panic!("insert learner {} twice", id),
+                FlatMapEntry::Vacant(ent) => ent.insert(pr),
+            }
+        }
+    }
+
+    pub fn delete(&mut self, id: u64) -> Option<Progress> {
+        match self.voters.remove(&id) {
+            Some(t) => return Some(t),
+            None => self.learners.remove(&id),
+        }
+    }
+
+    pub fn promote_learner(&mut self, id: u64) -> bool {
+        match self.learners.entry(id) {
+            FlatMapEntry::Occupied(ent) => {
+                let mut pr = ent.remove();
+                pr.is_learner = false;
+                self.voters.insert(id, pr);
+                true
+            }
+            _ => false,
         }
     }
 }
