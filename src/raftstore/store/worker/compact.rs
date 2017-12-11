@@ -20,7 +20,6 @@ use rocksdb::DB;
 use std::sync::Arc;
 use std::fmt::{self, Display, Formatter};
 use std::error;
-use storage::CF_DEFAULT;
 use super::metrics::COMPACT_RANGE_CF;
 
 pub struct Task {
@@ -98,6 +97,7 @@ mod test {
     use util::rocksdb::new_engine;
     use tempdir::TempDir;
     use rocksdb::{Writable, WriteBatch};
+    use storage::CF_DEFAULT;
     use super::*;
 
     const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-size";
