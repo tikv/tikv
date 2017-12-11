@@ -201,7 +201,7 @@ impl RangeIterator {
             }
             start = range.get_end();
             if start == RANGE_MAX {
-                break;
+                break; // All ranges are covered.
             }
         }
         if RangeEnd(start) < RangeEnd(range.get_end()) || finished_ranges.is_empty() {
@@ -214,6 +214,7 @@ impl RangeIterator {
             ranges_index: 0,
         };
 
+        // Seek to the first valid range.
         res.seek_next();
         res
     }

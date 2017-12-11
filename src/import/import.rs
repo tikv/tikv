@@ -116,7 +116,7 @@ impl ImportJob {
         );
         let job_size = cf_size / self.cfg.max_import_jobs;
 
-        // Calculate the range info of each sub import job.
+        // Calculate the range of each sub import job.
         let mut size = 0;
         let mut start = RANGE_MIN;
         let mut end = RANGE_MIN;
@@ -208,7 +208,7 @@ impl SubImportJob {
     }
 
     fn import(&self) -> bool {
-        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_sst_jobs * 2);
+        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_sst_jobs);
         let handles = self.run_import_threads(rx);
         let mut done = true;
         if let Err(e) = self.run_import_stream(tx) {
