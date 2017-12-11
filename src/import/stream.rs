@@ -36,34 +36,28 @@ pub struct SSTInfo {
 }
 
 impl SSTInfo {
-    fn new(info: ExternalSstFileInfo, next_start: Vec<u8>) -> SSTInfo {
+    pub fn new(info: ExternalSstFileInfo, next_start: Vec<u8>) -> SSTInfo {
         SSTInfo {
             path: info.file_path(),
             range: new_range(info.smallest_key(), info.largest_key()),
             next_start: next_start,
         }
     }
-}
 
-pub struct SSTFile {
-    pub meta: SSTMeta,
-    pub data: Vec<u8>,
-    next_start: Vec<u8>,
-}
-
-impl SSTFile {
-    pub fn new(info: SSTInfo, engine: Arc<Engine>, cf_name: String) -> Result<SSTFile> {
-        let mut f = engine.new_sst_reader(info.path)?;
+    pub fn into_file(self, engine: Arc<Engine>, cf_name: String) -> Result<SSTFile> {
         let mut data = Vec::new();
+        let mut f = engine.new_sst_reader(&self.path)?;
         f.read_to_end(&mut data)?;
+        // Anyway, it will be deleted eventually.
+        let _ = engine.delete_sst_file(&self.path);
 
         let mut digest = crc32::Digest::new(crc32::IEEE);
         digest.write(&data);
 
         // This range doesn't contain the data prefix, like region range.
         let mut range = Range::new();
-        range.set_start(keys::origin_key(info.range.get_start()).to_owned());
-        range.set_end(keys::origin_key(info.range.get_end()).to_owned());
+        range.set_start(keys::origin_key(self.range.get_start()).to_owned());
+        range.set_end(keys::origin_key(self.range.get_end()).to_owned());
 
         let mut meta = SSTMeta::new();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
@@ -75,10 +69,18 @@ impl SSTFile {
         Ok(SSTFile {
             meta: meta,
             data: data,
-            next_start: info.next_start,
+            next_start: self.next_start,
         })
     }
+}
 
+pub struct SSTFile {
+    pub meta: SSTMeta,
+    pub data: Vec<u8>,
+    next_start: Vec<u8>,
+}
+
+impl SSTFile {
     pub fn is_inside(&self, region: &Region) -> bool {
         let range = self.meta.get_range();
         range.get_start() >= region.get_start_key() &&

@@ -208,7 +208,7 @@ impl SubImportJob {
     }
 
     fn import(&self) -> bool {
-        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_sst_jobs);
+        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_sst_jobs * 4);
         let handles = self.run_import_threads(rx);
         let mut done = true;
         if let Err(e) = self.run_import_stream(tx) {
@@ -261,7 +261,7 @@ impl SubImportJob {
                     let id = job_counter.fetch_add(1, Ordering::SeqCst);
                     let tag = format!("[ImportJob {}:{}:{}]", engine.uuid(), cf_name, id);
 
-                    let sst = match SSTFile::new(info, engine.clone(), cf_name.clone()) {
+                    let sst = match info.into_file(engine.clone(), cf_name.clone()) {
                         Ok(v) => v,
                         Err(_) => {
                             done = false;

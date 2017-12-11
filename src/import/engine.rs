@@ -151,6 +151,11 @@ impl Engine {
         let f = self.env.new_sequential_file(path, EnvOptions::new())?;
         Ok(f)
     }
+
+    pub fn delete_sst_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let path = path.as_ref().to_str().unwrap();
+        self.env.delete_file(path).map_err(Error::from)
+    }
 }
 
 impl Deref for Engine {
