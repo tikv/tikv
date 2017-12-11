@@ -114,7 +114,7 @@ pub trait DateTimeExtension {
     fn calc_year_week(
         &self,
         monday_first: bool,
-        zero_week: bool,
+        week_year: bool,
         first_weekday: bool,
     ) -> (i32, i32);
     fn calc_year_week_by_week_mode(&self, week_mode: WeekMode) -> (i32, i32);
@@ -136,13 +136,13 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
     /// returns the week of year and year. should not be called directly.
     /// when monday_first == true, Monday is considered as the first day in the week,
     ///         otherwise Sunday.
-    /// when zero_week == true, week is from 0 to 53, otherwise from 1 to 53.
+    /// when week_year == true, week is from 1 to 53, otherwise from 0 to 53.
     /// when first_weekday == true, the week that contains the first 'first-day-of-week' is week 1,
     ///         otherwise weeks are numbered according to ISO 8601:1988.
     fn calc_year_week(
         &self,
         monday_first: bool,
-        zero_week: bool,
+        mut week_year: bool,
         first_weekday: bool,
     ) -> (i32, i32) {
         let week: i32;
@@ -151,7 +151,6 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
         let daynr = calc_day_number(self.year(), self.month() as i32, self.day() as i32);
         let mut first_daynr = calc_day_number(self.year(), 1, 1);
         let mut weekday = calc_weekday(first_daynr, !monday_first);
-        let mut week_year = !zero_week;
         let mut days: i32;
 
         if self.month() == 1 && (self.day() as i32) <= 7 - weekday {
@@ -187,9 +186,9 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
     fn calc_year_week_by_week_mode(&self, week_mode: WeekMode) -> (i32, i32) {
         let mode = week_mode.to_normalized();
         let monday_first = mode.contains(WeekMode::BEHAVIOR_MONDAY_FIRST);
-        let zero_week = !mode.contains(WeekMode::BEHAVIOR_YEAR);
+        let week_year = mode.contains(WeekMode::BEHAVIOR_YEAR);
         let first_weekday = mode.contains(WeekMode::BEHAVIOR_FIRST_WEEKDAY);
-        self.calc_year_week(monday_first, zero_week, first_weekday)
+        self.calc_year_week(monday_first, week_year, first_weekday)
     }
 
     /// returns the week of year.
