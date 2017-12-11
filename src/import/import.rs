@@ -208,7 +208,7 @@ impl SubImportJob {
     }
 
     fn import(&self) -> bool {
-        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_sst_jobs * 4);
+        let (tx, rx) = mpsc::sync_channel(self.cfg.max_import_sst_jobs * 2);
         let handles = self.run_import_threads(rx);
         let mut done = true;
         if let Err(e) = self.run_import_stream(tx) {
