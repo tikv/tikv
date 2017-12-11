@@ -93,7 +93,6 @@ pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Res
             return new_engine_opt(path, db_opts, default_cfs_opts);
         },
     }
-
 }
 
 fn check_and_open(
