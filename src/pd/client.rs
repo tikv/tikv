@@ -222,7 +222,7 @@ impl PdClient for RpcClient {
         let region = if resp.has_region() {
             resp.take_region()
         } else {
-            return Err(Error::RegionNotFound);
+            return Err(Error::RegionNotFound(key.to_owned()));
         };
         let leader = if resp.has_leader() {
             Some(resp.take_leader())
