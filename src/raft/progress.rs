@@ -96,23 +96,6 @@ impl ProgressSet {
         self.voters.iter_mut().chain(&mut self.learners)
     }
 
-    #[allow(needless_lifetimes)]
-    pub fn iter_voters<'a>(&'a self) -> impl Iterator<Item = (&'a u64, &'a Progress)> {
-        self.voters.iter()
-    }
-
-    #[allow(needless_lifetimes)]
-    pub fn iter_mut_voters<'a>(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
-        self.voters.iter_mut()
-    }
-
-    #[allow(needless_lifetimes)]
-    pub fn iter_mut_learners<'a>(
-        &'a mut self,
-    ) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
-        self.learners.iter_mut()
-    }
-
     pub fn insert_voter(&mut self, id: u64, pr: Progress) {
         if self.learners.contains_key(&id) {
             panic!("insert voter {} but already in learners", id);
@@ -138,15 +121,14 @@ impl ProgressSet {
         }
     }
 
-    pub fn promote_learner(&mut self, id: u64) -> bool {
+    pub fn promote_learner(&mut self, id: u64) {
         match self.learners.entry(id) {
             FlatMapEntry::Occupied(ent) => {
                 let mut pr = ent.remove();
                 pr.is_learner = false;
                 self.voters.insert(id, pr);
-                true
             }
-            _ => false,
+            _ => panic!("promote not exists learner: {}", id),
         }
     }
 }
