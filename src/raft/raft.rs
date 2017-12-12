@@ -1009,8 +1009,8 @@ impl<T: Storage> Raft<T> {
                 if self.is_learner {
                     // TODO: learner may need to vote, in case of node down when confchange.
                     info!(
-                        r#"{} [logterm: {}, index: {}, vote: {}] ignored {:?} from {}
- [logterm: {}, index: {}] at term {}: learner can not vote"#,
+                        "{} [logterm: {}, index: {}, vote: {}] ignored {:?} from {} \
+                         [logterm: {}, index: {}] at term {}: learner can not vote",
                         self.id,
                         self.raft_log.last_term(),
                         self.raft_log.last_index(),
