@@ -20,15 +20,15 @@ use std::sync::Arc;
 use uuid::Uuid;
 use tempdir::TempDir;
 
-use rocksdb::{DBCompactionStyle, DBCompressionType, DBIterator, Env, EnvOptions, ReadOptions,
-              SequentialFile, SstFileWriter, Writable, WriteBatch as RawBatch, DB};
+use rocksdb::{DBCompressionType, DBIterator, Env, EnvOptions, ReadOptions, SequentialFile,
+              SstFileWriter, Writable, WriteBatch as RawBatch, DB};
 use kvproto::importpb::*;
 
 use config::DbConfig;
 use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use storage::types::Key;
 use storage::mvcc::{Write, WriteType};
-use util::config::GB;
+use util::config::{ReadableSize, GB};
 use util::rocksdb::{get_fastest_supported_compression_type, new_engine_opt, CFOptions};
 
 use super::{Error, Result};
@@ -36,12 +36,13 @@ use super::{Error, Result};
 pub struct Engine {
     db: Arc<DB>,
     env: Arc<Env>,
+    cfg: DbConfig,
     uuid: Uuid,
     _temp_dir: TempDir, // Cleanup when engine is dropped.
 }
 
 impl Engine {
-    pub fn new(mut cfg: DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
+    pub fn new(cfg: DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
         // TODO: Use VectorMemtable instead of SkipList.
 
         // Configuration recommendation:
@@ -49,24 +50,28 @@ impl Engine {
         // 2. Choose a reasonable compression algorithm to balance between CPU and IO.
         // 3. Increase `max_background_jobs`, RocksDB preserves `max_background_jobs/4` for flush.
 
-        cfg.enable_statistics = false;
-        cfg.use_direct_io_for_flush_and_compaction = true;
-        cfg.writecf.disable_block_cache = true;
-        cfg.defaultcf.disable_block_cache = true;
+        // NOTE: Reserve the original configuration for SST file generation.
+        let mut opts = cfg.clone();
+        // Use a large block size for sequential access.
+        opts.writecf.block_size = ReadableSize::mb(1);
+        opts.defaultcf.block_size = ReadableSize::mb(1);
+        opts.writecf.pin_l0_filter_and_index_blocks = true;
+        opts.defaultcf.pin_l0_filter_and_index_blocks = true;
 
-        let db_opts = cfg.build_opt();
+        let mut db_opts = opts.build_opt();
+        db_opts.enable_statistics(false);
+        db_opts.set_use_direct_io_for_flush_and_compaction(true);
+
         let mut cfs_opts = vec![
             CFOptions::new(CF_WRITE, cfg.writecf.build_opt()),
             CFOptions::new(CF_DEFAULT, cfg.defaultcf.build_opt()),
         ];
-
         for cf_opts in &mut cfs_opts {
             const DISABLED: i32 = i32::MAX;
-            // Disable compaction and rate limit.
-            cf_opts.set_num_levels(1);
+            // Use a larget size for sequential access.
             cf_opts.set_target_file_size_base(GB);
+            // Disable compaction and rate limit.
             cf_opts.set_disable_auto_compactions(true);
-            cf_opts.set_compaction_style(DBCompactionStyle::None);
             cf_opts.set_soft_pending_compaction_bytes_limit(0);
             cf_opts.set_hard_pending_compaction_bytes_limit(0);
             cf_opts.set_level_zero_stop_writes_trigger(DISABLED);
@@ -78,6 +83,7 @@ impl Engine {
         Ok(Engine {
             db: Arc::new(db),
             env: Arc::new(Env::new_mem()),
+            cfg: cfg,
             uuid: uuid,
             _temp_dir: temp_dir,
         })
@@ -136,15 +142,17 @@ impl Engine {
     }
 
     pub fn new_sst_writer<P: AsRef<Path>>(&self, cf_name: &str, path: P) -> Result<SstFileWriter> {
-        let path = path.as_ref().to_str().unwrap();
-        let cf_handle = self.cf_handle(cf_name).unwrap();
-        let mut cf_opts = self.get_options_cf(cf_handle);
+        let mut cf_opts = match cf_name {
+            "write" => self.cfg.writecf.build_opt(),
+            "default" => self.cfg.defaultcf.build_opt(),
+            unknown_name => panic!("unknown cf name {}", unknown_name),
+        };
         cf_opts.set_env(self.env.clone());
         cf_opts.compression_per_level(&[]);
         cf_opts.bottommost_compression(DBCompressionType::Disable);
         cf_opts.compression(get_fastest_supported_compression_type());
         let mut writer = SstFileWriter::new(EnvOptions::new(), cf_opts);
-        writer.open(path)?;
+        writer.open(path.as_ref().to_str().unwrap())?;
         Ok(writer)
     }
 
