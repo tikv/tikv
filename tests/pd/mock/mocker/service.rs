@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use kvproto::metapb::{Region, Store};
+use kvproto::metapb::{Peer, Region, Store};
 use kvproto::pdpb::*;
 
 use protobuf::RepeatedField;
@@ -29,6 +29,7 @@ pub struct Service {
     is_bootstrapped: AtomicBool,
     stores: Mutex<HashMap<u64, Store>>,
     regions: Mutex<HashMap<u64, Region>>,
+    leaders: Mutex<HashMap<u64, Peer>>,
 }
 
 impl Service {
@@ -39,6 +40,7 @@ impl Service {
             is_bootstrapped: AtomicBool::new(false),
             stores: Mutex::new(HashMap::new()),
             regions: Mutex::new(HashMap::new()),
+            leaders: Mutex::new(HashMap::new()),
         }
     }
 
@@ -146,6 +148,7 @@ impl PdMocker for Service {
         let mut resp = GetRegionResponse::new();
         let key = req.get_region_key();
         let regions = self.regions.lock().unwrap();
+        let leaders = self.leaders.lock().unwrap();
 
         for region in regions.values() {
             if key >= region.get_start_key() &&
@@ -153,6 +156,9 @@ impl PdMocker for Service {
             {
                 resp.set_header(Service::header());
                 resp.set_region(region.clone());
+                if let Some(leader) = leaders.get(&region.get_id()) {
+                    resp.set_leader(leader.clone());
+                }
                 return Some(Ok(resp));
             }
         }
@@ -169,10 +175,15 @@ impl PdMocker for Service {
     fn get_region_by_id(&self, req: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         let mut resp = GetRegionResponse::new();
         let regions = self.regions.lock().unwrap();
+        let leaders = self.leaders.lock().unwrap();
+
         match regions.get(&req.get_region_id()) {
             Some(region) => {
                 resp.set_header(Service::header());
                 resp.set_region(region.clone());
+                if let Some(leader) = leaders.get(&region.get_id()) {
+                    resp.set_leader(leader.clone());
+                }
                 Some(Ok(resp))
             }
             None => {
@@ -189,8 +200,18 @@ impl PdMocker for Service {
 
     fn region_heartbeat(
         &self,
-        _: &RegionHeartbeatRequest,
+        req: &RegionHeartbeatRequest,
     ) -> Option<Result<RegionHeartbeatResponse>> {
+        let region_id = req.get_region().get_id();
+        self.regions
+            .lock()
+            .unwrap()
+            .insert(region_id, req.get_region().clone());
+        self.leaders
+            .lock()
+            .unwrap()
+            .insert(region_id, req.get_leader().clone());
+
         let mut resp = RegionHeartbeatResponse::new();
         let header = Service::header();
         resp.set_header(header);
