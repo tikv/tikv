@@ -83,16 +83,17 @@ impl<'a> CFOptions<'a> {
 pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<DB, String> {
     let mut db_opts = DBOptions::new();
     db_opts.enable_statistics(true);
-    match opts {
-        Some(cf_opts) => new_engine_opt(path, db_opts, cf_opts),
+    let cf_opts = match opts {
+        Some(opts_vec) => opts_vec,
         None => {
             let mut default_cfs_opts = Vec::with_capacity(cfs.len());
             for cf in cfs {
                 default_cfs_opts.push(CFOptions::new(*cf, ColumnFamilyOptions::new()));
             }
-            new_engine_opt(path, db_opts, default_cfs_opts)
+            default_cfs_opts
         }
-    }
+    };
+    new_engine_opt(path, db_opts, cf_opts)
 }
 
 fn check_and_open(
