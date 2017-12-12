@@ -208,12 +208,12 @@ impl Interface {
                         is_learner: true,
                         ..Default::default()
                     };
-                    self.mut_prs().insert(*id, progress, true);
+                    self.mut_prs().insert_learner(*id, progress);
                 } else {
                     let progress = Progress {
                         ..Default::default()
                     };
-                    self.mut_prs().insert(*id, progress, false);
+                    self.mut_prs().insert_voter(*id, progress);
                 }
             }
             let term = self.term;
@@ -1436,7 +1436,7 @@ fn test_commit() {
             let pr = new_progress(ProgressState::default(), v, v + 1, 0, sm.max_inflight);
             let id = j as u64 + 1;
             if sm.get_prs().get(id).is_none() {
-                sm.mut_prs().insert(id, pr, false);
+                sm.mut_prs().insert_voter(id, pr);
             }
         }
         sm.maybe_commit();
@@ -2205,7 +2205,7 @@ fn test_non_promotable_voter_which_check_quorum() {
 
     // Need to remove 2 again to make it a non-promotable node since newNetwork
     // overwritten some internal states
-    nt.peers.get_mut(&2).unwrap().mut_prs().delete(2).unwrap();
+    nt.peers.get_mut(&2).unwrap().mut_prs().remove(2).unwrap();
 
     assert_eq!(nt.peers[&2].promotable(), false);
 

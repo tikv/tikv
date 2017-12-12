@@ -49,7 +49,7 @@ pub struct ProgressSet {
     learners: FlatMap<u64, Progress>,
 }
 
-impl<'a> ProgressSet {
+impl ProgressSet {
     pub fn new(voter_size: usize, learner_size: usize) -> Self {
         ProgressSet {
             voters: FlatMap::with_capacity(voter_size),
@@ -85,47 +85,53 @@ impl<'a> ProgressSet {
         progress
     }
 
-    pub fn iter(&'a self) -> impl Iterator<Item = (&'a u64, &'a Progress)> {
+    // We need explicit lifetime here because of a compiler bug.
+    #[allow(needless_lifetimes)]
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a u64, &'a Progress)> {
         self.voters.iter().chain(&self.learners)
     }
 
-    pub fn iter_mut(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
+    #[allow(needless_lifetimes)]
+    pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
         self.voters.iter_mut().chain(&mut self.learners)
     }
 
-    pub fn iter_voters(&'a self) -> impl Iterator<Item = (&'a u64, &'a Progress)> {
+    #[allow(needless_lifetimes)]
+    pub fn iter_voters<'a>(&'a self) -> impl Iterator<Item = (&'a u64, &'a Progress)> {
         self.voters.iter()
     }
 
-    pub fn iter_mut_voters(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
+    #[allow(needless_lifetimes)]
+    pub fn iter_mut_voters<'a>(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
         self.voters.iter_mut()
     }
 
-    pub fn iter_mut_learners(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
+    #[allow(needless_lifetimes)]
+    pub fn iter_mut_learners<'a>(
+        &'a mut self,
+    ) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
         self.learners.iter_mut()
     }
 
-    pub fn insert(&mut self, id: u64, pr: Progress, is_learner: bool) -> &mut Progress {
-        if !is_learner {
-            if self.learners.contains_key(&id) {
-                panic!("insert voter {} but already in learners", id);
-            }
-            match self.voters.entry(id) {
-                FlatMapEntry::Occupied(_) => panic!("insert voter {} twice", id),
-                FlatMapEntry::Vacant(ent) => ent.insert(pr),
-            }
-        } else {
-            if self.voters.contains_key(&id) {
-                panic!("insert learner {} but already in voters", id);
-            }
-            match self.learners.entry(id) {
-                FlatMapEntry::Occupied(_) => panic!("insert learner {} twice", id),
-                FlatMapEntry::Vacant(ent) => ent.insert(pr),
-            }
+    pub fn insert_voter(&mut self, id: u64, pr: Progress) {
+        if self.learners.contains_key(&id) {
+            panic!("insert voter {} but already in learners", id);
+        }
+        if self.voters.insert(id, pr).is_some() {
+            panic!("insert voter {} twice", id);
         }
     }
 
-    pub fn delete(&mut self, id: u64) -> Option<Progress> {
+    pub fn insert_learner(&mut self, id: u64, pr: Progress) {
+        if self.voters.contains_key(&id) {
+            panic!("insert learner {} but already in voters", id);
+        }
+        if self.learners.insert(id, pr).is_some() {
+            panic!("insert learner {} twice", id);
+        }
+    }
+
+    pub fn remove(&mut self, id: u64) -> Option<Progress> {
         match self.voters.remove(&id) {
             None => self.learners.remove(&id),
             some => some,
