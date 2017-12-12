@@ -30,25 +30,47 @@ use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
-pub use self::future::Worker as FutureWorker;
+pub use self::future::{Stopped, Worker as FutureWorker};
 
-pub struct Stopped<T>(pub T);
+#[derive(Eq, PartialEq)]
+pub enum ScheduleError<T> {
+    Stopped(T),
+    Full(T),
+}
 
-impl<T> Display for Stopped<T> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "channel has been closed")
+impl<T> ScheduleError<T> {
+    pub fn into_inner(self) -> T {
+        match self {
+            ScheduleError::Stopped(t) => t,
+            ScheduleError::Full(t) => t,
+        }
     }
 }
 
-impl<T> Debug for Stopped<T> {
+impl<T> Display for ScheduleError<T> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "channel has been closed")
+        match *self {
+            ScheduleError::Stopped(_) => write!(f, "channel has been closed"),
+            ScheduleError::Full(_) => write!(f, "channel is full"),
+        }
     }
 }
 
-impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
-    fn from(_: Stopped<T>) -> Box<Error + Sync + Send + 'static> {
-        box_err!("channel has been closed")
+impl<T> Debug for ScheduleError<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match *self {
+            ScheduleError::Stopped(_) => write!(f, "channel has been closed"),
+            ScheduleError::Full(_) => write!(f, "channel is full"),
+        }
+    }
+}
+
+impl<T> From<ScheduleError<T>> for Box<Error + Sync + Send + 'static> {
+    fn from(e: ScheduleError<T>) -> Box<Error + Sync + Send + 'static> {
+        match e {
+            ScheduleError::Stopped(_) => box_err!("channel has been closed"),
+            ScheduleError::Full(_) => box_err!("channel is full"),
+        }
     }
 }
 
@@ -121,35 +143,26 @@ impl<T: Display> Scheduler<T> {
 
     /// Schedule a task to run.
     ///
-    /// If the worker is stopped, an error will return.
-    pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
+    /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.
+    pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         debug!("scheduling task {}", task);
-        let send_result = match self.sender {
-            TaskSender::Unbounded(ref tx) => tx.send(Some(task)),
-            TaskSender::Bounded(ref tx) => tx.send(Some(task)),
+        match self.sender {
+            TaskSender::Unbounded(ref tx) => if let Err(SendError(Some(t))) = tx.send(Some(task)) {
+                return Err(ScheduleError::Stopped(t));
+            },
+            TaskSender::Bounded(ref tx) => if let Err(e) = tx.try_send(Some(task)) {
+                match e {
+                    TrySendError::Disconnected(Some(t)) => return Err(ScheduleError::Stopped(t)),
+                    TrySendError::Full(Some(t)) => return Err(ScheduleError::Full(t)),
+                    _ => unreachable!(),
+                }
+            },
         };
-        if let Err(SendError(Some(t))) = send_result {
-            return Err(Stopped(t));
-        }
         self.counter.fetch_add(1, Ordering::SeqCst);
         WORKER_PENDING_TASK_VEC
             .with_label_values(&[&self.name])
             .inc();
         Ok(())
-    }
-
-    pub fn try_schedule(&self, task: T) -> Result<(), TrySendError<T>> {
-        match self.sender {
-            TaskSender::Unbounded(ref tx) => match tx.send(Some(task)) {
-                Err(SendError(Some(t))) => Err(TrySendError::Disconnected(t)),
-                _ => Ok(()),
-            },
-            TaskSender::Bounded(ref tx) => match tx.try_send(Some(task)) {
-                Err(TrySendError::Full(Some(t))) => Err(TrySendError::Full(t)),
-                Err(TrySendError::Disconnected(Some(t))) => Err(TrySendError::Disconnected(t)),
-                _ => Ok(()),
-            },
-        }
     }
 
     /// Check if underlying worker can't handle task immediately.
@@ -317,7 +330,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// Schedule a task to run.
     ///
     /// If the worker is stopped, an error will return.
-    pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
+    pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.scheduler.schedule(task)
     }
 
@@ -506,10 +519,7 @@ mod test {
         for i in 0..3 {
             scheduler.schedule(i).unwrap();
         }
-        assert_eq!(
-            scheduler.try_schedule(3).unwrap_err(),
-            TrySendError::Full(3)
-        );
+        assert_eq!(scheduler.schedule(3).unwrap_err(), ScheduleError::Full(3));
 
         let (tx, rx) = mpsc::channel();
         worker.start(BatchRunner { ch: tx }).unwrap();
