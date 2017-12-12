@@ -407,7 +407,7 @@ mod tests {
         ];
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
-        for (i, key) in keys.iter().enumerate() {
+        for (_, key) in keys.iter().enumerate() {
             kvs.push((key.encoded().as_slice(), b"value"));
         }
         let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
