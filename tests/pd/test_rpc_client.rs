@@ -84,6 +84,10 @@ fn test_rpc_client() {
     let tmp_region = client.get_region(region_key).unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
+    let region_info = client.get_region_info(region_key).unwrap();
+    assert_eq!(region_info.region, region);
+    assert_eq!(region_info.leader, None);
+
     let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
@@ -102,15 +106,17 @@ fn test_rpc_client() {
     let (tx, rx) = mpsc::channel();
     let f = client.handle_region_heartbeat_response(1, move |resp| { let _ = tx.send(resp); });
     poller.spawn(f).forget();
-    // Only check if it works.
     poller
-        .spawn(client.region_heartbeat(
-            metapb::Region::new(),
-            metapb::Peer::new(),
-            RegionStat::default(),
-        ))
+        .spawn(
+            client.region_heartbeat(region.clone(), peer.clone(), RegionStat::default()),
+        )
         .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    let region_info = client.get_region_info(region_key).unwrap();
+    assert_eq!(region_info.region, region);
+    assert_eq!(region_info.leader.unwrap(), peer);
+
     client
         .store_heartbeat(pdpb::StoreStats::new())
         .wait()
