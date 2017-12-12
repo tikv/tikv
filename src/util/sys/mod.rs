@@ -11,11 +11,11 @@ pub fn adjust_priority(t: AdjustPriType) {
         unsafe {
             let pid = libc::pthread_self();
             let pri = match t {
-                Incr => -1,
-                Normal => 0,
-                Desc => 1,
+                AdjustPriType::Incr => -1,
+                AdjustPriType::Normal => 0,
+                AdjustPriType::Desc => 1,
             };
-            libc::setpriority(libc::PRIO_PROCESS, pid, pri);
+            libc::setpriority(libc::PRIO_PROCESS as u32, pid as u32, pri);
         }
     }
 }
