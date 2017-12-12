@@ -19,7 +19,7 @@ use std::time::Duration;
 
 pub use self::rocksdb::EngineRocksdb;
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
+use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -533,7 +533,7 @@ pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<Box<Engine>> {
             _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
         };
         cfs_opts.push(cf_opt);
-    };
+    }
     EngineRocksdb::new(path, cfs, Some(cfs_opts)).map(|engine| -> Box<Engine> { Box::new(engine) })
 }
 

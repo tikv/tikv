@@ -87,7 +87,11 @@ pub struct EngineRocksdb {
 }
 
 impl EngineRocksdb {
-    pub fn new(path: &str, cfs: &[CfName], cfs_opts: Option<Vec<CFOptions>>) -> Result<EngineRocksdb> {
+    pub fn new(
+        path: &str,
+        cfs: &[CfName],
+        cfs_opts: Option<Vec<CFOptions>>,
+    ) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
