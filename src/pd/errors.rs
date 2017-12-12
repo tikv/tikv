@@ -41,7 +41,10 @@ quick_error!{
             description(err.description())
             display("unknown error {:?}", err)
         }
-        RegionNotFound {}
+        RegionNotFound(key: Vec<u8>) {
+            description("region is not found")
+            display("region is not found for key {:?}", key)
+        }
     }
 }
 
