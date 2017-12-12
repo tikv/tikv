@@ -41,8 +41,7 @@ pub enum ScheduleError<T> {
 impl<T> ScheduleError<T> {
     pub fn into_inner(self) -> T {
         match self {
-            ScheduleError::Stopped(t) => t,
-            ScheduleError::Full(t) => t,
+            ScheduleError::Stopped(t) | ScheduleError::Full(t) => t,
         }
     }
 }
