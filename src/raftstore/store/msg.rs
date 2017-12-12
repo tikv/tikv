@@ -86,9 +86,6 @@ pub enum Msg {
 
     // For region size
     ApproximateRegionSize { region_id: u64, region_size: u64 },
-
-    // For notify raftstore.
-    AppendLogReady,
 }
 
 impl fmt::Debug for Msg {
@@ -124,7 +121,6 @@ impl fmt::Debug for Msg {
                 region_id,
                 region_size
             ),
-            Msg::AppendLogReady => write!(fmt, "Async append log ready"),
         }
     }
 }
