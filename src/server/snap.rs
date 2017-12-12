@@ -313,4 +313,10 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             }
         }
     }
+
+    fn shutdown(&mut self) {
+        if let Err(e) = self.pool.stop() {
+            error!("failed to stop snap sender pool: {:?}", e);
+        }
+    }
 }
