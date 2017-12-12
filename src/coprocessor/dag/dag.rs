@@ -87,7 +87,7 @@ impl DAGContext {
                 .unwrap()
                 .get(region_id, &self.cache_key)
             {
-                info!("Cache Hit: {}, region_id: {}", self.cache_key, region_id);
+                debug!("Cache Hit: {}, region_id: {}", self.cache_key, region_id);
                 CORP_DISTSQL_CACHE_COUNT.with_label_values(&["hit"]).inc();
                 let mut resp = Response::new();
                 resp.set_data(data.clone());
@@ -120,7 +120,7 @@ impl DAGContext {
                     let data = box_try!(sel_resp.write_to_bytes());
                     // If result data is greater than 5MB should not cache it.
                     if self.can_cache_with_size(&data) {
-                        info!("Cache It: {}, region_id: {}", &self.cache_key, region_id);
+                        debug!("Cache It: {}, region_id: {}", &self.cache_key, region_id);
                         DISTSQL_CACHE
                             .lock()
                             .unwrap()

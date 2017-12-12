@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{AdminObserver, Coprocessor, ObserverContext, QueryObserver, Result};
+use super::{AdminObserver, Coprocessor, ObserverContext, QueryObserver};
 use coprocessor::cache::DISTSQL_CACHE;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, Request, Response};
+use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use protobuf::RepeatedField;
 
 pub struct DistSQLObserver;
@@ -35,41 +35,25 @@ impl DistSQLObserver {
 impl Coprocessor for DistSQLObserver {}
 
 impl QueryObserver for DistSQLObserver {
-    fn pre_apply_query(&self, _: &mut ObserverContext, req: &[Request]) {
-        info!("Disable cache at pre_apply_query, req: {:?}", req);
+    fn pre_apply_query(&self, _: &mut ObserverContext, _: &[Request]) {
+        debug!("Disable cache at pre_apply_query");
         self.disable_cache();
     }
 
     fn post_apply_query(&self, ctx: &mut ObserverContext, _: &mut RepeatedField<Response>) {
-        info!("Evict region and enable cache at post_apply_query");
+        debug!("Evict region and enable cache at post_apply_query");
         self.evict_region(ctx);
     }
 }
 
 impl AdminObserver for DistSQLObserver {
-    fn pre_propose_admin(&self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> Result<()> {
-        let cmd_type = req.get_cmd_type();
-        let has_split = req.has_split();
-
-        match cmd_type {
-            AdminCmdType::Split => if has_split {
-                self.evict_region(ctx);
-            },
-            AdminCmdType::TransferLeader => {
-                self.evict_region(ctx);
-            }
-            _ => {}
-        };
-        Ok(())
-    }
-
-    fn pre_apply_admin(&self, _: &mut ObserverContext, req: &AdminRequest) {
-        info!("Disable cache at pre_apply_admin, req: {:?}", req);
+    fn pre_apply_admin(&self, _: &mut ObserverContext, _: &AdminRequest) {
+        debug!("Disable cache at pre_apply_admin");
         self.disable_cache();
     }
 
     fn post_apply_admin(&self, ctx: &mut ObserverContext, _: &mut AdminResponse) {
-        info!("Evict region and enable cache at post_apply_admin");
+        debug!("Evict region and enable cache at post_apply_admin");
         self.evict_region(ctx);
     }
 }
