@@ -74,8 +74,7 @@ bitflags = "1.0.1"
 signal = "0.4"
 
 [dependencies.rocksdb]
-git = "https://github.com/UncP/rust-rocksdb.git"
-branch = "uncp/import-sst-reader"
+git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"

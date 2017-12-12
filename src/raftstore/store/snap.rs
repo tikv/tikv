@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::error;
-use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::sync::{Arc, RwLock};
@@ -222,18 +222,16 @@ use std::time::Instant;
 use crc::crc32::{self, Digest, Hasher32};
 use protobuf::RepeatedField;
 use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
-use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileReader,
-              SstFileWriter};
+use rocksdb::{set_external_sst_file_global_seq_no, DBCompressionType, EnvOptions,
+              IngestExternalFileOptions, SstFileWriter};
 use util::rocksdb;
 use util::time::duration_to_sec;
 use util::file::{delete_file_if_exist, file_exists, get_file_size};
 use util::rocksdb::get_fastest_supported_compression_type;
-
 pub const SNAPSHOT_VERSION: u64 = 2;
 const META_FILE_SUFFIX: &'static str = ".meta";
 const DIGEST_BUFFER_SIZE: usize = 10240;
-const ROCKSDB_GLOBAL_SEQNO_STR: &'static str = "rocksdb.external_sst_file.global_seqno";
-const ROCKSDB_DEFAULT_GLOBAL_SEQNO: &'static [u8] = &[0; 8];
+const ROCKSDB_DEFAULT_SEQ_NO: u64 = 0;
 
 fn calc_crc32(p: &PathBuf) -> io::Result<u32> {
     let mut digest = Digest::new(crc32::IEEE);
@@ -306,26 +304,6 @@ fn check_file_size_and_checksum(
     expected_checksum: u32,
 ) -> RaftStoreResult<()> {
     check_file_size(path, expected_size).and_then(|_| check_file_checksum(path, expected_checksum))
-}
-
-/// find the offset of rocksdb `global seq no` in sst file and update `seq no` with 0
-fn adjust_file_seq_no(path: &PathBuf) -> RaftStoreResult<()> {
-    let path_str = path.to_str().unwrap();
-    let mut reader = SstFileReader::new(path_str.as_bytes(), false /* checksum */);
-    let props = reader.get_properties();
-    let off = props.get_property_offset(ROCKSDB_GLOBAL_SEQNO_STR.as_bytes());
-    if off == 0 {
-        return Err(box_err!(
-            "adjust sst file seq no {} failed, expected seq no offset > 0",
-            path.display()
-        ));
-    }
-
-    let mut file = OpenOptions::new().write(true).open(path_str)?;
-    file.seek(SeekFrom::Start(off))?;
-    file.write_all(ROCKSDB_DEFAULT_GLOBAL_SEQNO)?;
-    file.sync_data()?;
-    Ok(())
 }
 
 #[derive(Default)]
@@ -616,17 +594,32 @@ impl Snap {
         )
     }
 
-    fn validate(&self, is_applying: bool) -> RaftStoreResult<()> {
+    fn validate(&self) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
                 // this is checked when loading the snapshot meta.
                 continue;
             }
-            if plain_file_used(cf_file.cf) == false && is_applying {
-                adjust_file_seq_no(&cf_file.path)?;
-            }
             check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
+        }
+        Ok(())
+    }
+
+    fn set_default_sst_seq_no(&self, options: &ApplyOptions) -> RaftStoreResult<()> {
+        for cf_file in &self.cf_files {
+            if cf_file.size == 0 {
+                continue;
+            }
+            if !plain_file_used(cf_file.cf) {
+                let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
+                set_external_sst_file_global_seq_no(
+                    &options.db,
+                    &cf_handle,
+                    cf_file.path.to_str().unwrap(),
+                    ROCKSDB_DEFAULT_SEQ_NO,
+                )?;
+            }
         }
         Ok(())
     }
@@ -703,7 +696,7 @@ impl Snap {
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         if self.exists() {
-            match self.validate(false) {
+            match self.validate() {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
@@ -966,7 +959,11 @@ impl Snapshot for Snap {
     }
 
     fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-        box_try!(self.validate(true));
+        if self.validate().is_err() {
+            // if checksum failed, we do a lazy sst seq no modification
+            box_try!(self.set_default_sst_seq_no(&options));
+            box_try!(self.validate());
+        }
 
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
@@ -1408,13 +1405,13 @@ mod test {
     use protobuf::Message;
 
     use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, Snapshot, SnapshotDeleter,
-                SnapshotStatistics, META_FILE_SUFFIX, ROCKSDB_DEFAULT_GLOBAL_SEQNO,
-                ROCKSDB_GLOBAL_SEQNO_STR, SNAPSHOT_CFS, SNAP_GEN_PREFIX, SST_FILE_SUFFIX};
+                SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
+                SST_FILE_SUFFIX};
 
     use std::path::PathBuf;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{RaftSnapshotData, SnapshotMeta};
-    use rocksdb::DB;
+    use rocksdb::{set_external_sst_file_global_seq_no, DB};
 
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::{rocksdb, HandyRwLock};
@@ -2059,34 +2056,35 @@ mod test {
         );
     }
 
-    fn modify_snapshot_sst_seq_no<T: Into<PathBuf>>(dir: T, seq_no: &[u8]) -> usize {
-        let mut total = 0;
+    fn corrupt_sst_seq_no<T: Into<PathBuf>>(dir: T, db: Arc<DB>) {
         let dir_path = dir.into();
         let read_dir = fs::read_dir(dir_path).unwrap();
+        let corrupt_seq_no = 913; // any number but ROCKSDB_DEFAULT_SEQ_NO will be fine
         for p in read_dir {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
-                if e.file_name()
-                    .into_string()
-                    .unwrap()
-                    .ends_with(SST_FILE_SUFFIX)
-                {
-                    let mut reader =
-                        SstFileReader::new(path_str.as_bytes(), false /* checksum */);
-                    let props = reader.get_properties();
-                    let off = props.get_property_offset(ROCKSDB_GLOBAL_SEQNO_STR.as_bytes());
-                    // CF_LOCK file does not have `seq no`, so `off` will be 0, we skip it
-                    if off {
-                        let mut file = OpenOptions::new().write(true).open(e.path()).unwrap();
-                        file.seek(SeekFrom::Start(off)).unwrap();
-                        file.write_all(seq_no).unwrap();
-                        file.sync_data().unwrap();
-                        total += 1
+                let s = e.file_name().into_string().unwrap();
+                if s.ends_with(SST_FILE_SUFFIX) {
+                    let cf_handle = if s.find(CF_DEFAULT).is_some() {
+                        rocksdb::get_cf_handle(&db, CF_DEFAULT)
+                    } else if s.find(CF_WRITE).is_some() {
+                        rocksdb::get_cf_handle(&db, CF_WRITE)
+                    } else {
+                        Err(String::from(""))
+                    };
+                    if cf_handle.is_ok() {
+                        assert!(
+                            set_external_sst_file_global_seq_no(
+                                &db,
+                                &cf_handle.unwrap(),
+                                e.path().to_str().unwrap(),
+                                corrupt_seq_no
+                            ).is_ok()
+                        );
                     }
                 }
             }
         }
-        total
     }
 
     #[test]
@@ -2094,16 +2092,16 @@ mod test {
         // generate a snapshot, then modify sst file `seq no`
         let region_id = 1;
         let region = get_test_region(region_id, 1, 1);
-        let db_dir = TempDir::new("test-snap-modify-seq-no-db").unwrap();
+        let db_dir = TempDir::new("test-snap-modify-seq-no-db-src").unwrap();
         let db = get_test_db(&db_dir).unwrap();
-        let snapshot = DbSnapshot::new(db);
+        let snapshot = DbSnapshot::new(db.clone());
 
-        let dir = TempDir::new("test-snap-modify-seq-no").unwrap();
+        let src_dir = TempDir::new("test-snap-modify-seq-no-src").unwrap();
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
         let deleter = Box::new(DummyDeleter {});
         let mut s1 = Snap::new_for_building(
-            dir.path(),
+            src_dir.path(),
             &key,
             &snapshot,
             size_track.clone(),
@@ -2124,11 +2122,30 @@ mod test {
         ).unwrap();
         assert!(s1.exists());
 
-        assert_eq!(modify_snapshot_seq_no(dir.path(), &[1; 8]), 2);
-
-        // try to apply this snapshot, which will fail
-        let mut s2 = Snap::new_for_applying(dir.path(), &key, size_track.clone(), deleter).unwrap();
+        let mut s2 =
+            Snap::new_for_sending(src_dir.path(), &key, size_track.clone(), deleter.clone())
+                .unwrap();
         assert!(s2.exists());
+
+        let dst_dir = TempDir::new("test-snap-modify-seq-no-dst").unwrap();
+        let mut s3 = Snap::new_for_receiving(
+            dst_dir.path(),
+            &key,
+            snap_data.take_meta(),
+            size_track.clone(),
+            deleter.clone(),
+            None,
+        ).unwrap();
+        assert!(!s3.exists());
+        io::copy(&mut s2, &mut s3).unwrap();
+        s3.save().unwrap();
+        assert!(s3.exists());
+
+        corrupt_sst_seq_no(dst_dir.path(), db.clone());
+
+        let mut s4 =
+            Snap::new_for_applying(dst_dir.path(), &key, size_track.clone(), deleter).unwrap();
+        assert!(s4.exists());
 
         let dst_db_dir = TempDir::new("test-snap-modify-seq-no-db-dst").unwrap();
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
@@ -2140,17 +2157,11 @@ mod test {
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
         };
-        assert!(s2.apply(options).is_err());
 
-        // modify `seq no` back to zero
-        assert_eq!(
-            modify_snapshot_seq_no(dir.path(), ROCKSDB_DEFAULT_GLOBAL_SEQNO),
-            2
-        );
-
-        // try to apply this snapshot, which is expected to success
-        assert!(s2.apply(options).is_ok());
-
+        // although `seq no` has been modified,
+        // it will be changed back to ROCKSDB_DEFAULT_SEQ_NO when doing apply operation,
+        // so ingestion should succeed.
+        assert!(s4.apply(options).is_ok());
         assert_eq_db(db, dst_db.as_ref());
     }
 
