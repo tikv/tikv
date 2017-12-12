@@ -117,6 +117,7 @@ macro_rules! build_cf_opt {
         cf_opts.set_level_zero_stop_writes_trigger($opt.level0_stop_writes_trigger);
         cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
         cf_opts.compaction_priority($opt.compaction_pri);
+
         cf_opts
     }};
 }
@@ -330,6 +331,7 @@ pub struct DbConfig {
     pub info_log_roll_time: ReadableDuration,
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
+    pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
@@ -361,6 +363,7 @@ impl Default for DbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
+            bytes_per_sync: ReadableSize::mb(0),
             wal_bytes_per_sync: ReadableSize::kb(0),
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
@@ -408,6 +411,7 @@ impl DbConfig {
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter(self.rate_bytes_per_sec.0 as i64);
         }
+        opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
@@ -513,6 +517,7 @@ pub struct RaftDbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
     pub allow_concurrent_memtable_write: bool,
+    pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub defaultcf: RaftDefaultCfConfig,
 }
@@ -539,6 +544,7 @@ impl Default for RaftDbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             allow_concurrent_memtable_write: false,
+            bytes_per_sync: ReadableSize::mb(0),
             wal_bytes_per_sync: ReadableSize::kb(0),
             defaultcf: RaftDefaultCfConfig::default(),
         }
@@ -582,6 +588,7 @@ impl RaftDbConfig {
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
         opts.add_event_listener(EventListener::new("raft"));
+        opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
 
         opts

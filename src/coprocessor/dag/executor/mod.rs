@@ -208,7 +208,13 @@ fn build_first_executor(
         }
         ExecType::TypeIndexScan => {
             let cols = Arc::new(first.get_idx_scan().get_columns().to_vec());
-            let ex = Box::new(IndexScanExecutor::new(first.take_idx_scan(), ranges, store));
+            let unique = first.get_idx_scan().get_unique();
+            let ex = Box::new(IndexScanExecutor::new(
+                first.take_idx_scan(),
+                ranges,
+                store,
+                unique,
+            ));
             Ok((ex, cols))
         }
         _ => Err(box_err!(
