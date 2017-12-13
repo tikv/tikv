@@ -39,6 +39,7 @@ macro_rules! invalid_type {
 }
 
 pub mod datum;
+pub mod chunk;
 pub mod table;
 pub mod convert;
 pub mod mysql;
