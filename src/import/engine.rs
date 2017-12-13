@@ -20,17 +20,16 @@ use std::sync::Arc;
 use uuid::Uuid;
 use tempdir::TempDir;
 
-use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBCompressionType, DBIterator, DBOptions,
-              Env, EnvOptions, ReadOptions, SequentialFile, SstFileWriter, Writable,
-              WriteBatch as RawBatch, DB};
+use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
+              ReadOptions, SequentialFile, SstFileWriter, Writable, WriteBatch as RawBatch, DB};
 use kvproto::importpb::*;
 
 use config::DbConfig;
 use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use storage::types::Key;
 use storage::mvcc::{Write, WriteType};
-use util::config::MB;
-use util::rocksdb::{get_fastest_supported_compression_type, new_engine_opt, CFOptions};
+use util::config::{KB, MB};
+use util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::{Error, Result};
 
@@ -117,9 +116,6 @@ impl Engine {
             _ => unreachable!(),
         };
         cf_opts.set_env(self.env.clone());
-        cf_opts.compression_per_level(&[]);
-        cf_opts.bottommost_compression(DBCompressionType::Disable);
-        cf_opts.compression(get_fastest_supported_compression_type());
         let mut writer = SstFileWriter::new(EnvOptions::new(), cf_opts);
         writer.open(path.as_ref().to_str().unwrap())?;
         Ok(writer)
@@ -161,13 +157,13 @@ fn tune_dbconfig_for_bulk_load(cfg: &DbConfig) -> (DBOptions, Vec<CFOptions>) {
     opts.set_use_direct_io_for_flush_and_compaction(true);
     // NOTE: RocksDB preserves `max_background_jobs/4` for flush.
     opts.set_max_background_jobs(cfg.max_background_jobs);
-    // Just guess a reasonable value according to number of write buffers.
-    opts.set_delayed_write_rate(8 * MB * cfg.defaultcf.max_write_buffer_number as u64);
+    // Just guess a reasonable value according to the number of write buffers.
+    opts.set_delayed_write_rate(16 * MB * cfg.defaultcf.max_write_buffer_number as u64);
 
     // CF_WRITE and CF_DEFAULT use the same options.
     let mut block_base_opts = BlockBasedOptions::new();
-    // NOTE: Consider using a large block size, 1MB should be good enough.
-    block_base_opts.set_block_size(cfg.defaultcf.block_size.0 as usize);
+    // Use a large block size for sequential access.
+    block_base_opts.set_block_size(512 * KB as usize);
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
     cf_opts.compression_per_level(&cfg.defaultcf.compression_per_level);
