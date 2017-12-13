@@ -182,7 +182,6 @@ impl DistSQLCache {
     }
 
     pub fn evict_region(&mut self, region_id: u64) {
-        info!("Evict Region: {}", region_id);
         let keys = match self.regions.get_mut(&region_id) {
             None => None,
             Some(region) => {
