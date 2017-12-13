@@ -29,6 +29,7 @@ use config::DbConfig;
 use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use storage::types::Key;
 use storage::mvcc::{Write, WriteType};
+use util::config::MB;
 use util::rocksdb::{get_fastest_supported_compression_type, new_engine_opt, CFOptions};
 
 use super::{Error, Result};
@@ -104,7 +105,7 @@ impl Engine {
         // Don't need to cache since it is unlikely to read more than once.
         let mut ropts = ReadOptions::new();
         ropts.fill_cache(false);
-        ropts.set_readahead_size(2 * 1024 * 1024);
+        ropts.set_readahead_size(2 * MB as usize);
         ropts.set_verify_checksums(verify_checksum);
         DBIterator::new_cf(self.db.clone(), cf_handle, ropts)
     }
@@ -160,6 +161,8 @@ fn tune_dbconfig_for_bulk_load(cfg: &DbConfig) -> (DBOptions, Vec<CFOptions>) {
     opts.set_use_direct_io_for_flush_and_compaction(true);
     // NOTE: RocksDB preserves `max_background_jobs/4` for flush.
     opts.set_max_background_jobs(cfg.max_background_jobs);
+    // Just guess a reasonable value according to number of write buffers.
+    opts.set_delayed_write_rate(8 * MB * cfg.defaultcf.max_write_buffer_number as u64);
 
     // CF_WRITE and CF_DEFAULT use the same options.
     let mut block_base_opts = BlockBasedOptions::new();
