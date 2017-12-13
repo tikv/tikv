@@ -152,12 +152,6 @@ pub trait PdClient: Send + Sync {
             .map(|region| RegionInfo::new(region, None))
     }
 
-    // Get region info which the key belong to.
-    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
-        self.get_region(key)
-            .map(|region| RegionInfo::new(region, None))
-    }
-
     // Get region by region id.
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>>;
 

@@ -270,7 +270,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
-    signal_handler::handle_signal(Some(engines), &cfg.rocksdb.backup_dir);
+    signal_handler::handle_signal(Some(engines));
 
     // Stop.
     server
@@ -290,7 +290,7 @@ fn run_import_server(cfg: &TiKvConfig, pd_client: RpcClient) {
     let mut server = ImportServer::new(cfg, Arc::new(pd_client));
     server.start();
     info!("import server started");
-    signal_handler::handle_signal(None, "");
+    signal_handler::handle_signal(None);
     server.shutdown();
     info!("import server shutdown");
 }

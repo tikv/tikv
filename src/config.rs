@@ -97,16 +97,11 @@ macro_rules! build_cf_opt {
     ($opt:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
-        if $opt.disable_block_cache {
-            block_base_opts.set_no_block_cache(true);
-            block_base_opts.set_cache_index_and_filter_blocks(false);
-            block_base_opts.set_pin_l0_filter_and_index_blocks_in_cache(false);
-        } else {
-            block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
-            block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
-            block_base_opts.set_pin_l0_filter_and_index_blocks_in_cache(
-                $opt.pin_l0_filter_and_index_blocks);
-        }
+        block_base_opts.set_no_block_cache($opt.disable_block_cache);
+        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
+        block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
+        block_base_opts.set_pin_l0_filter_and_index_blocks_in_cache(
+            $opt.pin_l0_filter_and_index_blocks);
         if $opt.use_bloom_filter {
             block_base_opts.set_bloom_filter($opt.bloom_filter_bits_per_key,
                                              $opt.block_based_bloom_filter);

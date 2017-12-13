@@ -430,8 +430,8 @@
 # number of threads to handle RPC requests.
 # num-threads = 4
 # maximum concurrent import jobs.
-# max-import-jobs = 4
+# max-import-jobs = 8
 # maximum concurrent import sst jobs.
 # max-import-sst-jobs = 8
 # stream channel buffer size, stream will be blocked on channel full.
-# stream-channel-size = 128
+# stream-channel-size = 1024

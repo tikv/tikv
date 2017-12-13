@@ -20,15 +20,15 @@ use std::sync::Arc;
 use uuid::Uuid;
 use tempdir::TempDir;
 
-use rocksdb::{DBCompressionType, DBIterator, Env, EnvOptions, ReadOptions, SequentialFile,
-              SstFileWriter, Writable, WriteBatch as RawBatch, DB};
+use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBCompressionType, DBIterator, DBOptions,
+              Env, EnvOptions, ReadOptions, SequentialFile, SstFileWriter, Writable,
+              WriteBatch as RawBatch, DB};
 use kvproto::importpb::*;
 
 use config::DbConfig;
 use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use storage::types::Key;
 use storage::mvcc::{Write, WriteType};
-use util::config::{ReadableSize, GB};
 use util::rocksdb::{get_fastest_supported_compression_type, new_engine_opt, CFOptions};
 
 use super::{Error, Result};
@@ -43,43 +43,10 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(cfg: DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
-        // TODO: Use VectorMemtable instead of SkipList.
-
-        // Configuration recommendation:
-        // 1. Use a large `write_buffer_size`, 1GB should be good enough.
-        // 2. Choose a reasonable compression algorithm to balance between CPU and IO.
-        // 3. Increase `max_background_jobs`, RocksDB preserves `max_background_jobs/4` for flush.
-
-        // NOTE: Reserve the original configuration for SST file generation.
-        let mut opts = cfg.clone();
-        // Use a large block size for sequential access.
-        opts.writecf.block_size = ReadableSize::mb(1);
-        opts.defaultcf.block_size = ReadableSize::mb(1);
-        opts.writecf.pin_l0_filter_and_index_blocks = true;
-        opts.defaultcf.pin_l0_filter_and_index_blocks = true;
-
-        let mut db_opts = opts.build_opt();
-        db_opts.enable_statistics(false);
-        db_opts.set_use_direct_io_for_flush_and_compaction(true);
-
-        let mut cfs_opts = vec![
-            CFOptions::new(CF_WRITE, cfg.writecf.build_opt()),
-            CFOptions::new(CF_DEFAULT, cfg.defaultcf.build_opt()),
-        ];
-        for cf_opts in &mut cfs_opts {
-            const DISABLED: i32 = i32::MAX;
-            // Use a larget size for sequential access.
-            cf_opts.set_target_file_size_base(GB);
-            // Disable compaction and rate limit.
-            cf_opts.set_disable_auto_compactions(true);
-            cf_opts.set_soft_pending_compaction_bytes_limit(0);
-            cf_opts.set_hard_pending_compaction_bytes_limit(0);
-            cf_opts.set_level_zero_stop_writes_trigger(DISABLED);
-            cf_opts.set_level_zero_slowdown_writes_trigger(DISABLED);
-            cf_opts.set_level_zero_file_num_compaction_trigger(DISABLED);
-        }
-
-        let db = new_engine_opt(temp_dir.path().to_str().unwrap(), db_opts, cfs_opts)?;
+        let db = {
+            let (db_opts, cfs_opts) = tune_dbconfig_for_bulk_load(&cfg);
+            new_engine_opt(temp_dir.path().to_str().unwrap(), db_opts, cfs_opts)?
+        };
         Ok(Engine {
             db: Arc::new(db),
             env: Arc::new(Env::new_mem()),
@@ -145,7 +112,7 @@ impl Engine {
         let mut cf_opts = match cf_name {
             "write" => self.cfg.writecf.build_opt(),
             "default" => self.cfg.defaultcf.build_opt(),
-            unknown_name => panic!("unknown cf name {}", unknown_name),
+            _ => unreachable!(),
         };
         cf_opts.set_env(self.env.clone());
         cf_opts.compression_per_level(&[]);
@@ -180,4 +147,44 @@ impl fmt::Display for Engine {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Engine {{uuid: {}, path: {}}}", self.uuid(), self.path())
     }
+}
+
+fn tune_dbconfig_for_bulk_load(cfg: &DbConfig) -> (DBOptions, Vec<CFOptions>) {
+    const DISABLED: i32 = i32::MAX;
+
+    let mut opts = DBOptions::new();
+    opts.create_if_missing(true);
+    opts.enable_statistics(false);
+    opts.enable_pipelined_write(true);
+    opts.set_use_direct_io_for_flush_and_compaction(true);
+    // NOTE: RocksDB preserves `max_background_jobs/4` for flush.
+    opts.set_max_background_jobs(cfg.max_background_jobs);
+
+    // CF_WRITE and CF_DEFAULT use the same options.
+    let mut block_base_opts = BlockBasedOptions::new();
+    block_base_opts.set_block_size(128 * 1024);
+    let mut cf_opts = ColumnFamilyOptions::new();
+    cf_opts.set_block_based_table_factory(&block_base_opts);
+    cf_opts.compression_per_level(&cfg.defaultcf.compression_per_level);
+    // NOTE: Consider using a large write buffer, 1GB should be good enough.
+    cf_opts.set_write_buffer_size(cfg.defaultcf.write_buffer_size.0);
+    cf_opts.set_target_file_size_base(cfg.defaultcf.write_buffer_size.0);
+    cf_opts.set_max_write_buffer_number(cfg.defaultcf.max_write_buffer_number);
+    cf_opts.set_min_write_buffer_number_to_merge(cfg.defaultcf.min_write_buffer_number_to_merge);
+    // Disable compaction and rate limit.
+    cf_opts.set_disable_auto_compactions(true);
+    cf_opts.set_soft_pending_compaction_bytes_limit(0);
+    cf_opts.set_hard_pending_compaction_bytes_limit(0);
+    cf_opts.set_level_zero_stop_writes_trigger(DISABLED);
+    cf_opts.set_level_zero_slowdown_writes_trigger(DISABLED);
+    cf_opts.set_level_zero_file_num_compaction_trigger(DISABLED);
+
+    // TODO: Use VectorMemtable instead of SkipList.
+
+    let cfs_opts = vec![
+        CFOptions::new(CF_WRITE, cf_opts.clone()),
+        CFOptions::new(CF_DEFAULT, cf_opts.clone()),
+    ];
+
+    (opts, cfs_opts)
 }

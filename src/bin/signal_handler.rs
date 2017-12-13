@@ -58,7 +58,7 @@ mod imp {
     }
 
     // TODO: remove backup_path from configuration
-    pub fn handle_signal(engines: Option<Engines>, _: &str) {
+    pub fn handle_signal(engines: Option<Engines>) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
