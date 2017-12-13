@@ -150,7 +150,7 @@ fn test_server_split_region_twice() {
 
     let (tx, rx) = channel();
     let key = split_key.to_vec();
-    let c = Box::new(move |mut resp: RaftCmdResponse| {
+    let c = Box::new(move |mut resp: RaftCmdResponse, _| {
         let admin_resp = resp.mut_admin_response();
         let split_resp = admin_resp.mut_split();
         let left = split_resp.take_left();
@@ -167,7 +167,7 @@ fn test_server_split_region_twice() {
     cluster.must_put(split_key, b"v2");
 
     let (tx1, rx1) = channel();
-    let c = Box::new(move |resp: RaftCmdResponse| {
+    let c = Box::new(move |resp: RaftCmdResponse, _| {
         assert!(resp.has_header());
         assert!(resp.get_header().has_error());
         assert!(!resp.has_admin_response());

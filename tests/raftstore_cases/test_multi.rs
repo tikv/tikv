@@ -474,7 +474,7 @@ fn test_node_leader_change_with_log_overlap() {
         .sim
         .rl()
         .get_node_router(1)
-        .send_command(put_req, box move |resp: RaftCmdResponse| {
+        .send_command(put_req, box move |resp: RaftCmdResponse, _| {
             called_.store(true, Ordering::SeqCst);
             assert!(resp.get_header().has_error());
             assert!(resp.get_header().get_error().has_stale_command());
@@ -723,7 +723,7 @@ fn test_node_dropped_proposal() {
         .sim
         .rl()
         .get_node_router(1)
-        .send_command(put_req, box move |resp: RaftCmdResponse| {
+        .send_command(put_req, box move |resp: RaftCmdResponse, _| {
             let _ = tx.send(resp);
         })
         .unwrap();

@@ -48,8 +48,9 @@ use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
-                    ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
+                    ConsistencyCheckRunner, ConsistencyCheckTask, LocalReadTask, LocalReader,
+                    RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
+                    SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -145,6 +146,7 @@ pub struct Store<T, C: 'static> {
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
+    local_read_worker: Option<Worker<LocalReadTask>>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
@@ -194,6 +196,7 @@ impl<T, C> Store<T, C> {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
+        local_read_worker: Option<Worker<LocalReadTask>>,
         mut coprocessor_host: CoprocessorHost,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
@@ -221,6 +224,7 @@ impl<T, C> Store<T, C> {
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: pd_worker,
+            local_read_worker: local_read_worker,
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
@@ -403,6 +407,12 @@ impl<T, C> Store<T, C> {
         self.region_worker.scheduler()
     }
 
+    pub fn local_read_scheduler(&self) -> Option<Scheduler<LocalReadTask>> {
+        self.local_read_worker
+            .as_ref()
+            .map(|local_read_worker| local_read_worker.scheduler())
+    }
+
     pub fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
         self.apply_worker.scheduler()
     }
@@ -530,6 +540,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.kv_engine.clone(),
         );
         box_try!(self.pd_worker.start(pd_runner));
+
+        {
+            let kv_engine = &self.kv_engine;
+            let store = &self.store;
+            let sendch = &self.sendch;
+
+            if let Some(result) = self.local_read_worker.as_mut().map(|worker| {
+                let local_reader =
+                    LocalReader::new(kv_engine.clone(), store.clone(), sendch.clone());
+                worker.start(local_reader)
+            }) {
+                box_try!(result);
+            }
+        }
 
         let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
         box_try!(
@@ -1557,11 +1581,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
-                cb.call_box((resp,));
+                cb.call_box((resp, None));
                 return;
             }
             Err(e) => {
-                cb.call_box((new_error(e),));
+                cb.call_box((new_error(e), None));
                 return;
             }
             _ => (),
@@ -1596,11 +1620,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for msg in batch {
             match self.pre_propose_raft_command(&msg) {
                 Ok(Some(resp)) => {
-                    ret.push(Some(resp));
+                    ret.push(Some((resp, None)));
                     continue;
                 }
                 Err(e) => {
-                    ret.push(Some(new_error(e)));
+                    ret.push(Some((new_error(e), None)));
                     continue;
                 }
                 _ => (),
@@ -1608,9 +1632,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             let region_id = msg.get_header().get_region_id();
             let peer = self.region_peers.get_mut(&region_id).unwrap();
-            ret.push(peer.propose_snapshot(msg, &mut self.raft_metrics.propose));
+            ret.push(
+                peer.propose_snapshot(msg, &mut self.raft_metrics.propose)
+                    .map(|resp| (resp, None)),
+            );
         }
-        on_finished.call_box((ret,));
+        on_finished(ret);
     }
 
     fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
@@ -1762,7 +1789,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
 
             if let Err(e) = self.sendch
-                .try_send(Msg::new_raft_cmd(request, Box::new(|_| {})))
+                .try_send(Msg::new_raft_cmd(request, Box::new(|_, _| {})))
             {
                 error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
             }
@@ -1855,7 +1882,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         cb: Option<Callback>,
     ) {
         if let Err(e) = self.validate_split_region(region_id, &region_epoch, &split_key) {
-            cb.map(|cb| cb(new_error(e)));
+            cb.map(|cb| cb(new_error(e), None));
             return;
         }
         let peer = &self.region_peers[&region_id];
@@ -1871,7 +1898,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} failed to notify pd to split: Stopped", peer.tag);
             match t {
                 PdTask::AskSplit { callback, .. } => {
-                    callback.map(|cb| cb(new_error(box_err!("failed to split: Stopped"))));
+                    callback.map(|cb| {
+                        cb(new_error(box_err!("failed to split: Stopped")), None)
+                    });
                 }
                 _ => unreachable!(),
             }
@@ -2282,7 +2311,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("{} scheduling consistent check", peer.tag);
             let msg = Msg::new_raft_cmd(
                 new_compute_hash_request(candidate_id, peer.peer.clone()),
-                Box::new(|_| {}),
+                Box::new(|_, _| {}),
             );
 
             if let Err(e) = self.sendch.send(msg) {
@@ -2347,7 +2376,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let msg = Msg::new_raft_cmd(
             new_verify_hash_request(region_id, peer.clone(), state),
-            Box::new(|_| {}),
+            Box::new(|_, _| {}),
         );
         if let Err(e) = self.sendch.send(msg) {
             error!(

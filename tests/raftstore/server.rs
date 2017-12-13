@@ -14,7 +14,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
-use std::boxed::FnBox;
 
 use grpc::EnvBuilder;
 use tempdir::TempDir;
@@ -27,7 +26,7 @@ use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{store, Error, Result};
-use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
@@ -110,7 +109,8 @@ impl Simulator for ServerCluster {
         let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
         let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
-        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender);
+        let raft_router =
+            ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender, None);
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create storage.
@@ -161,6 +161,7 @@ impl Simulator for ServerCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            None,
             coprocessor_host,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
@@ -217,14 +218,13 @@ impl Simulator for ServerCluster {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.router.clone(),
         };
-        wait_op!(
-            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                router.send_command(request, cb).unwrap()
-            },
+        wait_op2!(
+            |cb: Callback| { router.send_command(request, cb).unwrap() },
             timeout
-        ).ok_or_else(|| {
-            Error::Timeout(format!("request timeout for {:?}", timeout))
-        })
+        ).map(|(res, _)| res)
+            .ok_or_else(|| {
+                Error::Timeout(format!("request timeout for {:?}", timeout))
+            })
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {

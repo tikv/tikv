@@ -17,6 +17,7 @@
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
+#![feature(integer_atomics)]
 #![feature(iterator_for_each)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]

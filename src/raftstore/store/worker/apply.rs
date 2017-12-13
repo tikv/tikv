@@ -181,7 +181,7 @@ impl ApplyCallback {
     fn invoke_all(self, host: &CoprocessorHost) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
-            cb.map(|cb| cb(resp));
+            cb.map(|cb| cb(resp, None));
         }
     }
 
@@ -246,7 +246,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
 pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
-    cb(resp);
+    cb(resp, None);
 }
 
 /// Call the callback of `cmd` when it can not be processed further.
@@ -262,7 +262,7 @@ fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
 
 pub fn notify_stale_req(term: u64, cb: Callback) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
-    cb(resp);
+    cb(resp, None);
 }
 
 fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
@@ -1736,7 +1736,7 @@ mod tests {
             false,
             1,
             0,
-            box move |resp| { resp_tx.send(resp).unwrap(); },
+            box move |resp, _| { resp_tx.send(resp).unwrap(); },
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
         runner.run(Task::Proposals(vec![region_proposal]));
@@ -1747,8 +1747,13 @@ mod tests {
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
-            Proposal::new(false, 2, 0, box |_| {}),
-            Proposal::new(true, 3, 0, box move |resp| { cc_tx.send(resp).unwrap(); }),
+            Proposal::new(false, 2, 0, box |_, _| {}),
+            Proposal::new(
+                true,
+                3,
+                0,
+                box move |resp, _| { cc_tx.send(resp).unwrap(); },
+            ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
         runner.run(Task::Proposals(vec![region_proposal]));
@@ -1763,7 +1768,7 @@ mod tests {
             assert_eq!(cc.as_ref().map(|c| c.index), Some(3));
         }
 
-        let p = Proposal::new(true, 4, 0, box move |_| {});
+        let p = Proposal::new(true, 4, 0, box move |_, _| {});
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
         runner.run(Task::Proposals(vec![region_proposal]));
         assert!(rx.try_recv().is_err());
@@ -1846,11 +1851,10 @@ mod tests {
             delegate: &mut ApplyDelegate,
             tx: Sender<RaftCmdResponse>,
         ) -> EntryBuilder {
-            let cmd = PendingCmd::new(
-                self.entry.get_index(),
-                self.entry.get_term(),
-                box move |r| tx.send(r).unwrap(),
-            );
+            let cmd = PendingCmd::new(self.entry.get_index(), self.entry.get_term(), box move |r,
+                      _| {
+                tx.send(r).unwrap()
+            });
             delegate.pending_cmds.append_normal(cmd);
             self
         }

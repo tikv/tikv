@@ -154,19 +154,35 @@ macro_rules! defer {
 #[macro_export]
 macro_rules! wait_op {
     ($expr:expr) => {
-        wait_op!(IMPL $expr, None)
+        wait_op!(PROXY_ONE $expr, None)
     };
     ($expr:expr, $timeout:expr) => {
-        wait_op!(IMPL $expr, Some($timeout))
+        wait_op!(PROXY_ONE $expr, Some($timeout))
     };
-    (IMPL $expr:expr, $timeout:expr) => {
-        {
-            use std::sync::mpsc;
+    (PROXY_ONE $expr:expr, $timeout:expr) => {
+        wait_op!(IMPL $expr, $timeout, {
             let (tx, rx) = mpsc::channel();
             let cb = box move |res| {
-                 // we don't care error actually.
+                // we don't care error actually.
                 let _ = tx.send(res);
             };
+            (cb, rx)
+        })
+    };
+    (PROXY_TWO $expr:expr, $timeout:expr) => {
+        wait_op!(IMPL $expr, $timeout, {
+            let (tx, rx) = mpsc::channel();
+            let cb = box move |left, right| {
+                // we don't care error actually.
+                let _ = tx.send((left, right));
+            };
+            (cb, rx)
+        })
+    };
+    (IMPL $expr:expr, $timeout:expr, $proxy:expr) => {
+        {
+            use std::sync::mpsc;
+            let (cb, rx) = $proxy;
             $expr(cb);
             match $timeout {
                 None => rx.recv().ok(),
@@ -174,6 +190,16 @@ macro_rules! wait_op {
             }
         }
     }
+}
+
+#[macro_export]
+macro_rules! wait_op2 {
+    ($expr:expr) => {
+        wait_op!(PROXY_TWO $expr, None)
+    };
+    ($expr:expr, $timeout:expr) => {
+        wait_op!(PROXY_TWO $expr, Some($timeout))
+    };
 }
 
 /// `try_opt` check `Result<Option<T>>`, return early when met `Err` or `Ok(None)`.

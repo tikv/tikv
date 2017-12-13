@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, CounterVec, Histogram, HistogramVec};
+use prometheus::{exponential_buckets, CounterVec, Gauge, Histogram, HistogramVec};
 
 lazy_static! {
     pub static ref SNAP_COUNTER_VEC: CounterVec =
@@ -61,5 +61,25 @@ lazy_static! {
             "tikv_raftstore_apply_proposal",
             "Proposal count of all regions in a mio tick",
             exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref LOCAL_READ: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_local_reader_total",
+            "Total number of requests that routed to local read thread",
+            &["type", "result"]
+        ).unwrap();
+
+    pub static ref LOCAL_READ_CACHE: Gauge =
+         register_gauge!(
+            "tikv_raftstore_local_reader_cache_total",
+            "Total number of region cache of local read thread"
+        ).unwrap();
+
+    pub static ref LOCAL_READ_REJECT: CounterVec =
+         register_counter_vec!(
+            "tikv_raftstore_local_reader_reject_total",
+            "Total number of rejection of local read thread",
+            &["reason"]
         ).unwrap();
 }

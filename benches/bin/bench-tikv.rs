@@ -15,7 +15,6 @@
 #![feature(mpsc_recv_timeout)]
 #![feature(plugin)]
 #![feature(test)]
-#![feature(fnbox)]
 #![feature(box_syntax)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
