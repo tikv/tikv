@@ -104,6 +104,7 @@ impl Engine {
         // Don't need to cache since it is unlikely to read more than once.
         let mut ropts = ReadOptions::new();
         ropts.fill_cache(false);
+        ropts.set_readahead_size(2 * 1024 * 1024);
         ropts.set_verify_checksums(verify_checksum);
         DBIterator::new_cf(self.db.clone(), cf_handle, ropts)
     }
@@ -162,7 +163,8 @@ fn tune_dbconfig_for_bulk_load(cfg: &DbConfig) -> (DBOptions, Vec<CFOptions>) {
 
     // CF_WRITE and CF_DEFAULT use the same options.
     let mut block_base_opts = BlockBasedOptions::new();
-    block_base_opts.set_block_size(128 * 1024);
+    // NOTE: Consider using a large block size, 1MB should be good enough.
+    block_base_opts.set_block_size(cfg.defaultcf.block_size.0 as usize);
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
     cf_opts.compression_per_level(&cfg.defaultcf.compression_per_level);
