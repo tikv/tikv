@@ -70,7 +70,7 @@ const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
 struct _CopContext {
     select_stats: StatisticsSummary,
     index_stats: StatisticsSummary,
-    request_stats: HashMap<u64, FlowStatistics>,
+    flow_stats: HashMap<u64, FlowStatistics>,
     timer: Instant,
     pd_task_sender: FutureScheduler<PdTask>,
 }
@@ -80,7 +80,7 @@ impl _CopContext {
         _CopContext {
             select_stats: StatisticsSummary::default(),
             index_stats: StatisticsSummary::default(),
-            request_stats: map![],
+            flow_stats: map![],
             timer: Instant::now_coarse(),
             pd_task_sender: pd_task_sender,
         }
@@ -101,8 +101,8 @@ impl _CopContext {
         self.get_statistics(type_str).add_statistics(stats);
     }
 
-    fn add_statistics_by_region(&mut self, region_id: u64, stats: &Statistics) {
-        let flow_stats = self.request_stats
+    fn add_flow_stats_by_region(&mut self, region_id: u64, stats: &Statistics) {
+        let flow_stats = self.flow_stats
             .entry(region_id)
             .or_insert_with(FlowStatistics::default);
         flow_stats.add(&stats.write.flow_stats);
@@ -111,7 +111,7 @@ impl _CopContext {
 
     fn collect(&mut self, region_id: u64, scan_tag: &str, stats: &Statistics) {
         self.add_statistics(scan_tag, stats);
-        self.add_statistics_by_region(region_id, stats);
+        self.add_flow_stats_by_region(region_id, stats);
 
         let new_timer = Instant::now_coarse();
         if new_timer.duration_since(self.timer) > Duration::from_secs(1) {
@@ -129,10 +129,10 @@ impl _CopContext {
                             .unwrap();
                     }
                 }
-                this_statistics.count = 0;
+                mem::replace(this_statistics, StatisticsSummary::default());
             }
             let pd_task = PdTask::ReadStats {
-                read_stats: mem::replace(&mut self.request_stats, map![]),
+                read_stats: mem::replace(&mut self.flow_stats, map![]),
             };
             if let Err(e) = self.pd_task_sender.schedule(pd_task) {
                 error!("send coprocessor statistics: {:?}", e);
@@ -151,6 +151,10 @@ struct CopContextPool {
 }
 
 impl CopContextPool {
+    fn new(ctxs: Arc<HashMap<thread::ThreadId, CopContext>>) -> Self {
+        CopContextPool { cop_ctxs: ctxs }
+    }
+
     // Must run in CpuPool.
     fn collect(&self, region_id: u64, scan_tag: &str, stats: &Statistics) {
         let thread_id = thread::current().id();
@@ -159,14 +163,19 @@ impl CopContextPool {
     }
 }
 
+struct ExecutorPool {
+    pool: CpuPool,
+    contexts: CopContextPool,
+}
+
 pub struct Host {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: (CpuPool, CopContextPool),
-    low_priority_pool: (CpuPool, CopContextPool),
-    high_priority_pool: (CpuPool, CopContextPool),
+    pool: ExecutorPool,
+    low_priority_pool: ExecutorPool,
+    high_priority_pool: ExecutorPool,
     max_running_task_count: usize,
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
@@ -204,10 +213,10 @@ impl Host {
                 let mut map_counter = cop_ctxs.lock().unwrap();
                 if map_counter.1 >= size {
                     let cop_ctxs = mem::replace(&mut map_counter.0, map![]);
-                    let cop_ctx_pool = CopContextPool {
-                        cop_ctxs: Arc::new(cop_ctxs),
+                    return ExecutorPool {
+                        pool: cpu_pool,
+                        contexts: CopContextPool::new(Arc::new(cop_ctxs)),
                     };
-                    return (cpu_pool, cop_ctx_pool);
                 }
             }
         };
@@ -250,8 +259,8 @@ impl Host {
             CommandPri::High => &mut self.high_priority_pool,
             CommandPri::Normal => &mut self.pool,
         };
-        let pool = &mut pool_and_ctx_pool.0;
-        let mut ctx_pool = pool_and_ctx_pool.1.clone();
+        let pool = &mut pool_and_ctx_pool.pool;
+        let mut ctx_pool = pool_and_ctx_pool.contexts.clone();
         let task_count = self.running_task_count.clone();
 
         let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
