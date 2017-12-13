@@ -146,7 +146,7 @@ mod test {
     #[test]
     fn test_gc_raft_log() {
         let path = TempDir::new("gc-raft-log-test").unwrap();
-        let raft_db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let raft_db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
         let raft_db = Arc::new(raft_db);
 
         let (tx, rx) = mpsc::channel();
