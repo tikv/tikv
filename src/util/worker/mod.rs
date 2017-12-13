@@ -17,12 +17,12 @@
 mod metrics;
 mod future;
 
-use std::io;
+use std::{io, usize};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SendError, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, SendError, Sender, SyncSender, TryRecvError, TrySendError};
 use std::error::Error;
 
 use util::time::SlowTimer;
@@ -30,25 +30,46 @@ use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
-pub use self::future::Worker as FutureWorker;
+pub use self::future::{Stopped, Worker as FutureWorker};
 
-pub struct Stopped<T>(pub T);
+#[derive(Eq, PartialEq)]
+pub enum ScheduleError<T> {
+    Stopped(T),
+    Full(T),
+}
 
-impl<T> Display for Stopped<T> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "channel has been closed")
+impl<T> ScheduleError<T> {
+    pub fn into_inner(self) -> T {
+        match self {
+            ScheduleError::Stopped(t) | ScheduleError::Full(t) => t,
+        }
     }
 }
 
-impl<T> Debug for Stopped<T> {
+impl<T> Display for ScheduleError<T> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "channel has been closed")
+        match *self {
+            ScheduleError::Stopped(_) => write!(f, "channel has been closed"),
+            ScheduleError::Full(_) => write!(f, "channel is full"),
+        }
     }
 }
 
-impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
-    fn from(_: Stopped<T>) -> Box<Error + Sync + Send + 'static> {
-        box_err!("channel has been closed")
+impl<T> Debug for ScheduleError<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match *self {
+            ScheduleError::Stopped(_) => write!(f, "channel has been closed"),
+            ScheduleError::Full(_) => write!(f, "channel is full"),
+        }
+    }
+}
+
+impl<T> From<ScheduleError<T>> for Box<Error + Sync + Send + 'static> {
+    fn from(e: ScheduleError<T>) -> Box<Error + Sync + Send + 'static> {
+        match e {
+            ScheduleError::Stopped(_) => box_err!("channel has been closed"),
+            ScheduleError::Full(_) => box_err!("channel is full"),
+        }
     }
 }
 
@@ -86,19 +107,32 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
     }
 }
 
+enum TaskSender<T> {
+    Bounded(SyncSender<Option<T>>),
+    Unbounded(Sender<Option<T>>),
+}
+
+impl<T> Clone for TaskSender<T> {
+    fn clone(&self) -> TaskSender<T> {
+        match *self {
+            TaskSender::Bounded(ref tx) => TaskSender::Bounded(tx.clone()),
+            TaskSender::Unbounded(ref tx) => TaskSender::Unbounded(tx.clone()),
+        }
+    }
+}
+
 /// Scheduler provides interface to schedule task to underlying workers.
 pub struct Scheduler<T> {
     name: Arc<String>,
     counter: Arc<AtomicUsize>,
-    sender: Sender<Option<T>>,
+    sender: TaskSender<T>,
 }
 
 impl<T: Display> Scheduler<T> {
-    fn new<S: Into<String>>(
-        name: S,
-        counter: AtomicUsize,
-        sender: Sender<Option<T>>,
-    ) -> Scheduler<T> {
+    fn new<S>(name: S, counter: AtomicUsize, sender: TaskSender<T>) -> Scheduler<T>
+    where
+        S: Into<String>,
+    {
         Scheduler {
             name: Arc::new(name.into()),
             counter: Arc::new(counter),
@@ -108,12 +142,21 @@ impl<T: Display> Scheduler<T> {
 
     /// Schedule a task to run.
     ///
-    /// If the worker is stopped, an error will return.
-    pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
+    /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.
+    pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         debug!("scheduling task {}", task);
-        if let Err(SendError(Some(t))) = self.sender.send(Some(task)) {
-            return Err(Stopped(t));
-        }
+        match self.sender {
+            TaskSender::Unbounded(ref tx) => if let Err(SendError(Some(t))) = tx.send(Some(task)) {
+                return Err(ScheduleError::Stopped(t));
+            },
+            TaskSender::Bounded(ref tx) => if let Err(e) = tx.try_send(Some(task)) {
+                match e {
+                    TrySendError::Disconnected(Some(t)) => return Err(ScheduleError::Stopped(t)),
+                    TrySendError::Full(Some(t)) => return Err(ScheduleError::Full(t)),
+                    _ => unreachable!(),
+                }
+            },
+        };
         self.counter.fetch_add(1, Ordering::SeqCst);
         WORKER_PENDING_TASK_VEC
             .with_label_values(&[&self.name])
@@ -127,7 +170,7 @@ impl<T: Display> Scheduler<T> {
     }
 }
 
-impl<T: Display> Clone for Scheduler<T> {
+impl<T> Clone for Scheduler<T> {
     fn clone(&self) -> Scheduler<T> {
         Scheduler {
             name: self.name.clone(),
@@ -143,13 +186,15 @@ impl<T: Display> Clone for Scheduler<T> {
 #[cfg(test)]
 pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
     let (tx, _) = mpsc::channel();
-    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
+    let sender = TaskSender::Unbounded(tx);
+    Scheduler::new("dummy scheduler", AtomicUsize::new(0), sender)
 }
 
 #[derive(Copy, Clone)]
 pub struct Builder<S: Into<String>> {
     name: S,
     batch_size: usize,
+    pending_capacity: usize,
 }
 
 impl<S: Into<String>> Builder<S> {
@@ -157,6 +202,7 @@ impl<S: Into<String>> Builder<S> {
         Builder {
             name: name,
             batch_size: 1,
+            pending_capacity: usize::MAX,
         }
     }
 
@@ -165,10 +211,25 @@ impl<S: Into<String>> Builder<S> {
         self
     }
 
+    /// Pending tasks won't exceed `pending_capacity`.
+    pub fn pending_capacity(mut self, pending_capacity: usize) -> Self {
+        self.pending_capacity = pending_capacity;
+        self
+    }
+
     pub fn create<T: Display>(self) -> Worker<T> {
-        let (tx, rx) = mpsc::channel::<Option<T>>();
+        let (scheduler, rx) = if self.pending_capacity == usize::MAX {
+            let (tx, rx) = mpsc::channel::<Option<T>>();
+            let sender = TaskSender::Unbounded(tx);
+            (Scheduler::new(self.name, AtomicUsize::new(0), sender), rx)
+        } else {
+            let (tx, rx) = mpsc::sync_channel::<Option<T>>(self.pending_capacity);
+            let sender = TaskSender::Bounded(tx);
+            (Scheduler::new(self.name, AtomicUsize::new(0), sender), rx)
+        };
+
         Worker {
-            scheduler: Scheduler::new(self.name, AtomicUsize::new(0), tx),
+            scheduler: scheduler,
             receiver: Mutex::new(Some(rx)),
             handle: None,
             batch_size: self.batch_size,
@@ -268,7 +329,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// Schedule a task to run.
     ///
     /// If the worker is stopped, an error will return.
-    pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
+    pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.scheduler.schedule(task)
     }
 
@@ -288,7 +349,11 @@ impl<T: Display + Send + 'static> Worker<T> {
         if self.handle.is_none() {
             return None;
         }
-        if let Err(e) = self.scheduler.sender.send(None) {
+        let send_result = match self.scheduler.sender {
+            TaskSender::Unbounded(ref tx) => tx.send(None),
+            TaskSender::Bounded(ref tx) => tx.send(None),
+        };
+        if let Err(e) = send_result {
             warn!("failed to stop worker thread: {:?}", e);
         }
         self.handle.take()
@@ -440,5 +505,26 @@ mod test {
             }
         }
         worker.stop().unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn test_pending_capacity() {
+        let mut worker = Builder::new("test-worker-busy")
+            .batch_size(4)
+            .pending_capacity(3)
+            .create();
+        let scheduler = worker.scheduler();
+
+        for i in 0..3 {
+            scheduler.schedule(i).unwrap();
+        }
+        assert_eq!(scheduler.schedule(3).unwrap_err(), ScheduleError::Full(3));
+
+        let (tx, rx) = mpsc::channel();
+        worker.start(BatchRunner { ch: tx }).unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+
+        worker.stop().unwrap().join().unwrap();
+        drop(rx);
     }
 }
