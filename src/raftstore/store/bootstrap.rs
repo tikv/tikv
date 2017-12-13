@@ -151,10 +151,11 @@ mod tests {
         let path = TempDir::new("var").unwrap();
         let raft_path = path.path().join("raft");
         let kv_engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap(),
+            rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT], None)
+                .unwrap(),
         );
         let raft_engine = Arc::new(
-            rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
+            rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
         );
         let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
 

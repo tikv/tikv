@@ -35,6 +35,7 @@ pub struct MvccReader {
     key_only: bool,
 
     fill_cache: bool,
+    lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
     isolation_level: IsolationLevel,
 }
@@ -44,6 +45,7 @@ impl MvccReader {
         snapshot: Box<Snapshot>,
         scan_mode: Option<ScanMode>,
         fill_cache: bool,
+        lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
         isolation_level: IsolationLevel,
     ) -> MvccReader {
@@ -57,6 +59,7 @@ impl MvccReader {
             isolation_level: isolation_level,
             key_only: false,
             fill_cache: fill_cache,
+            lower_bound: lower_bound,
             upper_bound: upper_bound,
         }
     }
@@ -74,7 +77,7 @@ impl MvccReader {
             return Ok(vec![]);
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, self.fill_cache);
+            let iter_opt = IterOption::new(None, None, self.fill_cache);
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
@@ -100,7 +103,7 @@ impl MvccReader {
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(None, true);
+            let iter_opt = IterOption::new(None, None, true);
             let iter = self.snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
@@ -150,7 +153,7 @@ impl MvccReader {
     ) -> Result<Option<(u64, Write)>> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
-                let iter_opt = IterOption::new(None, self.fill_cache);
+                let iter_opt = IterOption::new(None, None, self.fill_cache);
                 let iter = self.snapshot
                     .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
                 self.write_cursor = Some(iter);
@@ -258,7 +261,7 @@ impl MvccReader {
     fn create_data_cursor(&mut self) -> Result<()> {
         self.scan_mode = Some(ScanMode::Forward);
         if self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, self.fill_cache);
+            let iter_opt = IterOption::new(None, None, self.fill_cache);
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
             self.data_cursor = Some(iter);
         }
@@ -267,7 +270,11 @@ impl MvccReader {
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = IterOption::new(self.upper_bound.as_ref().cloned(), self.fill_cache);
+            let iter_opt = IterOption::new(
+                self.lower_bound.as_ref().cloned(),
+                self.upper_bound.as_ref().cloned(),
+                self.fill_cache,
+            );
             let iter = self.snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
             self.write_cursor = Some(iter);
@@ -277,7 +284,11 @@ impl MvccReader {
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(self.upper_bound.as_ref().cloned(), true);
+            let iter_opt = IterOption::new(
+                self.lower_bound.as_ref().cloned(),
+                self.upper_bound.as_ref().cloned(),
+                true,
+            );
             let iter = self.snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
@@ -437,7 +448,7 @@ impl MvccReader {
         mut start: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
-        let iter_opt = IterOption::new(None, self.fill_cache);
+        let iter_opt = IterOption::new(None, None, self.fill_cache);
         let scan_mode = self.get_scan_mode(false);
         let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
         let mut keys = vec![];
@@ -689,7 +700,7 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
-        let reader = MvccReader::new(Box::new(snap), None, false, None, IsolationLevel::SI);
+        let reader = MvccReader::new(Box::new(snap), None, false, None, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }

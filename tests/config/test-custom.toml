@@ -98,7 +98,8 @@ info-log-max-size = "1KB"
 info-log-roll-time = "12s"
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
-wal-bytes-per-sync = "1MB"
+bytes-per-sync = "1MB"
+wal-bytes-per-sync = "32KB"
 max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
@@ -108,6 +109,7 @@ backup-dir = "/var"
 [rocksdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -138,6 +140,7 @@ compaction-pri = 3
 [rocksdb.writecf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -168,6 +171,7 @@ compaction-pri = 3
 [rocksdb.lockcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -198,6 +202,7 @@ compaction-pri = 3
 [rocksdb.raftcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false
@@ -245,11 +250,13 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 allow-concurrent-memtable-write = true
-wal-bytes-per-sync = "1MB"
+bytes-per-sync = "1MB"
+wal-bytes-per-sync = "32KB"
 
 [raftdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
+disable-block-cache = false
 cache-index-and-filter-blocks = false
 pin-l0-filter-and-index-blocks = false
 use-bloom-filter = false

@@ -56,16 +56,6 @@ pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
         .ok_or_else(|| format!("cf {} not found.", cf))
 }
 
-pub fn open(path: &str, cfs: &[&str]) -> Result<DB, String> {
-    let mut opts = DBOptions::new();
-    opts.create_if_missing(false);
-    let mut cfs_opts = vec![];
-    for _ in 0..cfs.len() {
-        cfs_opts.push(ColumnFamilyOptions::new());
-    }
-    open_opt(opts, path, cfs.to_vec(), cfs_opts)
-}
-
 pub fn open_opt(
     opts: DBOptions,
     path: &str,
@@ -90,14 +80,20 @@ impl<'a> CFOptions<'a> {
     }
 }
 
-pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
+pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<DB, String> {
     let mut db_opts = DBOptions::new();
-    db_opts.enable_statistics();
-    let mut cfs_opts = Vec::with_capacity(cfs.len());
-    for cf in cfs {
-        cfs_opts.push(CFOptions::new(*cf, ColumnFamilyOptions::new()));
-    }
-    new_engine_opt(path, db_opts, cfs_opts)
+    db_opts.enable_statistics(true);
+    let cf_opts = match opts {
+        Some(opts_vec) => opts_vec,
+        None => {
+            let mut default_cfs_opts = Vec::with_capacity(cfs.len());
+            for cf in cfs {
+                default_cfs_opts.push(CFOptions::new(*cf, ColumnFamilyOptions::new()));
+            }
+            default_cfs_opts
+        }
+    };
+    new_engine_opt(path, db_opts, cf_opts)
 }
 
 fn check_and_open(

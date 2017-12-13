@@ -17,6 +17,7 @@
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
+#![feature(iterator_for_each)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
@@ -34,6 +35,8 @@
 extern crate log;
 #[macro_use]
 extern crate quick_error;
+#[macro_use]
+extern crate bitflags;
 #[cfg(test)]
 extern crate test;
 extern crate protobuf;
