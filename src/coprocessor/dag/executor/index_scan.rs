@@ -135,7 +135,8 @@ impl IndexScanExecutor {
     }
 
     fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
-        Scanner::new(&self.store, ScanOn::Index, self.desc, false, range).map_err(Error::from)
+        Scanner::new(&self.store, ScanOn::Index, self.desc, !self.unique, range)
+            .map_err(Error::from)
     }
 
     fn is_point(&self, range: &KeyRange) -> bool {
