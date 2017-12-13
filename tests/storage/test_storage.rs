@@ -869,7 +869,7 @@ fn test_storage_1gc() {
 
 #[test]
 fn test_conflict_commands_on_fault_engine() {
-    let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS).unwrap();
+    let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS, None).unwrap();
     let box_engine = engine.clone();
     let config = Default::default();
     let mut store = SyncStorage::prepare(box_engine, &config);
