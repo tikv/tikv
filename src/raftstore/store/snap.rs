@@ -228,6 +228,7 @@ use util::rocksdb;
 use util::time::duration_to_sec;
 use util::file::{delete_file_if_exist, file_exists, get_file_size};
 use util::rocksdb::get_fastest_supported_compression_type;
+
 pub const SNAPSHOT_VERSION: u64 = 2;
 const META_FILE_SUFFIX: &'static str = ".meta";
 const DIGEST_BUFFER_SIZE: usize = 10240;
@@ -606,24 +607,6 @@ impl Snap {
         Ok(())
     }
 
-    fn set_default_sst_seq_no(&self, options: &ApplyOptions) -> RaftStoreResult<()> {
-        for cf_file in &self.cf_files {
-            if cf_file.size == 0 {
-                continue;
-            }
-            if !plain_file_used(cf_file.cf) {
-                let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
-                set_external_sst_file_global_seq_no(
-                    &options.db,
-                    cf_handle,
-                    cf_file.path.to_str().unwrap(),
-                    ROCKSDB_DEFAULT_SEQ_NO,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
     fn switch_to_cf_file(&mut self, cf: &str) -> io::Result<()> {
         match self.cf_files.iter().position(|x| x.cf == cf) {
             Some(index) => {
@@ -959,27 +942,44 @@ impl Snapshot for Snap {
     }
 
     fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-        if self.validate().is_err() {
-            // if checksum failed, we do a lazy sst seq no modification
-            box_try!(self.set_default_sst_seq_no(&options));
-            box_try!(self.validate());
-        }
-
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty cf file.
                 continue;
             }
-
             check_abort(&options.abort)?;
+            let r = check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum);
             let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
             if plain_file_used(cf_file.cf) {
+                if r.is_err() {
+                    return Err(box_err!(r.err().unwrap()));
+                }
                 let mut file = box_try!(File::open(&cf_file.path));
                 apply_plain_cf_file(&mut file, &options, cf_handle)?;
             } else {
+                if r.is_err() {
+                    // Validate failed, it means rocksdb has changed the `sst seq no`,
+                    // and this sst file is already a part of rocksdb.
+                    // We first copy this sst file to its tmp path, then set default `sst seq no`,
+                    // finally try to ingest the modified sst file into rocksdb.
+                    box_try!(fs::copy(
+                        cf_file.path.as_path().to_str().unwrap(),
+                        cf_file.tmp_path.as_path().to_str().unwrap(),
+                    ));
+                    box_try!(set_external_sst_file_global_seq_no(
+                        &options.db,
+                        cf_handle,
+                        cf_file.tmp_path.as_path().to_str().unwrap(),
+                        ROCKSDB_DEFAULT_SEQ_NO,
+                    ));
+                }
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
-                let path = cf_file.path.as_path().to_str().unwrap();
+                let path = if r.is_ok() {
+                    cf_file.path.as_path().to_str().unwrap()
+                } else {
+                    cf_file.tmp_path.as_path().to_str().unwrap()
+                };
                 box_try!(
                     options
                         .db
