@@ -22,7 +22,7 @@ pub fn adjust_priority(t: AdjustPriType) {
             warn!(
                 "set thread priority to {} failed, error {:?}",
                 pri,
-                Error::last_os_err()
+                Error::last_os_error()
             );
         }
     }
