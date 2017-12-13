@@ -444,7 +444,7 @@ mod tests {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
         let engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap(),
+            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap(),
         );
 
         let mut r = Region::new();
@@ -493,7 +493,7 @@ mod tests {
     fn test_peekable() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
-        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap();
+        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         let handle = engine.cf_handle("cf").unwrap();
@@ -509,7 +509,7 @@ mod tests {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
         let engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap(),
+            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap(),
         );
         let handle = engine.cf_handle(cf).unwrap();
 
