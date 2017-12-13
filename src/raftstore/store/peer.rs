@@ -35,10 +35,10 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::Config;
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
-
-use util::worker::{FutureWorker, Scheduler};
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
-use util::{Either, MustConsumeVec};
+
+use util::MustConsumeVec;
+use util::worker::{FutureWorker, Scheduler};
 use util::time::monotonic_raw_now;
 use util::collections::{FlatMap, FlatMapValues as Values, HashSet};
 
@@ -46,7 +46,7 @@ use pd::{PdTask, INVALID_ID};
 
 use super::store::{DestroyPeerJob, Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::util;
+use super::util::{self, Lease};
 use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
@@ -228,12 +228,12 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
 
-    // `leader_lease_expired_time` contains either timestamps of
-    //   1. Either::Left<Timespec>
+    // `leader_lease` contains either state of
+    //   1. Safe Timespec
     //      A safe leader lease expired time, which marks the leader holds the lease for now.
     //      The lease is safe until the clock time goes over this timestamp.
     //      It would increase when raft log entries are applied in current term.
-    //   2. Either::Right<Timespec>
+    //   2. Unsafe Timespec
     //      An unsafe leader lease expired time, which marks the leader may still hold or lose
     //      its lease until the clock time goes over this timestamp.
     //      It would be set after the message MsgTimeoutNow is sent by current peer.
@@ -244,7 +244,7 @@ pub struct Peer {
     //      current peer lose its leader lease.
     //      Within this unsafe leader lease expire time, read requests could not be performed
     //      locally.
-    leader_lease_expired_time: Option<Either<Timespec, Timespec>>,
+    leader_lease: Lease,
 
     // If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
@@ -357,8 +357,8 @@ impl Peer {
             },
             raft_log_size_hint: 0,
             raft_entry_max_size: cfg.raft_entry_max_size.0,
+            leader_lease: Lease::new(),
             cfg: cfg,
-            leader_lease_expired_time: None,
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
         };
@@ -539,11 +539,10 @@ impl Peer {
                     // the old leader may be expired earlier than usual, since a new leader
                     // may be elected and the old leader doesn't step down due to
                     // network partition from the new leader.
-                    // For lease safety during leader transfer, mark `leader_lease_expired_time`
+                    // For lease safety during leader transfer, mark `leader_lease`
                     // to be unsafe until next_lease_expired_time from now
-                    self.leader_lease_expired_time = Some(Either::Right(
-                        self.next_lease_expired_time(monotonic_raw_now()),
-                    ));
+                    let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
+                    self.renew_leader_lease(next_expired_time, false);
 
                     metrics.timeout_now += 1;
                 }
@@ -666,7 +665,7 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
-                    self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
+                    self.renew_leader_lease(next_expired_time, true);
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
                         self.tag,
@@ -675,7 +674,7 @@ impl Peer {
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
-                    self.leader_lease_expired_time = None;
+                    self.expire_leader_lease();
                 }
                 _ => {}
             }
@@ -898,7 +897,7 @@ impl Peer {
             self.pending_reads.clear_uncommitted(term);
         }
 
-        if let Some(Either::Right(_)) = self.leader_lease_expired_time {
+        if self.leader_lease.has_unsafe_lease() {
             return;
         }
 
@@ -955,14 +954,29 @@ impl Peer {
         }
     }
 
+    // All updates about leader_lease must be done by this method.
+    // And only leader can call it.
+    fn renew_leader_lease(&mut self, expired_time: Timespec, safe: bool) {
+        assert!(
+            self.is_leader(),
+            "{} non-leader peer {} try to update leader lease",
+            self.tag,
+            self.peer.get_id()
+        );
+        if safe {
+            self.leader_lease.update_safe(expired_time);
+        } else {
+            self.leader_lease.update_unsafe(expired_time);
+        }
+    }
+
+    fn expire_leader_lease(&mut self) {
+        self.leader_lease.clear();
+    }
+
     fn update_lease_with(&mut self, propose_time: Timespec) {
         // Try to renew the leader lease as this command asks to.
-        if self.leader_lease_expired_time.is_some() {
-            let current_expired_time =
-                match self.leader_lease_expired_time.as_ref().unwrap().as_ref() {
-                    Either::Left(safe_expired_time) => *safe_expired_time,
-                    Either::Right(unsafe_expired_time) => *unsafe_expired_time,
-                };
+        if let Some(current_expired_time) = self.leader_lease.expired_time() {
             // This peer is leader and has recorded leader lease.
             // Calculate the renewed lease for this command. If the renewed lease lives longer
             // than the current leader lease, update the current leader lease to the renewed lease.
@@ -976,7 +990,7 @@ impl Peer {
                     current_expired_time,
                     next_expired_time
                 );
-                self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
+                self.renew_leader_lease(next_expired_time, true);
             }
         } else if self.is_leader() {
             // This peer is leader but its leader lease has expired.
@@ -988,7 +1002,7 @@ impl Peer {
                 self.tag,
                 next_expired_time
             );
-            self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
+            self.renew_leader_lease(next_expired_time, true);
         }
     }
 
@@ -1180,23 +1194,19 @@ impl Peer {
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // If the leader lease has expired, local read should not be performed.
-        if self.leader_lease_expired_time.is_none() {
-            return Ok(RequestPolicy::ReadIndex);
-        }
-
-        if let Some(Either::Left(safe_expired_time)) = self.leader_lease_expired_time {
-            if monotonic_raw_now() <= safe_expired_time {
+        // Local read should be performed, iff leader is in safe lease.
+        if self.leader_lease.has_safe_lease() {
+            if self.leader_lease.in_safe_lease() {
                 return Ok(RequestPolicy::ReadLocal);
+            } else {
+                debug!(
+                    "{} leader lease expired time {:?} is outdated",
+                    self.tag,
+                    self.leader_lease.expired_time().unwrap(),
+                );
+                // Reset leader lease expiring time.
+                self.expire_leader_lease();
             }
-
-            debug!(
-                "{} leader lease expired time {:?} is outdated",
-                self.tag,
-                safe_expired_time
-            );
-            // Reset leader lease expiring time.
-            self.leader_lease_expired_time = None;
         }
 
         // Perform a consistent read to Raft quorum and try to renew the leader lease.
@@ -1367,10 +1377,9 @@ impl Peer {
             renew_lease_time: renew_lease_time,
         });
 
-        match self.leader_lease_expired_time {
-            Some(Either::Right(_)) => {}
-            _ => return true,
-        };
+        if !self.leader_lease.has_unsafe_lease() {
+            return true;
+        }
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.

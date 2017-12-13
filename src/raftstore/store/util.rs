@@ -19,11 +19,14 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
+use time::Timespec;
+
 use storage::LARGE_CFS;
 use util::properties::SizeProperties;
-use util::rocksdb as rocksdb_util;
-use super::engine::{IterOption, Iterable};
+use util::{rocksdb as rocksdb_util, Either};
+use util::time::monotonic_raw_now;
 
+use super::engine::{IterOption, Iterable};
 use super::peer_storage;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -177,22 +180,118 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
     Ok(size)
 }
 
+/// Lease records an expired time, for examining the current moment is in lease or not.
+/// A lease may be safe or be unsafe.
+// TODO: add a remote Lease.
+pub struct Lease {
+    lease_expired_time: Option<Either<Timespec, Timespec>>,
+}
+
+impl Lease {
+    pub fn new() -> Lease {
+        Lease {
+            lease_expired_time: None,
+        }
+    }
+
+    pub fn update_safe(&mut self, lease_expired_time: Timespec) {
+        self.lease_expired_time = Some(Either::Left(lease_expired_time));
+    }
+
+    pub fn update_unsafe(&mut self, lease_expired_time: Timespec) {
+        self.lease_expired_time = Some(Either::Right(lease_expired_time));
+    }
+
+    pub fn has_safe_lease(&self) -> bool {
+        match self.lease_expired_time {
+            Some(Either::Left(_)) => true,
+            _ => false,
+        }
+    }
+
+    pub fn has_unsafe_lease(&self) -> bool {
+        match self.lease_expired_time {
+            Some(Either::Right(_)) => true,
+            _ => false,
+        }
+    }
+
+    pub fn expired_time(&self) -> Option<Timespec> {
+        match self.lease_expired_time {
+            Some(Either::Left(expired_time)) | Some(Either::Right(expired_time)) => {
+                Some(expired_time)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn in_safe_lease(&self) -> bool {
+        match self.lease_expired_time {
+            Some(Either::Left(safe_expired_time)) => monotonic_raw_now() <= safe_expired_time,
+            _ => false,
+        }
+    }
+
+    /// clean lease.
+    pub fn clear(&mut self) {
+        self.lease_expired_time = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::process;
+    use std::thread;
 
     use kvproto::metapb;
     use kvproto::raft_serverpb::RaftMessage;
     use kvproto::eraftpb::{ConfChangeType, Message, MessageType};
+    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
+    use tempdir::TempDir;
+    use time::Duration as TimeDuration;
 
-    use super::*;
     use raftstore::store::peer_storage;
     use util::properties::SizePropertiesCollectorFactory;
-
-    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+    use util::time::monotonic_raw_now;
     use storage::ALL_CFS;
-    use tempdir::TempDir;
+    use super::*;
+
+    #[test]
+    fn test_lease() {
+        let duration = TimeDuration::milliseconds(1500);
+
+        // Empty lease.
+        let mut lease = Lease::new();
+        assert!(!lease.in_safe_lease());
+
+        // Mark in safe.
+        lease.update_safe(monotonic_raw_now() + duration);
+        assert!(lease.in_safe_lease());
+        assert!(lease.expired_time().is_some());
+
+        // Renew a larger lease.
+        lease.update_unsafe(monotonic_raw_now() + duration);
+        assert!(!lease.in_safe_lease());
+        assert!(lease.expired_time().is_some());
+
+        // Mark in safe again.
+        lease.update_safe(monotonic_raw_now() + duration);
+        assert!(lease.in_safe_lease());
+
+        // After lease expired time.
+        thread::sleep(duration.to_std().unwrap());
+        assert!(!lease.in_safe_lease());
+
+        // Renew lease.
+        lease.update_safe(monotonic_raw_now() + duration);
+        assert!(lease.in_safe_lease());
+
+        // Clear lease.
+        lease.clear();
+        assert!(!lease.in_safe_lease());
+        assert!(lease.expired_time().is_none());
+    }
 
     // Tests the util function `check_key_in_region`.
     #[test]
