@@ -252,6 +252,7 @@ mod tests {
     }
 
     #[test]
+    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
     fn test_peer_resolve() {
         let mut cfg = Config::default();
         let storage_cfg = StorageConfig::default();
