@@ -340,10 +340,10 @@ mod tests {
         let raft_path = path.path().join(Path::new("raft"));
         (
             Arc::new(
-                rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap(),
+                rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
             ),
             Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
+                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             ),
         )
     }
