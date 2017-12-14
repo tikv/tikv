@@ -198,10 +198,11 @@ struct ApplyContext<'a> {
     wb_last_keys: u64,
     sync_log: bool,
     exec_ctx: Option<ExecContext>,
+    use_delete_range: bool,
 }
 
 impl<'a> ApplyContext<'a> {
-    fn new(host: &CoprocessorHost) -> ApplyContext {
+    fn new(host: &CoprocessorHost, use_delete_range: bool) -> ApplyContext {
         ApplyContext {
             host: host,
             wb: WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE),
@@ -210,6 +211,7 @@ impl<'a> ApplyContext<'a> {
             wb_last_keys: 0,
             sync_log: false,
             exec_ctx: None,
+            use_delete_range: use_delete_range,
         }
     }
 
@@ -228,6 +230,10 @@ impl<'a> ApplyContext<'a> {
 
     pub fn delta_keys(&self) -> u64 {
         self.wb.count() as u64 - self.wb_last_keys
+    }
+
+    pub fn use_delete_range(&self) -> bool {
+        self.use_delete_range
     }
 }
 
@@ -309,8 +315,6 @@ pub struct ApplyDelegate {
     term: u64,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
-
-    use_delete_range: bool,
 }
 
 impl ApplyDelegate {
@@ -322,12 +326,12 @@ impl ApplyDelegate {
         self.id
     }
 
-    fn from_peer(peer: &Peer, use_delete_range: bool) -> ApplyDelegate {
+    fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.kv_engine(), reg, use_delete_range)
+        ApplyDelegate::from_registration(peer.kv_engine(), reg)
     }
 
-    fn from_registration(db: Arc<DB>, reg: Registration, use_delete_range: bool) -> ApplyDelegate {
+    fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -339,7 +343,6 @@ impl ApplyDelegate {
             term: reg.term,
             pending_cmds: Default::default(),
             metrics: Default::default(),
-            use_delete_range: use_delete_range,
         }
     }
 
@@ -1032,7 +1035,9 @@ impl ApplyDelegate {
             let mut resp = match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::DeleteRange => self.handle_delete_range(req, &mut ranges),
+                CmdType::DeleteRange => {
+                    self.handle_delete_range(req, &mut ranges, ctx.use_delete_range())
+                }
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1146,7 +1151,12 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_delete_range(&mut self, req: &Request, ranges: &mut Vec<Range>) -> Result<Response> {
+    fn handle_delete_range(
+        &mut self,
+        req: &Request,
+        ranges: &mut Vec<Range>,
+        use_delete_range: bool,
+    ) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         if !e_key.is_empty() && s_key >= e_key {
@@ -1189,22 +1199,17 @@ impl ApplyDelegate {
             });
 
         // Delete all remaining keys.
-        util::delete_all_in_range_cf(
-            &self.engine,
-            cf,
-            &start_key,
-            &end_key,
-            self.use_delete_range,
-        ).unwrap_or_else(|e| {
-            panic!(
-                "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                self.tag,
-                escape(&start_key),
-                escape(&end_key),
-                cf,
-                e
-            );
-        });
+        util::delete_all_in_range_cf(&self.engine, cf, &start_key, &end_key, use_delete_range)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                    self.tag,
+                    escape(&start_key),
+                    escape(&end_key),
+                    cf,
+                    e
+                );
+            });
 
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
@@ -1494,7 +1499,7 @@ impl Runner {
         let t = SlowTimer::new();
 
         let mut applys_res = Vec::with_capacity(applys.len());
-        let mut apply_ctx = ApplyContext::new(self.host.as_ref());
+        let mut apply_ctx = ApplyContext::new(self.host.as_ref(), self.use_delete_range);
         let mut committed_count = 0;
         for apply in applys {
             if apply.entries.is_empty() {
@@ -1601,7 +1606,7 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(self.db.clone(), s, self.use_delete_range);
+        let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag,
