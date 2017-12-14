@@ -203,7 +203,7 @@ impl Interface {
             let prs = self.take_prs();
             self.set_prs(ProgressSet::new(ids.len(), prs.learners().len()));
             for id in ids {
-                if prs.learners().get(id).is_some() {
+                if prs.learners().contains_key(id) {
                     let progress = Progress {
                         is_learner: true,
                         ..Default::default()
@@ -589,7 +589,6 @@ fn test_progress_resume_by_heartbeat_resp() {
     let mut raft = new_test_raft(1, vec![1, 2], 5, 1, new_storage());
     raft.become_candidate();
     raft.become_leader();
-    raft.mut_prs().get_mut(2).unwrap().paused = true;
     raft.mut_prs().get_mut(2).unwrap().paused = true;
 
     raft.step(new_message(1, 1, MessageType::MsgBeat, 0))
@@ -1433,10 +1432,9 @@ fn test_commit() {
 
         let mut sm = new_test_raft(1, vec![1], 5, 1, store);
         for (j, &v) in matches.iter().enumerate() {
-            let pr = new_progress(ProgressState::default(), v, v + 1, 0, sm.max_inflight);
             let id = j as u64 + 1;
-            if sm.prs().get(id).is_none() {
-                sm.mut_prs().insert_voter(id, pr);
+            if !sm.prs().voters().contains_key(&id) {
+                sm.set_progress(id, v, v + 1, false);
             }
         }
         sm.maybe_commit();
@@ -3465,6 +3463,8 @@ pub fn new_test_learner_raft(
     Interface::new(Raft::new(&cfg, storage))
 }
 
+// TestLearnerElectionTimeout verfies that the leader should not start election
+// even when times out.
 #[test]
 fn test_learner_election_timeout() {
     let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
@@ -3507,16 +3507,14 @@ fn test_learner_promotion() {
     assert_eq!(network.peers[&1].state, StateRole::Leader);
     assert_eq!(network.peers[&2].state, StateRole::Follower);
 
-    let mut heart_beat = Message::new();
-    heart_beat.set_to(1);
-    heart_beat.set_from(1);
-    heart_beat.set_msg_type(MessageType::MsgBeat);
+    let mut heart_beat = new_message(1, 1, MessageType::MsgBeat, 0);
     network.send(vec![heart_beat.clone()]);
 
     // Promote n2 from learner to follower.
     network.peers.get_mut(&1).unwrap().add_node(2);
     network.peers.get_mut(&2).unwrap().add_node(2);
     assert_eq!(network.peers[&2].state, StateRole::Follower);
+    assert!(!network.peers[&2].is_learner);
 
     let timeout = network.peers[&2].get_election_timeout();
     network
@@ -3554,44 +3552,46 @@ fn test_learner_cannot_vote() {
 
 #[test]
 fn test_learner_log_replication() {
-    let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
-    n1.become_follower(1, INVALID_ID);
+    let n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
+    let n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, new_storage());
+    let mut network = Network::new(vec![Some(n1), Some(n2)]);
 
-    let mut n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, new_storage());
-    n2.become_follower(1, INVALID_ID);
+    network
+        .peers
+        .get_mut(&1)
+        .unwrap()
+        .become_follower(1, INVALID_ID);
+    network
+        .peers
+        .get_mut(&2)
+        .unwrap()
+        .become_follower(1, INVALID_ID);
 
-    let timeout = n1.get_election_timeout();
-    n1.set_randomized_election_timeout(timeout);
-    n2.set_randomized_election_timeout(timeout);
+    let timeout = network.peers[&1].get_election_timeout();
+    network
+        .peers
+        .get_mut(&1)
+        .unwrap()
+        .set_randomized_election_timeout(timeout);
 
     for _ in 0..timeout {
-        n1.tick();
+        network.peers.get_mut(&1).unwrap().tick();
     }
 
-    let mut heart_beat = Message::new();
-    heart_beat.set_to(1);
-    heart_beat.set_from(1);
-    heart_beat.set_msg_type(MessageType::MsgBeat);
-
-    let mut network = Network::new(vec![Some(n1), Some(n2)]);
+    let heart_beat = new_message(1, 1, MessageType::MsgBeat, 0);
     network.send(vec![heart_beat.clone()]);
+
     assert_eq!(network.peers[&1].state, StateRole::Leader);
     assert_eq!(network.peers[&2].state, StateRole::Follower);
     assert!(network.peers[&2].is_learner);
 
     let next_committed = network.peers[&1].raft_log.committed + 1;
 
-    let mut msg = Message::new();
-    msg.set_to(1);
-    msg.set_from(1);
-    msg.set_msg_type(MessageType::MsgPropose);
-    msg.mut_entries().push(Entry::new());
+    let msg = new_message(1, 1, MessageType::MsgPropose, 1);
     network.send(vec![msg]);
 
-    assert_eq!(
-        network.peers.get_mut(&2).unwrap().raft_log.committed,
-        next_committed
-    );
+    assert_eq!(network.peers[&1].raft_log.committed, next_committed);
+    assert_eq!(network.peers[&2].raft_log.committed, next_committed);
 
     let matched = network
         .peers
@@ -3606,11 +3606,7 @@ fn test_learner_log_replication() {
 
 #[test]
 fn test_restore_with_learner() {
-    let mut s = Snapshot::new();
-    s.mut_metadata().set_index(11);
-    s.mut_metadata().set_term(11);
-    s.mut_metadata().mut_conf_state().mut_nodes().push(1);
-    s.mut_metadata().mut_conf_state().mut_nodes().push(2);
+    let mut s = new_snapshot(11, 11, vec![1, 2]);
     s.mut_metadata().mut_conf_state().mut_learners().push(3);
 
     let mut sm = new_test_learner_raft(3, vec![1, 2], vec![3], 10, 1, new_storage());

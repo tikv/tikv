@@ -26,7 +26,7 @@
 // limitations under the License.
 
 use std::cmp;
-use super::{FlatMap, FlatMapEntry};
+use super::FlatMap;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {
@@ -122,14 +122,12 @@ impl ProgressSet {
     }
 
     pub fn promote_learner(&mut self, id: u64) {
-        match self.learners.entry(id) {
-            FlatMapEntry::Occupied(ent) => {
-                let mut pr = ent.remove();
-                pr.is_learner = false;
-                self.voters.insert(id, pr);
-            }
-            _ => panic!("promote not exists learner: {}", id),
+        if let Some(mut pr) = self.learners.remove(&id) {
+            pr.is_learner = false;
+            self.voters.insert(id, pr);
+            return;
         }
+        panic!("promote not exists learner: {}", id);
     }
 }
 
