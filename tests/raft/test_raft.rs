@@ -3483,6 +3483,8 @@ fn test_learner_election_timeout() {
     assert_eq!(n2.state, StateRole::Follower);
 }
 
+// TestLearnerPromotion verifies that the leaner should not election until
+// it is promoted to a normal peer.
 #[test]
 fn test_learner_promotion() {
     let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
@@ -3533,16 +3535,14 @@ fn test_learner_promotion() {
     assert_eq!(network.peers[&2].state, StateRole::Leader);
 }
 
+// TestLearnerCannotVote checks that a learner can't vote even it receives a valid Vote request.
 #[test]
 fn test_learner_cannot_vote() {
     let mut n2 = new_test_learner_raft(2, vec![1], vec![2], 10, 1, new_storage());
     n2.become_follower(1, INVALID_ID);
 
-    let mut msg_vote = Message::new();
-    msg_vote.set_from(1);
-    msg_vote.set_to(2);
+    let mut msg_vote = new_message(1, 2, MessageType::MsgRequestVote, 0);
     msg_vote.set_term(2);
-    msg_vote.set_msg_type(MessageType::MsgRequestVote);
     msg_vote.set_log_term(11);
     msg_vote.set_index(11);
     n2.step(msg_vote).unwrap();
@@ -3550,6 +3550,7 @@ fn test_learner_cannot_vote() {
     assert_eq!(n2.msgs.len(), 0);
 }
 
+// TestLearnerLogReplication tests that a learner can receive entries from the leader.
 #[test]
 fn test_learner_log_replication() {
     let n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
@@ -3604,6 +3605,7 @@ fn test_learner_log_replication() {
     assert_eq!(matched, network.peers[&2].raft_log.committed);
 }
 
+// TestRestoreWithLearner restores a snapshot which contains learners.
 #[test]
 fn test_restore_with_learner() {
     let mut s = new_snapshot(11, 11, vec![1, 2]);
@@ -3629,13 +3631,11 @@ fn test_restore_with_learner() {
     assert!(!sm.restore(s));
 }
 
+// TestRestoreInvalidLearner verfies that a normal peer can't become learner again
+// when restores snapshot.
 #[test]
 fn test_restore_invalid_learner() {
-    let mut s = Snapshot::new();
-    s.mut_metadata().set_index(11);
-    s.mut_metadata().set_term(11);
-    s.mut_metadata().mut_conf_state().mut_nodes().push(1);
-    s.mut_metadata().mut_conf_state().mut_nodes().push(2);
+    let mut s = new_snapshot(11, 11, vec![1, 2]);
     s.mut_metadata().mut_conf_state().mut_learners().push(3);
 
     let mut sm = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
@@ -3643,27 +3643,21 @@ fn test_restore_invalid_learner() {
     assert!(!sm.restore(s));
 }
 
+// TestRestoreLearnerPromotion checks that a learner can become to a follower after
+// restoring snapshot.
 #[test]
 fn test_restore_learner_promotion() {
-    let mut s = Snapshot::new();
-    s.mut_metadata().set_index(11);
-    s.mut_metadata().set_term(11);
-    s.mut_metadata().mut_conf_state().mut_nodes().push(1);
-    s.mut_metadata().mut_conf_state().mut_nodes().push(2);
-    s.mut_metadata().mut_conf_state().mut_nodes().push(3);
-
+    let s = new_snapshot(11, 11, vec![1, 2, 3]);
     let mut sm = new_test_learner_raft(3, vec![1, 2], vec![3], 10, 1, new_storage());
     assert!(sm.is_learner);
     assert!(sm.restore(s));
     assert!(!sm.is_learner);
 }
 
+// TestLearnerReceiveSnapshot tests that a learner can receive a snpahost from leader.
 #[test]
 fn test_learner_receive_snapshot() {
-    let mut s = Snapshot::new();
-    s.mut_metadata().set_index(11);
-    s.mut_metadata().set_term(11);
-    s.mut_metadata().mut_conf_state().mut_nodes().push(1);
+    let mut s = new_snapshot(11, 11, vec![1]);
     s.mut_metadata().mut_conf_state().mut_learners().push(2);
 
     let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());
@@ -3698,6 +3692,7 @@ fn test_learner_receive_snapshot() {
     assert_eq!(n1_committed, n2_committed);
 }
 
+// TestAddLearner tests that addLearner could update pendingConf and nodes correctly.
 #[test]
 fn test_add_learner() {
     let mut n1 = new_test_raft(1, vec![1], 10, 1, new_storage());
@@ -3709,6 +3704,8 @@ fn test_add_learner() {
     assert!(n1.prs().learners()[&2].is_learner);
 }
 
+// TestRemoveLearner tests that removeNode could update pendingConf, nodes and
+// and removed list correctly.
 #[test]
 fn test_remove_learner() {
     let mut n1 = new_test_learner_raft(1, vec![1], vec![2], 10, 1, new_storage());

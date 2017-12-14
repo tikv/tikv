@@ -236,15 +236,6 @@ pub struct Raft<T: Storage> {
 
     /// tag is only used for logging
     tag: String,
-
-    /// `initialized` flag indicates the `Raft` is initialized or not.
-    /// If it's created by `ConfChange`, we don't know the peer is `voter`
-    /// or `learner`, so we need the flag to enforce the peer can accept
-    /// snapshots.
-    ///
-    /// The flag will be true if all of `Config.peers` and `Config.learners`
-    /// and `peers/learners` from `PeerStorage` are empty.
-    initialized: bool,
 }
 
 fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
@@ -327,7 +318,6 @@ impl<T: Storage> Raft<T> {
             randomized_election_timeout: 0,
             skip_bcast_commit: c.skip_bcast_commit,
             tag: c.tag.to_owned(),
-            initialized: false,
         };
         for p in peers {
             let pr = new_progress(1, r.max_inflight);
@@ -340,10 +330,6 @@ impl<T: Storage> Raft<T> {
             if *p == r.id {
                 r.is_learner = true;
             }
-        }
-
-        if !r.prs().voters().is_empty() || !r.prs().learners().is_empty() {
-            r.initialized = true;
         }
 
         if rs.hard_state != HardState::new() {
@@ -1766,7 +1752,10 @@ impl<T: Storage> Raft<T> {
             return Some(false);
         }
 
-        if self.initialized && !self.is_learner {
+        // Both of learners and voters are empty means the peer is created by ConfChange.
+        if (!self.prs().voters().is_empty() || !self.prs().learners().is_empty()) &&
+            !self.is_learner
+        {
             for &id in meta.get_conf_state().get_learners() {
                 if id == self.id {
                     error!(
