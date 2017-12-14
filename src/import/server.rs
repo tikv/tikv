@@ -34,9 +34,8 @@ impl Server {
         let cfg = &tikv.server;
         let addr = SocketAddr::from_str(&cfg.addr).unwrap();
 
-        let dir = &tikv.import.import_dir;
-        let importer = Arc::new(KVImporter::new(dir, &tikv.rocksdb).unwrap());
-        let import_service = ImportKVService::new(&tikv.import, client, importer);
+        let importer = KVImporter::new(&tikv.import, &tikv.rocksdb).unwrap();
+        let import_service = ImportKVService::new(&tikv.import, client, Arc::new(importer));
 
         let env = Arc::new(
             EnvBuilder::new()

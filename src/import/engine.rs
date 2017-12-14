@@ -18,7 +18,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use uuid::Uuid;
-use tempdir::TempDir;
 
 use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
               ReadOptions, SequentialFile, SstFileWriter, Writable, WriteBatch as RawBatch, DB};
@@ -34,25 +33,23 @@ use util::rocksdb::{new_engine_opt, CFOptions};
 use super::{Error, Result};
 
 pub struct Engine {
-    db: Arc<DB>,
-    env: Arc<Env>,
     cfg: DbConfig,
     uuid: Uuid,
-    _temp_dir: TempDir, // Cleanup when engine is dropped.
+    db: Arc<DB>,
+    env: Arc<Env>,
 }
 
 impl Engine {
-    pub fn new(cfg: DbConfig, uuid: Uuid, temp_dir: TempDir) -> Result<Engine> {
+    pub fn new<P: AsRef<Path>>(cfg: DbConfig, uuid: Uuid, path: P) -> Result<Engine> {
         let db = {
             let (db_opts, cfs_opts) = tune_dbconfig_for_bulk_load(&cfg);
-            new_engine_opt(temp_dir.path().to_str().unwrap(), db_opts, cfs_opts)?
+            new_engine_opt(path.as_ref().to_str().unwrap(), db_opts, cfs_opts)?
         };
         Ok(Engine {
-            db: Arc::new(db),
-            env: Arc::new(Env::new_mem()),
             cfg: cfg,
             uuid: uuid,
-            _temp_dir: temp_dir,
+            db: Arc::new(db),
+            env: Arc::new(Env::new_mem()),
         })
     }
 

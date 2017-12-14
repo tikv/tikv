@@ -28,7 +28,7 @@ use util::time::duration_to_sec;
 
 use super::service::*;
 use super::metrics::*;
-use super::{Client, Config, Error, ImportJob, KVImporter};
+use super::{Client, Config, Error, KVImporter};
 
 #[derive(Clone)]
 pub struct ImportKVService {
@@ -76,7 +76,7 @@ impl ImportKv for ImportKVService {
                     if chunk.has_head() {
                         let head = chunk.get_head();
                         let uuid = Uuid::from_bytes(head.get_uuid())?;
-                        import1.open(token, uuid)?;
+                        import1.attach(token, uuid)?;
                     }
                     if chunk.has_batch() {
                         import1.write(token, chunk.take_batch())?;
@@ -84,7 +84,7 @@ impl ImportKv for ImportKVService {
                     Ok(())
                 })
                 .then(move |res| match res {
-                    Ok(_) => import2.close(token),
+                    Ok(_) => import2.detach(token),
                     Err(e) => {
                         if let Some(engine) = import2.remove(token) {
                             error!("remove {}: {:?}", engine, e);
@@ -101,7 +101,23 @@ impl ImportKv for ImportKVService {
         let label = "flush";
         let timer = Instant::now();
 
-        let cfg = self.cfg.clone();
+        let import = self.importer.clone();
+
+        ctx.spawn(
+            self.pool
+                .spawn_fn(move || {
+                    let uuid = Uuid::from_bytes(req.get_uuid())?;
+                    import.flush(uuid)
+                })
+                .map(|_| FlushResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn import(&self, ctx: RpcContext, req: ImportRequest, sink: UnarySink<ImportResponse>) {
+        let label = "import";
+        let timer = Instant::now();
+
         let client = self.client.clone();
         let import = self.importer.clone();
 
@@ -109,11 +125,26 @@ impl ImportKv for ImportKVService {
             self.pool
                 .spawn_fn(move || {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
-                    let engine = import.finish(uuid)?;
-                    let job = ImportJob::new(cfg, engine, client)?;
-                    job.run()
+                    import.import(uuid, client)
                 })
-                .map(|_| FlushResponse::new())
+                .map(|_| ImportResponse::new())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn cleanup(&self, ctx: RpcContext, req: CleanupRequest, sink: UnarySink<CleanupResponse>) {
+        let label = "cleanup";
+        let timer = Instant::now();
+
+        let import = self.importer.clone();
+
+        ctx.spawn(
+            self.pool
+                .spawn_fn(move || {
+                    let uuid = Uuid::from_bytes(req.get_uuid())?;
+                    import.cleanup(uuid)
+                })
+                .map(|_| CleanupResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }

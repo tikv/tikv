@@ -28,18 +28,24 @@ use super::{Error, Result};
 
 pub type Token = usize;
 
-pub struct SSTImporter {
+struct Inner {
     dir: ImportDir,
+    files: HashMap<Token, ImportFile>,
+}
+
+pub struct SSTImporter {
     token: AtomicUsize,
-    files: Mutex<HashMap<Token, ImportFile>>,
+    inner: Mutex<Inner>,
 }
 
 impl SSTImporter {
     pub fn new<P: AsRef<Path>>(root: P) -> Result<SSTImporter> {
         Ok(SSTImporter {
-            dir: ImportDir::new(root)?,
             token: AtomicUsize::new(1),
-            files: Mutex::new(HashMap::new()),
+            inner: Mutex::new(Inner {
+                dir: ImportDir::new(root)?,
+                files: HashMap::new(),
+            }),
         })
     }
 
@@ -47,11 +53,22 @@ impl SSTImporter {
         self.token.fetch_add(1, Ordering::SeqCst)
     }
 
+    fn insert(&self, token: Token, file: ImportFile) {
+        let mut inner = self.inner.lock().unwrap();
+        assert!(inner.files.insert(token, file).is_none());
+    }
+
+    pub fn remove(&self, token: Token) -> Option<ImportFile> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.files.remove(&token)
+    }
+
     pub fn create(&self, token: Token, meta: &SSTMeta) -> Result<()> {
-        match self.dir.create(meta) {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.dir.create(meta) {
             Ok(f) => {
                 info!("create {}", f);
-                self.insert(token, f);
+                assert!(inner.files.insert(token, f).is_none());
                 Ok(())
             }
             Err(e) => {
@@ -93,23 +110,14 @@ impl SSTImporter {
         }
     }
 
-    fn insert(&self, token: Token, file: ImportFile) {
-        let mut files = self.files.lock().unwrap();
-        assert!(files.insert(token, file).is_none());
-    }
-
-    pub fn remove(&self, token: Token) -> Option<ImportFile> {
-        let mut files = self.files.lock().unwrap();
-        files.remove(&token)
-    }
-
     pub fn locate(&self, meta: &SSTMeta) -> Result<PathBuf> {
-        self.dir.locate(meta)
+        let inner = self.inner.lock().unwrap();
+        inner.dir.locate(meta)
     }
 }
 
 pub struct ImportDir {
-    root: Mutex<PathBuf>,
+    root: PathBuf,
 }
 
 impl ImportDir {
@@ -122,16 +130,13 @@ impl ImportDir {
             fs::remove_dir_all(&temp_dir)?;
         }
         fs::create_dir_all(&temp_dir)?;
-        Ok(ImportDir {
-            root: Mutex::new(root_dir),
-        })
+        Ok(ImportDir { root: root_dir })
     }
 
     pub fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
-        let root = self.root.lock().unwrap();
         let file_name = sst_meta_to_path(meta)?;
-        let save_path = root.join(&file_name);
-        let temp_path = root.join(Self::TEMP_DIR).join(&file_name);
+        let save_path = self.root.join(&file_name);
+        let temp_path = self.root.join(Self::TEMP_DIR).join(&file_name);
         if save_path.exists() {
             return Err(Error::FileExists(save_path));
         }
@@ -142,9 +147,8 @@ impl ImportDir {
     }
 
     pub fn locate(&self, meta: &SSTMeta) -> Result<PathBuf> {
-        let root = self.root.lock().unwrap();
         let file_name = sst_meta_to_path(meta)?;
-        let save_path = root.join(&file_name);
+        let save_path = self.root.join(&file_name);
         if !save_path.exists() {
             return Err(Error::FileNotExists(save_path));
         }
@@ -154,53 +158,53 @@ impl ImportDir {
 
 pub struct ImportFile {
     meta: SSTMeta,
+    file: Option<File>,
+    digest: crc32::Digest,
     save_path: PathBuf,
     temp_path: PathBuf,
-    temp_file: Option<File>,
-    temp_digest: crc32::Digest,
 }
 
 impl ImportFile {
     fn create(meta: SSTMeta, save_path: PathBuf, temp_path: PathBuf) -> Result<ImportFile> {
-        let temp_file = File::create(&temp_path)?;
+        let file = File::create(&temp_path)?;
         Ok(ImportFile {
             meta: meta,
+            file: Some(file),
+            digest: crc32::Digest::new(crc32::IEEE),
             save_path: save_path,
             temp_path: temp_path,
-            temp_file: Some(temp_file),
-            temp_digest: crc32::Digest::new(crc32::IEEE),
         })
     }
 
     fn append(&mut self, data: &[u8]) -> Result<()> {
-        self.temp_file.as_mut().unwrap().write_all(data)?;
-        self.temp_digest.write(data);
+        self.file.as_mut().unwrap().write_all(data)?;
+        self.digest.write(data);
         Ok(())
     }
 
     fn finish(&mut self) -> Result<()> {
         self.validate()?;
-        self.temp_file.take();
+        self.file.take();
         assert!(self.temp_path.exists());
         assert!(!self.save_path.exists());
-        fs::rename(&self.temp_path, &self.save_path).map_err(Error::from)
+        fs::rename(&self.temp_path, &self.save_path)?;
+        Ok(())
     }
 
     fn remove(&mut self) -> Result<()> {
-        self.temp_file.take();
+        self.file.take();
         if self.temp_path.exists() {
-            fs::remove_file(&self.temp_path).map_err(Error::from)
-        } else {
-            Ok(())
+            fs::remove_file(&self.temp_path)?;
         }
+        Ok(())
     }
 
     fn validate(&self) -> Result<()> {
-        let f = self.temp_file.as_ref().unwrap();
-        if f.metadata()?.len() != self.meta.get_length() {
+        if self.digest.sum32() != self.meta.get_crc32() {
             return Err(Error::FileCorrupted(self.temp_path.clone()));
         }
-        if self.temp_digest.sum32() != self.meta.get_crc32() {
+        let f = self.file.as_ref().unwrap();
+        if f.metadata()?.len() != self.meta.get_length() {
             return Err(Error::FileCorrupted(self.temp_path.clone()));
         }
         Ok(())

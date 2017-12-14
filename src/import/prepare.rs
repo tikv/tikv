@@ -66,7 +66,7 @@ impl PrepareJob {
         }
 
         info!(
-            "{} with {} ranges takes {:?}",
+            "{} {} ranges takes {:?}",
             self.tag,
             ranges.len(),
             start.elapsed(),
