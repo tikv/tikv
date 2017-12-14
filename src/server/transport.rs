@@ -18,7 +18,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 
 use util::transport::SendCh;
 use util::HandyRwLock;
-use util::worker::{Scheduler, Stopped};
+use util::worker::Scheduler;
 use util::collections::HashSet;
 use raft::SnapshotStatus;
 use raftstore::store::{BatchCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
@@ -257,14 +257,18 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         } else {
             rep.report(SnapshotStatus::Finish);
         };
-        if let Err(Stopped(SnapTask::SendTo { cb, .. })) =
-            self.snap_scheduler.schedule(SnapTask::SendTo {
-                addr: addr.to_owned(),
-                msg: msg,
-                cb: cb,
-            }) {
-            error!("channel is closed, failed to schedule snapshot to {}", addr);
-            cb(Err(box_err!("failed to schedule snapshot")));
+        if let Err(e) = self.snap_scheduler.schedule(SnapTask::SendTo {
+            addr: addr.to_owned(),
+            msg: msg,
+            cb: cb,
+        }) {
+            if let SnapTask::SendTo { cb, .. } = e.into_inner() {
+                error!(
+                    "channel is unavaliable, failed to schedule snapshot to {}",
+                    addr
+                );
+                cb(Err(box_err!("failed to schedule snapshot")));
+            }
         }
     }
 
