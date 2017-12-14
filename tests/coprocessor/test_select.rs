@@ -1623,6 +1623,7 @@ fn test_aggr_bit_ops() {
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.data, &*expected_encoded);
     }
+
     // for dag
     let req = DAGSelect::from(&product.table)
         .bit_and(product.count)
