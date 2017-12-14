@@ -978,7 +978,7 @@ dependencies = [
  "sys-info 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
- "tipb 0.0.1 (git+https://github.com/spongedu/tipb.git)",
+ "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
  "tokio-core 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-timer 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
