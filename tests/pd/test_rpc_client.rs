@@ -80,6 +80,14 @@ fn test_rpc_client() {
     let tmp_store = client.get_store(store_id).unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
+    let region_key = region.get_start_key();
+    let tmp_region = client.get_region(region_key).unwrap();
+    assert_eq!(tmp_region.get_id(), region.get_id());
+
+    let region_info = client.get_region_info(region_key).unwrap();
+    assert_eq!(region_info.region, region);
+    assert_eq!(region_info.leader, None);
+
     let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
@@ -98,15 +106,17 @@ fn test_rpc_client() {
     let (tx, rx) = mpsc::channel();
     let f = client.handle_region_heartbeat_response(1, move |resp| { let _ = tx.send(resp); });
     poller.spawn(f).forget();
-    // Only check if it works.
     poller
-        .spawn(client.region_heartbeat(
-            metapb::Region::new(),
-            metapb::Peer::new(),
-            RegionStat::default(),
-        ))
+        .spawn(
+            client.region_heartbeat(region.clone(), peer.clone(), RegionStat::default()),
+        )
         .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    let region_info = client.get_region_info(region_key).unwrap();
+    assert_eq!(region_info.region, region);
+    assert_eq!(region_info.leader.unwrap(), peer);
+
     client
         .store_heartbeat(pdpb::StoreStats::new())
         .wait()
@@ -238,8 +248,11 @@ fn test_restart_leader() {
         .bootstrap_cluster(store.clone(), region.clone())
         .unwrap();
 
-    let region = client.get_region_by_id(1);
-    region.wait().unwrap();
+    let region = client
+        .get_region_by_id(region.get_id())
+        .wait()
+        .unwrap()
+        .unwrap();
 
     // Get the random binded addrs.
     let eps = server.bind_addrs();
@@ -253,7 +266,7 @@ fn test_restart_leader() {
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
 
-    let region = client.get_region_by_id(1);
+    let region = client.get_region_by_id(region.get_id());
     region.wait().unwrap();
 }
 
@@ -295,8 +308,8 @@ fn test_secure_restart_leader() {
         .bootstrap_cluster(store.clone(), region.clone())
         .unwrap();
 
-    let region = client.get_region_by_id(1);
-    region.wait().unwrap();
+    let region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
+    assert_eq!(region.get_id(), region_id);
 
     // Get the random binded addrs.
     let eps = server.bind_addrs().into_iter().collect();
@@ -309,8 +322,8 @@ fn test_secure_restart_leader() {
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
 
-    let region = client.get_region_by_id(1);
-    region.wait().unwrap();
+    let region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
+    assert_eq!(region.get_id(), region_id);
 }
 
 #[test]
