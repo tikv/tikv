@@ -236,7 +236,7 @@ impl SubImportJob {
         ))
     }
 
-    fn run_import_stream(&self, tx: mpsc::SyncSender<SSTInfo>) -> Result<()> {
+    fn run_import_stream(&self, tx: mpsc::SyncSender<SSTFile>) -> Result<()> {
         let mut stream = self.new_import_stream()?;
         while let Some(sst) = stream.next()? {
             tx.send(sst).unwrap();
@@ -244,7 +244,7 @@ impl SubImportJob {
         Ok(())
     }
 
-    fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<SSTInfo>>>) -> JoinHandle<bool> {
+    fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<SSTFile>>>) -> JoinHandle<bool> {
         let client = self.client.clone();
         let engine = self.engine.clone();
         let cf_name = self.cf_name.clone();
@@ -256,19 +256,9 @@ impl SubImportJob {
             .spawn(move || {
                 // Done if no error occurs.
                 let mut done = true;
-
-                while let Ok(info) = rx.lock().unwrap().recv() {
+                while let Ok(sst) = rx.lock().unwrap().recv() {
                     let id = job_counter.fetch_add(1, Ordering::SeqCst);
                     let tag = format!("[ImportJob {}:{}:{}]", engine.uuid(), cf_name, id);
-
-                    let sst = match info.into_file(engine.clone(), cf_name.clone()) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            done = false;
-                            continue;
-                        }
-                    };
-
                     let mut job = ImportSSTJob::new(tag, sst, client.clone());
                     match job.run() {
                         Ok(v) => finished_ranges.lock().unwrap().push(v),
@@ -278,13 +268,12 @@ impl SubImportJob {
                         }
                     }
                 }
-
                 done
             })
             .unwrap()
     }
 
-    fn run_import_threads(&self, rx: mpsc::Receiver<SSTInfo>) -> Vec<JoinHandle<bool>> {
+    fn run_import_threads(&self, rx: mpsc::Receiver<SSTFile>) -> Vec<JoinHandle<bool>> {
         let mut handles = Vec::new();
         let rx = Arc::new(Mutex::new(rx));
         for _ in 0..self.cfg.max_import_sst_jobs {

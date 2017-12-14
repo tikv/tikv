@@ -157,8 +157,6 @@ fn tune_dbconfig_for_bulk_load(cfg: &DbConfig) -> (DBOptions, Vec<CFOptions>) {
     opts.set_use_direct_io_for_flush_and_compaction(true);
     // NOTE: RocksDB preserves `max_background_jobs/4` for flush.
     opts.set_max_background_jobs(cfg.max_background_jobs);
-    // Just guess a reasonable value according to the number of write buffers.
-    opts.set_delayed_write_rate(16 * MB * cfg.defaultcf.max_write_buffer_number as u64);
 
     // CF_WRITE and CF_DEFAULT use the same options.
     let mut block_base_opts = BlockBasedOptions::new();
