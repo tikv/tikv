@@ -154,7 +154,8 @@ fn check_and_open(
             }
         }
     }
-    let mut db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cfs_opts_v).collect()).unwrap();
+    let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
+    let mut db = DB::open_cf(db_opt, path, cfds).unwrap();
 
     // Drop discarded column families.
     //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {

@@ -1482,7 +1482,7 @@ impl Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
-            delegates.insert(region_id, ApplyDelegate::from_peer(p, use_delete_range));
+            delegates.insert(region_id, ApplyDelegate::from_peer(p));
         }
         Runner {
             db: store.kv_engine(),
@@ -1982,7 +1982,7 @@ mod tests {
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg, true);
+        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
         let (tx, rx) = mpsc::channel();
 
         let put_entry = EntryBuilder::new(1, 1)
@@ -1996,7 +1996,7 @@ mod tests {
         let obs = ApplyObserver::default();
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
-        let mut apply_ctx = ApplyContext::new(&host);
+        let mut apply_ctx = ApplyContext::new(&host, true /* use delete range */);
         let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2023,7 +2023,7 @@ mod tests {
             .put_cf(CF_LOCK, b"k1", b"v1")
             .epoch(1, 3)
             .build();
-        let mut apply_ctx = ApplyContext::new(&host);
+        let mut apply_ctx = ApplyContext::new(&host, true /* use delete range */);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2046,7 +2046,7 @@ mod tests {
             .epoch(1, 1)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host);
+        let mut apply_ctx = ApplyContext::new(&host, true /* use delete range */);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2063,7 +2063,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host);
+        let mut apply_ctx = ApplyContext::new(&host, true /* use delete range */);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2089,7 +2089,7 @@ mod tests {
         let lock_written_bytes = delegate.metrics.lock_cf_written_bytes;
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
-        let mut apply_ctx = ApplyContext::new(&host);
+        let mut apply_ctx = ApplyContext::new(&host, true /* use delete range */);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2113,7 +2113,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host);
+        let mut apply_ctx = ApplyContext::new(&host, true /* use delete range */);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2127,7 +2127,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host);
+        let mut apply_ctx = ApplyContext::new(&host, true /* use delete range */);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2144,7 +2144,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new(&host);
+        let mut apply_ctx = ApplyContext::new(&host, true /* use delete range */);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
@@ -2165,7 +2165,7 @@ mod tests {
                 .build();
             entries.push(put_entry);
         }
-        let mut apply_ctx = ApplyContext::new(&host);
+        let mut apply_ctx = ApplyContext::new(&host, true /* use delete range */);
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
         db.write(apply_ctx.wb).unwrap();
         for cbs in apply_ctx.cbs.drain(..) {
