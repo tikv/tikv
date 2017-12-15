@@ -51,6 +51,7 @@ mod storage;
 mod util;
 mod pd;
 mod config;
+mod stability;
 
 use std::env;
 
