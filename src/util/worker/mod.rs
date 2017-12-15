@@ -22,10 +22,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SendError, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, SendError, Sender, TryRecvError, RecvTimeoutError};
 use std::error::Error;
+use std::time::Duration;
 
 use util::time::SlowTimer;
+use util::timer::{Timer, TimeoutTask, EmptyTask};
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
@@ -184,16 +186,19 @@ pub struct Worker<T: Display> {
     batch_size: usize,
 }
 
-fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
+fn poll<R, T, U, F>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize, mut timer: Option<Timer<U>>, mut f: F)
 where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
+    F: FnMut(&mut TimeoutTask<U>) + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut batch = Vec::with_capacity(batch_size);
     let mut keep_going = true;
+    let mut timeout_tasks = Vec::new();
     while keep_going {
-        keep_going = fill_task_batch(&rx, &mut batch, batch_size);
+        let timeout = timer.as_mut().and_then(|timer| timer.next_timeout(&mut timeout_tasks));
+        keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
         let should_tick = !batch.is_empty();
         if !batch.is_empty() {
             counter.fetch_sub(batch.len(), Ordering::SeqCst);
@@ -210,26 +215,35 @@ where
         if should_tick {
             runner.on_tick();
         }
+        for mut task in timeout_tasks.drain(..) {
+            f(&mut task);
+        }
     }
     runner.shutdown();
 }
 
 // Fill buffer with next task batch comes from `rx`.
-fn fill_task_batch<T>(rx: &Receiver<Option<T>>, buffer: &mut Vec<T>, batch_size: usize) -> bool {
-    match rx.recv() {
-        Ok(Some(task)) => {
-            buffer.push(task);
-            while buffer.len() < batch_size {
-                match rx.try_recv() {
-                    Ok(Some(t)) => buffer.push(t),
-                    Err(TryRecvError::Empty) => break,
-                    Ok(None) | Err(_) => return false,
-                }
-            }
-            true
+fn fill_task_batch<T>(rx: &Receiver<Option<T>>, buffer: &mut Vec<T>, batch_size: usize, timeout: Option<Duration>) -> bool {
+    let head_task = match timeout {
+        Some(dur) => match rx.recv_timeout(dur) {
+            Err(RecvTimeoutError::Timeout) => return true,
+            Err(RecvTimeoutError::Disconnected) | Ok(None) => return false,
+            Ok(Some(task)) => task,
         }
-        _ => false,
+        None => match rx.recv() {
+            Err(_) | Ok(None) => return false,
+            Ok(Some(task)) => task,
+        }
+    };
+    buffer.push(head_task);
+    while buffer.len() < batch_size {
+        match rx.try_recv() {
+            Ok(Some(t)) => buffer.push(t),
+            Err(TryRecvError::Empty) => return true,
+            Err(_) | Ok(None) => return false,
+        }
     }
+    true
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
@@ -243,6 +257,18 @@ impl<T: Display + Send + 'static> Worker<T> {
     where
         R: BatchRunnable<T> + Send + 'static,
     {
+        let timer: Option<Timer<EmptyTask>>  = None;
+        let f = |_: &mut TimeoutTask<EmptyTask>| {};
+        self.start_with_timer(runner, timer, f)
+    }
+
+    /// Start the worker.
+    pub fn start_with_timer<R, U, F>(&mut self, runner: R, timer: Option<Timer<U>>, f: F) -> Result<(), io::Error>
+    where
+        R: BatchRunnable<T> + Send + 'static,
+        U: Send + 'static,
+        F: FnMut(&mut TimeoutTask<U>) + Send + 'static,
+    {
         let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.scheduler.name);
         if receiver.is_none() {
@@ -255,7 +281,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         let batch_size = self.batch_size;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size))?;
+            .spawn(move || poll(runner, rx, counter, batch_size, timer, f))?;
         self.handle = Some(h);
         Ok(())
     }

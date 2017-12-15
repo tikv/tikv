@@ -16,6 +16,9 @@ use std::time::Duration;
 use util::time::Instant;
 use std::collections::BinaryHeap;
 
+/// A empty task for keeping compatible.
+pub struct EmptyTask;
+
 pub struct TimeoutTask<T> {
     next_tick: Instant,
     timeout: Duration,
@@ -139,12 +142,27 @@ impl<T> Timer<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::{self, Sender};
+    use util::worker::{Runnable, Builder as WorkerBuilder};
 
     #[derive(Debug, PartialEq, Eq)]
     enum Task {
         A,
         B,
         C,
+    }
+
+    struct Runner {
+        ch: Sender<&'static str>,
+    }
+
+    impl Runnable<&'static str> for Runner {
+        fn run(&mut self, msg: &'static str) {
+            self.ch.send(msg).unwrap();
+        }
+        fn shutdown(&mut self) {
+            self.ch.send("").unwrap();
+        }
     }
 
     #[test]
@@ -170,5 +188,46 @@ mod tests {
         assert_eq!(events[0].as_ref(), &Task::A);
         assert_eq!(events[1].as_ref(), &Task::C);
         assert_eq!(events[2].as_ref(), &Task::B);
+    }
+
+    #[test]
+    fn test_worker_with_timer() {
+        let mut worker = WorkerBuilder::new("test-worker-with-timer").create();
+        for _ in 0..10 {
+            worker.schedule("normal msg").unwrap();
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let runner = Runner { ch: tx.clone() };
+
+        let mut counter = 0;
+        let mut timer = Timer::new(Duration::from_millis(100));
+        timer.add_task(Duration::from_millis(200), Task::A);
+        timer.add_task(Duration::from_millis(300), Task::B);
+
+        worker.start_with_timer(runner, Some(timer), move |ref mut timeout_task| {
+            match timeout_task.as_ref() {
+                &Task::A => tx.send("task a").unwrap(),
+                &Task::B => tx.send("task b").unwrap(),
+                _ => unreachable!(),
+            };
+            counter += 1;
+            if counter <= 2 {
+                // TODO: keep a `&mut Timer` in `TimeoutTask` for we can restore.
+                // timeout_task.restore()
+            }
+        }).unwrap();
+
+        for i in 0..12 {
+            let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            if i == 1 {
+                assert_eq!(msg, "task a");
+            } else if i == 3 {
+                assert_eq!(msg, "task b");
+            } else {
+                assert_eq!(msg, "normal msg");
+            }
+        }
+        worker.stop().unwrap().join().unwrap();
     }
 }
