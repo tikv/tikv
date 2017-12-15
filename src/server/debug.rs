@@ -303,43 +303,6 @@ impl Debugger {
         Ok(())
     }
 
-    /*********************
-    pub fn do_unsafe_recover_all(&self) -> Result<()> {
-        let db = &self.engines.kv_engine;
-        let upper_bound = keys::REGION_META_MAX_KEY.to_owned();
-        let readopts = IterOption::new(Some(upper_bound), false).build_read_opts();
-        let handle = box_try!(get_cf_handle(db.as_ref(), CF_RAFT));
-        let mut iter = DBIterator::new_cf(db.clone(), handle, readopts);
-        iter.seek(SeekKey::from(keys::REGION_META_MIN_KEY));
-
-        let store_id = self.get_store_id()?;
-        let wb = WriteBatch::new();
-        for kv in &mut iter {
-            let mut region_state = RegionLocalState::new();
-            box_try!(region_state.merge_from_bytes(&kv.1));
-            if region_state.state == PeerState::Tombstone {
-                continue;
-            }
-
-            let peers = region_state.mut_region().take_peers();
-            let peer = match peers.into_iter().find(|p| p.get_store_id() == store_id) {
-                Some(p) => p.clone(),
-                None => {
-                    let err_msg = "RegionLocalState doesn't contains the peer itself";
-                    return Err(Error::Other(err_msg.into()));
-                }
-            };
-            region_state.mut_region().mut_peers().clear();
-            region_state.mut_region().mut_peers().push(peer);
-            box_try!(wb.put_msg_cf(handle, &kv.0, &region_state));
-        }
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        box_try!(db.write_opt(wb, &write_opts));
-        Ok(())
-    }
-    *********************/
-
     fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
         db.get_msg::<StoreIdent>(&keys::store_ident_key())
