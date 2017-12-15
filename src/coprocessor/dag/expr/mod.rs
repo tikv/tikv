@@ -21,6 +21,7 @@ mod compare;
 mod arithmetic;
 mod math;
 mod json;
+mod time;
 
 use std::{error, io, str};
 use std::borrow::Cow;

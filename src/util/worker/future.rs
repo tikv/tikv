@@ -14,14 +14,34 @@
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder, JoinHandle};
 use std::io;
-use std::fmt::Display;
+use std::error::Error;
+use std::fmt::{self, Debug, Display, Formatter};
 
 use futures::Stream;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use tokio_core::reactor::{Core, Handle};
 
-use super::Stopped;
 use super::metrics::*;
+
+pub struct Stopped<T>(pub T);
+
+impl<T> Display for Stopped<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "channel has been closed")
+    }
+}
+
+impl<T> Debug for Stopped<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "channel has been closed")
+    }
+}
+
+impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
+    fn from(_: Stopped<T>) -> Box<Error + Sync + Send + 'static> {
+        box_err!("channel has been closed")
+    }
+}
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T, handle: &Handle);
