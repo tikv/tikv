@@ -37,7 +37,6 @@ pub mod pri {
         use std::io::ErrorKind;
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn test_set_priority() {
             // priority is a value in range -20 to 19, the default priority
             // is 0, lower priorities cause more favorable scheduling.
