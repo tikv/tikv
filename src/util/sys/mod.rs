@@ -42,16 +42,15 @@ pub mod pri {
             // priority is a value in range -20 to 19, the default priority
             // is 0, lower priorities cause more favorable scheduling.
             assert_eq!(get_priority(), Ok(0));
-            assert!(set_proitiry(10).is_ok());
-
-            assert_eq!(get_priority(), Ok(10));
+            assert!(set_priority(10).is_ok());
+            assert_eq!(get_priority().unwrap(), 10);
 
             // only users which have `SYS_NICE_CAP` capability can priority.
-            let ret = set_proitiry(-10);
-            if let ret = Err(e) {
+            let ret = set_priority(-10);
+            if let Err(e) = ret {
                 assert_eq!(e.kind(), ErrorKind::PermissionDenied);
             } else {
-                assert_eq!(get_priority(), Ok(-10));
+                assert_eq!(get_priority().unwrap(), -10);
             }
         }
     }
