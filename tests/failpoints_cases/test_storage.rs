@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::thread;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use fail;
@@ -38,7 +39,8 @@ fn test_storage_1gc() {
             tx1.send(1).unwrap();
         })
         .unwrap();
-
+    // Sleep to make sure the failpoint is triggered.
+    thread::sleep(Duration::from_millis(1000));
     // Old GC command is blocked at snapshot stage, the other one will get ServerIsBusy error.
     let (tx2, rx2) = channel();
     storage
@@ -97,6 +99,8 @@ fn test_scheduler_leader_change_twice() {
             }
         })
         .unwrap();
+    // Sleep to make sure the failpoint is triggered.
+    thread::sleep(Duration::from_millis(1000));
     // Transfer leader twice, then unblock snapshot.
     cluster.must_transfer_leader(region0.get_id(), peers[1].clone());
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
