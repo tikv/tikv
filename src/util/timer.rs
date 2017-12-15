@@ -143,7 +143,7 @@ impl<T> Timer<T> {
 mod tests {
     use super::*;
     use std::sync::mpsc::{self, Sender};
-    use util::worker::{Runnable, Builder as WorkerBuilder};
+    use util::worker::{Builder as WorkerBuilder, Runnable};
 
     #[derive(Debug, PartialEq, Eq)]
     enum Task {
@@ -205,18 +205,20 @@ mod tests {
         timer.add_task(Duration::from_millis(200), Task::A);
         timer.add_task(Duration::from_millis(300), Task::B);
 
-        worker.start_with_timer(runner, Some(timer), move |ref mut timeout_task| {
-            match timeout_task.as_ref() {
-                &Task::A => tx.send("task a").unwrap(),
-                &Task::B => tx.send("task b").unwrap(),
-                _ => unreachable!(),
-            };
-            counter += 1;
-            if counter <= 2 {
-                // TODO: keep a `&mut Timer` in `TimeoutTask` for we can restore.
-                // timeout_task.restore()
-            }
-        }).unwrap();
+        worker
+            .start_with_timer(runner, Some(timer), move |ref mut timeout_task| {
+                match timeout_task.as_ref() {
+                    &Task::A => tx.send("task a").unwrap(),
+                    &Task::B => tx.send("task b").unwrap(),
+                    _ => unreachable!(),
+                };
+                counter += 1;
+                if counter <= 2 {
+                    // TODO: keep a `&mut Timer` in `TimeoutTask` for we can restore.
+                    // timeout_task.restore()
+                }
+            })
+            .unwrap();
 
         for i in 0..12 {
             let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
