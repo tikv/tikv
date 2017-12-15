@@ -26,6 +26,8 @@ pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::RECONNECT_INTERVAL_SEC;
 pub use self::config::Config;
 
+use std::ops::Deref;
+
 use kvproto::metapb;
 use kvproto::pdpb;
 use futures::Future;
@@ -63,6 +65,29 @@ impl RegionStat {
             read_keys: read_keys,
             approximate_size: approximate_size,
         }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct RegionInfo {
+    pub region: metapb::Region,
+    pub leader: Option<metapb::Peer>,
+}
+
+impl RegionInfo {
+    pub fn new(region: metapb::Region, leader: Option<metapb::Peer>) -> RegionInfo {
+        RegionInfo {
+            region: region,
+            leader: leader,
+        }
+    }
+}
+
+impl Deref for RegionInfo {
+    type Target = metapb::Region;
+
+    fn deref(&self) -> &Self::Target {
+        &self.region
     }
 }
 
@@ -120,6 +145,12 @@ pub trait PdClient: Send + Sync {
     // For route.
     // Get region which the key belong to.
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
+
+    // Get region info which the key belong to.
+    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
+        self.get_region(key)
+            .map(|region| RegionInfo::new(region, None))
+    }
 
     // Get region by region id.
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>>;

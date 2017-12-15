@@ -123,11 +123,11 @@ impl<T: Simulator> Cluster<T> {
         kv_cfs.extend_from_slice(cfs);
         for item in &self.paths {
             let engine = Arc::new(
-                rocksdb::new_engine(item.path().to_str().unwrap(), &kv_cfs).unwrap(),
+                rocksdb::new_engine(item.path().to_str().unwrap(), &kv_cfs, None).unwrap(),
             );
             let raft_path = item.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
+                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             );
             self.dbs.push(Engines::new(engine, raft_engine));
         }
