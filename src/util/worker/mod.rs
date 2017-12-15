@@ -28,7 +28,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use util::time::SlowTimer;
-use util::timer::{EmptyTask, TimeoutTask, Timer};
+use util::timer::{EmptyTask, TimeoutTask, Timer, TimerWrapper};
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
@@ -258,7 +258,7 @@ fn poll<R, T, U, F>(
 ) where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
-    F: FnMut(&mut TimeoutTask<U>) -> bool + Send + 'static,
+    F: FnMut(TimerWrapper<U>, TimeoutTask<U>) + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut batch = Vec::with_capacity(batch_size);
@@ -285,10 +285,9 @@ fn poll<R, T, U, F>(
         if should_tick {
             runner.on_tick();
         }
-        for mut task in timeout_tasks.drain(..) {
-            if f(&mut task) {
-                task.restore(&mut timer.as_mut().unwrap())
-            }
+        for task in timeout_tasks.drain(..) {
+            let wrapper = timer.as_mut().unwrap().as_wrapper();
+            f(wrapper, task);
         }
     }
     runner.shutdown();
@@ -335,7 +334,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         R: BatchRunnable<T> + Send + 'static,
     {
         let timer: Option<Timer<EmptyTask>> = None;
-        let f = |_: &mut TimeoutTask<EmptyTask>| false;
+        let f = |_: TimerWrapper<EmptyTask>, _: TimeoutTask<EmptyTask>| {};
         self.start_with_timer(runner, timer, f)
     }
 
@@ -349,7 +348,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     where
         R: BatchRunnable<T> + Send + 'static,
         U: Send + 'static,
-        F: FnMut(&mut TimeoutTask<U>) -> bool + Send + 'static,
+        F: FnMut(TimerWrapper<U>, TimeoutTask<U>) + Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.scheduler.name);

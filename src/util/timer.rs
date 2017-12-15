@@ -25,12 +25,6 @@ pub struct TimeoutTask<T> {
     task: T,
 }
 
-impl<T> TimeoutTask<T> {
-    pub fn restore(self, timer: &mut Timer<T>) {
-        timer.pending.push(self);
-    }
-}
-
 impl<T> AsRef<T> for TimeoutTask<T> {
     fn as_ref(&self) -> &T {
         &self.task
@@ -137,6 +131,22 @@ impl<T> Timer<T> {
         }
         None
     }
+
+    pub fn as_wrapper(&mut self) -> TimerWrapper<T> {
+        TimerWrapper(self)
+    }
+}
+
+pub struct TimerWrapper<'a, T: 'a>(&'a mut Timer<T>);
+
+impl<'a, T> TimerWrapper<'a, T> {
+    pub fn restore(&mut self, task: TimeoutTask<T>) {
+        self.0.pending.push(task);
+    }
+
+    pub fn add_task(&mut self, timeout: Duration, task: T) {
+        self.0.add_task(timeout, task);
+    }
 }
 
 #[cfg(test)]
@@ -179,7 +189,7 @@ mod tests {
         assert_eq!(events[0].as_ref(), &Task::A);
         assert_eq!(events[1].as_ref(), &Task::B);
         for event in events {
-            event.restore(&mut timer);
+            timer.as_wrapper().restore(event);
         }
 
         let mut events = Vec::new();
@@ -206,14 +216,16 @@ mod tests {
         timer.add_task(Duration::from_millis(300), Task::B);
 
         worker
-            .start_with_timer(runner, Some(timer), move |ref mut timeout_task| {
+            .start_with_timer(runner, Some(timer), move |mut timer, timeout_task| {
                 match *timeout_task.as_ref() {
                     Task::A => tx.send("task a").unwrap(),
                     Task::B => tx.send("task b").unwrap(),
                     _ => unreachable!(),
                 };
                 counter += 1;
-                counter <= 2
+                if counter <= 2 {
+                    timer.restore(timeout_task);
+                }
             })
             .unwrap();
 
