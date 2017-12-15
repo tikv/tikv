@@ -41,8 +41,8 @@ pub mod pri {
         fn test_set_priority() {
             // priority is a value in range -20 to 19, the default priority
             // is 0, lower priorities cause more favorable scheduling.
-            assert_eq!(get_priority(), Ok(0));
-            assert!(set_priority(10).is_ok());
+            assert_eq!(get_priority().unwrap(), 0);
+            set_priority(10).unwrap();
             assert_eq!(get_priority().unwrap(), 10);
 
             // only users which have `SYS_NICE_CAP` capability can priority.
