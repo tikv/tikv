@@ -23,7 +23,7 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender, SyncSender,
-                      TryRecvError};
+                      TryRecvError, TrySendError};
 use std::error::Error;
 use std::time::Duration;
 
@@ -258,7 +258,7 @@ fn poll<R, T, U, F>(
 ) where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
-    F: FnMut(&mut TimeoutTask<U>) + Send + 'static,
+    F: FnMut(&mut TimeoutTask<U>) -> bool + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut batch = Vec::with_capacity(batch_size);
@@ -286,7 +286,9 @@ fn poll<R, T, U, F>(
             runner.on_tick();
         }
         for mut task in timeout_tasks.drain(..) {
-            f(&mut task);
+            if f(&mut task) {
+                task.restore(&mut timer.as_mut().unwrap())
+            }
         }
     }
     runner.shutdown();
@@ -333,7 +335,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         R: BatchRunnable<T> + Send + 'static,
     {
         let timer: Option<Timer<EmptyTask>> = None;
-        let f = |_: &mut TimeoutTask<EmptyTask>| {};
+        let f = |_: &mut TimeoutTask<EmptyTask>| false;
         self.start_with_timer(runner, timer, f)
     }
 
@@ -347,7 +349,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     where
         R: BatchRunnable<T> + Send + 'static,
         U: Send + 'static,
-        F: FnMut(&mut TimeoutTask<U>) + Send + 'static,
+        F: FnMut(&mut TimeoutTask<U>) -> bool + Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.scheduler.name);

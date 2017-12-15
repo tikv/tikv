@@ -213,18 +213,15 @@ mod tests {
                     _ => unreachable!(),
                 };
                 counter += 1;
-                if counter <= 2 {
-                    // TODO: keep a `&mut Timer` in `TimeoutTask` for we can restore.
-                    // timeout_task.restore()
-                }
+                counter <= 2
             })
             .unwrap();
 
-        for i in 0..12 {
+        for i in 0..14 {
             let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-            if i == 1 {
+            if i == 1 || i == 5 {
                 assert_eq!(msg, "task a");
-            } else if i == 3 {
+            } else if i == 3 || i == 7 {
                 assert_eq!(msg, "task b");
             } else {
                 assert_eq!(msg, "normal msg");
