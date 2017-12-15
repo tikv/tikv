@@ -39,6 +39,7 @@ pub struct DAGContext {
     batch_row_limit: usize,
     cache_key: String,
     enable_distsql_cache: bool,
+    distsql_cache_entry_max_size: usize,
 }
 
 impl DAGContext {
@@ -49,6 +50,7 @@ impl DAGContext {
         req_ctx: Arc<ReqContext>,
         batch_row_limit: usize,
         enable_distsql_cache: bool,
+        distsql_cache_entry_max_size: usize,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
@@ -73,6 +75,7 @@ impl DAGContext {
             batch_row_limit: batch_row_limit,
             cache_key: cache_key,
             enable_distsql_cache: enable_distsql_cache,
+            distsql_cache_entry_max_size: distsql_cache_entry_max_size,
         })
     }
 
@@ -153,7 +156,7 @@ impl DAGContext {
     }
 
     pub fn can_cache_with_size(&mut self, data: &[u8]) -> bool {
-        if data.len() > 5 * 1024 * 1024 {
+        if data.len() > self.distsql_cache_entry_max_size {
             false
         } else {
             self.can_cache()

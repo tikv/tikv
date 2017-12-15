@@ -14,6 +14,7 @@ end-point-concurrency = 12
 end-point-max-tasks = 12
 enable-distsql-cache = false
 distsql-cache-size = "256MB"
+distsql-cache-entry-max-size = "5MB"
 end-point-stack-size = "12MB"
 end-point-recursion-limit = 100
 end-point-batch-row-limit = 64

@@ -72,6 +72,7 @@ pub struct Host {
     high_priority_pool: ThreadPool<CopContext>,
     max_running_task_count: usize,
     enable_distsql_cache: bool,
+    distsql_cache_entry_max_size: usize,
     batch_row_limit: usize,
 }
 
@@ -171,6 +172,7 @@ impl Host {
             last_req_id: 0,
             max_running_task_count: cfg.end_point_max_tasks,
             enable_distsql_cache: cfg.enable_distsql_cache,
+            distsql_cache_entry_max_size: cfg.distsql_cache_entry_max_size.0 as usize,
             batch_row_limit: cfg.end_point_batch_row_limit,
             pool: ThreadPoolBuilder::new(
                 thd_name!("endpoint-normal-pool"),
@@ -221,7 +223,11 @@ impl Host {
             COPR_PENDING_REQS
                 .with_label_values(&[type_str, pri_str])
                 .add(1.0);
-            let end_point = TiDbEndPoint::new(snap.clone(), self.enable_distsql_cache);
+            let end_point = TiDbEndPoint::new(
+                snap.clone(),
+                self.enable_distsql_cache,
+                self.distsql_cache_entry_max_size,
+            );
 
             let pool = match pri {
                 CommandPri::Low => &mut self.low_priority_pool,
@@ -620,13 +626,19 @@ fn respond(resp: Response, mut t: RequestTask) -> Statistics {
 pub struct TiDbEndPoint {
     snap: Box<Snapshot>,
     enable_distsql_cache: bool,
+    distsql_cache_entry_max_size: usize,
 }
 
 impl TiDbEndPoint {
-    pub fn new(snap: Box<Snapshot>, enable_distsql_cache: bool) -> TiDbEndPoint {
+    pub fn new(
+        snap: Box<Snapshot>,
+        enable_distsql_cache: bool,
+        distsql_cache_entry_max_size: usize,
+    ) -> TiDbEndPoint {
         TiDbEndPoint {
             snap: snap,
             enable_distsql_cache: enable_distsql_cache,
+            distsql_cache_entry_max_size: distsql_cache_entry_max_size,
         }
     }
 }
@@ -678,6 +690,7 @@ impl TiDbEndPoint {
             t.ctx.clone(),
             batch_row_limit,
             self.enable_distsql_cache,
+            self.distsql_cache_entry_max_size,
         )?;
         let res = ctx.handle_request(region_id);
         ctx.collect_statistics_into(&mut t.statistics);

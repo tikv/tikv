@@ -284,8 +284,10 @@ impl DistSQLCache {
     }
 }
 
-// DistSQL Cache Size unit is byte, for now just use 256MB
+// DistSQL cache size unit is byte, default is 256MB
 pub const DEFAULT_DISTSQL_CACHE_SIZE: usize = 256 * 1024 * 1024;
+// DistSQL cache entry max size unit is byte, default is 5MB
+pub const DEFAULT_DISTSQL_CACHE_ENTRY_MAX_SIZE: usize = 5 * 1204 * 1024;
 
 lazy_static! {
     pub static ref DISTSQL_CACHE: Arc<Mutex<DistSQLCache>> =

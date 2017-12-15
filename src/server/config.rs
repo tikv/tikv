@@ -19,7 +19,7 @@ use util::collections::HashMap;
 use util::config::{self, ReadableSize};
 use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use super::Result;
-use coprocessor::cache::DEFAULT_DISTSQL_CACHE_SIZE;
+use coprocessor::cache::{DEFAULT_DISTSQL_CACHE_ENTRY_MAX_SIZE, DEFAULT_DISTSQL_CACHE_SIZE};
 
 pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;
@@ -69,6 +69,7 @@ pub struct Config {
     pub end_point_max_tasks: usize,
     pub enable_distsql_cache: bool,
     pub distsql_cache_size: ReadableSize,
+    pub distsql_cache_entry_max_size: ReadableSize,
     pub end_point_stack_size: ReadableSize,
     pub end_point_recursion_limit: u32,
     pub end_point_batch_row_limit: usize,
@@ -102,6 +103,7 @@ impl Default for Config {
             end_point_max_tasks: DEFAULT_MAX_RUNNING_TASK_COUNT,
             enable_distsql_cache: false,
             distsql_cache_size: ReadableSize(DEFAULT_DISTSQL_CACHE_SIZE as u64),
+            distsql_cache_entry_max_size: ReadableSize(DEFAULT_DISTSQL_CACHE_ENTRY_MAX_SIZE as u64),
             end_point_stack_size: ReadableSize::mb(DEFAULT_ENDPOINT_STACK_SIZE_MB),
             end_point_recursion_limit: 1000,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,

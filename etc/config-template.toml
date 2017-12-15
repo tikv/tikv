@@ -52,6 +52,7 @@
 
 # dist-sql cache size default is 256MB
 # distsql-cache-size = "256MB"
+# distsql-cache-entry-max-size = "5MB"
 
 [storage]
 # set the path to rocksdb directory.
