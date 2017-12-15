@@ -543,7 +543,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
-        util_sys::adjust_priority(util_sys::AdjustPriType::Incr);
+        if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
+            warn!("set priority for raftstore failed, error: {:?}", e);
+        }
 
         event_loop.run(self)?;
         Ok(())
