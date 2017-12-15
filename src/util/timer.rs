@@ -207,9 +207,9 @@ mod tests {
 
         worker
             .start_with_timer(runner, Some(timer), move |ref mut timeout_task| {
-                match timeout_task.as_ref() {
-                    &Task::A => tx.send("task a").unwrap(),
-                    &Task::B => tx.send("task b").unwrap(),
+                match *timeout_task.as_ref() {
+                    Task::A => tx.send("task a").unwrap(),
+                    Task::B => tx.send("task b").unwrap(),
                     _ => unreachable!(),
                 };
                 counter += 1;
