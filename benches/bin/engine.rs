@@ -2,7 +2,7 @@ extern crate rand;
 
 //use std::sync::mpsc::{channel, Sender};
 use tikv::storage::{new_local_engine, CFStatistics, Engine, Key, Modify, ScanMode, Snapshot,
-                    Value, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+                    Value, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, TEMP_DIR};
 use kvproto::kvrpcpb::Context;
 use tikv::raftstore::store::engine::IterOption;
 use tempdir::TempDir;
@@ -34,8 +34,8 @@ fn next_ts() -> u64 {
 }
 
 fn create_engine() -> Box<Engine> {
-    let dir = TempDir::new("engine_bench").unwrap();
-    let e = new_local_engine(dir.path().to_str().unwrap(), ALL_CFS).unwrap();
+    //    let dir = TempDir::new("engine_bench").unwrap();
+    let e = new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     e
 }
 
@@ -192,7 +192,7 @@ fn bench_get(e: &Box<Engine>, data: &Vec<BenchDataItem>) -> BenchSamples {
 }
 
 // Any difference between update and insert?
-fn bench_write(e: &Box<Engine>, data: &Vec<BenchDataItem>) -> BenchSamples {
+fn bench_set(e: &Box<Engine>, data: &Vec<BenchDataItem>) -> BenchSamples {
     //    let snapshot = e.snapshot(&Context::new()).unwrap();
     let mut rng = rand::thread_rng();
     let mut fake_statistics = CFStatistics::default();
@@ -252,7 +252,7 @@ pub fn bench_engine() {
                     load_test_data(&e, &data);
 
                     printf!(
-                        "benching engine get with {} rows, {} versions, {} bytes value\t...\t",
+                        "benching txn get on local engine\trows:{} versions:{} value len:{}\t...",
                         table_size,
                         version_count,
                         value_length
@@ -260,12 +260,12 @@ pub fn bench_engine() {
                     print_result(bench_get(&e, &data));
 
                     printf!(
-                        "benching engine write with {} rows, {} versions, {} bytes value\t...\t",
+                        "benching txn set on local engine\trows:{} versions:{} value len:{}\t...",
                         table_size,
                         version_count,
                         value_length
                     );
-                    print_result(bench_write(&e, &data));
+                    print_result(bench_set(&e, &data));
                 } // Dispose e and data, regenerate new ones
 
                 {
@@ -276,7 +276,7 @@ pub fn bench_engine() {
                     load_test_data(&e, &data);
 
                     printf!(
-                        "benching engine delete with {} rows, {} versions, {} bytes value\t...\t",
+                        "benching txn del on local engine\trows:{} versions:{} value len:{}\t...",
                         *table_size,
                         version_count,
                         value_length
@@ -296,7 +296,7 @@ pub fn bench_engine() {
             load_test_data(&e, &data);
 
             printf!(
-                "benching engine gc with {} rows, {} versions, {} bytes value\t...\t",
+                "benching gc on local engine\trows:{} versions:{} value len:{}\t...",
                 100_000,
                 version_count,
                 value_length
