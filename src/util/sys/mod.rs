@@ -34,6 +34,7 @@ pub mod pri {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use super::super::HIGH_PRI;
         use std::io::ErrorKind;
 
         #[test]
