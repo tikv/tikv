@@ -87,7 +87,7 @@ mod test {
         for (arg1, arg2, exp) in tests {
             let arg1 = datum_expr(Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()));
             let arg2 = datum_expr(Datum::Bytes(arg2.to_string().into_bytes()));
-            let f = fncall_expr(ScalarFuncSig::DateFormat, &[arg1, arg2]);
+            let f = fncall_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
             let op = Expression::build(&ctx, f).unwrap();
             let got = op.eval(&ctx, &[]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));
