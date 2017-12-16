@@ -245,7 +245,7 @@ fn bench_single_gc(e: &Engine, data: &[BenchDataItem]) -> BenchSamples {
 
 pub fn bench_engine() {
     for table_size in &[1_000, 10_000, 100_000] {
-        for version_count in &[1, 5, 50] {
+        for version_count in &[5] {
             for value_length in &[32, 128, 1024] {
                 {
                     let e = create_engine();
@@ -289,7 +289,7 @@ pub fn bench_engine() {
     }
 
 
-    for version_count in &[1, 5, 50] {
+    for version_count in &[1, 5, 25] {
         for value_length in &[32, 128, 1024] {
             let e = create_engine();
             let data = generate_row_data(100_000, *version_count, *value_length);
