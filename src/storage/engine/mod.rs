@@ -520,7 +520,7 @@ impl Cursor {
     }
 }
 
-/// Create a local Rocskdb engine. (Whihout raft, mainly for tests).
+/// Create a local Rocskdb engine. (Without raft, mainly for tests).
 pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<Box<Engine>> {
     let mut cfs_opts = Vec::with_capacity(cfs.len());
     let cfg_rocksdb = config::DbConfig::default();
