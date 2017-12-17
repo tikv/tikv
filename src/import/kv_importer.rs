@@ -303,7 +303,7 @@ impl EngineFile {
     }
 
     fn finish(&mut self) -> Result<()> {
-        self.engine.take();
+        self.engine.take().unwrap().flush()?;
         assert!(self.temp_path.exists());
         assert!(!self.save_path.exists());
         fs::rename(&self.temp_path, &self.save_path)?;

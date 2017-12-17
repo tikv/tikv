@@ -96,6 +96,14 @@ impl Engine {
         wb
     }
 
+    pub fn flush(&self) -> Result<()> {
+        for cf_name in self.cf_names() {
+            let cf_handle = self.cf_handle(cf_name).unwrap();
+            self.flush_cf(cf_handle, true)?;
+        }
+        Ok(())
+    }
+
     pub fn new_iter(&self, cf_name: &str, verify_checksum: bool) -> DBIterator<Arc<DB>> {
         let cf_handle = self.cf_handle(cf_name).unwrap();
         // Don't need to cache since it is unlikely to read more than once.

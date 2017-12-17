@@ -195,7 +195,7 @@ impl SubImportJob {
 
             let range_count = self.finished_ranges.lock().unwrap().len();
             info!(
-                "{} finished {} ranges takes {:?}",
+                "{} import {} ranges takes {:?}",
                 self.tag,
                 range_count,
                 start.elapsed(),
