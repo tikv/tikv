@@ -20,7 +20,7 @@ use std::thread::{self, JoinHandle};
 use rocksdb::SeekKey;
 use kvproto::kvrpcpb::*;
 
-use pd::RegionInfo;
+use pd::{PdClient, RegionInfo};
 use storage::types::Key;
 
 use super::{Client, Config, Engine, Error, Result};
@@ -151,16 +151,17 @@ impl PrepareRangeJob {
         let start = Instant::now();
         info!("{} start {:?}", self.tag, self.range);
 
-        let mut region = self.client.get_region(&self.range.start)?;
-
-        // No need to split if the file is not large enough.
-        if self.range.size > self.cfg.region_split_size / 2 &&
-            RangeEnd(self.range.get_end()) < RangeEnd(region.get_end_key())
-        {
-            region = self.split_region(region, self.range.get_end().to_owned())?;
+        if self.range.size < self.cfg.region_split_size / 2 {
+            // No need to prepare a small range.
+            return Ok(());
         }
 
-        self.relocate_region(region)?;
+        let mut region = self.client.get_region(&self.range.start)?;
+
+        if RangeEnd(self.range.get_end()) < RangeEnd(region.get_end_key()) {
+            region = self.split_region(region, self.range.get_end().to_owned())?;
+            self.relocate_region(region)?;
+        }
 
         info!("{} takes {:?}", self.tag, start.elapsed());
         Ok(())
@@ -217,8 +218,16 @@ impl PrepareRangeJob {
         unreachable!();
     }
 
-    fn relocate_region(&self, _: RegionInfo) -> Result<()> {
-        // TODO
-        Ok(())
+    fn relocate_region(&self, region: RegionInfo) -> Result<()> {
+        match self.client.scatter_region(region.get_id()) {
+            Ok(_) => {
+                info!("{} scatter region {}", self.tag, region.get_id());
+                Ok(())
+            }
+            Err(e) => {
+                error!("{} scatter region {}: {:?}", self.tag, region.get_id(), e);
+                Err(Error::PdRPC(e))
+            }
+        }
     }
 }
