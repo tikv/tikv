@@ -128,8 +128,16 @@ impl AggrFunc for Sum {
             collector.push(res);
             return Ok(());
         }
-        let d = box_try!(res.into_dec());
-        collector.push(Datum::Dec(d));
+        let is_float = match res {
+            Datum::F64(_) => true,
+            _ => false
+        };
+        if is_float {
+            collector.push(Datum::F64(res.f64()));
+        } else {
+            let d = box_try!(res.into_dec());
+            collector.push(Datum::Dec(d));
+        }
         Ok(())
     }
 }
