@@ -130,7 +130,7 @@ impl AggrFunc for Sum {
         }
         let is_float = match res {
             Datum::F64(_) => true,
-            _ => false
+            _ => false,
         };
         if is_float {
             collector.push(Datum::F64(res.f64()));
