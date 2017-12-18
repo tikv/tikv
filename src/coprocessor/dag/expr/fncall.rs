@@ -97,7 +97,7 @@ impl FnCall {
             ScalarFuncSig::BitAndSig |
             ScalarFuncSig::BitOrSig |
             ScalarFuncSig::BitXorSig |
-            ScalarFuncSig::DateFormat => (2, 2),
+            ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt |
             ScalarFuncSig::CastIntAsReal |
@@ -546,7 +546,7 @@ dispatch_call! {
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
 
-        DateFormat => date_format,
+        DateFormatSig => date_format,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
