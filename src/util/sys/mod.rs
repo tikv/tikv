@@ -8,7 +8,7 @@ pub mod pri {
 
     pub fn set_priority(pri: i32) -> Result<(), Error> {
         unsafe {
-            let pid = libc::getpid();
+            let pid = libc::syscall(libc::SYS_gettid);
             if libc::setpriority(libc::PRIO_PROCESS as u32, pid as u32, pri) != 0 {
                 let e = Error::last_os_error();
                 return Err(e);
@@ -19,7 +19,7 @@ pub mod pri {
 
     pub fn get_priority() -> Result<i32, Error> {
         unsafe {
-            let pid = libc::getpid();
+            let pid = libc::syscall(libc::SYS_gettid);
             // clean previous error
             let _ = Error::last_os_error();
             let ret = libc::getpriority(libc::PRIO_PROCESS as u32, pid as u32);
