@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::option::Option;
+use std::fmt;
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
@@ -24,7 +25,6 @@ use time::Timespec;
 use storage::LARGE_CFS;
 use util::properties::SizeProperties;
 use util::{rocksdb as rocksdb_util, Either};
-use util::time::monotonic_raw_now;
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
@@ -181,60 +181,88 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 }
 
 /// Lease records an expired time, for examining the current moment is in lease or not.
-/// A lease may be safe or be unsafe.
-// TODO: add a remote Lease.
+/// It's dedicated to the Raft leader lease mechanism, contains either state of
+///   1. Lowerbound Timestamp
+///      A safe leader lease expired time, which marks the leader holds the lease for now.
+///      The lease is safe until the clock time goes over this timestamp.
+///   2. Lowerbound Timestamp
+///      An unsafe leader lease expired time, which marks the leader may still hold or lose
+///      its lease until the clock time goes over this timestamp. It is critical that a Lease
+///      can only transit it's state to the Upperbound after the clock time goes over
+///      the Lowerbound.
+///
+/// ```text
+/// Time
+/// |----------------------------------------------------->
+///      ^                    ^                   ^
+///     Now              Lowerbound          Upperbound
+///      |       Unsafe       |       Safe        |
+/// ```
+///
+/// Note:
+///   - Upperbound would increase when raft log entries are applied in current term.
+///   - Lowerbound would be set after the message `MsgTimeoutNow` is sent by current peer.
+///     The message `MsgTimeoutNow` starts a leader transfer procedure. During this procedure,
+///     current peer as an old leader may still hold its lease or lose it.
+///     It's possible there is a new leader elected and current peer as an old leader
+///     doesn't step down due to network partition from the new leader. In that case,
+///     current peer lose its leader lease.
+///     Within this unsafe leader lease expire time, read requests could not be performed
+///     locally.
+// TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
+//       to the local read thread, so name it remote. If Lease expires, the remote must
+//       expires too.
 pub struct Lease {
-    lease_expired_time: Option<Either<Timespec, Timespec>>,
+    // A lowerbound is in the Either::Left(_),
+    // an upperbound is in the Either::Right(_).
+    bound: Option<Either<Timespec, Timespec>>,
 }
 
 impl Lease {
     pub fn new() -> Lease {
-        Lease {
-            lease_expired_time: None,
-        }
+        Lease { bound: None }
     }
 
-    pub fn update_safe(&mut self, lease_expired_time: Timespec) {
-        self.lease_expired_time = Some(Either::Left(lease_expired_time));
+    /// Update upperbound timstamp.
+    /// Note: Caller must ensure that the bound is longer than
+    ///       the lowerbound ts if it is currently in the Lowerbound.
+    pub fn update_upper(&mut self, bound: Timespec) {
+        self.bound = Some(Either::Right(bound));
     }
 
-    pub fn update_unsafe(&mut self, lease_expired_time: Timespec) {
-        self.lease_expired_time = Some(Either::Right(lease_expired_time));
+    /// Update lowerbound timstamp.
+    pub fn update_lower(&mut self, bound: Timespec) {
+        self.bound = Some(Either::Left(bound));
     }
 
-    pub fn has_safe_lease(&self) -> bool {
-        match self.lease_expired_time {
-            Some(Either::Left(_)) => true,
-            _ => false,
-        }
-    }
-
-    pub fn has_unsafe_lease(&self) -> bool {
-        match self.lease_expired_time {
-            Some(Either::Right(_)) => true,
-            _ => false,
-        }
-    }
-
-    pub fn expired_time(&self) -> Option<Timespec> {
-        match self.lease_expired_time {
-            Some(Either::Left(expired_time)) | Some(Either::Right(expired_time)) => {
-                Some(expired_time)
-            }
+    pub fn behind_upper(&self, ts: Timespec) -> Option<bool> {
+        match self.bound {
+            Some(Either::Right(upper)) => Some(upper >= ts),
             _ => None,
         }
     }
 
-    pub fn in_safe_lease(&self) -> bool {
-        match self.lease_expired_time {
-            Some(Either::Left(safe_expired_time)) => monotonic_raw_now() <= safe_expired_time,
-            _ => false,
+    pub fn behind_lower(&self, ts: Timespec) -> Option<bool> {
+        match self.bound {
+            Some(Either::Left(lower)) => Some(lower >= ts),
+            _ => None,
         }
     }
 
     /// clean lease.
     pub fn clear(&mut self) {
-        self.lease_expired_time = None;
+        self.bound = None;
+    }
+}
+
+impl fmt::Debug for Lease {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let mut fmter = fmt.debug_struct("Lease");
+        match self.bound {
+            Some(Either::Left(ts)) => fmter.field("lowerbound", &ts).finish(),
+            Some(Either::Right(ts)) => fmter.field("upperbound", &ts).finish(),
+            None => fmter.field("none", &"").finish(),
+        }
     }
 }
 
@@ -263,34 +291,33 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new();
-        assert!(!lease.in_safe_lease());
+        assert_eq!(lease.behind_lower(monotonic_raw_now()), None);
+        assert_eq!(lease.behind_upper(monotonic_raw_now()), None);
 
-        // Mark in safe.
-        lease.update_safe(monotonic_raw_now() + duration);
-        assert!(lease.in_safe_lease());
-        assert!(lease.expired_time().is_some());
-
-        // Renew a larger lease.
-        lease.update_unsafe(monotonic_raw_now() + duration);
-        assert!(!lease.in_safe_lease());
-        assert!(lease.expired_time().is_some());
-
-        // Mark in safe again.
-        lease.update_safe(monotonic_raw_now() + duration);
-        assert!(lease.in_safe_lease());
+        // Transit to the Upperbound state.
+        lease.update_upper(monotonic_raw_now() + duration);
+        assert_eq!(lease.behind_lower(monotonic_raw_now()), None);
+        assert_eq!(lease.behind_upper(monotonic_raw_now()), Some(true));
 
         // After lease expired time.
         thread::sleep(duration.to_std().unwrap());
-        assert!(!lease.in_safe_lease());
+        assert_eq!(lease.behind_lower(monotonic_raw_now()), None);
+        assert_eq!(lease.behind_upper(monotonic_raw_now()), Some(false));
 
-        // Renew lease.
-        lease.update_safe(monotonic_raw_now() + duration);
-        assert!(lease.in_safe_lease());
+        // Transit to the Lowerbound state.
+        lease.update_lower(monotonic_raw_now() + duration);
+        assert_eq!(lease.behind_lower(monotonic_raw_now()), Some(true));
+        assert_eq!(lease.behind_upper(monotonic_raw_now()), None);
+
+        // After lease expired time.
+        thread::sleep(duration.to_std().unwrap());
+        assert_eq!(lease.behind_lower(monotonic_raw_now()), Some(false));
+        assert_eq!(lease.behind_upper(monotonic_raw_now()), None);
 
         // Clear lease.
         lease.clear();
-        assert!(!lease.in_safe_lease());
-        assert!(lease.expired_time().is_none());
+        assert_eq!(lease.behind_lower(monotonic_raw_now()), None);
+        assert_eq!(lease.behind_upper(monotonic_raw_now()), None);
     }
 
     // Tests the util function `check_key_in_region`.
