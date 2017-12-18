@@ -86,6 +86,7 @@ impl ProgressSet {
     }
 
     // We need explicit lifetime here because of a compiler bug.
+    // See https://github.com/rust-lang/rust/issues/43396.
     #[allow(needless_lifetimes)]
     pub fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a u64, &'a Progress)> {
         self.voters.iter().chain(&self.learners)
