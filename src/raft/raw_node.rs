@@ -286,17 +286,17 @@ impl<T: Storage> RawNode<T> {
         if cc.get_node_id() == INVALID_ID {
             self.raft.reset_pending_conf();
             let mut cs = ConfState::new();
-            cs.set_nodes(self.raft.nodes());
+            cs.set_nodes(self.raft.prs().nodes());
             return cs;
         }
         let nid = cc.get_node_id();
         match cc.get_change_type() {
             ConfChangeType::AddNode => self.raft.add_node(nid),
+            ConfChangeType::AddLearnerNode => self.raft.add_learner(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
-            ConfChangeType::AddLearnerNode => unimplemented!(),
         }
         let mut cs = ConfState::new();
-        cs.set_nodes(self.raft.nodes());
+        cs.set_nodes(self.raft.prs().nodes());
         cs
     }
 
@@ -306,7 +306,7 @@ impl<T: Storage> RawNode<T> {
         if is_local_msg(m.get_msg_type()) {
             return Err(Error::StepLocalMsg);
         }
-        if self.raft.get_prs().contains_key(&m.get_from()) || !is_response_msg(m.get_msg_type()) {
+        if self.raft.prs().get(m.get_from()).is_some() || !is_response_msg(m.get_msg_type()) {
             return self.raft.step(m);
         }
         Err(Error::StepPeerNotFound)
