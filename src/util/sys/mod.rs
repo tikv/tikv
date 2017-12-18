@@ -4,7 +4,7 @@ pub const HIGH_PRI: i32 = -1;
 #[cfg(target_os = "linux")]
 pub mod pri {
     use libc;
-    use std::io::{Error, ErrorKind};
+    use std::io::Error;
 
     pub fn set_priority(pri: i32) -> Result<(), Error> {
         unsafe {
