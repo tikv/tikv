@@ -443,6 +443,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     None => snapshots.push(None),
                 }
             }
+            fail_point!("raftkv_async_batch_snapshot_finish");
             on_finished(snapshots);
         };
 
