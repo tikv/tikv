@@ -138,9 +138,9 @@ mod test {
     #[test]
     fn test_cm_sketch() {
         let (depth, width) = (8, 2048);
-        let (total, max_value) = (1000000, 10000000);
-        assert_eq!(average_error(depth, width, total, max_value, 1.1), 3);
-        assert_eq!(average_error(depth, width, total, max_value, 2.0), 24);
-        assert_eq!(average_error(depth, width, total, max_value, 3.0), 64);
+        let (total, max_value) = (10000, 10000000);
+        assert_eq!(average_error(depth, width, total, max_value, 1.1), 1);
+        assert_eq!(average_error(depth, width, total, max_value, 2.0), 2);
+        assert_eq!(average_error(depth, width, total, max_value, 3.0), 2);
     }
 }
