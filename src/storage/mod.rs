@@ -916,6 +916,7 @@ impl Storage {
             sst,
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
+        KV_COMMAND_COUNTER_VEC.with_label_values(&["ingest"]).inc();
         Ok(())
     }
 }

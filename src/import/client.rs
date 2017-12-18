@@ -131,7 +131,7 @@ impl<'a> UploadStream<'a> {
     }
 }
 
-const UPLOAD_CHUNK_SIZE: usize = 1024 * 1024;
+const UPLOAD_CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
 impl<'a> Stream for UploadStream<'a> {
     type Item = (UploadRequest, WriteFlags);
