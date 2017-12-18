@@ -116,6 +116,7 @@ impl SSTImporter {
     }
 }
 
+// TODO: Add size and rate limit.
 pub struct ImportDir {
     root: PathBuf,
 }

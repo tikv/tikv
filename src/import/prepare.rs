@@ -160,7 +160,7 @@ impl PrepareRangeJob {
 
         if RangeEnd(self.range.get_end()) < RangeEnd(region.get_end_key()) {
             region = self.split_region(region, self.range.get_end().to_owned())?;
-            self.relocate_region(region)?;
+            self.scatter_region(region)?;
         }
 
         info!("{} takes {:?}", self.tag, start.elapsed());
@@ -218,14 +218,15 @@ impl PrepareRangeJob {
         unreachable!();
     }
 
-    fn relocate_region(&self, region: RegionInfo) -> Result<()> {
-        match self.client.scatter_region(region.get_id()) {
+    fn scatter_region(&self, region: RegionInfo) -> Result<()> {
+        let region_id = region.get_id();
+        match self.client.scatter_region(region) {
             Ok(_) => {
-                info!("{} scatter region {}", self.tag, region.get_id());
+                info!("{} scatter region {}", self.tag, region_id);
                 Ok(())
             }
             Err(e) => {
-                error!("{} scatter region {}: {:?}", self.tag, region.get_id(), e);
+                error!("{} scatter region {}: {:?}", self.tag, region_id, e);
                 Err(Error::PdRPC(e))
             }
         }
