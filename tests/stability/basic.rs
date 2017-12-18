@@ -16,31 +16,32 @@ use tikv::storage::ALL_CFS;
 use tikv::util::rocksdb;
 use rocksdb::Writable;
 
-fn make_key(key: u64) -> String {
+pub const NUM: u64 = 1000000;
+
+pub fn make_key(key: u64) -> String {
     let key = format!("k{}", key);
     key
 }
 
-fn make_val(val: u64) -> String {
+pub fn make_val(val: u64) -> String {
     let val = format!("v{}", val);
     val
 }
 
 #[test]
 fn test_rocksdb_insert() {
-    let path = TempDir::new("_open_rocksdb").unwrap();
+    let path = TempDir::new("_rocksdb_insert").unwrap();
     let db = rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap();
-    let num = 100;
     for cf in ALL_CFS {
         let cf_handle = db.cf_handle(cf).unwrap();
-        for i in 0..num {
+        for i in 0..NUM {
             db.put_cf(cf_handle, make_key(i).as_bytes(), make_val(i).as_bytes())
                 .unwrap();
         }
     }
     for cf in ALL_CFS {
         let cf_handle = db.cf_handle(cf).unwrap();
-        for i in 0..num {
+        for i in 0..NUM {
             assert_eq!(
                 db.get_cf(cf_handle, make_key(i).as_bytes())
                     .unwrap()
@@ -53,34 +54,33 @@ fn test_rocksdb_insert() {
 
 #[test]
 fn test_rocksdb_update() {
-    let path = TempDir::new("_open_rocksdb").unwrap();
+    let path = TempDir::new("_rocksdb_update").unwrap();
     let db = rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap();
-    let num = 100;
     for cf in ALL_CFS {
         let cf_handle = rocksdb::get_cf_handle(&db, cf).unwrap();
-        for i in 0..num {
+        for i in 0..NUM {
             db.put_cf(cf_handle, make_key(i).as_bytes(), make_val(i).as_bytes())
                 .unwrap();
         }
     }
     for cf in ALL_CFS {
         let cf_handle = rocksdb::get_cf_handle(&db, cf).unwrap();
-        for i in 0..num {
+        for i in 0..NUM {
             db.put_cf(
                 cf_handle,
                 make_key(i).as_bytes(),
-                make_val(i + num).as_bytes(),
+                make_val(i + NUM).as_bytes(),
             ).unwrap();
         }
     }
     for cf in ALL_CFS {
         let cf_handle = db.cf_handle(cf).unwrap();
-        for i in 0..num {
+        for i in 0..NUM {
             assert_eq!(
                 db.get_cf(cf_handle, make_key(i).as_bytes())
                     .unwrap()
                     .unwrap(),
-                make_val(i + num).as_bytes()
+                make_val(i + NUM).as_bytes()
             );
         }
     }
@@ -88,32 +88,31 @@ fn test_rocksdb_update() {
 
 #[test]
 fn test_rocksdb_delete() {
-    let path = TempDir::new("_open_rocksdb").unwrap();
+    let path = TempDir::new("_rocksdb_delete").unwrap();
     let db = rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap();
-    let num = 100;
     for cf in ALL_CFS {
         let cf_handle = rocksdb::get_cf_handle(&db, cf).unwrap();
-        for i in 0..num {
+        for i in 0..NUM {
             db.put_cf(cf_handle, make_key(i).as_bytes(), make_val(i).as_bytes())
                 .unwrap();
         }
     }
     for cf in ALL_CFS {
         let cf_handle = rocksdb::get_cf_handle(&db, cf).unwrap();
-        for i in 0..(num / 2) {
+        for i in 0..(NUM / 2) {
             db.delete_cf(cf_handle, make_key(i).as_bytes()).unwrap();
         }
     }
     for cf in ALL_CFS {
         let cf_handle = db.cf_handle(cf).unwrap();
-        for i in 0..(num / 2) {
+        for i in 0..(NUM / 2) {
             assert!(
                 db.get_cf(cf_handle, make_key(i).as_bytes())
                     .unwrap()
                     .is_none()
             );
         }
-        for i in (num / 2)..num {
+        for i in (NUM / 2)..NUM {
             assert_eq!(
                 db.get_cf(cf_handle, make_key(i).as_bytes())
                     .unwrap()
