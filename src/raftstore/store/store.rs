@@ -1268,7 +1268,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer,
                 self.store_id()
             );
-
         }
     }
 
@@ -1712,8 +1711,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             //                  |-----------------threshold------------ |
             //              first_index                         replicated_index
             let replicated_idx = peer.raft_group
-                .status()
-                .progress
+                .raft
+                .prs()
+                .voters()
                 .values()
                 .map(|p| p.matched)
                 .min()
