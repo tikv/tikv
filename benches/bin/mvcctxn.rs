@@ -98,11 +98,11 @@ fn prepare_test_engine(
 
             prewrite(
                 &*engine,
-                &vec![Mutation::Put((Key::from_raw(key), value))],
+                &[Mutation::Put((Key::from_raw(key), value))],
                 key,
                 start_ts,
             );
-            commit(&*engine, &vec![Key::from_raw(key)], start_ts, commit_ts);
+            commit(&*engine, &[Key::from_raw(key)], start_ts, commit_ts);
         }
     }
     engine
@@ -141,8 +141,8 @@ fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> BenchSample
 
         //let check_value = value.clone();
 
-        prewrite(engine, &vec![Mutation::Put((Key::from_raw(key), value))], key, start_ts);
-        commit(engine, &vec![Key::from_raw(key)], start_ts, commit_ts)
+        prewrite(engine, &[Mutation::Put((Key::from_raw(key), value))], key, start_ts);
+        commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
 
         // Debug code
         // let res = get(engine, &Key::from_raw(key), &mut Statistics::default());
@@ -158,8 +158,8 @@ fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> BenchSamples {
         let commit_ts = next_ts();
 
         let key = &keys[rng.gen_range(0, keys.len())];
-        prewrite(engine, &vec![Mutation::Delete(Key::from_raw(key))], key, start_ts);
-        commit(engine, &vec![Key::from_raw(key)], start_ts, commit_ts)
+        prewrite(engine, &[Mutation::Delete(Key::from_raw(key))], key, start_ts);
+        commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
 
         // Debug code
         // let res = get(engine, &Key::from_raw(key), &mut Statistics::default());
