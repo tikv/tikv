@@ -179,7 +179,7 @@ pub struct Host {
     max_running_task_count: usize,
     running_task_count: Arc<AtomicUsize>,
     batch_row_limit: usize,
-    chunks_per_stream: usize,
+    stream_batch_row_limit: usize,
 }
 
 impl Host {
@@ -232,7 +232,7 @@ impl Host {
             high_priority_pool: create_pool("endpoint-high-pool", cfg.end_point_concurrency),
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
-            chunks_per_stream: cfg.end_point_chunks_per_stream,
+            stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             running_task_count: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -268,7 +268,7 @@ impl Host {
         let mut metrics = t.metrics;
         let ranges = req.take_ranges().into_vec();
         let batch_row_limit = self.batch_row_limit;
-        let chunks_per_stream = self.chunks_per_stream;
+        let stream_batch_row_limit = self.stream_batch_row_limit;
         let mut statistics = Statistics::default();
 
         fn on_finish(
@@ -303,14 +303,14 @@ impl Host {
                     snap,
                     req_ctx,
                     batch_row_limit,
-                    chunks_per_stream,
+                    stream_batch_row_limit,
                 ) {
                     Ok(ctx) => ctx,
                     Err(e) => return on_resp.respond(err_resp(e)),
                 };
                 if !on_resp.is_streaming() {
                     let do_request = move || {
-                        let res = ctx.handle_request(false).map(|(resp, _)| resp);
+                        let res = ctx.handle_request();
                         let resp = res.unwrap_or_else(err_resp);
                         ctx.collect_statistics_into(&mut statistics);
                         on_finish(&task_count, &statistics, &mut metrics, &mut ctx_pool);
@@ -320,7 +320,7 @@ impl Host {
                 }
                 let s = stream::unfold(Some(ctx), move |ctx_opt| {
                     ctx_opt.and_then(|mut ctx| {
-                        let (resp, remain) = ctx.handle_request(true)
+                        let (resp, remain) = ctx.handle_streaming_request()
                             .unwrap_or_else(|e| (err_resp(e), false));
                         if remain {
                             return Some(future::ok::<_, GrpcError>((resp, Some(ctx))));

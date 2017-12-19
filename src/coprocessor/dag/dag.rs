@@ -11,11 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
 use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
-use tipb::select::{Chunk, DAGRequest, SelectResponse};
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
 
@@ -35,8 +34,7 @@ pub struct DAGContext {
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
-    chunks_per_stream: usize,
-    chunks: Vec<Chunk>,
+    stream_batch_row_limit: usize,
 }
 
 impl DAGContext {
@@ -46,7 +44,7 @@ impl DAGContext {
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
         batch_row_limit: usize,
-        chunks_per_stream: usize,
+        stream_batch_row_limit: usize,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
@@ -67,50 +65,38 @@ impl DAGContext {
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
             batch_row_limit: batch_row_limit,
-            chunks_per_stream: chunks_per_stream,
-            chunks: Vec::new(),
+            stream_batch_row_limit: stream_batch_row_limit,
         })
     }
 
-    pub fn handle_request(&mut self, streaming: bool) -> Result<(Response, bool)> {
+    pub fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
-        let (mut first_row, mut start_key) = (true, None);
+        let mut chunks = Vec::new();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-
-                    if first_row {
-                        first_row = false;
-                        start_key = self.exec.take_last_key();
-                    }
-
-                    let mut stream_result = None;
-                    if self.chunks.is_empty() || record_cnt >= self.batch_row_limit {
-                        if streaming && self.chunks.len() >= self.chunks_per_stream {
-                            let start_key = start_key.take();
-                            let end_key = self.exec.take_last_key();
-                            stream_result = Some(self.make_response(true, start_key, end_key));
-                        }
-                        self.chunks.push(Chunk::new());
+                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
+                        let chunk = Chunk::new();
+                        chunks.push(chunk);
                         record_cnt = 0;
                     }
+                    let chunk = chunks.last_mut().unwrap();
                     record_cnt += 1;
-
-                    let chunk = self.chunks.last_mut().unwrap();
                     if self.has_aggr {
                         chunk.mut_rows_data().extend_from_slice(&row.data.value);
                     } else {
                         let value = inflate_cols(&row, &self.columns, &self.output_offsets)?;
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
-                    if let Some(stream_result) = stream_result {
-                        return stream_result;
-                    }
                 }
                 Ok(None) => {
-                    let end_key = self.exec.take_last_key();
-                    return self.make_response(false, start_key, end_key);
+                    let mut resp = Response::new();
+                    let mut sel_resp = SelectResponse::new();
+                    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    let data = box_try!(sel_resp.write_to_bytes());
+                    resp.set_data(data);
+                    return Ok(resp);
                 }
                 Err(e) => if let Error::Other(_) = e {
                     let mut resp = Response::new();
@@ -118,7 +104,7 @@ impl DAGContext {
                     sel_resp.set_error(to_pb_error(&e));
                     resp.set_data(box_try!(sel_resp.write_to_bytes()));
                     resp.set_other_error(format!("{}", e));
-                    return Ok((resp, false));
+                    return Ok(resp);
                 } else {
                     return Err(e);
                 },
@@ -126,18 +112,60 @@ impl DAGContext {
         }
     }
 
-    fn make_response(
-        &mut self,
-        remain: bool,
+    pub fn handle_streaming_request(&mut self) -> Result<(Response, bool)> {
+        let mut record_cnt = 0;
+        let mut chunk = Chunk::new();
+        let mut start_key = None;
+        let mut remain = false;
+        loop {
+            if record_cnt >= self.stream_batch_row_limit {
+                remain = true;
+                break;
+            }
+            match self.exec.next() {
+                Ok(None) => break,
+                Ok(Some(row)) => {
+                    self.req_ctx.check_if_outdated()?;
+                    record_cnt += 1;
+                    if start_key.is_none() {
+                        start_key = self.exec.take_last_key().or_else(|| Some(vec![]));
+                    }
+                    if self.has_aggr {
+                        chunk.mut_rows_data().extend_from_slice(&row.data.value);
+                    } else {
+                        let value = inflate_cols(&row, &self.columns, &self.output_offsets)?;
+                        chunk.mut_rows_data().extend_from_slice(&value);
+                    }
+                }
+                Err(e) => if let Error::Other(_) = e {
+                    let mut resp = Response::new();
+                    let mut stream_resp = StreamResponse::new();
+                    stream_resp.set_error(to_pb_error(&e));
+                    resp.set_data(box_try!(stream_resp.write_to_bytes()));
+                    resp.set_other_error(format!("{}", e));
+                    return Ok((resp, false));
+                } else {
+                    return Err(e);
+                },
+            }
+        }
+        start_key = start_key.and_then(|k| if k.is_empty() { None } else { Some(k) });
+        DAGContext::make_stream_response(chunk, start_key, self.exec.take_last_key())
+            .map(|resp| (resp, remain))
+    }
+
+    fn make_stream_response(
+        chunk: Chunk,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
-    ) -> Result<(Response, bool)> {
-        let chunks = mem::replace(&mut self.chunks, Vec::new());
+    ) -> Result<Response> {
+        // TODO: set `output_counts` later.
+        let mut stream_resp = StreamResponse::new();
+        stream_resp.set_encode_type(EncodeType::TypeDefault);
+        stream_resp.set_data(box_try!(chunk.write_to_bytes()));
+
         let mut resp = Response::new();
-        let mut sel_resp = SelectResponse::new();
-        sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-        let data = box_try!(sel_resp.write_to_bytes());
-        resp.set_data(data);
+        resp.set_data(box_try!(stream_resp.write_to_bytes()));
 
         let (start, end) = match (start_key, end_key) {
             (Some(start_key), Some(end_key)) => if start_key > end_key {
@@ -149,14 +177,14 @@ impl DAGContext {
                 let end_key = prefix_next(&start_key);
                 (start_key, end_key)
             }
-            (None, None) => return Ok((resp, remain)),
+            (None, None) => return Ok(resp),
             _ => unreachable!(),
         };
         let mut range = KeyRange::new();
         range.set_start(start);
         range.set_end(end);
         resp.set_range(range);
-        Ok((resp, remain))
+        Ok(resp)
     }
 
     pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
