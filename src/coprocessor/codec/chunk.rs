@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tipb::expression::FieldType;
 use super::datum::Datum;
 use super::mysql::types;
-#[warn(dead_code)]
+
 #[derive(Default)]
 struct Column {
     length: usize,
@@ -19,8 +19,8 @@ struct Column {
 }
 
 impl Column {
-    fn new(tp: u8, init_cap: usize) -> Column {
-        match tp {
+    fn new(tp: &FieldType, init_cap: usize) -> Column {
+        match tp.get_tp() as u8 {
             types::TINY |
             types::SHORT |
             types::INT24 |
@@ -303,10 +303,10 @@ const CHUNK_INITIAL_CAPACITY: usize = 32;
 
 impl Chunk {
     ///new_chunk creates a new chunk with field types.
-    pub fn new_chunk(tps: &[i32]) -> Chunk {
+    pub fn new(tps: &[FieldType]) -> Chunk {
         let mut columns = Vec::with_capacity(tps.len());
         for tp in tps {
-            columns.push(Column::new(*tp as u8, CHUNK_INITIAL_CAPACITY));
+            columns.push(Column::new(tp, CHUNK_INITIAL_CAPACITY));
         }
         Chunk { columns: columns }
     }
@@ -444,6 +444,10 @@ impl Row {
         self.c.num_cols()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.c.num_cols() == 0
+    }
+
     //next returns the next valid Row in the same Chunk.
     pub fn next(&self) -> Row {
         // TODO should we check the idx?
@@ -521,9 +525,10 @@ impl Row {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use tipb::expression::FieldType;
     use coprocessor::codec::datum::Datum;
     use coprocessor::codec::mysql::{Decimal, Json};
+    use super::*;
 
     fn new_chunk(elem_len: &[i32]) -> Chunk {
         let mut cols = Vec::with_capacity(elem_len.len());
@@ -549,6 +554,7 @@ mod test {
         assert_eq!(left.var_offsets, right.var_offsets);
         assert_eq!(left.ifaces, right.ifaces);
     }
+
     #[test]
     fn test_chunk() {
         let cols_cnt = 6;
@@ -602,6 +608,82 @@ mod test {
         }
         for i in 0..cols_cnt {
             assert_same_columns(&chunk2.columns[i], &arc_chunk.chunk.columns[i]);
+        }
+    }
+
+    #[test]
+    fn test_chunk_reset() {
+        let mut chunk = new_chunk(&[0]);
+        chunk.append_bytes(0, b"abcd");
+        chunk.reset();
+        chunk.append_bytes(0, b"def");
+        let arc_chunk = ArcChunk::new(chunk);
+        assert_eq!(arc_chunk.get_row(0).get_bytes(0), b"def");
+    }
+
+    fn field_type(tp: u8) -> FieldType {
+        let mut fp = FieldType::new();
+        fp.set_tp(tp as i32);
+        fp
+    }
+
+    #[test]
+    fn test_append() {
+        let fields = vec![
+            field_type(types::FLOAT),
+            field_type(types::VARCHAR),
+            field_type(types::JSON),
+        ];
+        let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
+
+        let mut src = Chunk::new(&fields);
+        let mut dst = Chunk::new(&fields);
+        src.append_f64(0, 12.8);
+        src.append_bytes(1, b"abc");
+        src.append_interface(2, Datum::Json(json.clone()));
+        src.append_null(0);
+        src.append_null(1);
+        src.append_null(2);
+
+        for _ in 0..6 {
+            dst.append(&src, 0, 2);
+        }
+        dst.append(&src, 1, 1);
+        let row_cnt = 12;
+        assert_eq!(dst.columns.len(), 3);
+        for col in &dst.columns {
+            assert_eq!(col.length, row_cnt);
+            assert_eq!(col.null_cnt, 6);
+            assert_eq!(col.null_bitmap, vec![0x55, 0x05]);
+        }
+        // check column 0
+        assert!(!dst.columns[0].is_varlen());
+        assert!(dst.columns[0].ifaces.is_empty());
+        assert_eq!(dst.columns[0].fixed_len, 8);
+        assert_eq!(dst.columns[0].data.len(), 8 * row_cnt);
+
+        // check column 1,varchar
+        assert_eq!(
+            dst.columns[1].var_offsets,
+            vec![0, 3, 3, 6, 6, 9, 9, 12, 12, 15, 15, 18, 18]
+        );
+        assert_eq!(dst.columns[1].data, b"abcabcabcabcabcabc".to_vec());
+        assert!(!dst.columns[1].is_fixed());
+        assert!(dst.columns[1].ifaces.is_empty());
+
+
+        // check column 2, interface
+        assert!(!dst.columns[2].is_varlen());
+        assert!(!dst.columns[2].is_fixed());
+        assert!(dst.columns[2].data.is_empty());
+        assert_eq!(dst.columns[2].ifaces.len(), row_cnt);
+
+        for i in 0..row_cnt {
+            if i & 1 == 1 {
+                assert_eq!(dst.columns[2].ifaces[i], Datum::Null)
+            } else {
+                assert_eq!(dst.columns[2].ifaces[i], Datum::Json(json.clone()));
+            }
         }
     }
 }
