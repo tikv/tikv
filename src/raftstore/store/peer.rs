@@ -23,7 +23,7 @@ use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType};
+use kvproto::eraftpb::{self, ConfChange, ConfChangeType, EntryType, MessageType};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
@@ -77,6 +77,7 @@ struct ReadIndexQueue {
     id_allocator: u64,
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
+    term: u64,
 }
 
 impl ReadIndexQueue {
@@ -86,6 +87,10 @@ impl ReadIndexQueue {
     }
 
     fn clear_uncommitted(&mut self, term: u64) {
+        if self.term >= term {
+            return;
+        }
+        self.term = term;
         for mut read in self.reads.drain(self.ready_cnt..) {
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
@@ -250,6 +255,7 @@ pub struct Peer {
     pending_messages: Vec<eraftpb::Message>,
 
     pub peer_stat: PeerStat,
+    is_appending_log: bool,
 }
 
 impl Peer {
@@ -361,6 +367,7 @@ impl Peer {
             leader_lease_expired_time: None,
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
+            is_appending_log: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -715,11 +722,12 @@ impl Peer {
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut ReadyContext<T>,
+        ready_res: &mut Vec<(Ready, InvokeContext)>,
         worker: &FutureWorker<PdTask>,
-    ) {
+    ) -> bool {
         self.marked_to_be_checked = false;
         if self.pending_remove {
-            return;
+            return true;
         }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -729,7 +737,7 @@ impl Peer {
                 "{} still applying snapshot, skip further handling.",
                 self.tag
             );
-            return;
+            return true;
         }
 
         if !self.pending_messages.is_empty() {
@@ -748,14 +756,23 @@ impl Peer {
                 self.get_store().applied_index(),
                 self.last_applying_idx
             );
-            return;
+            return true;
         }
 
         if !self.raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
-            return;
+            return true;
         }
+
+        if self.is_appending_log {
+            debug!(
+                "region [{}] is async appending log, will handled next time",
+                self.region_id
+            );
+            return false;
+        }
+        self.is_appending_log = true;
 
         debug!("{} handle raft ready", self.tag);
 
@@ -777,6 +794,8 @@ impl Peer {
                 });
         }
 
+        let kv_wb_old_size = ctx.kv_wb.data_size();
+        let raft_wb_old_size = ctx.raft_wb.data_size();
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
             Ok(r) => r,
             Err(e) => {
@@ -786,7 +805,14 @@ impl Peer {
             }
         };
 
-        ctx.ready_res.push((ready, invoke_ctx));
+        // this ready write something.
+        if ctx.kv_wb.data_size() > kv_wb_old_size || ctx.raft_wb.data_size() > raft_wb_old_size {
+            ctx.ready_res.push((ready, invoke_ctx));
+        } else {
+            ready_res.push((ready, invoke_ctx));
+        }
+
+        true
     }
 
     pub fn post_raft_ready_append<T: Transport>(
@@ -796,6 +822,9 @@ impl Peer {
         ready: &mut Ready,
         invoke_ctx: InvokeContext,
     ) -> Option<ApplySnapResult> {
+        assert!(self.is_appending_log, "is_appending_log should be true");
+        self.is_appending_log = false;
+
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
@@ -850,14 +879,29 @@ impl Peer {
                 if to_be_updated {
                     to_be_updated = !self.maybe_update_lease(entry);
                 }
+                // if apply entry has RemoveNode and remove peer itself, mark it as pending_remove.
+                // so that async append thread will not append new entries.
+                if entry.get_entry_type() == EntryType::EntryConfChange {
+                    let index = entry.get_index();
+                    let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
+                    let cmd: RaftCmdRequest =
+                        parse_data_at(conf_change.get_context(), index, &self.tag);
+                    let admin_request = cmd.get_admin_request();
+                    if admin_request.get_cmd_type() == AdminCmdType::ChangePeer {
+                        let request = admin_request.get_change_peer();
+                        if request.get_change_type() == ConfChangeType::RemoveNode &&
+                            request.get_peer().get_id() == self.peer_id()
+                        {
+                            self.pending_remove = true;
+                        }
+                    }
+                }
             }
             if !committed_entries.is_empty() {
                 self.last_applying_idx = committed_entries.last().unwrap().get_index();
                 apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
-
-        self.apply_reads(&ready);
 
         self.raft_group.advance_append(ready);
         if self.is_applying_snapshot() {
@@ -867,7 +911,7 @@ impl Peer {
         }
     }
 
-    fn apply_reads(&mut self, ready: &Ready) {
+    pub fn apply_reads(&mut self, ready: Ready) {
         let mut propose_time = None;
         if self.ready_to_handle_read() {
             for state in &ready.read_states {
@@ -897,6 +941,8 @@ impl Peer {
             // all uncommitted reads will be dropped silently in raft.
             self.pending_reads.clear_uncommitted(term);
         }
+
+        self.raft_group.commit_ready(ready);
 
         if let Some(Either::Right(_)) = self.leader_lease_expired_time {
             return;

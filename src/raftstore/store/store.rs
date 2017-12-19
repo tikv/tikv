@@ -20,9 +20,9 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
+use std::mem;
 
 use rocksdb::{WriteBatch, DB};
-use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use time::{self, Timespec};
@@ -38,7 +38,9 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdRes
                           StatusCmdType, StatusResponse};
 use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
+use raft::raw_node::Ready;
 use raftstore::{Error, Result};
+use raftstore::store::peer_storage::InvokeContext;
 use kvproto::metapb;
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
@@ -47,9 +49,10 @@ use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
-                    ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
+use super::worker::{AppendRunner, AppendTask, AppendTaskRes, ApplyRunner, ApplyTask, ApplyTaskRes,
+                    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+                    RaftlogGcRunner, RaftlogGcTask, RegionRunner, RegionTask, SplitCheckRunner,
+                    SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -148,6 +151,8 @@ pub struct Store<T, C: 'static> {
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
+    pub append_worker: Worker<AppendTask>,
+    append_res_receiver: Option<StdReceiver<AppendTaskRes>>,
 
     trans: T,
     pd_client: Arc<C>,
@@ -224,6 +229,8 @@ impl<T, C> Store<T, C> {
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
+            append_worker: Worker::new("append worker"),
+            append_res_receiver: None,
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
             trans: trans,
@@ -407,6 +414,10 @@ impl<T, C> Store<T, C> {
         self.apply_worker.scheduler()
     }
 
+    pub fn append_scheduler(&self) -> Scheduler<AppendTask> {
+        self.append_worker.scheduler()
+    }
+
     pub fn kv_engine(&self) -> Arc<DB> {
         self.kv_engine.clone()
     }
@@ -542,6 +553,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
+        let (tx, rx) = mpsc::channel();
+        let append_runner = AppendRunner::new(
+            self.tag.clone(),
+            self.kv_engine.clone(),
+            self.raft_engine.clone(),
+            tx,
+            self.cfg.sync_log,
+        );
+        self.append_res_receiver = Some(rx);
+        box_try!(self.append_worker.start(append_runner));
+
         event_loop.run(self)?;
         Ok(())
     }
@@ -563,6 +585,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.apply_worker.stop());
+        handles.push(self.append_worker.stop());
 
         for h in handles {
             if let Some(h) = h {
@@ -668,6 +691,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Err(e) => panic!("unexpected error {:?}", e),
             }
         }
+    }
+
+    fn poll_append(&self) -> Vec<(Ready, InvokeContext)> {
+        let mut ready_res = vec![];
+        loop {
+            match self.append_res_receiver.as_ref().unwrap().try_recv() {
+                Ok(mut res) => {
+                    ready_res.append(&mut res.ready_res);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(e) => panic!("unexcepted error {:?}", e),
+            }
+        }
+        ready_res
     }
 
     /// If target peer doesn't exist, create it.
@@ -1065,26 +1102,68 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(None)
     }
 
-    fn on_raft_ready(&mut self) {
+    fn on_raft_ready(&mut self, mut ready_res: Vec<(Ready, InvokeContext)>) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
 
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
+        let mut ready_reads = Vec::new();
+        let mut ready_res_cnt = 0;
         let mut region_proposals = Vec::with_capacity(pending_count);
-        let (kv_wb, raft_wb, append_res, sync_log) = {
+        {
+            let mut regions_not_handled = HashSet::default();
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
                     if let Some(region_proposal) = peer.take_apply_proposals() {
                         region_proposals.push(region_proposal);
                     }
-                    peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
+                    if !peer.handle_raft_ready_append(&mut ctx, &mut ready_res, &self.pd_worker) {
+                        regions_not_handled.insert(region_id);
+                    }
                 }
             }
-            (ctx.kv_wb, ctx.raft_wb, ctx.ready_res, ctx.sync_log)
-        };
+            self.pending_raft_groups = regions_not_handled;
+
+            // Handle ready read_states ASAP.
+            for &mut (ref mut ready, ref invoke_ctx) in
+                ctx.ready_res.iter_mut().chain(ready_res.iter_mut())
+            {
+                let mut ready_read = if !ready.read_states.is_empty() {
+                    let mut read = Ready::default();
+                    mem::swap(&mut ready.read_states, &mut read.read_states);
+                    Some(read)
+                } else {
+                    None
+                };
+                // May handle ss twice, one for ready_reads
+                // and the other froms the async ready(the append worker).
+                // TODO: unset ss before commit_ready() in apply_read().
+                if let Some(ref ss) = ready.ss {
+                    let mut read = ready_read.unwrap_or_default();
+                    read.ss = Some(ss.clone());
+                    ready_read = Some(read);
+                }
+                if let Some(ready_read) = ready_read {
+                    ready_reads.push((invoke_ctx.region_id, ready_read));
+                }
+            }
+
+            // Needs to schedule Ready logs.
+            if !ctx.ready_res.is_empty() {
+                ready_res_cnt = ctx.ready_res.len();
+                self.append_worker
+                    .schedule(AppendTask {
+                        kv_wb: ctx.kv_wb,
+                        raft_wb: ctx.raft_wb,
+                        ready_res: ctx.ready_res,
+                        sync_log: ctx.sync_log,
+                    })
+                    .unwrap();
+            }
+        }
 
         if !region_proposals.is_empty() {
             self.apply_worker
@@ -1097,38 +1176,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.trans.flush();
         }
 
-        self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
+        self.raft_metrics.ready.has_ready_region += ready_res_cnt as u64;
 
-        // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
-        // otherwise, if program restart between two write, raft log will be removed,
-        // but region state may not changed in disk.
-        fail_point!("raft_before_save");
-        if !kv_wb.is_empty() {
-            // RegionLocalState, ApplyState
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            self.kv_engine
-                .write_opt(kv_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save append state result: {:?}", self.tag, e);
-                });
-        }
-        fail_point!("raft_between_save");
-
-        if !raft_wb.is_empty() {
-            // RaftLocalState, Raft Log Entry
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log || sync_log);
-            self.raft_engine
-                .write_opt(raft_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save raft append result: {:?}", self.tag, e);
-                });
-        }
-        fail_point!("raft_after_save");
-
-        let mut ready_results = Vec::with_capacity(append_res.len());
-        for (mut ready, invoke_ctx) in append_res {
+        let mut ready_results = Vec::with_capacity(ready_res.len());
+        for (mut ready, invoke_ctx) in ready_res {
             let region_id = invoke_ctx.region_id;
             let res =
                 self.region_peers
@@ -1158,6 +1209,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.raft_metrics.ready.message - previous_ready_metrics.message,
             self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot
         );
+
+        for (region_id, ready) in ready_reads {
+            self.region_peers
+                .get_mut(&region_id)
+                .unwrap()
+                .apply_reads(ready);
+        }
 
         let mut apply_tasks = Vec::with_capacity(ready_results.len());
         for (region_id, ready, res) in ready_results {
@@ -2516,9 +2574,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             return;
         }
 
+        let ready_res = self.poll_append();
+
         // We handle raft ready in event loop.
-        if !self.pending_raft_groups.is_empty() {
-            self.on_raft_ready();
+        if !self.pending_raft_groups.is_empty() || !ready_res.is_empty() {
+            self.on_raft_ready(ready_res);
         }
 
         self.poll_apply();

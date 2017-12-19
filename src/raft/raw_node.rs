@@ -214,7 +214,7 @@ impl<T: Storage> RawNode<T> {
         Ok(rn)
     }
 
-    fn commit_ready(&mut self, rd: Ready) {
+    pub fn commit_ready(&mut self, rd: Ready) {
         if rd.ss.is_some() {
             self.prev_ss = rd.ss.unwrap();
         }
