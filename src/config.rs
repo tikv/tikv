@@ -108,7 +108,10 @@ macro_rules! build_cf_opt {
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_block_based_table_factory(&block_base_opts);
-        cf_opts.compression_per_level(&$opt.compression_per_level);
+        cf_opts.set_num_levels($opt.num_levels);
+        assert!($opt.compression_per_level.len() >= $opt.num_levels as usize);
+        let compression_per_level = $opt.compression_per_level[..$opt.num_levels as usize].to_vec();
+        cf_opts.compression_per_level(compression_per_level.as_slice());
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
         cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
@@ -120,7 +123,6 @@ macro_rules! build_cf_opt {
         cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
         cf_opts.compaction_priority($opt.compaction_pri);
         cf_opts.set_level_compaction_dynamic_level_bytes($opt.level_dynamic_level_bytes);
-        cf_opts.set_num_levels($opt.num_levels);
 
         cf_opts
     }};
