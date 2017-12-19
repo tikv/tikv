@@ -67,7 +67,7 @@ const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 
 const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
 
-struct _CopContext {
+struct CopContextInner {
     select_stats: StatisticsSummary,
     index_stats: StatisticsSummary,
     flow_stats: HashMap<u64, FlowStatistics>,
@@ -75,9 +75,9 @@ struct _CopContext {
     pd_task_sender: FutureScheduler<PdTask>,
 }
 
-impl _CopContext {
+impl CopContextInner {
     fn new(pd_task_sender: FutureScheduler<PdTask>) -> Self {
-        _CopContext {
+        CopContextInner {
             select_stats: StatisticsSummary::default(),
             index_stats: StatisticsSummary::default(),
             flow_stats: map![],
@@ -141,7 +141,7 @@ impl _CopContext {
     }
 }
 
-struct CopContext(RefCell<_CopContext>);
+struct CopContext(RefCell<CopContextInner>);
 
 unsafe impl Sync for CopContext {}
 
@@ -199,7 +199,8 @@ impl Host {
                     .pool_size(size)
                     .after_start(move || {
                         let thread_id = thread::current().id();
-                        let cop_ctx = CopContext(RefCell::new(_CopContext::new(sender.clone())));
+                        let cop_ctx =
+                            CopContext(RefCell::new(CopContextInner::new(sender.clone())));
                         let mut map_counter = cop_ctxs.lock().unwrap();
                         map_counter.0.insert(thread_id, cop_ctx);
                         map_counter.1 += 1;
