@@ -170,7 +170,7 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
-            level_dynamic_level_bytes: false,
+            level_dynamic_level_bytes: true,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -202,7 +202,7 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
-            level_dynamic_level_bytes: false,
+            level_dynamic_level_bytes: true,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),

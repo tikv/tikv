@@ -158,7 +158,7 @@ impl Default for DefaultCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
-            level_dynamic_level_bytes: true,
+            level_dynamic_level_bytes: false,
         }
     }
 }
@@ -206,7 +206,7 @@ impl Default for WriteCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
-            level_dynamic_level_bytes: true,
+            level_dynamic_level_bytes: false,
         }
     }
 }
