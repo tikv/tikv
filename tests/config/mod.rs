@@ -171,6 +171,7 @@ fn test_serde_custom_tikv_config() {
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             level_dynamic_level_bytes: true,
+            num_levels: 4,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -203,6 +204,7 @@ fn test_serde_custom_tikv_config() {
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             level_dynamic_level_bytes: true,
+            num_levels: 4,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -235,6 +237,7 @@ fn test_serde_custom_tikv_config() {
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             level_dynamic_level_bytes: true,
+            num_levels: 4,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -267,6 +270,7 @@ fn test_serde_custom_tikv_config() {
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             level_dynamic_level_bytes: true,
+            num_levels: 4,
         },
     };
     value.raftdb = RaftDbConfig {
@@ -322,6 +326,7 @@ fn test_serde_custom_tikv_config() {
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             level_dynamic_level_bytes: true,
+            num_levels: 4,
         },
     };
     value.storage = StorageConfig {

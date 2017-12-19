@@ -136,6 +136,7 @@ level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
+num-levels = 4
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -168,6 +169,7 @@ level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
+num-levels = 4
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -200,6 +202,7 @@ level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
+num-levels = 4
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -232,6 +235,7 @@ level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
+num-levels = 4
 
 [raftdb]
 wal-recovery-mode = 3
@@ -287,6 +291,7 @@ level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
+num-levels = 4
 
 [security]
 ca-path = "invalid path"
