@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 
+use kvproto::metapb::*;
 use kvproto::importpb::*;
 
 use super::{Error, Result};
@@ -110,6 +111,20 @@ impl SSTImporter {
         }
     }
 
+    pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
+        let inner = self.inner.lock().unwrap();
+        match inner.dir.delete(meta) {
+            Ok(path) => {
+                info!("delete {:?}", meta);
+                Ok(())
+            }
+            Err(e) => {
+                error!("delete {:?}: {:?}", meta, e);
+                Err(e)
+            }
+        }
+    }
+
     pub fn locate(&self, meta: &SSTMeta) -> Result<PathBuf> {
         let inner = self.inner.lock().unwrap();
         inner.dir.locate(meta)
@@ -147,6 +162,13 @@ impl ImportDir {
         ImportFile::create(meta.clone(), save_path, temp_path)
     }
 
+    pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
+        let file_name = sst_meta_to_path(meta)?;
+        let save_path = self.root.join(&file_name);
+        fs::remove_file(&save_path)?;
+        Ok(())
+    }
+
     pub fn locate(&self, meta: &SSTMeta) -> Result<PathBuf> {
         let file_name = sst_meta_to_path(meta)?;
         let save_path = self.root.join(&file_name);
@@ -154,6 +176,21 @@ impl ImportDir {
             return Err(Error::FileNotExists(save_path));
         }
         Ok(save_path)
+    }
+
+    pub fn list_ssts(&self) -> Result<Vec<SSTMeta>> {
+        let mut ssts = Vec::new();
+        for p in fs::read_dir(&self.root)? {
+            let p = p?;
+            if !p.file_type()?.is_file() {
+                continue;
+            }
+            match path_to_sst_meta(p.path()) {
+                Ok(sst) => ssts.push(sst),
+                Err(e) => error!("parse {:?}: {:?}", p.path(), e),
+            }
+        }
+        Ok(ssts)
     }
 }
 
@@ -240,4 +277,27 @@ fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
         meta.get_region_epoch().get_conf_ver(),
         meta.get_region_epoch().get_version(),
     )))
+}
+
+fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
+    let path = path.as_ref();
+    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name,
+        None => return Err(Error::InvalidPath(path.to_owned())),
+    };
+
+    let elems: Vec<_> = file_name.split('_').collect();
+    if elems.len() != 4 {
+        return Err(Error::InvalidPath(path.to_owned()));
+    }
+
+    let mut sst = SSTMeta::new();
+    let uuid = Uuid::parse_str(elems[0])?;
+    sst.set_uuid(uuid.as_bytes().to_vec());
+    sst.set_region_id(elems[1].parse()?);
+    let mut epoch = RegionEpoch::new();
+    epoch.set_conf_ver(elems[2].parse()?);
+    epoch.set_version(elems[3].parse()?);
+    sst.set_region_epoch(epoch);
+    Ok(sst)
 }

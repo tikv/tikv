@@ -28,6 +28,7 @@ use kvproto::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftTruncatedState};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
                           RaftCmdRequest, RaftCmdResponse, Request, Response};
+use kvproto::importpb::SSTMeta;
 
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
@@ -1230,21 +1231,12 @@ impl ApplyDelegate {
     fn handle_ingest_sst(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let sst = req.get_ingest_sst().get_sst();
         let region = &self.region;
-        let region_epoch = region.get_region_epoch();
 
-        // Check region epoch and range.
-        if sst.get_region_id() != region.get_id() ||
-            sst.get_region_epoch().get_conf_ver() != region_epoch.get_conf_ver() ||
-            sst.get_region_epoch().get_version() != region_epoch.get_version()
-        {
-            return Err(box_err!(
-                "can not ingest file {:?} to region {:?}",
-                sst,
-                region
-            ));
+        if let Err(e) = check_sst_for_region(sst, region) {
+            error!("can not ingest {:?} to region {:?}: {:?}", sst, region, e);
+            let _ = ctx.importer.delete(sst);
+            return Err(e);
         }
-        util::check_key_in_region(sst.get_range().get_start(), region)?;
-        util::check_key_in_region(sst.get_range().get_end(), region)?;
 
         // TODO: Use hard link and fix checksum.
         let sst_path = match ctx.importer.locate(sst) {
@@ -1280,6 +1272,34 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
     // region key range has no data prefix, so we must use origin key to check.
     util::check_key_in_region(key, region)?;
+
+    Ok(())
+}
+
+fn check_sst_for_region(sst: &SSTMeta, region: &Region) -> Result<()> {
+    if sst.get_region_id() != region.get_id() {
+        return Err(box_err!(
+            "region id does not match: {} != {}",
+            sst.get_region_id(),
+            region.get_id()
+        ));
+    }
+
+    // Check region epoch.
+    let epoch = region.get_region_epoch();
+    if sst.get_region_epoch().get_conf_ver() != epoch.get_conf_ver() ||
+        sst.get_region_epoch().get_version() != epoch.get_version()
+    {
+        return Err(box_err!(
+            "region epoch does not match: {:?} != {:?}",
+            sst.get_region_epoch(),
+            epoch
+        ));
+    }
+
+    // Check region range.
+    util::check_key_in_region(sst.get_range().get_start(), region)?;
+    util::check_key_in_region(sst.get_range().get_end(), region)?;
 
     Ok(())
 }

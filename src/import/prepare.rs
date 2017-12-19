@@ -14,7 +14,7 @@
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::thread::{self, JoinHandle};
 
 use rocksdb::SeekKey;
@@ -27,6 +27,7 @@ use super::{Client, Config, Engine, Error, Result};
 use super::region::*;
 
 const MAX_RETRY_TIMES: u64 = 3;
+const RETRY_INTERVAL_SECS: u64 = 1;
 
 pub struct PrepareJob {
     tag: String,
@@ -156,66 +157,65 @@ impl PrepareRangeJob {
             return Ok(());
         }
 
-        let mut region = self.client.get_region(&self.range.start)?;
+        for i in 0..MAX_RETRY_TIMES {
+            if i != 0 {
+                info!("{} retry #{}", self.tag, i);
+                thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
+            }
 
-        if RangeEnd(self.range.get_end()) < RangeEnd(region.get_end_key()) {
-            region = self.split_region(region, self.range.get_end().to_owned())?;
-            self.scatter_region(region)?;
-        }
-
-        info!("{} takes {:?}", self.tag, start.elapsed());
-        Ok(())
-    }
-
-    fn split_region(&self, mut region: RegionInfo, split_key: Vec<u8>) -> Result<RegionInfo> {
-        for _ in 0..MAX_RETRY_TIMES {
-            let ctx = new_context(&region);
-            let store_id = ctx.get_peer().get_store_id();
-            // The SplitRegion API accepts a raw key.
-            let raw_key = Key::from_encoded(split_key.clone()).raw()?;
-
-            let mut split = SplitRegionRequest::new();
-            split.set_context(ctx);
-            split.set_split_key(raw_key);
-
-            let res = match self.client.split_region(store_id, split) {
-                Ok(ref mut resp) if resp.has_region_error() => {
-                    let mut error = resp.take_region_error();
-                    if error.get_not_leader().has_leader() {
-                        region.leader = Some(error.take_not_leader().take_leader());
-                        continue;
-                    }
-                    Err(Error::SplitRegion(error))
-                }
-                res => res,
-            };
-
-            match res {
-                Ok(mut resp) => {
-                    info!(
-                        "{} split {:?} to left {{{:?}}} and right {{{:?}}}",
-                        self.tag,
-                        region,
-                        resp.get_left(),
-                        resp.get_right(),
-                    );
-                    let region = resp.take_left();
-                    // Just assume that the leader will be at the same store.
-                    let leader = region
-                        .get_peers()
-                        .iter()
-                        .find(|p| p.get_store_id() == store_id)
-                        .cloned();
-                    return Ok(RegionInfo::new(region, leader));
-                }
-                Err(e) => {
-                    error!("{} split {:?}: {:?}", self.tag, region, e);
-                    return Err(e);
-                }
+            if self.prepare().is_ok() {
+                info!("{} takes {:?}", self.tag, start.elapsed());
+                return Ok(());
             }
         }
 
-        unreachable!();
+        Err(Error::Timeout)
+    }
+
+    fn prepare(&self) -> Result<()> {
+        let mut region = self.client.get_region(&self.range.start)?;
+
+        if RangeEnd(self.range.get_end()) >= RangeEnd(region.get_end_key()) {
+            return Ok(());
+        }
+
+        region = self.split_region(region, self.range.get_end().to_owned())?;
+        self.scatter_region(region)
+    }
+
+    fn split_region(&self, region: RegionInfo, split_key: Vec<u8>) -> Result<RegionInfo> {
+        let ctx = new_context(&region);
+        let store_id = ctx.get_peer().get_store_id();
+        // The SplitRegion API accepts a raw key.
+        let raw_key = Key::from_encoded(split_key.clone()).raw()?;
+
+        let mut split = SplitRegionRequest::new();
+        split.set_context(ctx);
+        split.set_split_key(raw_key);
+
+        match self.client.split_region(store_id, split) {
+            Ok(mut resp) => {
+                info!(
+                    "{} split {:?} to left {{{:?}}} and right {{{:?}}}",
+                    self.tag,
+                    region,
+                    resp.get_left(),
+                    resp.get_right(),
+                );
+                let region = resp.take_left();
+                // Just assume that the leader will be at the same store.
+                let leader = region
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_store_id() == store_id)
+                    .cloned();
+                Ok(RegionInfo::new(region, leader))
+            }
+            Err(e) => {
+                error!("{} split {:?}: {:?}", self.tag, region, e);
+                Err(e)
+            }
+        }
     }
 
     fn scatter_region(&self, region: RegionInfo) -> Result<()> {

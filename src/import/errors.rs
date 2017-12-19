@@ -14,6 +14,7 @@
 use std::io;
 use std::result;
 use std::path::PathBuf;
+use std::num::ParseIntError;
 
 use grpc;
 use uuid::{ParseError, Uuid};
@@ -56,6 +57,11 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        ParseIntError(err: ParseIntError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         Storage(err: storage::Error) {
             from()
             cause(err)
@@ -71,6 +77,9 @@ quick_error! {
         }
         SplitRegion(err: errorpb::Error) {
             display("SplitRegion {:?}", err)
+        }
+        InvalidPath(path: PathBuf) {
+            display("Invalid path {}", path.to_str().unwrap())
         }
         FileExists(path: PathBuf) {
             display("File {} exists", path.to_str().unwrap())
