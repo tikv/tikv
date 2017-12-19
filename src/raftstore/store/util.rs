@@ -183,13 +183,13 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 /// Lease records an expired time, for examining the current moment is in lease or not.
 /// It's dedicated to the Raft leader lease mechanism, contains either state of
 ///   1. Lowerbound Timestamp
-///      A safe leader lease expired time, which marks the leader holds the lease for now.
-///      The lease is safe until the clock time goes over this timestamp.
-///   2. Lowerbound Timestamp
-///      An unsafe leader lease expired time, which marks the leader may still hold or lose
+///      An unsafe leader lease timestamp, which marks the leader may still hold or lose
 ///      its lease until the clock time goes over this timestamp. It is critical that a Lease
 ///      can only transit it's state to the Upperbound after the clock time goes over
 ///      the Lowerbound.
+///   2. Upperbound Timestamp
+///      A safe leader lease timestamp, which marks the leader holds the lease for now.
+///      The lease is safe until the clock time goes over this timestamp.
 ///
 /// ```text
 /// Time
@@ -211,7 +211,7 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 ///     locally.
 // TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
 //       to the local read thread, so name it remote. If Lease expires, the remote must
-//       expires too.
+//       expire too.
 pub struct Lease {
     // A lowerbound is in the Either::Left(_),
     // an upperbound is in the Either::Right(_).
