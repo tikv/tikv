@@ -28,6 +28,7 @@ use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK};
 use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, ReadOptions,
               SliceTransform, Writable, WriteBatch, DB};
 use rocksdb::rocksdb::supported_compression;
+use rocksdb::set_external_sst_file_global_seq_no;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
                                     ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
 use util::rocksdb;
@@ -355,6 +356,68 @@ pub fn compact_range(
     // concurrently run with other background compactions.
     compact_opts.set_exclusive_manual_compaction(exclusive_manual);
     db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
+}
+
+/// Prepare the SST file for ingestion.
+/// The purpose is to make the ingestion retryable when using the `move_files` option.
+/// Things we need to consider here:
+/// 1. We need to access the original file on retry, so we should make a clone
+///    before ingestion.
+/// 2. `RocksDB` will modified the global seqno of the ingested file, so we need
+///    to modified the global seqno back to 0 so that we can pass the checksum
+///    validation.
+/// 3. If the file has been ingested to `RocksDB`, we should not modified the
+///    global seqno directly, because that may corrupt RocksDB's data.
+#[cfg(target_os = "linux")]
+pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
+    db: &DB,
+    cf: &str,
+    path: P,
+    clone: P,
+) -> Result<(), String> {
+    use std::os::linux::fs::MetadataExt;
+
+    let path = path.as_ref().to_str().unwrap();
+    let clone = clone.as_ref().to_str().unwrap();
+
+    if Path::new(clone).exists() {
+        fs::remove_file(clone)
+            .map_err(|e| format!("remove {}: {:?}", clone, e))?;
+    }
+
+    let meta = fs::metadata(path)
+        .map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
+
+    if meta.st_nlink() == 1 {
+        // RocksDB must not have this file, we can make a hard link.
+        fs::hard_link(path, clone)
+            .map_err(|e| format!("link from {} to {}: {:?}", path, clone, e))?;
+    } else {
+        // RocksDB may have this file, we should make a copy.
+        fs::copy(path, clone)
+            .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
+    }
+
+    let cf_handle = get_cf_handle(db, cf)?;
+    set_external_sst_file_global_seq_no(db, cf_handle, clone, 0).map(|_| ())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
+    db: &DB,
+    cf: &str,
+    path: P,
+    clone: P,
+) -> Result<(), String> {
+    let path = path.as_ref().to_str().unwrap();
+    let clone = clone.as_ref().to_str().unwrap();
+    if Path::new(clone).exists() {
+        fs::copy(path, clone)
+            .map(|_| ())
+            .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
