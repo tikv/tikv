@@ -68,13 +68,6 @@ impl DistSQLCache {
         }
     }
 
-    pub fn get_region_version(&self, region_id: u64) -> u64 {
-        match self.regions.get(&region_id) {
-            None => 0,
-            Some(item) => item.version,
-        }
-    }
-
     pub fn put(&mut self, region_id: u64, k: DistSQLCacheKey, version: u64, res: Vec<u8>) {
         if !self.enable_cache {
             return;
@@ -138,6 +131,21 @@ impl DistSQLCache {
         };
         if opt.is_some() {
             self.remove(k);
+        }
+    }
+
+    pub fn get_region_version_and_cache_entry(
+        &mut self,
+        region_id: u64,
+        k: &str,
+    ) -> (u64, Option<&Vec<u8>>) {
+        (self.get_region_version(region_id), self.get(region_id, k))
+    }
+
+    pub fn get_region_version(&self, region_id: u64) -> u64 {
+        match self.regions.get(&region_id) {
+            None => 0,
+            Some(item) => item.version,
         }
     }
 

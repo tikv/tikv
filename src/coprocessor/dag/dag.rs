@@ -84,18 +84,17 @@ impl DAGContext {
         let mut chunks = Vec::new();
         let mut version: u64 = 0;
         if self.can_cache() {
-            version = DISTSQL_CACHE.lock().unwrap().get_region_version(region_id);
-            if let Some(data) = DISTSQL_CACHE
-                .lock()
-                .unwrap()
-                .get(region_id, &self.cache_key)
-            {
+            let mut cache = DISTSQL_CACHE.lock().unwrap();
+            let (rver, entry) =
+                cache.get_region_version_and_cache_entry(region_id, &self.cache_key);
+            version = rver;
+            if let Some(data) = entry {
                 debug!("Cache Hit: {}, region_id: {}", self.cache_key, region_id);
                 CORP_DISTSQL_CACHE_COUNT.with_label_values(&["hit"]).inc();
                 let mut resp = Response::new();
                 resp.set_data(data.clone());
                 return Ok(resp);
-            };
+            }
         }
 
         loop {
