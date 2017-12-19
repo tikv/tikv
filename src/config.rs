@@ -87,6 +87,7 @@ macro_rules! cf_config {
             pub compaction_pri: CompactionPriority,
             pub level_dynamic_level_bytes: bool,
             pub num_levels: i32,
+            pub max_bytes_for_level_multiplier: i32,
         }
     }
 }
@@ -123,6 +124,7 @@ macro_rules! build_cf_opt {
         cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
         cf_opts.compaction_priority($opt.compaction_pri);
         cf_opts.set_level_compaction_dynamic_level_bytes($opt.level_dynamic_level_bytes);
+        cf_opts.set_max_bytes_for_level_multiplier($opt.max_bytes_for_level_multiplier);
 
         cf_opts
     }};
@@ -164,6 +166,7 @@ impl Default for DefaultCfConfig {
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             level_dynamic_level_bytes: false,
             num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -213,6 +216,7 @@ impl Default for WriteCfConfig {
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             level_dynamic_level_bytes: false,
             num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -264,6 +268,7 @@ impl Default for LockCfConfig {
             compaction_pri: CompactionPriority::ByCompensatedSize,
             level_dynamic_level_bytes: false,
             num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -308,6 +313,7 @@ impl Default for RaftCfConfig {
             compaction_pri: CompactionPriority::ByCompensatedSize,
             level_dynamic_level_bytes: false,
             num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -490,6 +496,7 @@ impl Default for RaftDefaultCfConfig {
             compaction_pri: CompactionPriority::ByCompensatedSize,
             level_dynamic_level_bytes: false,
             num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }

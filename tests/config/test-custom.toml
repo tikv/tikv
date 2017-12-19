@@ -137,6 +137,7 @@ max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
 num-levels = 4
+max-bytes-for-level-multiplier = 8
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -170,6 +171,7 @@ max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
 num-levels = 4
+max-bytes-for-level-multiplier = 8
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -203,6 +205,7 @@ max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
 num-levels = 4
+max-bytes-for-level-multiplier = 8
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -236,6 +239,7 @@ max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
 num-levels = 4
+max-bytes-for-level-multiplier = 8
 
 [raftdb]
 wal-recovery-mode = 3
@@ -292,6 +296,7 @@ max-compaction-bytes = "1GB"
 compaction-pri = 3
 level-dynamic-level-bytes = true
 num-levels = 4
+max-bytes-for-level-multiplier = 8
 
 [security]
 ca-path = "invalid path"
