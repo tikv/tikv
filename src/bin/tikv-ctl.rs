@@ -470,6 +470,7 @@ impl DebugExecutor for DebugClient {
         req.set_limit(limit);
         Box::new(
             self.scan_mvcc(&req)
+                .unwrap()
                 .map_err(|e| e.to_string())
                 .map(|mut resp| (resp.take_key(), resp.take_info())),
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
