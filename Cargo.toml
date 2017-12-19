@@ -63,7 +63,7 @@ tokio-timer = "0.1"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
-grpcio = "0.1"
+grpcio = {version = "0.1", features = ["secure"]}
 rustc-serialize = "0.3"
 murmur3 = "0.4.0"
 futures-cpupool = "0.1"
@@ -77,7 +77,7 @@ signal = "0.4"
 git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
+path = "/home/qupeng/github.com/pingcap/kvproto"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
@@ -98,6 +98,9 @@ git = "https://github.com/pingcap/fail-rs.git"
 
 [replace]
 "protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+
+[replace."grpcio:0.1.2"]
+path = "/home/qupeng/github.com/pingcap/grpc-rs"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
