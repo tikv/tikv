@@ -74,6 +74,7 @@ pub struct Node<C: PdClient + 'static> {
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
     ch: SendCh<Msg>,
+    enable_distsql_cache: bool,
 
     pd_client: Arc<C>,
 }
@@ -116,6 +117,7 @@ where
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
+            enable_distsql_cache: cfg.enable_distsql_cache,
         }
     }
 
@@ -339,6 +341,7 @@ where
 
         let (tx, rx) = mpsc::channel();
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
+        let enable_distsql_cache = self.enable_distsql_cache;
         let h = builder.spawn(move || {
             let ch = StoreChannel {
                 sender,
@@ -354,6 +357,7 @@ where
                 snap_mgr,
                 pd_worker,
                 coprocessor_host,
+                enable_distsql_cache,
             ) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,

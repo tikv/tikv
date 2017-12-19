@@ -19,8 +19,12 @@ use protobuf::RepeatedField;
 pub struct DistSQLObserver;
 
 impl DistSQLObserver {
-    fn disable_cache(&self) {
-        DISTSQL_CACHE.lock().unwrap().disable();
+    fn disable_cache(&self, ctx: &mut ObserverContext) {
+        let region_id = ctx.region().get_id();
+        DISTSQL_CACHE
+            .lock()
+            .unwrap()
+            .disable_region_cache(region_id);
     }
 
     fn evict_region(&self, ctx: &mut ObserverContext) {
@@ -35,9 +39,9 @@ impl DistSQLObserver {
 impl Coprocessor for DistSQLObserver {}
 
 impl QueryObserver for DistSQLObserver {
-    fn pre_apply_query(&self, _: &mut ObserverContext, _: &[Request]) {
+    fn pre_apply_query(&self, ctx: &mut ObserverContext, _: &[Request]) {
         debug!("Disable cache at pre_apply_query");
-        self.disable_cache();
+        self.disable_cache(ctx);
     }
 
     fn post_apply_query(&self, ctx: &mut ObserverContext, _: &mut RepeatedField<Response>) {
@@ -47,9 +51,9 @@ impl QueryObserver for DistSQLObserver {
 }
 
 impl AdminObserver for DistSQLObserver {
-    fn pre_apply_admin(&self, _: &mut ObserverContext, _: &AdminRequest) {
+    fn pre_apply_admin(&self, ctx: &mut ObserverContext, _: &AdminRequest) {
         debug!("Disable cache at pre_apply_admin");
-        self.disable_cache();
+        self.disable_cache(ctx);
     }
 
     fn post_apply_admin(&self, ctx: &mut ObserverContext, _: &mut AdminResponse) {

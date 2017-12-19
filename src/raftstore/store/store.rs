@@ -196,6 +196,7 @@ impl<T, C> Store<T, C> {
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         mut coprocessor_host: CoprocessorHost,
+        enable_distsql_cache: bool,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -207,12 +208,15 @@ impl<T, C> Store<T, C> {
         coprocessor_host
             .registry
             .register_admin_observer(100, box SplitObserver);
-        coprocessor_host
-            .registry
-            .register_admin_observer(100, box DistSQLObserver);
-        coprocessor_host
-            .registry
-            .register_query_observer(100, box DistSQLObserver);
+
+        if enable_distsql_cache {
+            coprocessor_host
+                .registry
+                .register_admin_observer(100, box DistSQLObserver);
+            coprocessor_host
+                .registry
+                .register_query_observer(100, box DistSQLObserver);
+        }
 
         let mut s = Store {
             cfg: Rc::new(cfg),
