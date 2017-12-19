@@ -118,6 +118,7 @@ macro_rules! build_cf_opt {
         cf_opts.set_level_zero_stop_writes_trigger($opt.level0_stop_writes_trigger);
         cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
         cf_opts.compaction_priority($opt.compaction_pri);
+        cf_opts.set_level_compaction_dynamic_level_bytes($opt.level_dynamic_level_bytes);
 
         cf_opts
     }};
