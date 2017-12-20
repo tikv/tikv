@@ -423,9 +423,11 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable, DB};
+    use rocksdb::{ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions,
+                  SstFileWriter, Writable, DB};
     use tempdir::TempDir;
     use storage::CF_DEFAULT;
+    use util::file::calc_crc32;
 
     #[test]
     fn test_check_and_open() {
@@ -481,5 +483,77 @@ mod tests {
         db.put_cf(cf, b"a", b"a").unwrap();
         db.flush_cf(cf, true).unwrap();
         assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_some());
+    }
+
+    fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
+        if cfg!(target_os = "linux") {
+            use std::os::linux::fs::MetadataExt;
+            assert_eq!(fs::metadata(path).unwrap().st_nlink(), nlink);
+        }
+    }
+
+    fn gen_sst_with_kvs(db: &DB, cf: &CFHandle, path: &str, kvs: &[(&str, &str)]) {
+        let opts = db.get_options_cf(cf).clone();
+        let mut writer = SstFileWriter::new(EnvOptions::new(), opts);
+        writer.open(path).unwrap();
+        for &(k, v) in kvs {
+            writer.put(k.as_bytes(), v.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    fn check_db_with_kvs(db: &DB, cf: &CFHandle, kvs: &[(&str, &str)]) {
+        for &(k, v) in kvs {
+            assert_eq!(db.get_cf(cf, k.as_bytes()).unwrap().unwrap(), v.as_bytes());
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_prepare_sst_for_ingestion() {
+        let path = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion").expect("");
+        let path_str = path.path().to_str().unwrap();
+
+        let sst_dir = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion_sst").expect("");
+        let sst_path = sst_dir.path().join("abc.sst");
+        let sst_clone = sst_dir.path().join("abc.sst.clone");
+
+        let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
+
+        let cf_name = "default";
+        let db = new_engine(path_str, &[cf_name], None).unwrap();
+        let cf = db.cf_handle(cf_name).unwrap();
+        let mut ingest_opts = IngestExternalFileOptions::new();
+        ingest_opts.move_files(true);
+
+        gen_sst_with_kvs(&db, cf, sst_path.to_str().unwrap(), &kvs);
+        let crc32 = calc_crc32(&sst_path).unwrap();
+
+        // The first ingestion will hard link sst_path to sst_clone.
+        check_hard_link(&sst_path, 1);
+        prepare_sst_for_ingestion(&db, cf_name, &sst_path, &sst_clone).unwrap();
+        check_hard_link(&sst_path, 2);
+        check_hard_link(&sst_clone, 2);
+        assert_eq!(calc_crc32(&sst_clone).unwrap(), crc32);
+        // If we prepare again, it will use hard link too.
+        prepare_sst_for_ingestion(&db, cf_name, &sst_path, &sst_clone).unwrap();
+        check_hard_link(&sst_path, 2);
+        check_hard_link(&sst_clone, 2);
+        assert_eq!(calc_crc32(&sst_clone).unwrap(), crc32);
+        db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
+            .unwrap();
+        check_db_with_kvs(&db, cf, &kvs);
+        assert!(!sst_clone.exists());
+
+        // The second ingestion will copy sst_path to sst_clone.
+        check_hard_link(&sst_path, 2);
+        prepare_sst_for_ingestion(&db, cf_name, &sst_path, &sst_clone).unwrap();
+        check_hard_link(&sst_path, 2);
+        check_hard_link(&sst_clone, 1);
+        assert_eq!(calc_crc32(&sst_clone).unwrap(), crc32);
+        db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
+            .unwrap();
+        check_db_with_kvs(&db, cf, &kvs);
+        assert!(!sst_clone.exists());
     }
 }

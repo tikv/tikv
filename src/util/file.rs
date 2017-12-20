@@ -11,9 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{self, ErrorKind};
-use std::fs;
+use std::io::{self, ErrorKind, Read};
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+
+use crc::crc32::{self, Digest, Hasher32};
 
 pub fn get_file_size(path: &PathBuf) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
@@ -31,6 +33,26 @@ pub fn delete_file_if_exist(file: &PathBuf) {
         Err(ref e) if e.kind() == ErrorKind::NotFound => {}
         Err(e) => {
             warn!("failed to delete file {}: {:?}", file.display(), e);
+        }
+    }
+}
+
+const DIGEST_BUFFER_SIZE: usize = 10240;
+
+pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
+    let mut digest = Digest::new(crc32::IEEE);
+    let mut f = OpenOptions::new().read(true).open(path)?;
+    let mut buf = vec![0; DIGEST_BUFFER_SIZE];
+    loop {
+        match f.read(&mut buf[..]) {
+            Ok(0) => {
+                return Ok(digest.sum32());
+            }
+            Ok(n) => {
+                digest.write(&buf[..n]);
+            }
+            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
         }
     }
 }

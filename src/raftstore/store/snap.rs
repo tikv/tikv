@@ -227,31 +227,11 @@ use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
 use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
 use util::rocksdb;
 use util::time::duration_to_sec;
-use util::file::{delete_file_if_exist, file_exists, get_file_size};
+use util::file::{delete_file_if_exist, file_exists, get_file_size, calc_crc32};
 use util::rocksdb::get_fastest_supported_compression_type;
 
 pub const SNAPSHOT_VERSION: u64 = 2;
 const META_FILE_SUFFIX: &'static str = ".meta";
-const DIGEST_BUFFER_SIZE: usize = 10240;
-
-
-fn calc_crc32(p: &PathBuf) -> io::Result<u32> {
-    let mut digest = Digest::new(crc32::IEEE);
-    let mut f = OpenOptions::new().read(true).open(&p)?;
-    let mut buf = vec![0; DIGEST_BUFFER_SIZE];
-    loop {
-        match f.read(&mut buf[..]) {
-            Ok(0) => {
-                return Ok(digest.sum32());
-            }
-            Ok(n) => {
-                digest.write(&buf[..n]);
-            }
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(err) => return Err(err),
-        }
-    }
-}
 
 fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());
