@@ -34,6 +34,7 @@ use raftstore::errors::Error as RaftStoreError;
 use raftstore::store::Msg;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use util::file::calc_crc32;
 use util::transport::SendCh;
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::HandyRwLock;

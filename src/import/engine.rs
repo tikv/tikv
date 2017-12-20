@@ -33,21 +33,21 @@ use util::rocksdb::{new_engine_opt, CFOptions};
 use super::{Error, Result};
 
 pub struct Engine {
-    cfg: DbConfig,
     uuid: Uuid,
+    opts: DbConfig,
     db: Arc<DB>,
     env: Arc<Env>,
 }
 
 impl Engine {
-    pub fn new<P: AsRef<Path>>(cfg: DbConfig, uuid: Uuid, path: P) -> Result<Engine> {
+    pub fn new<P: AsRef<Path>>(uuid: Uuid, path: P, opts: DbConfig) -> Result<Engine> {
         let db = {
-            let (db_opts, cfs_opts) = tune_dbconfig_for_bulk_load(&cfg);
+            let (db_opts, cfs_opts) = tune_dboptions_for_bulk_load(&opts);
             new_engine_opt(path.as_ref().to_str().unwrap(), db_opts, cfs_opts)?
         };
         Ok(Engine {
-            cfg: cfg,
             uuid: uuid,
+            opts: opts,
             db: Arc::new(db),
             env: Arc::new(Env::new_mem()),
         })
@@ -116,8 +116,8 @@ impl Engine {
 
     pub fn new_sst_writer<P: AsRef<Path>>(&self, cf_name: &str, path: P) -> Result<SstFileWriter> {
         let mut cf_opts = match cf_name {
-            "write" => self.cfg.writecf.build_opt(),
-            "default" => self.cfg.defaultcf.build_opt(),
+            "write" => self.opts.writecf.build_opt(),
+            "default" => self.opts.defaultcf.build_opt(),
             _ => unreachable!(),
         };
         cf_opts.set_env(self.env.clone());
@@ -152,16 +152,16 @@ impl fmt::Display for Engine {
     }
 }
 
-fn tune_dbconfig_for_bulk_load(cfg: &DbConfig) -> (DBOptions, Vec<CFOptions>) {
+fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) {
     const DISABLED: i32 = i32::MAX;
 
-    let mut opts = DBOptions::new();
-    opts.create_if_missing(true);
-    opts.enable_statistics(false);
-    opts.enable_pipelined_write(true);
-    opts.set_use_direct_io_for_flush_and_compaction(true);
+    let mut db_opts = DBOptions::new();
+    db_opts.create_if_missing(true);
+    db_opts.enable_statistics(false);
+    db_opts.enable_pipelined_write(true);
+    db_opts.set_use_direct_io_for_flush_and_compaction(true);
     // NOTE: RocksDB preserves `max_background_jobs/4` for flush.
-    opts.set_max_background_jobs(cfg.max_background_jobs);
+    db_opts.set_max_background_jobs(opts.max_background_jobs);
 
     // CF_WRITE and CF_DEFAULT use the same options.
     let mut block_base_opts = BlockBasedOptions::new();
@@ -169,12 +169,12 @@ fn tune_dbconfig_for_bulk_load(cfg: &DbConfig) -> (DBOptions, Vec<CFOptions>) {
     block_base_opts.set_block_size(512 * KB as usize);
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
-    cf_opts.compression_per_level(&cfg.defaultcf.compression_per_level);
+    cf_opts.compression_per_level(&opts.defaultcf.compression_per_level);
     // NOTE: Consider using a large write buffer, 1GB should be good enough.
-    cf_opts.set_write_buffer_size(cfg.defaultcf.write_buffer_size.0);
-    cf_opts.set_target_file_size_base(cfg.defaultcf.write_buffer_size.0);
-    cf_opts.set_max_write_buffer_number(cfg.defaultcf.max_write_buffer_number);
-    cf_opts.set_min_write_buffer_number_to_merge(cfg.defaultcf.min_write_buffer_number_to_merge);
+    cf_opts.set_write_buffer_size(opts.defaultcf.write_buffer_size.0);
+    cf_opts.set_target_file_size_base(opts.defaultcf.write_buffer_size.0);
+    cf_opts.set_max_write_buffer_number(opts.defaultcf.max_write_buffer_number);
+    cf_opts.set_min_write_buffer_number_to_merge(opts.defaultcf.min_write_buffer_number_to_merge);
     // Disable compaction and rate limit.
     cf_opts.set_disable_auto_compactions(true);
     cf_opts.set_soft_pending_compaction_bytes_limit(0);
@@ -190,5 +190,5 @@ fn tune_dbconfig_for_bulk_load(cfg: &DbConfig) -> (DBOptions, Vec<CFOptions>) {
         CFOptions::new(CF_DEFAULT, cf_opts.clone()),
     ];
 
-    (opts, cfs_opts)
+    (db_opts, cfs_opts)
 }

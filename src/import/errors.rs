@@ -78,9 +78,6 @@ quick_error! {
         SplitRegion(err: errorpb::Error) {
             display("SplitRegion {:?}", err)
         }
-        InvalidPath(path: PathBuf) {
-            display("Invalid path {}", path.to_str().unwrap())
-        }
         FileExists(path: PathBuf) {
             display("File {} exists", path.to_str().unwrap())
         }
@@ -89,6 +86,9 @@ quick_error! {
         }
         FileNotExists(path: PathBuf) {
             display("File {} not exists", path.to_str().unwrap())
+        }
+        InvalidSSTPath(path: PathBuf) {
+            display("Invalid SST path {}", path.to_str().unwrap())
         }
         TokenNotFound(token: usize) {
             display("Token {} not found", token)

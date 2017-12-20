@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,32 +21,30 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
+use rocksdb::{IngestExternalFileOptions, DB};
 
 use kvproto::metapb::*;
 use kvproto::importpb::*;
+
+use util::file::calc_crc32;
+use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion};
 
 use super::{Error, Result};
 
 pub type Token = usize;
 
-struct Inner {
-    dir: ImportDir,
-    files: HashMap<Token, ImportFile>,
-}
-
 pub struct SSTImporter {
+    dir: ImportDir,
     token: AtomicUsize,
-    inner: Mutex<Inner>,
+    files: Mutex<HashMap<Token, ImportFile>>,
 }
 
 impl SSTImporter {
     pub fn new<P: AsRef<Path>>(root: P) -> Result<SSTImporter> {
         Ok(SSTImporter {
+            dir: ImportDir::new(root)?,
             token: AtomicUsize::new(1),
-            inner: Mutex::new(Inner {
-                dir: ImportDir::new(root)?,
-                files: HashMap::new(),
-            }),
+            files: Mutex::new(HashMap::new()),
         })
     }
 
@@ -55,21 +53,20 @@ impl SSTImporter {
     }
 
     fn insert(&self, token: Token, file: ImportFile) {
-        let mut inner = self.inner.lock().unwrap();
-        assert!(inner.files.insert(token, file).is_none());
+        let mut files = self.files.lock().unwrap();
+        assert!(files.insert(token, file).is_none());
     }
 
     pub fn remove(&self, token: Token) -> Option<ImportFile> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.files.remove(&token)
+        let mut files = self.files.lock().unwrap();
+        files.remove(&token)
     }
 
     pub fn create(&self, token: Token, meta: &SSTMeta) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
-        match inner.dir.create(meta) {
+        match self.dir.create(meta) {
             Ok(f) => {
                 info!("create {}", f);
-                assert!(inner.files.insert(token, f).is_none());
+                self.insert(token, f);
                 Ok(())
             }
             Err(e) => {
@@ -112,10 +109,9 @@ impl SSTImporter {
     }
 
     pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
-        let inner = self.inner.lock().unwrap();
-        match inner.dir.delete(meta) {
+        match self.dir.delete(meta) {
             Ok(path) => {
-                info!("delete {:?}", meta);
+                info!("delete {}", path);
                 Ok(())
             }
             Err(e) => {
@@ -125,92 +121,155 @@ impl SSTImporter {
         }
     }
 
-    pub fn locate(&self, meta: &SSTMeta) -> Result<PathBuf> {
-        let inner = self.inner.lock().unwrap();
-        inner.dir.locate(meta)
+    pub fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
+        match self.dir.ingest(meta, db) {
+            Ok(_) => {
+                info!("ingest {:?}", meta);
+                Ok(())
+            }
+            Err(e) => {
+                error!("ingest {:?}: {:?}", meta, e);
+                Err(e)
+            }
+        }
     }
 }
 
 // TODO: Add size and rate limit.
 pub struct ImportDir {
-    root: PathBuf,
+    root_dir: PathBuf,
+    temp_dir: PathBuf,
+    clone_dir: PathBuf,
 }
 
 impl ImportDir {
     const TEMP_DIR: &'static str = ".temp";
+    const CLONE_DIR: &'static str = ".clone";
 
-    pub fn new<P: AsRef<Path>>(root: P) -> Result<ImportDir> {
+    fn new<P: AsRef<Path>>(root: P) -> Result<ImportDir> {
         let root_dir = root.as_ref().to_owned();
         let temp_dir = root_dir.join(Self::TEMP_DIR);
+        let clone_dir = root_dir.join(Self::CLONE_DIR);
         if temp_dir.exists() {
             fs::remove_dir_all(&temp_dir)?;
         }
+        if clone_dir.exists() {
+            fs::remove_dir_all(&clone_dir)?;
+        }
         fs::create_dir_all(&temp_dir)?;
-        Ok(ImportDir { root: root_dir })
+        fs::create_dir_all(&clone_dir)?;
+        Ok(ImportDir {
+            root_dir: root_dir,
+            temp_dir: temp_dir,
+            clone_dir: clone_dir,
+        })
     }
 
-    pub fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
+    fn join(&self, meta: &SSTMeta) -> Result<ImportPath> {
         let file_name = sst_meta_to_path(meta)?;
-        let save_path = self.root.join(&file_name);
-        let temp_path = self.root.join(Self::TEMP_DIR).join(&file_name);
-        if save_path.exists() {
-            return Err(Error::FileExists(save_path));
-        }
-        if temp_path.exists() {
-            return Err(Error::FileExists(temp_path));
-        }
-        ImportFile::create(meta.clone(), save_path, temp_path)
+        let save_path = self.root_dir.join(&file_name);
+        let temp_path = self.temp_dir.join(&file_name);
+        let clone_path = self.clone_dir.join(&file_name);
+        Ok(ImportPath {
+            save: save_path,
+            temp: temp_path,
+            clone: clone_path,
+        })
     }
 
-    pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
-        let file_name = sst_meta_to_path(meta)?;
-        let save_path = self.root.join(&file_name);
-        fs::remove_file(&save_path)?;
+    fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
+        let path = self.join(meta)?;
+        if path.save.exists() {
+            return Err(Error::FileExists(path.save));
+        }
+        ImportFile::create(meta.clone(), path)
+    }
+
+    fn delete(&self, meta: &SSTMeta) -> Result<ImportPath> {
+        let path = self.join(meta)?;
+        if path.save.exists() {
+            fs::remove_file(&path.save)?;
+        }
+        if path.temp.exists() {
+            fs::remove_file(&path.temp)?;
+        }
+        if path.clone.exists() {
+            fs::remove_file(&path.clone)?;
+        }
+        Ok(path)
+    }
+
+    fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
+        let path = self.join(meta)?;
+        prepare_sst_for_ingestion(db, meta.get_cf_name(), &path.save, &path.clone)?;
+
+        if calc_crc32(&path.clone)? != meta.get_crc32() {
+            return Err(Error::FileCorrupted(path.clone));
+        }
+        if path.clone.metadata()?.len() != meta.get_length() {
+            return Err(Error::FileCorrupted(path.clone));
+        }
+
+        let cf = get_cf_handle(db, meta.get_cf_name())?;
+        let mut opts = IngestExternalFileOptions::new();
+        opts.move_files(true);
+        db.ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()])?;
         Ok(())
     }
 
-    pub fn locate(&self, meta: &SSTMeta) -> Result<PathBuf> {
-        let file_name = sst_meta_to_path(meta)?;
-        let save_path = self.root.join(&file_name);
-        if !save_path.exists() {
-            return Err(Error::FileNotExists(save_path));
-        }
-        Ok(save_path)
-    }
-
-    pub fn list_ssts(&self) -> Result<Vec<SSTMeta>> {
+    fn list_ssts(&self) -> Result<Vec<SSTMeta>> {
         let mut ssts = Vec::new();
-        for p in fs::read_dir(&self.root)? {
-            let p = p?;
-            if !p.file_type()?.is_file() {
+        for e in fs::read_dir(&self.root_dir)? {
+            let e = e?;
+            if !e.file_type()?.is_file() {
                 continue;
             }
-            match path_to_sst_meta(p.path()) {
+            let path = e.path();
+            match path_to_sst_meta(&path) {
                 Ok(sst) => ssts.push(sst),
-                Err(e) => error!("parse {:?}: {:?}", p.path(), e),
+                Err(e) => error!("{}: {:?}", path.to_str().unwrap(), e),
             }
         }
         Ok(ssts)
     }
 }
 
+pub struct ImportPath {
+    save: PathBuf,
+    temp: PathBuf,
+    clone: PathBuf,
+}
+
+impl fmt::Display for ImportPath {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "ImportPath {{save: {}, temp: {}, clone: {}}}",
+            self.save.to_str().unwrap(),
+            self.temp.to_str().unwrap(),
+            self.clone.to_str().unwrap(),
+        )
+    }
+}
+
 pub struct ImportFile {
     meta: SSTMeta,
+    path: ImportPath,
     file: Option<File>,
     digest: crc32::Digest,
-    save_path: PathBuf,
-    temp_path: PathBuf,
 }
 
 impl ImportFile {
-    fn create(meta: SSTMeta, save_path: PathBuf, temp_path: PathBuf) -> Result<ImportFile> {
-        let file = File::create(&temp_path)?;
+    fn create(meta: SSTMeta, path: ImportPath) -> Result<ImportFile> {
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path.temp)?;
         Ok(ImportFile {
             meta: meta,
+            path: path,
             file: Some(file),
             digest: crc32::Digest::new(crc32::IEEE),
-            save_path: save_path,
-            temp_path: temp_path,
         })
     }
 
@@ -223,27 +282,28 @@ impl ImportFile {
     fn finish(&mut self) -> Result<()> {
         self.validate()?;
         self.file.take();
-        assert!(self.temp_path.exists());
-        assert!(!self.save_path.exists());
-        fs::rename(&self.temp_path, &self.save_path)?;
+        if self.path.save.exists() {
+            return Err(Error::FileExists(self.path.save.clone()));
+        }
+        fs::rename(&self.path.temp, &self.path.save)?;
         Ok(())
     }
 
-    fn remove(&mut self) -> Result<()> {
+    fn cleanup(&mut self) -> Result<()> {
         self.file.take();
-        if self.temp_path.exists() {
-            fs::remove_file(&self.temp_path)?;
+        if self.path.temp.exists() {
+            fs::remove_file(&self.path.temp)?;
         }
         Ok(())
     }
 
     fn validate(&self) -> Result<()> {
         if self.digest.sum32() != self.meta.get_crc32() {
-            return Err(Error::FileCorrupted(self.temp_path.clone()));
+            return Err(Error::FileCorrupted(self.path.temp.clone()));
         }
         let f = self.file.as_ref().unwrap();
         if f.metadata()?.len() != self.meta.get_length() {
-            return Err(Error::FileCorrupted(self.temp_path.clone()));
+            return Err(Error::FileCorrupted(self.path.temp.clone()));
         }
         Ok(())
     }
@@ -251,8 +311,8 @@ impl ImportFile {
 
 impl Drop for ImportFile {
     fn drop(&mut self) {
-        if let Err(e) = self.remove() {
-            warn!("remove {}: {:?}", self, e);
+        if let Err(e) = self.cleanup() {
+            warn!("cleanup {}: {:?}", self, e);
         }
     }
 }
@@ -261,21 +321,23 @@ impl fmt::Display for ImportFile {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "ImportFile {{meta: {{{:?}}}, save_path: {}, temp_path: {}}}",
+            "ImportFile {{meta: {{{:?}}}, path: {}}}",
             self.meta,
-            self.save_path.to_str().unwrap(),
-            self.temp_path.to_str().unwrap(),
+            self.path,
         )
     }
 }
 
+const SST_SUFFIX: &'static str = ".sst";
+
 fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
-        "{}_{}_{}_{}.sst",
+        "{}_{}_{}_{}{}",
         Uuid::from_bytes(meta.get_uuid())?,
         meta.get_region_id(),
         meta.get_region_epoch().get_conf_ver(),
         meta.get_region_epoch().get_version(),
+        SST_SUFFIX,
     )))
 }
 
@@ -283,12 +345,18 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
     let path = path.as_ref();
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
-        None => return Err(Error::InvalidPath(path.to_owned())),
+        None => return Err(Error::InvalidSSTPath(path.to_owned())),
     };
 
-    let elems: Vec<_> = file_name.split('_').collect();
+    if !file_name.ends_with(SST_SUFFIX) {
+        return Err(Error::InvalidSSTPath(path.to_owned()));
+    }
+    let elems: Vec<_> = file_name
+        .trim_right_matches(SST_SUFFIX)
+        .split('_')
+        .collect();
     if elems.len() != 4 {
-        return Err(Error::InvalidPath(path.to_owned()));
+        return Err(Error::InvalidSSTPath(path.to_owned()));
     }
 
     let mut sst = SSTMeta::new();
@@ -300,4 +368,28 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
     epoch.set_version(elems[3].parse()?);
     sst.set_region_epoch(epoch);
     Ok(sst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sst_meta_to_path() {
+        let mut meta = SSTMeta::new();
+        let uuid = Uuid::new_v4();
+        meta.set_uuid(uuid.as_bytes().to_vec());
+        meta.set_region_id(1);
+        let mut epoch = RegionEpoch::new();
+        epoch.set_conf_ver(2);
+        epoch.set_version(3);
+        meta.set_region_epoch(epoch);
+
+        let path = sst_meta_to_path(&meta).unwrap();
+        let expected_path = format!("{}_1_2_3.sst", uuid);
+        assert_eq!(path.to_str().unwrap(), &expected_path);
+
+        let new_meta = path_to_sst_meta(path).unwrap();
+        assert_eq!(meta, new_meta);
+    }
 }

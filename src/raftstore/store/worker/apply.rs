@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::collections::VecDeque;
 use std::mem;
 
-use rocksdb::{IngestExternalFileOptions, Writable, WriteBatch, DB};
+use rocksdb::{Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::RepeatedField;
 
@@ -1230,28 +1230,19 @@ impl ApplyDelegate {
 
     fn handle_ingest_sst(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let sst = req.get_ingest_sst().get_sst();
-        let region = &self.region;
 
-        if let Err(e) = check_sst_for_region(sst, region) {
-            error!("can not ingest {:?} to region {:?}: {:?}", sst, region, e);
+        if let Err(e) = check_sst_for_region(sst, &self.region) {
+            error!("ingest {:?} to region {:?}: {:?}", sst, self.region, e);
+            // This file is not valid, we can delete it here.
             let _ = ctx.importer.delete(sst);
             return Err(e);
         }
 
-        // TODO: Use hard link and fix checksum.
-        let sst_path = match ctx.importer.locate(sst) {
-            Ok(path) => path,
-            Err(e) => return Err(box_err!("can not locate file {:?}: {:?}", sst, e)),
-        };
-
-        let cf = rocksdb::get_cf_handle(&self.engine, sst.get_cf_name())?;
-        let mut opts = IngestExternalFileOptions::new();
-        opts.move_files(true);
-        self.engine
-            .ingest_external_file_cf(cf, &opts, &[sst_path.to_str().unwrap()])
-            .unwrap_or_else(|e| {
-                panic!("{} ingest file {:?}: {:?}", self.tag, sst_path, e);
-            });
+        ctx.importer.ingest(sst, &self.engine).unwrap_or_else(|e| {
+            // If this failed, it means that the file is corrupted or something
+            // is wrong with the engine, we can't handle that.
+            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+        });
 
         Ok(Response::new())
     }

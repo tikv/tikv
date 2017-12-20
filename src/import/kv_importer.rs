@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -28,7 +29,6 @@ use super::{Client, Config, Engine, Error, ImportJob, Result};
 pub type Token = usize;
 
 struct Inner {
-    dir: EngineDir,
     jobs: HashMap<Uuid, Arc<ImportJob>>,
     engines: HashMap<Uuid, Arc<EngineFile>>,
     clients: HashMap<Token, Arc<EngineFile>>,
@@ -36,6 +36,7 @@ struct Inner {
 
 pub struct KVImporter {
     cfg: Config,
+    dir: EngineDir,
     token: AtomicUsize,
     inner: Mutex<Inner>,
 }
@@ -44,9 +45,9 @@ impl KVImporter {
     pub fn new(cfg: &Config, opts: &DbConfig) -> Result<KVImporter> {
         Ok(KVImporter {
             cfg: cfg.clone(),
+            dir: EngineDir::new(&cfg.import_dir, opts)?,
             token: AtomicUsize::new(1),
             inner: Mutex::new(Inner {
-                dir: EngineDir::new(&cfg.import_dir, opts)?,
                 jobs: HashMap::new(),
                 engines: HashMap::new(),
                 clients: HashMap::new(),
@@ -72,10 +73,10 @@ impl KVImporter {
     /// Clients with the same uuid will share the same engine.
     pub fn attach(&self, token: Token, uuid: Uuid) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
-        let engine = match inner.engines.get(&uuid).cloned() {
-            Some(engine) => engine,
-            None => {
-                let engine = match inner.dir.create(uuid) {
+        let engine = match inner.engines.entry(uuid) {
+            Entry::Occupied(e) => e.get().clone(),
+            Entry::Vacant(e) => {
+                let engine = match self.dir.create(uuid) {
                     Ok(engine) => {
                         info!("create {}", engine);
                         Arc::new(engine)
@@ -85,7 +86,7 @@ impl KVImporter {
                         return Err(e);
                     }
                 };
-                inner.engines.insert(uuid, engine.clone());
+                e.insert(engine.clone());
                 engine
             }
         };
@@ -158,17 +159,14 @@ impl KVImporter {
             if inner.jobs.contains_key(&uuid) || inner.engines.contains_key(&uuid) {
                 return Err(Error::EngineInUse(uuid));
             }
-            let engine = inner.dir.open(uuid)?;
+            let engine = self.dir.open(uuid)?;
             let job = Arc::new(ImportJob::new(self.cfg.clone(), engine, client)?);
             inner.jobs.insert(uuid, job.clone());
             job
         };
 
         let res = job.run();
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.jobs.remove(&uuid);
-        }
+        self.inner.lock().unwrap().jobs.remove(&uuid);
 
         match res {
             Ok(_) => {
@@ -183,7 +181,7 @@ impl KVImporter {
     }
 
     /// Cleanup the engine.
-    /// Engine can not be cleanuped when it is being written or imported.
+    /// Engine can not be cleaned when it is being written or imported.
     pub fn cleanup(&self, uuid: Uuid) -> Result<()> {
         // Drop the engine outside of the lock.
         let _ = {
@@ -204,14 +202,13 @@ impl KVImporter {
             }
         };
 
-        let inner = self.inner.lock().unwrap();
-        match inner.dir.remove(uuid) {
+        match self.dir.delete(uuid) {
             Ok(_) => {
-                info!("cleanup {} done", uuid);
+                info!("delete {}", uuid);
                 Ok(())
             }
             Err(e) => {
-                error!("cleanup {}: {:?}", uuid, e);
+                error!("delete {}: {:?}", uuid, e);
                 Err(e)
             }
         }
@@ -219,14 +216,15 @@ impl KVImporter {
 }
 
 pub struct EngineDir {
-    root: PathBuf,
     opts: DbConfig,
+    root_dir: PathBuf,
+    temp_dir: PathBuf,
 }
 
 impl EngineDir {
     const TEMP_DIR: &'static str = ".temp";
 
-    pub fn new<P: AsRef<Path>>(root: P, opts: &DbConfig) -> Result<EngineDir> {
+    fn new<P: AsRef<Path>>(root: P, opts: &DbConfig) -> Result<EngineDir> {
         let root_dir = root.as_ref().to_owned();
         let temp_dir = root_dir.join(Self::TEMP_DIR);
         if temp_dir.exists() {
@@ -234,67 +232,76 @@ impl EngineDir {
         }
         fs::create_dir_all(&temp_dir)?;
         Ok(EngineDir {
-            root: root_dir,
             opts: opts.clone(),
+            root_dir: root_dir,
+            temp_dir: temp_dir,
         })
     }
 
-    pub fn open(&self, uuid: Uuid) -> Result<Engine> {
+    fn join(&self, uuid: Uuid) -> EnginePath {
         let file_name = format!("{}", uuid);
-        let save_path = self.root.join(&file_name);
-        if !save_path.exists() {
-            return Err(Error::FileNotExists(save_path));
+        let save_path = self.root_dir.join(&file_name);
+        let temp_path = self.temp_dir.join(&file_name);
+        EnginePath {
+            save: save_path,
+            temp: temp_path,
         }
-        Engine::new(self.opts.clone(), uuid, save_path)
     }
 
-    pub fn create(&self, uuid: Uuid) -> Result<EngineFile> {
-        let file_name = format!("{}", uuid);
-        let save_path = self.root.join(&file_name);
-        let temp_path = self.root.join(Self::TEMP_DIR).join(&file_name);
-        if save_path.exists() {
-            return Err(Error::FileExists(save_path));
-        }
-        if temp_path.exists() {
-            return Err(Error::FileExists(temp_path));
-        }
-        EngineFile::new(self.opts.clone(), uuid, save_path, temp_path)
+    fn open(&self, uuid: Uuid) -> Result<Engine> {
+        let path = self.join(uuid);
+        Engine::new(uuid, path.save, self.opts.clone())
     }
 
-    pub fn remove(&self, uuid: Uuid) -> Result<()> {
-        let file_name = format!("{}", uuid);
-        let save_path = self.root.join(&file_name);
-        let temp_path = self.root.join(Self::TEMP_DIR).join(&file_name);
-        if save_path.exists() {
-            fs::remove_dir_all(save_path)?;
+    fn create(&self, uuid: Uuid) -> Result<EngineFile> {
+        let path = self.join(uuid);
+        if path.save.exists() {
+            return Err(Error::FileExists(path.save));
         }
-        if temp_path.exists() {
-            fs::remove_dir_all(temp_path)?;
+        EngineFile::new(uuid, path, self.opts.clone())
+    }
+
+    fn delete(&self, uuid: Uuid) -> Result<EnginePath> {
+        let path = self.join(uuid);
+        if path.save.exists() {
+            fs::remove_dir_all(&path.save)?;
         }
-        Ok(())
+        if path.temp.exists() {
+            fs::remove_dir_all(&path.temp)?;
+        }
+        Ok(path)
+    }
+}
+
+pub struct EnginePath {
+    save: PathBuf,
+    temp: PathBuf,
+}
+
+impl fmt::Display for EnginePath {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "EnginePath: {{save: {}, temp: {}}}",
+            self.save.to_str().unwrap(),
+            self.temp.to_str().unwrap(),
+        )
     }
 }
 
 pub struct EngineFile {
     uuid: Uuid,
+    path: EnginePath,
     engine: Option<Engine>,
-    save_path: PathBuf,
-    temp_path: PathBuf,
 }
 
 impl EngineFile {
-    fn new(
-        cfg: DbConfig,
-        uuid: Uuid,
-        save_path: PathBuf,
-        temp_path: PathBuf,
-    ) -> Result<EngineFile> {
-        let engine = Engine::new(cfg, uuid, &temp_path)?;
+    fn new(uuid: Uuid, path: EnginePath, opts: DbConfig) -> Result<EngineFile> {
+        let engine = Engine::new(uuid, &path.temp, opts)?;
         Ok(EngineFile {
             uuid: uuid,
+            path: path,
             engine: Some(engine),
-            save_path: save_path,
-            temp_path: temp_path,
         })
     }
 
@@ -304,16 +311,17 @@ impl EngineFile {
 
     fn finish(&mut self) -> Result<()> {
         self.engine.take().unwrap().flush()?;
-        assert!(self.temp_path.exists());
-        assert!(!self.save_path.exists());
-        fs::rename(&self.temp_path, &self.save_path)?;
+        if self.path.save.exists() {
+            return Err(Error::FileExists(self.path.save.clone()));
+        }
+        fs::rename(&self.path.temp, &self.path.save)?;
         Ok(())
     }
 
-    fn remove(&mut self) -> Result<()> {
+    fn cleanup(&mut self) -> Result<()> {
         self.engine.take();
-        if self.temp_path.exists() {
-            fs::remove_file(&self.temp_path)?;
+        if self.path.temp.exists() {
+            fs::remove_dir_all(&self.path.temp)?;
         }
         Ok(())
     }
@@ -321,20 +329,14 @@ impl EngineFile {
 
 impl Drop for EngineFile {
     fn drop(&mut self) {
-        if let Err(e) = self.remove() {
-            warn!("remove {}: {:?}", self, e);
+        if let Err(e) = self.cleanup() {
+            warn!("cleanup {}: {:?}", self, e);
         }
     }
 }
 
 impl fmt::Display for EngineFile {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "EngineFile {{uuid: {}, save_path: {}, temp_path: {}}}",
-            self.uuid,
-            self.save_path.to_str().unwrap(),
-            self.temp_path.to_str().unwrap(),
-        )
+        write!(f, "EngineFile {{uuid: {}, path: {}}}", self.uuid, self.path)
     }
 }
