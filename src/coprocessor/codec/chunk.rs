@@ -686,4 +686,66 @@ mod test {
             }
         }
     }
+
+    #[test]
+    fn test_truncate_to() {
+        let fields = vec![
+            field_type(types::FLOAT),
+            field_type(types::VARCHAR),
+            field_type(types::JSON),
+        ];
+        let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
+
+        let mut chunk = Chunk::new(&fields);
+
+        for _ in 0..8 {
+            chunk.append_f64(0, 12.8);
+            chunk.append_bytes(1, b"abc");
+            chunk.append_interface(2, Datum::Json(json.clone()));
+            chunk.append_null(0);
+            chunk.append_null(1);
+            chunk.append_null(2);
+        }
+
+        chunk.truncate_to(16);
+        chunk.truncate_to(16);
+        chunk.truncate_to(14);
+        let row_cnt = 12;
+        chunk.truncate_to(12);
+        assert_eq!(chunk.columns.len(), 3);
+        for col in &chunk.columns {
+            assert_eq!(col.length, row_cnt);
+            assert_eq!(col.null_cnt, 6);
+            assert_eq!(col.null_bitmap, vec![0x55, 0x55]);
+        }
+        // check column 0
+        assert!(!chunk.columns[0].is_varlen());
+        assert!(chunk.columns[0].ifaces.is_empty());
+        assert_eq!(chunk.columns[0].fixed_len, 8);
+        assert_eq!(chunk.columns[0].data.len(), 8 * row_cnt);
+
+        // check column 1,varchar
+        assert_eq!(
+            chunk.columns[1].var_offsets,
+            vec![0, 3, 3, 6, 6, 9, 9, 12, 12, 15, 15, 18, 18]
+        );
+        assert_eq!(chunk.columns[1].data, b"abcabcabcabcabcabc".to_vec());
+        assert!(!chunk.columns[1].is_fixed());
+        assert!(chunk.columns[1].ifaces.is_empty());
+
+
+        // check column 2, interface
+        assert!(!chunk.columns[2].is_varlen());
+        assert!(!chunk.columns[2].is_fixed());
+        assert!(chunk.columns[2].data.is_empty());
+        assert_eq!(chunk.columns[2].ifaces.len(), row_cnt);
+
+        for i in 0..row_cnt {
+            if i & 1 == 1 {
+                assert_eq!(chunk.columns[2].ifaces[i], Datum::Null)
+            } else {
+                assert_eq!(chunk.columns[2].ifaces[i], Datum::Json(json.clone()));
+            }
+        }
+    }
 }
