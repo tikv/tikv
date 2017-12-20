@@ -1918,19 +1918,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         let region = peer.region();
+        let latest_epoch = region.get_region_epoch();
 
-        if region.get_region_epoch().get_version() != epoch.get_version() {
+        if latest_epoch.get_version() != epoch.get_version() {
             info!(
-                "{} epoch changed {:?} != {:?}, need re-check later",
+                "{} epoch changed {:?} != {:?}, retry later",
                 peer.tag,
                 region.get_region_epoch(),
                 epoch
             );
-            return Err(box_err!(
-                "{} epoch changed {:?} != {:?}, need re-check later",
-                peer.tag,
-                region.get_region_epoch(),
-                epoch
+            return Err(Error::StaleEpoch(
+                format!(
+                    "{} epoch changed {:?} != {:?}, retry later",
+                    peer.tag,
+                    latest_epoch,
+                    epoch
+                ),
+                vec![region.to_owned()],
             ));
         }
         Ok(())
