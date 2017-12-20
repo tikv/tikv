@@ -6,6 +6,17 @@ use tipb::expression::FieldType;
 use super::datum::Datum;
 use super::mysql::types;
 
+
+// Chunk stores multiple rows of data in Apache Arrow format.
+// See https://arrow.apache.org/docs/memory_layout.html
+// Values are appended in compact format and can be directly accessed without decoding.
+// When the chunk is done processing, we can reuse the allocated memory by resetting it.
+pub struct Chunk {
+    columns: Vec<Column>,
+}
+
+const CHUNK_INITIAL_CAPACITY: usize = 32;
+
 #[derive(Default)]
 struct Column {
     length: usize,
@@ -16,6 +27,12 @@ struct Column {
     // if the data's length is fixed, fixed_len should be bigger than 0
     fixed_len: usize,
     ifaces: Vec<Datum>,
+}
+
+
+pub struct Row {
+    c: Arc<Chunk>,
+    idx: usize,
 }
 
 impl Column {
@@ -155,18 +172,6 @@ impl Column {
         data.as_slice().read_u64::<LittleEndian>().unwrap()
     }
 
-    fn append_f32(&mut self, v: f32) {
-        self.data.write_f32::<LittleEndian>(v).unwrap();
-        self.finish_append_fixed();
-    }
-
-    fn get_f32(&self, idx: usize) -> f32 {
-        let start = idx * self.fixed_len;
-        let end = start + self.fixed_len;
-        let data = self.data[start..end].to_vec();
-        data.as_slice().read_f32::<LittleEndian>().unwrap()
-    }
-
     fn append_f64(&mut self, v: f64) {
         self.data.write_f64::<LittleEndian>(v).unwrap();
         self.finish_append_fixed();
@@ -184,17 +189,6 @@ impl Column {
         let offset = self.data.len();
         self.var_offsets.push(offset);
         self.length += 1;
-    }
-
-    fn append_str(&mut self, s: String) {
-        self.data.write_all(s.as_bytes()).unwrap();
-        self.finished_append_var();
-    }
-
-    fn get_str(&self, idx: usize) -> String {
-        let start = self.var_offsets[idx];
-        let end = self.var_offsets[idx + 1];
-        String::from_utf8(self.data[start..end].to_vec()).unwrap()
     }
 
     fn append_bytes(&mut self, byte: &[u8]) {
@@ -226,21 +220,7 @@ impl Column {
 
     //TODO: seems equal to append(row_col,row_idx,row_idx)?
     fn append_row(&mut self, row_col: &Column, row_idx: usize) {
-        self.append_null_bitmap(!row_col.is_null(row_idx));
-        if row_col.is_fixed() {
-            let offset = row_idx * row_col.fixed_len;
-            let end = offset + row_col.fixed_len;
-            self.data.write_all(&row_col.data[offset..end]).unwrap();
-        } else if row_col.is_varlen() {
-            let start = row_col.var_offsets[row_idx];
-            let end = row_col.var_offsets[row_idx + 1];
-            self.data.write_all(&row_col.data[start..end]).unwrap();
-            let len = self.data.len();
-            self.var_offsets.push(len);
-        } else {
-            self.ifaces.push(row_col.ifaces[row_idx].clone());
-        }
-        self.length += 1;
+        self.append(row_col, row_idx, row_idx + 1);
     }
 
     // append appends data in [begin,end) in col to current column.
@@ -290,16 +270,6 @@ impl Column {
         self.null_bitmap.truncate((num_rows >> 3) + 1);
     }
 }
-
-// Chunk stores multiple rows of data in Apache Arrow format.
-// See https://arrow.apache.org/docs/memory_layout.html
-// Values are appended in compact format and can be directly accessed without decoding.
-// When the chunk is done processing, we can reuse the allocated memory by resetting it.
-pub struct Chunk {
-    columns: Vec<Column>,
-}
-
-const CHUNK_INITIAL_CAPACITY: usize = 32;
 
 impl Chunk {
     ///new_chunk creates a new chunk with field types.
@@ -375,17 +345,8 @@ impl Chunk {
         self.columns[col_idx].append_u64(v);
     }
 
-    // appends a float32 value to the chunk.
-    pub fn append_f32(&mut self, col_idx: usize, v: f32) {
-        self.columns[col_idx].append_f32(v);
-    }
-
     pub fn append_f64(&mut self, col_idx: usize, v: f64) {
         self.columns[col_idx].append_f64(v);
-    }
-
-    pub fn append_str(&mut self, col_idx: usize, v: String) {
-        self.columns[col_idx].append_str(v);
     }
 
     pub fn append_bytes(&mut self, col_idx: usize, v: &[u8]) {
@@ -422,11 +383,6 @@ impl ArcChunk {
         let num_rows = self.chunk.num_rows();
         Row::new(self.chunk.clone(), num_rows)
     }
-}
-
-pub struct Row {
-    c: Arc<Chunk>,
-    idx: usize,
 }
 
 impl Row {
@@ -469,16 +425,8 @@ impl Row {
         self.c.columns[col_idx].get_u64(idx)
     }
 
-    pub fn get_f32(&self, col_idx: usize) -> f32 {
-        self.c.columns[col_idx].get_f32(self.idx)
-    }
-
     pub fn get_f64(&self, col_idx: usize) -> f64 {
         self.c.columns[col_idx].get_f64(self.idx)
-    }
-
-    pub fn get_str(&self, col_idx: usize) -> String {
-        self.c.columns[col_idx].get_str(self.idx)
     }
 
     pub fn get_bytes(&self, col_idx: usize) -> &[u8] {
@@ -564,7 +512,7 @@ mod test {
             chunk.append_null(0);
             chunk.append_i64(1, i as i64);
             let s = format!("{}.12345", i);
-            chunk.append_str(2, s.clone());
+            chunk.append_bytes(2, s.clone().as_bytes());
             chunk.append_bytes(3, s.clone().as_bytes());
             let decimal = s.parse::<Decimal>().unwrap();
             chunk.append_interface(4, Datum::Dec(decimal));
@@ -586,7 +534,7 @@ mod test {
             let s = format!("{}.12345", i);
             // col 2
             assert!(!row.is_null(2));
-            assert_eq!(row.get_str(2), s.clone());
+            assert_eq!(row.get_bytes(2), s.as_bytes());
             // col3
             assert!(!row.is_null(3));
             assert_eq!(row.get_bytes(3), s.as_bytes());
@@ -747,5 +695,53 @@ mod test {
                 assert_eq!(chunk.columns[2].ifaces[i], Datum::Json(json.clone()));
             }
         }
+    }
+
+    #[test]
+    fn test_row() {
+        let fields = vec![
+            field_type(types::FLOAT),
+            field_type(types::VARCHAR),
+            field_type(types::JSON),
+        ];
+        let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
+
+        let mut chunk = Chunk::new(&fields);
+
+        for _ in 0..8 {
+            chunk.append_f64(0, 12.8);
+            chunk.append_bytes(1, b"abc");
+            chunk.append_interface(2, Datum::Json(json.clone()));
+            chunk.append_null(0);
+            chunk.append_null(1);
+            chunk.append_null(2);
+        }
+        let arc_chunk = ArcChunk::new(chunk);
+        // begin
+        let row0 = arc_chunk.begin();
+        assert!((row0.get_f64(0) - 12.8).abs() < 0.01);
+        assert_eq!(row0.get_bytes(1), b"abc");
+        assert_eq!(row0.get_interface(2), Datum::Json(json.clone()));
+        assert_eq!(row0.len(), 3);
+        assert_eq!(row0.idx(), 0);
+        assert!(!row0.is_empty());
+
+        let row1 = row0.next();
+        assert!(row1.is_null(0));
+        assert_eq!(row1.get_datum(1, &fields[1]), Datum::Null);
+
+        for i in 0..arc_chunk.end().idx() {
+            let row = arc_chunk.get_row(i);
+            if i % 2 == 1 {
+                assert!(row.is_null(0));
+                assert!(row.is_null(1));
+                assert!(row.is_null(2));
+            } else {
+                assert_eq!(row.get_datum(0, &fields[0]), Datum::F64(12.8));
+                assert_eq!(row.get_datum(1, &fields[1]), Datum::Bytes(b"abc".to_vec()));
+                assert_eq!(row.get_datum(2, &fields[2]), Datum::Json(json.clone()));
+            }
+        }
+
     }
 }
