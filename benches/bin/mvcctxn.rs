@@ -33,9 +33,6 @@ fn create_row_key(tableid: u64, rowid: u64) -> Vec<u8> {
     let mut result = to_bytes(tableid);
     result.extend(b"_r".iter());
     result.extend(to_bytes(rowid).iter());
-    // Key::from_raw(&result[..])
-    // result.append_ts(ts)
-    // result
     result
 }
 
@@ -73,27 +70,16 @@ fn commit(engine: &Engine, keys: &[Key], start_ts: u64, commit_ts: u64) {
     do_write(engine, txn.into_modifies());
 }
 
-fn prepare_test_engine(
-    versions: usize,
-    value_len: usize,
-    keys: &[Vec<u8>],
-    values: &mut Vec<Vec<u8>>,
-) -> Box<Engine> {
+fn prepare_test_engine(versions: usize, value_len: usize, keys: &[Vec<u8>]) -> Box<Engine> {
     let engine = new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     let mut rng = rand::thread_rng();
-    values.clear();
 
-    for version in 0..versions {
+    for _ in 0..versions {
         for key in keys {
             let mut value = vec![0u8; value_len];
             rng.fill_bytes(&mut value);
             let start_ts = next_ts();
             let commit_ts = next_ts();
-
-            // Keep the last version value for debug usage
-            if version == versions - 1 {
-                values.push(value.clone());
-            }
 
             prewrite(
                 &*engine,
@@ -115,8 +101,7 @@ fn get(engine: &Engine, key: &Key, statistics: &mut Statistics) -> Option<Vec<u8
     snapstore.get(key, statistics).unwrap()
 }
 
-#[allow(unused_variables)]
-fn bench_get(engine: &Engine, keys: &[Vec<u8>], values: &[Vec<u8>]) -> BenchSamples {
+fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> BenchSamples {
     let mut fake_statistics = Statistics::default();
     let mut rng = rand::thread_rng();
     bench!{
@@ -124,7 +109,6 @@ fn bench_get(engine: &Engine, keys: &[Vec<u8>], values: &[Vec<u8>]) -> BenchSamp
         let key = Key::from_raw(&keys[index]);
 
         get(engine, &key, &mut fake_statistics).unwrap()
-        // assert_eq!(res, values[index])
     }
 }
 
@@ -138,15 +122,8 @@ fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> BenchSample
 
         let key = &keys[rng.gen_range(0, keys.len())];
 
-        //let check_value = value.clone();
-
         prewrite(engine, &[Mutation::Put((Key::from_raw(key), value))], key, start_ts);
         commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
-
-        // Debug code
-        // let res = get(engine, &Key::from_raw(key), &mut Statistics::default());
-        // println!("Set: {:?}", res)
-        // assert_eq!(res.unwrap(), value)
     }
 }
 
@@ -159,11 +136,6 @@ fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> BenchSamples {
         let key = &keys[rng.gen_range(0, keys.len())];
         prewrite(engine, &[Mutation::Delete(Key::from_raw(key))], key, start_ts);
         commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
-
-        // Debug code
-        // let res = get(engine, &Key::from_raw(key), &mut Statistics::default());
-        // println!("Del: {:?}", res)
-        // assert!(res.is_none())
     }
 }
 
@@ -171,9 +143,7 @@ fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> BenchSamples {
 // Run all bench with specified parameters
 fn bench_all(table_size: usize, version_count: usize, value_len: usize) {
     let keys = generate_keys(table_size);
-    // Used for debug
-    let mut values = Vec::new();
-    let engine = prepare_test_engine(version_count, value_len, &keys, &mut values);
+    let engine = prepare_test_engine(version_count, value_len, &keys);
 
     printf!(
         "benching mvcctxn get\trows:{} versions:{} value len:{}\t...",
@@ -181,7 +151,7 @@ fn bench_all(table_size: usize, version_count: usize, value_len: usize) {
         version_count,
         value_len
     );
-    print_result(bench_get(&*engine, &keys, &values));
+    print_result(bench_get(&*engine, &keys));
 
     printf!(
         "benching mvcctxn set\trows:{} versions:{} value len:{}\t...",
@@ -192,8 +162,7 @@ fn bench_all(table_size: usize, version_count: usize, value_len: usize) {
     print_result(bench_set(&*engine, &keys, value_len));
 
     // Generate new engine to bench delete, for the size of content was increased when benching set
-    // let keys = generate_keys(table_size);
-    let engine = prepare_test_engine(version_count, value_len, &keys, &mut values);
+    let engine = prepare_test_engine(version_count, value_len, &keys);
 
     printf!(
         "benching mvcctxn delete\trows:{} versions:{} value len:{}\t...",
