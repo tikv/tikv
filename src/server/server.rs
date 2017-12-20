@@ -54,7 +54,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     pd_scheduler: FutureScheduler<PdTask>,
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(too_many_arguments)]
     pub fn new(
         cfg: &Arc<Config>,
@@ -258,7 +258,7 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let mut storage = Storage::new(&storage_cfg).unwrap();
+        let mut storage = Storage::new(&storage_cfg, None).unwrap();
         storage.start(&storage_cfg).unwrap();
 
         let (tx, rx) = mpsc::channel();

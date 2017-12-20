@@ -201,7 +201,7 @@ fn test_scheduler_leader_change_twice() {
 
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
     let mut engine0 = util::BlockEngine::new(engine0);
-    let mut storage0 = Storage::from_engine(engine0.clone(), &config).unwrap();
+    let mut storage0 = Storage::from_engine(engine0.clone(), &config, None).unwrap();
     storage0.start(&config).unwrap();
 
     let mut ctx0 = Context::new();
@@ -245,7 +245,7 @@ fn test_scheduler_leader_change_twice() {
         cluster.must_transfer_leader(region1.get_id(), peers[1].clone());
 
         let engine1 = cluster.sim.rl().storages[&peers[1].get_id()].clone();
-        let mut storage1 = Storage::from_engine(engine1, &config).unwrap();
+        let mut storage1 = Storage::from_engine(engine1, &config, None).unwrap();
         storage1.start(&config).unwrap();
         let mut ctx1 = Context::new();
         ctx1.set_region_id(region1.get_id());

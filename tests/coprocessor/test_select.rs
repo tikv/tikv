@@ -566,7 +566,7 @@ pub struct Store {
 impl Store {
     fn new(engine: Box<Engine>) -> Store {
         Store {
-            store: SyncStorage::from_engine(engine, &Default::default()),
+            store: SyncStorage::from_engine(engine, &Default::default(), None),
             current_ts: 1,
             handles: vec![],
         }

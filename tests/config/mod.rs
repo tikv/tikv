@@ -329,6 +329,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
+        scheduler_busy_check_interval: ReadableDuration::secs(5),
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,

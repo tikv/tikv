@@ -32,8 +32,8 @@
 //! to the scheduler.
 
 use std::fmt::{self, Debug, Formatter};
-use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 use std::thread;
 use std::hash::{Hash, Hasher};
 use std::u64;
@@ -55,6 +55,8 @@ use util::transport::{Error as TransportError, SyncSendCh};
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
 use util::time::SlowTimer;
 use util::collections::HashMap;
+use util::worker::FutureScheduler;
+use pd::PdTask;
 
 use super::Result;
 use super::Error;
@@ -328,6 +330,15 @@ pub struct Scheduler {
 
     // used to control write flow
     running_write_bytes: usize,
+
+    // how often busy status is checked
+    sched_busy_check_interval: u64,
+
+    // pd task sender
+    sender: Option<FutureScheduler<PdTask>>,
+
+    // the report time of the previous busy status
+    last_busy_report_time: Instant,
 }
 
 // Make clippy happy.
@@ -375,6 +386,8 @@ impl Scheduler {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
+        sched_busy_check_interval: u64,
+        r: Option<FutureScheduler<PdTask>>,
     ) -> Scheduler {
         Scheduler {
             engine: engine,
@@ -395,6 +408,9 @@ impl Scheduler {
             ).build(),
             has_gc_command: false,
             running_write_bytes: 0,
+            sched_busy_check_interval: sched_busy_check_interval,
+            sender: r.clone(),
+            last_busy_report_time: Instant::now(),
         }
     }
 }
@@ -1496,61 +1512,101 @@ impl Scheduler {
     pub fn run(&mut self, receiver: Receiver<Msg>) -> Result<()> {
         let mut msgs = Vec::with_capacity(CMD_BATCH_SIZE);
         loop {
-            let msg = box_try!(receiver.recv());
-            msgs.push(msg);
-            while let Ok(msg) = receiver.try_recv() {
-                msgs.push(msg);
-                if msgs.len() >= CMD_BATCH_SIZE {
-                    break;
+            match receiver.recv_timeout(Duration::from_millis(self.sched_busy_check_interval / 2)) {
+                Ok(msg) => {
+                    msgs.push(msg);
+                    while let Ok(msg) = receiver.try_recv() {
+                        msgs.push(msg);
+                        if msgs.len() >= CMD_BATCH_SIZE {
+                            break;
+                        }
+                    }
+                    let quit_loop = self.handle_msgs(&mut msgs)?;
+                    if quit_loop {
+                        return Ok(());
+                    }
+                    self.report_busy_status()?;
                 }
-            }
-
-            for msg in msgs.drain(..) {
-                match msg {
-                    Msg::Quit => return self.shutdown(),
-                    Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-                    Msg::RetryGetSnapshots(batch) => self.on_retry_get_snapshots(batch),
-                    Msg::SnapshotFinished {
-                        cids,
-                        cb_ctx,
-                        snapshot,
-                    } => self.on_snapshot_finished(cids, cb_ctx, snapshot),
-                    Msg::BatchSnapshotFinished { batch } => for (cids, cb_ctx, snapshot) in batch {
-                        self.on_snapshot_finished(cids, cb_ctx, snapshot)
-                    },
-                    Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
-                    Msg::WritePrepareFinished {
-                        cid,
-                        cmd,
-                        pr,
-                        to_be_write,
-                        rows,
-                    } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write, rows),
-                    Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
-                    Msg::WriteFinished {
-                        cid, pr, result, ..
-                    } => self.on_write_finished(cid, pr, result),
+                Err(RecvTimeoutError::Timeout) => self.report_busy_status()?,
+                Err(e) => {
+                    return Err(box_err!(e));
                 }
-            }
-
-            if self.grouped_cmds.as_ref().unwrap().is_empty() {
-                continue;
-            }
-
-            if let Some(cmds) = self.grouped_cmds.take() {
-                self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
-                    CMD_BATCH_SIZE,
-                    Default::default(),
-                ));
-                let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
-                    BATCH_COMMANDS
-                        .with_label_values(&["all"])
-                        .observe(cids.len() as f64);
-                    (hash_ctx.0, cids)
-                });
-                self.batch_get_snapshot(batch.collect());
             }
         }
+    }
+
+    fn report_busy_status(&mut self) -> Result<()> {
+        if self.last_busy_report_time.elapsed().as_secs() * 1000 < self.sched_busy_check_interval {
+            return Ok(());
+        }
+        self.last_busy_report_time = Instant::now();
+
+        // `self.sender` is optional.
+        if self.sender.is_none() {
+            return Ok(());
+        }
+
+        let sender = self.sender.clone().unwrap();
+        if let Err(e) = sender.schedule(PdTask::SchedulerBusyStats {
+            is_busy: self.too_busy(),
+        }) {
+            error!("send coprocessor statistics: {:?}", e);
+        };
+
+        Ok(())
+    }
+
+    fn handle_msgs(&mut self, msgs: &mut Vec<Msg>) -> Result<bool> {
+        for msg in msgs.drain(..) {
+            match msg {
+                Msg::Quit => {
+                    self.shutdown()?;
+                    return Ok(true);
+                }
+                Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
+                Msg::RetryGetSnapshots(batch) => self.on_retry_get_snapshots(batch),
+                Msg::SnapshotFinished {
+                    cids,
+                    cb_ctx,
+                    snapshot,
+                } => self.on_snapshot_finished(cids, cb_ctx, snapshot),
+                Msg::BatchSnapshotFinished { batch } => for (cids, cb_ctx, snapshot) in batch {
+                    self.on_snapshot_finished(cids, cb_ctx, snapshot)
+                },
+                Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
+                Msg::WritePrepareFinished {
+                    cid,
+                    cmd,
+                    pr,
+                    to_be_write,
+                    rows,
+                } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write, rows),
+                Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
+                Msg::WriteFinished {
+                    cid, pr, result, ..
+                } => self.on_write_finished(cid, pr, result),
+            }
+        }
+
+        if self.grouped_cmds.as_ref().unwrap().is_empty() {
+            return Ok(false);
+        }
+
+        if let Some(cmds) = self.grouped_cmds.take() {
+            self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
+                CMD_BATCH_SIZE,
+                Default::default(),
+            ));
+            let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
+                BATCH_COMMANDS
+                    .with_label_values(&["all"])
+                    .observe(cids.len() as f64);
+                (hash_ctx.0, cids)
+            });
+            self.batch_get_snapshot(batch.collect());
+        }
+
+        Ok(false)
     }
 
     fn shutdown(&mut self) -> Result<()> {
