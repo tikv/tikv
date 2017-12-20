@@ -1,5 +1,7 @@
 extern crate rand;
 
+use std::sync::atomic::{AtomicU64, Ordering, ATOMIC_U64_INIT};
+
 use tikv::storage::{new_local_engine, Engine, Key, Modify, Mutation, Options, SnapshotStore,
                     Statistics, ALL_CFS, TEMP_DIR};
 use tikv::storage::mvcc::MvccTxn;
@@ -11,13 +13,10 @@ use test::BenchSamples;
 use rand::Rng;
 
 
-// TODO: Make this thread safe
+#[inline]
 fn next_ts() -> u64 {
-    static mut CURRENT: u64 = 1;
-    unsafe {
-        CURRENT += 1;
-        CURRENT
-    }
+    static CURRENT: AtomicU64 = ATOMIC_U64_INIT;
+    CURRENT.fetch_add(1, Ordering::SeqCst)
 }
 
 #[inline]
