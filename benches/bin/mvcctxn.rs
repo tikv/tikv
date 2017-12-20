@@ -1,6 +1,6 @@
 extern crate rand;
 
-use std::sync::atomic::{AtomicU64, Ordering, ATOMIC_U64_INIT};
+use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
 
 use tikv::storage::{new_local_engine, Engine, Key, Modify, Mutation, Options, SnapshotStore,
                     Statistics, ALL_CFS, TEMP_DIR};
