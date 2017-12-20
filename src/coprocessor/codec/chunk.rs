@@ -202,12 +202,6 @@ impl Column {
         &self.data[start..end]
     }
 
-    // fn append_name_value(&mut self, name: String, val: u64) {
-    //     self.data.write_u64::<LittleEndian>(val).unwrap(); //.map_err(From::from)
-    //     self.data.write_all(name.as_bytes());
-    //     self.finished_append_var();
-    // }
-
     fn append_interface(&mut self, item: Datum) {
         self.ifaces.push(item);
         self.append_null_bitmap(true);
