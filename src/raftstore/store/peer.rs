@@ -46,7 +46,7 @@ use pd::{PdTask, INVALID_ID};
 
 use super::store::{DestroyPeerJob, Store, StoreStat};
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::util::{self, Lease};
+use super::util::{self, Lease, LeaseState};
 use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
@@ -527,7 +527,7 @@ impl Peer {
                     // to lowerbound, a new lease can be granted only after the clock time
                     // goes over next_lease_expired_time.
                     let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
-                    self.step_leader_lease(next_expired_time, false);
+                    self.leader_lease.suspect(next_expired_time);
 
                     metrics.timeout_now += 1;
                 }
@@ -650,7 +650,7 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
-                    self.step_leader_lease(next_expired_time, true);
+                    self.update_leader_lease(next_expired_time);
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
                         self.tag,
@@ -883,10 +883,11 @@ impl Peer {
         }
 
         if let Some(propose_time) = propose_time {
-            if self.leader_lease.behind_lower(propose_time).is_some() {
+            if self.inspect_leader_lease(propose_time) == LeaseState::Suspect {
                 return;
             }
-            self.update_lease_with(propose_time);
+            let next_expired_time = self.next_lease_expired_time(propose_time);
+            self.update_leader_lease(next_expired_time);
         }
     }
 
@@ -938,51 +939,20 @@ impl Peer {
         }
     }
 
-    // All updates about leader_lease must be done by this method.
-    // And only leader can call it.
-    fn step_leader_lease(&mut self, expired_time: Timespec, safe: bool) {
-        assert!(
-            self.is_leader(),
-            "{} non-leader peer {} try to update leader lease",
-            self.tag,
-            self.peer.get_id()
-        );
-        if safe {
-            self.leader_lease.update_upper(expired_time);
-        } else {
-            self.leader_lease.update_lower(expired_time);
-        }
+    fn inspect_leader_lease(&self, ts: Timespec) -> LeaseState {
+        self.leader_lease.inspect(ts)
     }
 
     fn expire_leader_lease(&mut self) {
-        self.leader_lease.clear();
+        self.leader_lease.expire();
     }
 
-    fn update_lease_with(&mut self, propose_time: Timespec) {
+    fn update_leader_lease(&mut self, ts: Timespec) {
         // A nonleader peer should never has leader lease.
         if !self.is_leader() {
             return;
         }
-        // Try to renew the leader lease as this command asks to.
-        let next_expired_time = self.next_lease_expired_time(propose_time);
-        // If the renewed lease lives longer than the current leader lease,
-        // update the current leader lease to the renewed lease.
-        let behind_lower = self.leader_lease.behind_lower(next_expired_time);
-        let behind_upper = self.leader_lease.behind_upper(next_expired_time);
-
-        match (behind_lower, behind_upper) {
-            // Longer than lowerbound or longer than upperbound or an empty lease.
-            (Some(false), _) | (_, Some(false)) | (None, None) => {
-                debug!(
-                    "{} update leader lease expired time from {:?} to {:?}",
-                    self.tag,
-                    self.leader_lease,
-                    next_expired_time
-                );
-                self.step_leader_lease(next_expired_time, true);
-            }
-            _ => (),
-        }
+        self.leader_lease.renew(ts);
     }
 
     /// Try to update lease.
@@ -994,7 +964,8 @@ impl Peer {
             _ => return false,
         };
 
-        self.update_lease_with(propose_time);
+        let next_expired_time = self.next_lease_expired_time(propose_time);
+        self.update_leader_lease(next_expired_time);
 
         true
     }
@@ -1174,9 +1145,9 @@ impl Peer {
         }
 
         // Local read should be performed, if and only if leader is in lease.
-        match self.leader_lease.behind_upper(monotonic_raw_now()) {
-            Some(true) => return Ok(RequestPolicy::ReadLocal),
-            Some(false) => {
+        match self.inspect_leader_lease(monotonic_raw_now()) {
+            LeaseState::Vailed => return Ok(RequestPolicy::ReadLocal),
+            LeaseState::Expired => {
                 debug!(
                     "{} leader lease is expired: {:?}",
                     self.tag,
@@ -1185,7 +1156,7 @@ impl Peer {
                 // Reset leader lease expiring time.
                 self.expire_leader_lease();
             }
-            None => (),
+            LeaseState::Suspect => (),
         }
 
         // Perform a consistent read to Raft quorum and try to renew the leader lease.
@@ -1358,7 +1329,7 @@ impl Peer {
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        if self.leader_lease.behind_lower(renew_lease_time).is_some() {
+        if self.inspect_leader_lease(renew_lease_time) == LeaseState::Suspect {
             let req = RaftCmdRequest::new();
             if let Ok(index) = self.propose_normal(req, metrics) {
                 let meta = ProposalMeta {

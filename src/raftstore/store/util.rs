@@ -193,10 +193,10 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 ///
 /// ```text
 /// Time
-/// |----------------------------------------------------->
-///      ^                    ^                   ^
-///     Now              Lowerbound          Upperbound
-///      |       Unsafe       |       Safe        |
+/// |--------------------------------------------------->
+///      ^               ^                  ^
+///     Now          Lowerbound         Upperbound
+///      |    Suspect    |      Vailed      |   Expired
 /// ```
 ///
 /// Note:
@@ -218,39 +218,51 @@ pub struct Lease {
     bound: Option<Either<Timespec, Timespec>>,
 }
 
+#[derive(PartialEq, Eq, Debug)]
+pub enum LeaseState {
+    Suspect,
+    Vailed,
+    Expired,
+}
+
 impl Lease {
     pub fn new() -> Lease {
         Lease { bound: None }
     }
 
-    /// Update upperbound timstamp.
-    /// Note: Caller must ensure that the bound is longer than
-    ///       the lowerbound ts if it is currently in the Lowerbound.
-    pub fn update_upper(&mut self, bound: Timespec) {
-        self.bound = Some(Either::Right(bound));
+    /// Renew the lease to the `bound`, update upperbound.
+    pub fn renew(&mut self, bound: Timespec) {
+        match self.bound {
+            // Longer than lowerbound or longer than upperbound.
+            Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts < bound {
+                self.bound = Some(Either::Right(bound));
+            },
+            // Or an empty lease
+            None => {
+                self.bound = Some(Either::Right(bound));
+            }
+        }
     }
 
-    /// Update lowerbound timstamp.
-    pub fn update_lower(&mut self, bound: Timespec) {
+    /// Suspect the lease until the clock time goes over the bound, update lowerbound.
+    pub fn suspect(&mut self, bound: Timespec) {
         self.bound = Some(Either::Left(bound));
     }
 
-    pub fn behind_upper(&self, ts: Timespec) -> Option<bool> {
+    /// Inspect the lease state for the ts.
+    pub fn inspect(&self, ts: Timespec) -> LeaseState {
         match self.bound {
-            Some(Either::Right(upper)) => Some(upper >= ts),
-            _ => None,
+            Some(Either::Left(_)) => LeaseState::Suspect,
+            Some(Either::Right(bound)) => if ts < bound {
+                LeaseState::Vailed
+            } else {
+                LeaseState::Expired
+            },
+            None => LeaseState::Expired,
         }
     }
 
-    pub fn behind_lower(&self, ts: Timespec) -> Option<bool> {
-        match self.bound {
-            Some(Either::Left(lower)) => Some(lower >= ts),
-            _ => None,
-        }
-    }
-
-    /// clean lease.
-    pub fn clear(&mut self) {
+    pub fn expire(&mut self) {
         self.bound = None;
     }
 }
@@ -291,33 +303,27 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new();
-        assert_eq!(lease.behind_lower(monotonic_raw_now()), None);
-        assert_eq!(lease.behind_upper(monotonic_raw_now()), None);
+        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Expired);
 
         // Transit to the Upperbound state.
-        lease.update_upper(monotonic_raw_now() + duration);
-        assert_eq!(lease.behind_lower(monotonic_raw_now()), None);
-        assert_eq!(lease.behind_upper(monotonic_raw_now()), Some(true));
+        lease.renew(monotonic_raw_now() + duration);
+        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Vailed);
 
         // After lease expired time.
         thread::sleep(duration.to_std().unwrap());
-        assert_eq!(lease.behind_lower(monotonic_raw_now()), None);
-        assert_eq!(lease.behind_upper(monotonic_raw_now()), Some(false));
+        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Expired);
 
         // Transit to the Lowerbound state.
-        lease.update_lower(monotonic_raw_now() + duration);
-        assert_eq!(lease.behind_lower(monotonic_raw_now()), Some(true));
-        assert_eq!(lease.behind_upper(monotonic_raw_now()), None);
+        lease.suspect(monotonic_raw_now() + duration);
+        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Suspect);
 
-        // After lease expired time.
+        // After lease expired time. Always suspect.
         thread::sleep(duration.to_std().unwrap());
-        assert_eq!(lease.behind_lower(monotonic_raw_now()), Some(false));
-        assert_eq!(lease.behind_upper(monotonic_raw_now()), None);
+        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Suspect);
 
         // Clear lease.
-        lease.clear();
-        assert_eq!(lease.behind_lower(monotonic_raw_now()), None);
-        assert_eq!(lease.behind_upper(monotonic_raw_now()), None);
+        lease.expire();
+        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Expired);
     }
 
     // Tests the util function `check_key_in_region`.
