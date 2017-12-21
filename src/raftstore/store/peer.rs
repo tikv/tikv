@@ -524,8 +524,7 @@ impl Peer {
                     // may be elected and the old leader doesn't step down due to
                     // network partition from the new leader.
                     // For lease safety during leader transfer, transit `leader_lease`
-                    // to lowerbound, a new lease can be granted only after the clock time
-                    // goes over next_lease_expired_time.
+                    // to suspect.
                     let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
                     self.leader_lease.suspect(next_expired_time);
 
@@ -650,7 +649,7 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let next_expired_time = self.next_lease_expired_time(monotonic_raw_now());
-                    self.update_leader_lease(next_expired_time);
+                    self.renew_leader_lease(next_expired_time);
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
                         self.tag,
@@ -887,7 +886,7 @@ impl Peer {
                 return;
             }
             let next_expired_time = self.next_lease_expired_time(propose_time);
-            self.update_leader_lease(next_expired_time);
+            self.renew_leader_lease(next_expired_time);
         }
     }
 
@@ -947,7 +946,7 @@ impl Peer {
         self.leader_lease.expire();
     }
 
-    fn update_leader_lease(&mut self, ts: Timespec) {
+    fn renew_leader_lease(&mut self, ts: Timespec) {
         // A nonleader peer should never has leader lease.
         if !self.is_leader() {
             return;
@@ -965,7 +964,7 @@ impl Peer {
         };
 
         let next_expired_time = self.next_lease_expired_time(propose_time);
-        self.update_leader_lease(next_expired_time);
+        self.renew_leader_lease(next_expired_time);
 
         true
     }
@@ -1146,14 +1145,13 @@ impl Peer {
 
         // Local read should be performed, if and only if leader is in lease.
         match self.inspect_leader_lease(monotonic_raw_now()) {
-            LeaseState::Vailed => return Ok(RequestPolicy::ReadLocal),
+            LeaseState::Valid => return Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired => {
                 debug!(
                     "{} leader lease is expired: {:?}",
                     self.tag,
                     self.leader_lease
                 );
-                // Reset leader lease expiring time.
                 self.expire_leader_lease();
             }
             LeaseState::Suspect => (),

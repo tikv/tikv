@@ -182,46 +182,52 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 
 /// Lease records an expired time, for examining the current moment is in lease or not.
 /// It's dedicated to the Raft leader lease mechanism, contains either state of
-///   1. Lowerbound Timestamp
-///      An unsafe leader lease timestamp, which marks the leader may still hold or lose
-///      its lease until the clock time goes over this timestamp. It is critical that a Lease
-///      can only transit it's state to the Upperbound after the clock time goes over
-///      the Lowerbound.
-///   2. Upperbound Timestamp
-///      A safe leader lease timestamp, which marks the leader holds the lease for now.
-///      The lease is safe until the clock time goes over this timestamp.
+///   1. Suspect Timestamp
+///      A suspicious leader lease timestamp, which marks the leader may still hold or lose
+///      its lease until the clock time goes over this timestamp.
+///   2. Valid Timestamp
+///      A valid leader lease timestamp, which marks the leader holds the lease for now.
+///      The lease is valid until the clock time goes over this timestamp.
 ///
 /// ```text
 /// Time
-/// |--------------------------------------------------->
-///      ^               ^                  ^
-///     Now          Lowerbound         Upperbound
-///      |    Suspect    |      Vailed      |   Expired
+/// |---------------------------------->
+///         ^               ^
+///        Now           Suspect TS
+/// State:  |    Suspect    |   Suspect
+///
+/// |---------------------------------->
+///         ^               ^
+///        Now           Valid TS
+/// State:  |     Valid     |   Expired
 /// ```
 ///
 /// Note:
-///   - Upperbound would increase when raft log entries are applied in current term.
-///   - Lowerbound would be set after the message `MsgTimeoutNow` is sent by current peer.
+///   - Valid timestamp would increase when raft log entries are applied in current term.
+///   - Suspect timestamp would be set after the message `MsgTimeoutNow` is sent by current peer.
 ///     The message `MsgTimeoutNow` starts a leader transfer procedure. During this procedure,
 ///     current peer as an old leader may still hold its lease or lose it.
 ///     It's possible there is a new leader elected and current peer as an old leader
 ///     doesn't step down due to network partition from the new leader. In that case,
 ///     current peer lose its leader lease.
-///     Within this unsafe leader lease expire time, read requests could not be performed
+///     Within this suspect leader lease expire time, read requests could not be performed
 ///     locally.
 // TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
 //       to the local read thread, so name it remote. If Lease expires, the remote must
 //       expire too.
 pub struct Lease {
-    // A lowerbound is in the Either::Left(_),
-    // an upperbound is in the Either::Right(_).
+    // A suspect timestamp is in the Either::Left(_),
+    // a valid timestamp is in the Either::Right(_).
     bound: Option<Either<Timespec, Timespec>>,
 }
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum LeaseState {
+    /// The lease is suspicious, may be invalid.
     Suspect,
-    Vailed,
+    /// The lease is valid.
+    Valid,
+    /// The lease is expired.
     Expired,
 }
 
@@ -230,10 +236,10 @@ impl Lease {
         Lease { bound: None }
     }
 
-    /// Renew the lease to the `bound`, update upperbound.
+    /// Renew the lease to the `bound`.
     pub fn renew(&mut self, bound: Timespec) {
         match self.bound {
-            // Longer than lowerbound or longer than upperbound.
+            // Longer than suspect ts or longer than valid ts.
             Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts < bound {
                 self.bound = Some(Either::Right(bound));
             },
@@ -244,7 +250,7 @@ impl Lease {
         }
     }
 
-    /// Suspect the lease until the clock time goes over the bound, update lowerbound.
+    /// Suspect the lease.
     pub fn suspect(&mut self, bound: Timespec) {
         self.bound = Some(Either::Left(bound));
     }
@@ -254,7 +260,7 @@ impl Lease {
         match self.bound {
             Some(Either::Left(_)) => LeaseState::Suspect,
             Some(Either::Right(bound)) => if ts < bound {
-                LeaseState::Vailed
+                LeaseState::Valid
             } else {
                 LeaseState::Expired
             },
@@ -271,8 +277,8 @@ impl fmt::Debug for Lease {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         let mut fmter = fmt.debug_struct("Lease");
         match self.bound {
-            Some(Either::Left(ts)) => fmter.field("lowerbound", &ts).finish(),
-            Some(Either::Right(ts)) => fmter.field("upperbound", &ts).finish(),
+            Some(Either::Left(ts)) => fmter.field("suspect", &ts).finish(),
+            Some(Either::Right(ts)) => fmter.field("valid", &ts).finish(),
             None => fmter.field("none", &"").finish(),
         }
     }
@@ -305,15 +311,15 @@ mod tests {
         let mut lease = Lease::new();
         assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Expired);
 
-        // Transit to the Upperbound state.
+        // Transit to the Valid state.
         lease.renew(monotonic_raw_now() + duration);
-        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Vailed);
+        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Valid);
 
         // After lease expired time.
         thread::sleep(duration.to_std().unwrap());
         assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Expired);
 
-        // Transit to the Lowerbound state.
+        // Transit to the Suspect state.
         lease.suspect(monotonic_raw_now() + duration);
         assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Suspect);
 
