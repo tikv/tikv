@@ -29,10 +29,10 @@ mod sst_service;
 mod sst_importer;
 
 use self::client::{Client, UploadStream};
-use self::errors::{Error, Result};
 use self::engine::Engine;
 use self::import::ImportJob;
 
+pub use self::errors::{Error, Result};
 pub use self::config::Config;
 pub use self::server::Server;
 pub use self::kv_importer::KVImporter;

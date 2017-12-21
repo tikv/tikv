@@ -2186,6 +2186,56 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
+
+    fn on_cleanup_import_sst(&self, sst: SSTMeta) {
+        if !self.region_peers.contains_key(&sst.get_region_id()) {
+            // If the region epoch is fresher than the SST and this node doesn't
+            // contain the peer, then the SST will not be ingested anymore.
+            let _ = self.importer.delete(&sst);
+        }
+    }
+
+    fn handle_sst_importer_gc(&mut self) -> Result<()> {
+        let ssts = self.importer.list_ssts()?;
+        for sst in &ssts {
+            if let Some(peer) = self.region_peers.get(&sst.get_region_id()) {
+                let sst_epoch = sst.get_region_epoch();
+                let region_epoch = peer.region().get_region_epoch();
+                if util::is_epoch_stale(sst_epoch, region_epoch) {
+                    // If the local peer is fresher than the SST, then the SST
+                    // will not be ingested anymore.
+                    let _ = self.importer.delete(sst);
+                }
+            } else {
+                // If this node doesn't contain the peer, we need to validate it through PD.
+                let task = PdTask::ValidateSST {
+                    sst: sst.clone(),
+                    store_id: self.store_id(),
+                };
+                if let Err(e) = self.pd_worker.schedule(task) {
+                    error!("schedule pd to validate sst: {:?}", e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn on_sst_importer_gc_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = self.handle_sst_importer_gc() {
+            error!("{} failed to gc sst importer: {:?}", self.tag, e);
+        }
+        self.register_sst_importer_gc_tick(event_loop);
+    }
+
+    fn register_sst_importer_gc_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(
+            event_loop,
+            Tick::SSTImporterGc,
+            self.cfg.sst_importer_gc_interval.as_millis(),
+        ) {
+            error!("{} register sst importer gc tick err: {:?}", self.tag, e);
+        }
+    }
 }
 
 // Consistency Check implementation.
@@ -2516,6 +2566,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 region_id,
                 region_size,
             } => self.on_approximate_region_size(region_id, region_size),
+            Msg::CleanupImportSST { sst } => self.on_cleanup_import_sst(sst),
         }
     }
 
@@ -2531,6 +2582,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
+            Tick::SSTImporterGc => self.on_sst_importer_gc_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

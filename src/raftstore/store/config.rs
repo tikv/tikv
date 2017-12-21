@@ -64,6 +64,7 @@ pub struct Config {
     pub snap_gc_timeout: ReadableDuration,
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
+    pub sst_importer_gc_interval: ReadableDuration,
 
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
@@ -138,6 +139,7 @@ impl Default for Config {
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
+            sst_importer_gc_interval: ReadableDuration::minutes(30),
             // Disable consistency check by default as it will hurt performance.
             // We should turn on this only in our tests.
             consistency_check_interval: ReadableDuration::secs(0),

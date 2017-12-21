@@ -133,6 +133,10 @@ impl SSTImporter {
             }
         }
     }
+
+    pub fn list_ssts(&self) -> Result<Vec<SSTMeta>> {
+        self.dir.list_ssts()
+    }
 }
 
 // TODO: Add size and rate limit.
