@@ -402,7 +402,7 @@ impl DbConfig {
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
         if self.enable_statistics {
-            opts.enable_statistics();
+            opts.enable_statistics(true);
             opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         }
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
@@ -575,7 +575,7 @@ impl RaftDbConfig {
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
         if self.enable_statistics {
-            opts.enable_statistics();
+            opts.enable_statistics(true);
             opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         }
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
