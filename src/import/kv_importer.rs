@@ -105,9 +105,9 @@ impl KVImporter {
         }
     }
 
-    pub fn write(&self, token: Token, batch: WriteBatch) -> Result<()> {
+    pub fn write(&self, token: Token, batch: WriteBatch, options: WriteOptions) -> Result<()> {
         match self.remove(token) {
-            Some(engine) => match engine.write(batch) {
+            Some(engine) => match engine.write(batch, options) {
                 Ok(_) => {
                     self.insert(token, engine);
                     Ok(())
@@ -121,9 +121,9 @@ impl KVImporter {
         }
     }
 
-    /// Flush the engine.
-    /// Engine can not be flushed when it is being written.
-    pub fn flush(&self, uuid: Uuid) -> Result<()> {
+    /// Close the engine.
+    /// Engine can not be closed when it is being wrote.
+    pub fn close(&self, uuid: Uuid) -> Result<()> {
         let mut engine = {
             let mut inner = self.inner.lock().unwrap();
             let engine = match inner.engines.remove(&uuid) {
@@ -152,7 +152,7 @@ impl KVImporter {
     }
 
     /// Import the engine to the cluster.
-    /// Engine can not be imported if it hasn't been flushed.
+    /// Engine can not be imported if it hasn't been closed.
     pub fn import(&self, uuid: Uuid, client: Arc<Client>) -> Result<()> {
         let job = {
             let mut inner = self.inner.lock().unwrap();
@@ -170,7 +170,7 @@ impl KVImporter {
 
         match res {
             Ok(_) => {
-                info!("import {} done", uuid);
+                info!("import {}", uuid);
                 Ok(())
             }
             Err(e) => {
@@ -180,9 +180,9 @@ impl KVImporter {
         }
     }
 
-    /// Cleanup the engine.
-    /// Engine can not be cleaned when it is being written or imported.
-    pub fn cleanup(&self, uuid: Uuid) -> Result<()> {
+    /// Delete the engine.
+    /// Engine can not be deleted when it is being wrote or imported.
+    pub fn delete(&self, uuid: Uuid) -> Result<()> {
         // Drop the engine outside of the lock.
         let _ = {
             let mut inner = self.inner.lock().unwrap();
@@ -305,8 +305,8 @@ impl EngineFile {
         })
     }
 
-    fn write(&self, batch: WriteBatch) -> Result<()> {
-        self.engine.as_ref().unwrap().write(batch)
+    fn write(&self, batch: WriteBatch, options: WriteOptions) -> Result<()> {
+        self.engine.as_ref().unwrap().write(batch, options)
     }
 
     fn finish(&mut self) -> Result<()> {

@@ -63,7 +63,6 @@ impl ImportKv for ImportKVService {
     ) {
         let label = "write";
         let timer = Instant::now();
-
         let token = self.importer.token();
         let import1 = self.importer.clone();
         let import2 = self.importer.clone();
@@ -79,7 +78,12 @@ impl ImportKv for ImportKVService {
                         import1.attach(token, uuid)?;
                     }
                     if chunk.has_batch() {
-                        import1.write(token, chunk.take_batch())?;
+                        let options = if chunk.has_options() {
+                            chunk.take_options()
+                        } else {
+                            WriteOptions::new()
+                        };
+                        import1.write(token, chunk.take_batch(), options)?;
                     }
                     Ok(())
                 })
@@ -97,19 +101,18 @@ impl ImportKv for ImportKVService {
         )
     }
 
-    fn flush(&self, ctx: RpcContext, req: FlushRequest, sink: UnarySink<FlushResponse>) {
-        let label = "flush";
+    fn close(&self, ctx: RpcContext, req: CloseRequest, sink: UnarySink<CloseResponse>) {
+        let label = "close";
         let timer = Instant::now();
-
         let import = self.importer.clone();
 
         ctx.spawn(
             self.pool
                 .spawn_fn(move || {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
-                    import.flush(uuid)
+                    import.close(uuid)
                 })
-                .map(|_| FlushResponse::new())
+                .map(|_| CloseResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
@@ -117,7 +120,6 @@ impl ImportKv for ImportKVService {
     fn import(&self, ctx: RpcContext, req: ImportRequest, sink: UnarySink<ImportResponse>) {
         let label = "import";
         let timer = Instant::now();
-
         let client = self.client.clone();
         let import = self.importer.clone();
 
@@ -132,19 +134,18 @@ impl ImportKv for ImportKVService {
         )
     }
 
-    fn cleanup(&self, ctx: RpcContext, req: CleanupRequest, sink: UnarySink<CleanupResponse>) {
-        let label = "cleanup";
+    fn delete(&self, ctx: RpcContext, req: DeleteRequest, sink: UnarySink<DeleteResponse>) {
+        let label = "delete";
         let timer = Instant::now();
-
         let import = self.importer.clone();
 
         ctx.spawn(
             self.pool
                 .spawn_fn(move || {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
-                    import.cleanup(uuid)
+                    import.delete(uuid)
                 })
-                .map(|_| CleanupResponse::new())
+                .map(|_| DeleteResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }

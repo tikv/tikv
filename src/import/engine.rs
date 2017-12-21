@@ -57,14 +57,18 @@ impl Engine {
         self.uuid
     }
 
-    pub fn write(&self, batch: WriteBatch) -> Result<()> {
+    pub fn write(&self, batch: WriteBatch, options: WriteOptions) -> Result<()> {
         let wb = if batch.get_commit_ts() == 0 {
             self.raw_write(batch)
         } else {
             self.txn_write(batch)
         };
-        // All data will be deleted on restart, so don't need to write WAL here.
-        self.write_without_wal(wb).map_err(Error::from)
+        self.write_without_wal(wb)?;
+        if options.flush {
+            self.flush()
+        } else {
+            Ok(())
+        }
     }
 
     fn raw_write(&self, mut batch: WriteBatch) -> RawBatch {

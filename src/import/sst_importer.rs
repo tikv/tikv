@@ -281,7 +281,7 @@ impl ImportFile {
 
     fn finish(&mut self) -> Result<()> {
         self.validate()?;
-        self.file.take();
+        self.file.take().unwrap().sync_all()?;
         if self.path.save.exists() {
             return Err(Error::FileExists(self.path.save.clone()));
         }

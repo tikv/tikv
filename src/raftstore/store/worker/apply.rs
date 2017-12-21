@@ -167,6 +167,7 @@ pub enum ExecResult {
     },
     VerifyHash { index: u64, hash: Vec<u8> },
     DeleteRange { ranges: Vec<Range> },
+    IngestSST { ssts: Vec<SSTMeta> },
 }
 
 struct ApplyCallback {
@@ -612,7 +613,8 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
                 ExecResult::CompactLog { .. } |
-                ExecResult::DeleteRange { .. } => {}
+                ExecResult::DeleteRange { .. } |
+                ExecResult::IngestSST { .. } => {}
                 ExecResult::SplitRegion {
                     ref left,
                     ref right,
@@ -1041,6 +1043,7 @@ impl ApplyDelegate {
         let mut responses = Vec::with_capacity(requests.len());
 
         let mut ranges = vec![];
+        let mut ssts = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
@@ -1049,7 +1052,7 @@ impl ApplyDelegate {
                 CmdType::DeleteRange => {
                     self.handle_delete_range(req, &mut ranges, ctx.use_delete_range())
                 }
-                CmdType::IngestSST => self.handle_ingest_sst(ctx, req),
+                CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1079,10 +1082,14 @@ impl ApplyDelegate {
         resp.mut_header().set_uuid(uuid);
         resp.set_responses(RepeatedField::from_vec(responses));
 
-        let exec_res = if ranges.is_empty() {
-            None
-        } else {
+        // TODO: Should we let them work together?
+        assert!(ranges.is_empty() || ssts.is_empty());
+        let exec_res = if !ranges.is_empty() {
             Some(ExecResult::DeleteRange { ranges: ranges })
+        } else if !ssts.is_empty() {
+            Some(ExecResult::IngestSST { ssts: ssts })
+        } else {
+            None
         };
 
         Ok((resp, exec_res))
@@ -1228,7 +1235,12 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_ingest_sst(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+    fn handle_ingest_sst(
+        &mut self,
+        ctx: &ApplyContext,
+        req: &Request,
+        ssts: &mut Vec<SSTMeta>,
+    ) -> Result<Response> {
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_region(sst, &self.region) {
@@ -1244,6 +1256,7 @@ impl ApplyDelegate {
             panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
         });
 
+        ssts.push(sst.clone());
         Ok(Response::new())
     }
 }

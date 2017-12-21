@@ -31,6 +31,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData, RaftTrunc
                              RegionLocalState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
+use kvproto::importpb::SSTMeta;
 use util::{escape, rocksdb};
 use util::time::{duration_to_sec, SlowTimer};
 use pd::{PdClient, PdRunner, PdTask};
@@ -1546,6 +1547,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
                 }
+                ExecResult::IngestSST { ssts } => self.on_ready_ingest_sst(ssts),
             }
         }
     }
@@ -2370,6 +2372,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 index,
                 e
             );
+        }
+    }
+
+    fn on_ready_ingest_sst(&mut self, ssts: Vec<SSTMeta>) {
+        for sst in &ssts {
+            self.region_peers
+                .get_mut(&sst.get_region_id())
+                .unwrap()
+                .size_diff_hint += sst.get_length();
+            let _ = self.importer.delete(sst);
         }
     }
 }
