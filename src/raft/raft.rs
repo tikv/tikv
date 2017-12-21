@@ -25,7 +25,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::cmp;
 
 use rand::{self, Rng};
@@ -33,7 +32,7 @@ use kvproto::eraftpb::{Entry, EntryType, HardState, Message, MessageType, Snapsh
 use protobuf::repeated::RepeatedField;
 
 use super::storage::Storage;
-use super::progress::{Inflights, Progress, ProgressState};
+use super::progress::{Inflights, Progress, ProgressSet, ProgressState};
 use super::errors::{Error, Result, StorageError};
 use super::raft_log::{self, RaftLog};
 use super::read_only::{ReadOnly, ReadOnlyOption, ReadState};
@@ -80,6 +79,12 @@ pub struct Config {
     /// peers is set.
     /// peer is private and only used for testing right now.
     pub peers: Vec<u64>,
+
+    /// learners contains the IDs of all learner nodes (maybe include self if
+    /// the local node is a learner) in the raft cluster.
+    /// learners only receives entries from the leader node. It does not vote
+    /// or promote itself.
+    pub learners: Vec<u64>,
 
     /// ElectionTick is the number of node.tick invocations that must pass between
     /// elections. That is, if a follower does not receive any message from the
@@ -181,9 +186,11 @@ pub struct Raft<T: Storage> {
 
     pub max_inflight: usize,
     pub max_msg_size: u64,
-    pub prs: Option<FlatMap<u64, Progress>>,
+    prs: Option<ProgressSet>,
 
     pub state: StateRole,
+
+    pub is_learner: bool,
 
     pub votes: FlatMap<u64, bool>,
 
@@ -267,19 +274,22 @@ impl<T: Storage> Raft<T> {
     pub fn new(c: &Config, store: T) -> Raft<T> {
         c.validate().expect("configuration is invalid");
         let rs = store.initial_state().expect("");
+        let conf_state = &rs.conf_state;
         let raft_log = RaftLog::new(store, c.tag.clone());
         let mut peers: &[u64] = &c.peers;
-        if !rs.conf_state.get_nodes().is_empty() {
-            if !peers.is_empty() {
+        let mut learners: &[u64] = &c.learners;
+        if !conf_state.get_nodes().is_empty() || !conf_state.get_learners().is_empty() {
+            if !peers.is_empty() || !learners.is_empty() {
                 // TODO: the peers argument is always nil except in
                 // tests; the argument should be removed and these tests should be
                 // updated to specify their nodes through a snap
                 panic!(
-                    "{} cannot specify both new(peers) and ConfState.Nodes",
+                    "{} cannot specify both new(peers/learners) and ConfState.(Nodes/Learners)",
                     c.tag
                 )
             }
-            peers = rs.conf_state.get_nodes();
+            peers = conf_state.get_nodes();
+            learners = conf_state.get_learners();
         }
         let mut r = Raft {
             id: c.id,
@@ -287,8 +297,9 @@ impl<T: Storage> Raft<T> {
             raft_log: raft_log,
             max_inflight: c.max_inflight_msgs,
             max_msg_size: c.max_size_per_msg,
-            prs: Some(FlatMap::with_capacity(peers.len())),
+            prs: Some(ProgressSet::new(peers.len(), learners.len())),
             state: StateRole::Follower,
+            is_learner: false,
             check_quorum: c.check_quorum,
             pre_vote: c.pre_vote,
             read_only: ReadOnly::new(c.read_only_option),
@@ -309,9 +320,18 @@ impl<T: Storage> Raft<T> {
             tag: c.tag.to_owned(),
         };
         for p in peers {
-            let max_inflight = r.max_inflight;
-            r.mut_prs().insert(*p, new_progress(1, max_inflight));
+            let pr = new_progress(1, r.max_inflight);
+            r.mut_prs().insert_voter(*p, pr);
         }
+        for p in learners {
+            let mut pr = new_progress(1, r.max_inflight);
+            pr.is_learner = true;
+            r.mut_prs().insert_learner(*p, pr);
+            if *p == r.id {
+                r.is_learner = true;
+            }
+        }
+
         if rs.hard_state != HardState::new() {
             r.load_state(rs.hard_state);
         }
@@ -324,7 +344,7 @@ impl<T: Storage> Raft<T> {
             "{} newRaft [peers: {:?}, term: {:?}, commit: {}, applied: {}, last_index: {}, \
              last_term: {}]",
             r.tag,
-            r.nodes(),
+            r.prs().nodes(),
             r.term,
             r.raft_log.committed,
             r.raft_log.get_applied(),
@@ -379,7 +399,7 @@ impl<T: Storage> Raft<T> {
     }
 
     fn quorum(&self) -> usize {
-        quorum(self.get_prs().len())
+        quorum(self.prs().voters().len())
     }
 
     // for testing leader lease
@@ -397,13 +417,6 @@ impl<T: Storage> Raft<T> {
 
     pub fn get_randomized_election_timeout(&self) -> usize {
         self.randomized_election_timeout
-    }
-
-    pub fn nodes(&self) -> Vec<u64> {
-        let mut nodes = Vec::with_capacity(self.get_prs().len());
-        nodes.extend(self.get_prs().keys());
-        nodes.sort();
-        nodes
     }
 
     // send persists state to stable storage and then sends to its mailbox.
@@ -566,7 +579,7 @@ impl<T: Storage> Raft<T> {
     }
 
     // bcast_append sends RPC, with entries to all peers that are not up-to-date
-    // according to the progress recorded in r.get_prs().
+    // according to the progress recorded in r.prs().
     pub fn bcast_append(&mut self) {
         let self_id = self.id;
         let mut prs = self.take_prs();
@@ -597,13 +610,13 @@ impl<T: Storage> Raft<T> {
     pub fn maybe_commit(&mut self) -> bool {
         let mut mis_arr = [0; 5];
         let mut mis_vec;
-        let mis = if self.get_prs().len() <= 5 {
-            &mut mis_arr[..self.get_prs().len()]
+        let mis = if self.prs().voters().len() <= 5 {
+            &mut mis_arr[..self.prs().voters().len()]
         } else {
-            mis_vec = vec![0; self.get_prs().len()];
+            mis_vec = vec![0; self.prs().voters().len()];
             mis_vec.as_mut_slice()
         };
-        for (i, pr) in self.get_prs().values().enumerate() {
+        for (i, pr) in self.prs().voters().values().enumerate() {
             mis[i] = pr.matched;
         }
         // reverse sort
@@ -625,16 +638,20 @@ impl<T: Storage> Raft<T> {
         self.abort_leader_transfer();
 
         self.votes = FlatMap::default();
-        let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
-        let self_id = self.id;
-        for (id, p) in self.mut_prs() {
-            *p = new_progress(last_index + 1, max_inflight);
-            if id == &self_id {
-                p.matched = last_index;
-            }
-        }
+
         self.pending_conf = false;
         self.read_only = ReadOnly::new(self.read_only.option);
+
+        let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
+        let self_id = self.id;
+        for (&id, pr) in self.mut_prs().iter_mut() {
+            let is_learner = pr.is_learner;
+            *pr = new_progress(last_index + 1, max_inflight);
+            pr.is_learner = is_learner;
+            if id == self_id {
+                pr.matched = last_index;
+            }
+        }
     }
 
     pub fn append_entry(&mut self, es: &mut [Entry]) {
@@ -644,12 +661,14 @@ impl<T: Storage> Raft<T> {
             e.set_index(li + 1 + i as u64);
         }
         self.raft_log.append(es);
-        let last_index = self.raft_log.last_index();
+
         let self_id = self.id;
+        let last_index = self.raft_log.last_index();
         self.mut_prs()
-            .get_mut(&self_id)
+            .get_mut(self_id)
             .unwrap()
             .maybe_update(last_index);
+
         // Regardless of maybe_commit's return, our caller will call bcastAppend.
         self.maybe_commit();
     }
@@ -788,8 +807,8 @@ impl<T: Storage> Raft<T> {
             self.become_candidate();
             (MessageType::MsgRequestVote, self.term)
         };
-        let id = self.id;
-        if self.quorum() == self.poll(id, vote_resp_msg_type(vote_msg), true) {
+        let self_id = self.id;
+        if self.quorum() == self.poll(self_id, vote_resp_msg_type(vote_msg), true) {
             // We won the election after voting for ourselves (which must mean that
             // this is a single-node cluster). Advance to the next state.
             if campaign_type == CAMPAIGN_PRE_ELECTION {
@@ -799,29 +818,29 @@ impl<T: Storage> Raft<T> {
             }
             return;
         }
+
         let prs = self.take_prs();
-        for &id in prs.keys() {
-            if id == self.id {
-                continue;
-            }
-            info!(
-                "{} [logterm: {}, index: {}] sent {:?} request to {} at term {}",
-                self.tag,
-                self.raft_log.last_term(),
-                self.raft_log.last_index(),
-                vote_msg,
-                id,
-                self.term
-            );
-            let mut m = new_message(id, vote_msg, None);
-            m.set_term(term);
-            m.set_index(self.raft_log.last_index());
-            m.set_log_term(self.raft_log.last_term());
-            if campaign_type == CAMPAIGN_TRANSFER {
-                m.set_context(campaign_type.to_vec());
-            }
-            self.send(m);
-        }
+        prs.voters().keys().filter(|&id| *id != self_id).for_each(
+            |&id| {
+                info!(
+                    "{} [logterm: {}, index: {}] sent {:?} request to {} at term {}",
+                    self.tag,
+                    self.raft_log.last_term(),
+                    self.raft_log.last_index(),
+                    vote_msg,
+                    id,
+                    self.term
+                );
+                let mut m = new_message(id, vote_msg, None);
+                m.set_term(term);
+                m.set_index(self.raft_log.last_index());
+                m.set_log_term(self.raft_log.last_term());
+                if campaign_type == CAMPAIGN_TRANSFER {
+                    m.set_context(campaign_type.to_vec());
+                }
+                self.send(m);
+            },
+        );
         self.set_prs(prs);
     }
 
@@ -953,7 +972,6 @@ impl<T: Storage> Raft<T> {
             }
         }
 
-
         match m.get_msg_type() {
             MessageType::MsgHup => if self.state != StateRole::Leader {
                 let ents = self.raft_log
@@ -988,6 +1006,24 @@ impl<T: Storage> Raft<T> {
                 debug!("{} ignoring MsgHup because already leader", self.tag);
             },
             MessageType::MsgRequestVote | MessageType::MsgRequestPreVote => {
+                if self.is_learner {
+                    // TODO: learner may need to vote, in case of node down when confchange.
+                    info!(
+                        "{} [logterm: {}, index: {}, vote: {}] ignored {:?} from {} \
+                         [logterm: {}, index: {}] at term {}: learner can not vote",
+                        self.tag,
+                        self.raft_log.last_term(),
+                        self.raft_log.last_index(),
+                        self.vote,
+                        m.get_msg_type(),
+                        m.get_from(),
+                        m.get_log_term(),
+                        m.get_index(),
+                        self.term,
+                    );
+                    return Ok(());
+                }
+
                 // The m.get_term() > self.term clause is for MsgRequestPreVote. For MsgRequestVote
                 // m.get_term() should always equal self.term
                 if (self.vote == INVALID_ID || m.get_term() > self.term ||
@@ -1057,12 +1093,12 @@ impl<T: Storage> Raft<T> {
     fn handle_append_response(
         &mut self,
         m: &Message,
-        prs: &mut FlatMap<u64, Progress>,
+        prs: &mut ProgressSet,
         old_paused: &mut bool,
         send_append: &mut bool,
         maybe_commit: &mut bool,
     ) {
-        let pr = prs.get_mut(&m.get_from()).unwrap();
+        let pr = prs.get_mut(m.get_from()).unwrap();
         pr.recent_active = true;
 
         if m.get_reject() {
@@ -1130,12 +1166,12 @@ impl<T: Storage> Raft<T> {
     fn handle_heartbeat_response(
         &mut self,
         m: &Message,
-        prs: &mut FlatMap<u64, Progress>,
+        prs: &mut ProgressSet,
         quorum: usize,
         send_append: &mut bool,
         more_to_send: &mut Option<Message>,
     ) {
-        let pr = prs.get_mut(&m.get_from()).unwrap();
+        let pr = prs.get_mut(m.get_from()).unwrap();
         pr.recent_active = true;
         pr.resume();
 
@@ -1177,6 +1213,11 @@ impl<T: Storage> Raft<T> {
     }
 
     fn handle_transfer_leader(&mut self, m: &Message, pr: &mut Progress) {
+        if self.is_learner {
+            debug!("{} is learner. Ignored transferring leadership", self.tag);
+            return;
+        }
+
         let lead_transferee = m.get_from();
         let last_lead_transferee = self.lead_transferee;
         if last_lead_transferee.is_some() {
@@ -1264,7 +1305,7 @@ impl<T: Storage> Raft<T> {
         maybe_commit: &mut bool,
         more_to_send: &mut Option<Message>,
     ) {
-        if !self.get_prs().contains_key(&m.get_from()) {
+        if self.prs().get(m.get_from()).is_none() {
             debug!("{} no progress available for {}", self.tag, m.get_from());
             return;
         }
@@ -1275,17 +1316,17 @@ impl<T: Storage> Raft<T> {
                 self.handle_append_response(m, &mut prs, old_paused, send_append, maybe_commit);
             }
             MessageType::MsgHeartbeatResponse => {
-                let quorum = quorum(prs.len());
+                let quorum = quorum(prs.voters().len());
                 self.handle_heartbeat_response(m, &mut prs, quorum, send_append, more_to_send);
             }
             MessageType::MsgSnapStatus => {
-                let pr = prs.get_mut(&m.get_from()).unwrap();
+                let pr = prs.get_mut(m.get_from()).unwrap();
                 if pr.state == ProgressState::Snapshot {
                     self.handle_snapshot_status(m, pr);
                 }
             }
             MessageType::MsgUnreachable => {
-                let pr = prs.get_mut(&m.get_from()).unwrap();
+                let pr = prs.get_mut(m.get_from()).unwrap();
                 // During optimistic replication, if the remote becomes unreachable,
                 // there is huge probability that a MsgAppend is lost.
                 if pr.state == ProgressState::Replicate {
@@ -1299,7 +1340,7 @@ impl<T: Storage> Raft<T> {
                 );
             }
             MessageType::MsgTransferLeader => {
-                let pr = prs.get_mut(&m.get_from()).unwrap();
+                let pr = prs.get_mut(m.get_from()).unwrap();
                 self.handle_transfer_leader(m, pr);
             }
             _ => {}
@@ -1329,7 +1370,7 @@ impl<T: Storage> Raft<T> {
                 if m.get_entries().is_empty() {
                     panic!("{} stepped empty MsgProp", self.tag);
                 }
-                if !self.get_prs().contains_key(&self.id) {
+                if !self.prs().voters().contains_key(&self.id) {
                     // If we are not currently a member of the range (i.e. this node
                     // was removed from the configuration while serving as leader),
                     // drop any new proposals.
@@ -1442,7 +1483,7 @@ impl<T: Storage> Raft<T> {
         if send_append {
             let from = m.get_from();
             let mut prs = self.take_prs();
-            self.send_append(from, prs.get_mut(&from).unwrap());
+            self.send_append(from, prs.get_mut(from).unwrap());
             self.set_prs(prs);
         }
         if let Some(to_send) = more_to_send {
@@ -1711,6 +1752,23 @@ impl<T: Storage> Raft<T> {
             return Some(false);
         }
 
+        // Both of learners and voters are empty means the peer is created by ConfChange.
+        if (!self.prs().voters().is_empty() || !self.prs().learners().is_empty()) &&
+            !self.is_learner
+        {
+            for &id in meta.get_conf_state().get_learners() {
+                if id == self.id {
+                    error!(
+                        "{} can't become learner when restores snapshot [index: {}, term: {}]",
+                        self.tag,
+                        meta.get_index(),
+                        meta.get_term(),
+                    );
+                    return Some(false);
+                }
+            }
+        }
+
         info!(
             "{} [commit: {}, lastindex: {}, lastterm: {}] starts to restore snapshot \
              [index: {}, term: {}]",
@@ -1723,24 +1781,26 @@ impl<T: Storage> Raft<T> {
         );
 
         let nodes = meta.get_conf_state().get_nodes();
-        let prs = FlatMap::with_capacity(meta.get_conf_state().get_nodes().len());
-        self.prs = Some(prs);
+        let learners = meta.get_conf_state().get_learners();
+        self.prs = Some(ProgressSet::new(nodes.len(), learners.len()));
 
-        let self_id = self.id;
-        let last_index = self.raft_log.last_index();
-        for &n in nodes {
-            let next_index = last_index + 1;
-            let matched = if n == self_id { next_index - 1 } else { 0 };
-            self.set_progress(n, matched, next_index);
-            info!(
-                "{} restored progress of {} [{:?}]",
-                self.tag,
-                n,
-                self.get_prs().get(&n)
-            );
-
+        for &(is_learner, nodes) in &[(false, nodes), (true, learners)] {
+            for &n in nodes {
+                let next_index = self.raft_log.last_index() + 1;
+                let mut matched = 0;
+                if n == self.id {
+                    matched = next_index - 1;
+                    self.is_learner = is_learner;
+                }
+                self.set_progress(n, matched, next_index, is_learner);
+                info!(
+                    "{} restored progress of {} [{:?}]",
+                    self.tag,
+                    n,
+                    self.prs().get(n)
+                );
+            }
         }
-
         None
     }
 
@@ -1753,6 +1813,7 @@ impl<T: Storage> Raft<T> {
         if let Some(b) = self.restore_raft(&snap) {
             return b;
         }
+
         self.raft_log.restore(snap);
         true
     }
@@ -1764,26 +1825,55 @@ impl<T: Storage> Raft<T> {
     // promotable indicates whether state machine can be promoted to leader,
     // which is true when its own id is in progress list.
     pub fn promotable(&self) -> bool {
-        self.get_prs().contains_key(&self.id)
+        self.prs().voters().contains_key(&self.id)
+    }
+
+    fn add_voter_or_learner(&mut self, id: u64, is_learner: bool) {
+        self.pending_conf = false;
+        if self.prs().voters().contains_key(&id) {
+            if is_learner {
+                info!(
+                    "{} ignored add learner: do not support changing {} from voter to learner",
+                    self.tag,
+                    id
+                );
+            }
+            // Ignore redundant add voter.
+            return;
+        } else if self.prs().learners().contains_key(&id) {
+            if is_learner {
+                // Ignore redundant add learner.
+                return;
+            }
+            self.mut_prs().promote_learner(id);
+            if id == self.id {
+                self.is_learner = false;
+            }
+        } else {
+            // New progress.
+            let last_index = self.raft_log.last_index();
+            self.set_progress(id, 0, last_index + 1, is_learner);
+        }
+        // When a node is first added/promoted, we should mark it as recently active.
+        // Otherwise, check_quorum may cause us to step down if it is invoked
+        // before the added node has a chance to commuicate with us.
+        self.mut_prs().get_mut(id).unwrap().recent_active = true;
     }
 
     pub fn add_node(&mut self, id: u64) {
-        self.pending_conf = false;
-        if self.get_prs().contains_key(&id) {
-            // Ignore any redundant addNode calls (which can happen because the
-            // initial bootstrapping entries are applied twice).
-            return;
-        }
-        let last_index = self.raft_log.last_index();
-        self.set_progress(id, 0, last_index + 1);
+        self.add_voter_or_learner(id, false);
+    }
+
+    pub fn add_learner(&mut self, id: u64) {
+        self.add_voter_or_learner(id, true);
     }
 
     pub fn remove_node(&mut self, id: u64) {
-        self.del_progress(id);
+        self.mut_prs().remove(id);
         self.pending_conf = false;
 
         // do not try to commit or abort transferring if there are no nodes in the cluster.
-        if self.get_prs().is_empty() {
+        if self.prs().voters().is_empty() && self.prs().learners().is_empty() {
             return;
         }
 
@@ -1802,29 +1892,30 @@ impl<T: Storage> Raft<T> {
         self.pending_conf = false;
     }
 
-    pub fn set_progress(&mut self, id: u64, matched: u64, next_idx: u64) {
+    pub fn set_progress(&mut self, id: u64, matched: u64, next_idx: u64, is_learner: bool) {
         let mut p = new_progress(next_idx, self.max_inflight);
         p.matched = matched;
-        self.mut_prs().insert(id, p);
+        p.is_learner = is_learner;
+        if is_learner {
+            self.mut_prs().insert_learner(id, p);
+        } else {
+            self.mut_prs().insert_voter(id, p);
+        }
     }
 
-    fn del_progress(&mut self, id: u64) {
-        self.mut_prs().remove(&id);
-    }
-
-    pub fn take_prs(&mut self) -> FlatMap<u64, Progress> {
+    pub fn take_prs(&mut self) -> ProgressSet {
         self.prs.take().unwrap()
     }
 
-    pub fn set_prs(&mut self, prs: FlatMap<u64, Progress>) {
+    pub fn set_prs(&mut self, prs: ProgressSet) {
         self.prs = Some(prs);
     }
 
-    pub fn get_prs(&self) -> &FlatMap<u64, Progress> {
+    pub fn prs(&self) -> &ProgressSet {
         self.prs.as_ref().unwrap()
     }
 
-    pub fn mut_prs(&mut self) -> &mut FlatMap<u64, Progress> {
+    pub fn mut_prs(&mut self) -> &mut ProgressSet {
         self.prs.as_mut().unwrap()
     }
 
@@ -1871,21 +1962,19 @@ impl<T: Storage> Raft<T> {
     // the view of the local raft state machine. Otherwise, it returns
     // false.
     // check_quorum_active also resets all recent_active to false.
+    // check_quorum_active can only called by leader.
     fn check_quorum_active(&mut self) -> bool {
-        let mut act = 0;
         let self_id = self.id;
-        for (id, p) in self.mut_prs() {
-            if id == &self_id {
-                // self is always active
+        let mut act = 0;
+        for (&id, pr) in self.mut_prs().iter_mut() {
+            if id == self_id {
                 act += 1;
                 continue;
             }
-
-            if p.recent_active {
+            if !pr.is_learner && pr.recent_active {
                 act += 1;
             }
-
-            p.recent_active = false;
+            pr.recent_active = false;
         }
         act >= self.quorum()
     }
