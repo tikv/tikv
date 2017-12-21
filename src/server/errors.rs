@@ -21,7 +21,7 @@ use protobuf::ProtobufError;
 use grpc::Error as GrpcError;
 
 use util::codec::Error as CodecError;
-use util::worker::Stopped;
+use util::worker::ScheduleError;
 use raftstore::Error as RaftServerError;
 use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
@@ -92,11 +92,11 @@ quick_error!{
             display("{:?}", err)
             description(err.description())
         }
-        SnapWorkerStopped(err: Stopped<SnapTask>) {
+        SnapWorkerStopped(err: ScheduleError<SnapTask>) {
             from()
             display("{:?}", err)
         }
-        EndPointStopped(err: Stopped<EndPointTask>) {
+        EndPointStopped(err: ScheduleError<EndPointTask>) {
             from()
             display("{:?}", err)
         }

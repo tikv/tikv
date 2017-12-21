@@ -43,6 +43,6 @@ pub use self::raft_log::{RaftLog, NO_LIMIT};
 pub use self::raw_node::{is_empty_snap, Peer, RawNode, Ready, SnapshotStatus};
 pub use self::status::Status;
 pub use self::log_unstable::Unstable;
-pub use self::progress::{Inflights, Progress, ProgressState};
+pub use self::progress::{Inflights, Progress, ProgressSet, ProgressState};
 pub use self::read_only::{ReadOnlyOption, ReadState};
 use util::collections::{FlatMap, HashMap, HashSet};
