@@ -13,3 +13,4 @@
 
 mod test_pending_peers;
 mod test_snap;
+mod test_storage;
