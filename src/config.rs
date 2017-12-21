@@ -81,6 +81,9 @@ macro_rules! cf_config {
             pub max_compaction_bytes: ReadableSize,
             #[serde(with = "config::compaction_pri_serde")]
             pub compaction_pri: CompactionPriority,
+            pub dynamic_level_bytes: bool,
+            pub num_levels: i32,
+            pub max_bytes_for_level_multiplier: i32,
         }
     }
 }
@@ -101,7 +104,10 @@ macro_rules! build_cf_opt {
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_block_based_table_factory(&block_base_opts);
-        cf_opts.compression_per_level(&$opt.compression_per_level);
+        cf_opts.set_num_levels($opt.num_levels);
+        assert!($opt.compression_per_level.len() >= $opt.num_levels as usize);
+        let compression_per_level = $opt.compression_per_level[..$opt.num_levels as usize].to_vec();
+        cf_opts.compression_per_level(compression_per_level.as_slice());
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
         cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
@@ -112,6 +118,9 @@ macro_rules! build_cf_opt {
         cf_opts.set_level_zero_stop_writes_trigger($opt.level0_stop_writes_trigger);
         cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
         cf_opts.compaction_priority($opt.compaction_pri);
+        cf_opts.set_level_compaction_dynamic_level_bytes($opt.dynamic_level_bytes);
+        cf_opts.set_max_bytes_for_level_multiplier($opt.max_bytes_for_level_multiplier);
+
         cf_opts
     }};
 }
@@ -149,6 +158,9 @@ impl Default for DefaultCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -195,6 +207,9 @@ impl Default for WriteCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -243,6 +258,9 @@ impl Default for LockCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -284,6 +302,9 @@ impl Default for RaftCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -381,7 +402,7 @@ impl DbConfig {
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
         if self.enable_statistics {
-            opts.enable_statistics();
+            opts.enable_statistics(true);
             opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         }
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
@@ -462,6 +483,9 @@ impl Default for RaftDefaultCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -551,7 +575,7 @@ impl RaftDbConfig {
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
         if self.enable_statistics {
-            opts.enable_statistics();
+            opts.enable_statistics(true);
             opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         }
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);

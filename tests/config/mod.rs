@@ -164,6 +164,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -194,6 +197,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -224,6 +230,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -254,6 +263,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
     };
     value.raftdb = RaftDbConfig {
@@ -306,6 +318,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
     };
     value.storage = StorageConfig {
