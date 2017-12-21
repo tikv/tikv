@@ -411,7 +411,7 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
 ) -> Result<(), String> {
     let path = path.as_ref().to_str().unwrap();
     let clone = clone.as_ref().to_str().unwrap();
-    if Path::new(clone).exists() {
+    if !Path::new(clone).exists() {
         fs::copy(path, clone)
             .map(|_| ())
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))
@@ -509,7 +509,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn test_prepare_sst_for_ingestion() {
         let path = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion").expect("");
         let path_str = path.path().to_str().unwrap();
