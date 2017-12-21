@@ -27,8 +27,8 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender, SyncS
 use std::error::Error;
 use std::time::Duration;
 
-use util::time::SlowTimer;
-use util::timer::{EmptyTask, TimeoutTask, Timer};
+use util::time::{Instant, SlowTimer};
+use util::timer::{TimeoutTask, Timer};
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
@@ -89,6 +89,10 @@ pub trait BatchRunnable<T: Display> {
     fn run_batch(&mut self, ts: &mut Vec<T>);
     fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
+}
+
+pub trait BatchRunnableWithTimer<T: Display, U>: BatchRunnable<T> {
+    fn on_timeout(&mut self, TimeoutTask<U>, &mut Timer<U>);
 }
 
 impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
@@ -248,28 +252,18 @@ pub struct Worker<T: Display> {
     batch_size: usize,
 }
 
-fn poll<R, T, U, F>(
-    mut runner: R,
-    rx: Receiver<Option<T>>,
-    counter: Arc<AtomicUsize>,
-    batch_size: usize,
-    mut timer: Option<Timer<U>>,
-    mut f: F,
-) where
+fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
+where
     R: BatchRunnable<T> + Send + 'static,
     T: Display + Send + 'static,
-    F: FnMut(&mut Timer<U>, TimeoutTask<U>) + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
     let mut batch = Vec::with_capacity(batch_size);
     let mut keep_going = true;
-    let mut timeout_tasks = Vec::new();
     while keep_going {
-        let timeout = timer
-            .as_mut()
-            .and_then(|timer| timer.next_timeout(&mut timeout_tasks));
-        keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
+        keep_going = fill_task_batch(&rx, &mut batch, batch_size, None);
         let should_tick = !batch.is_empty();
+
         if !batch.is_empty() {
             counter.fetch_sub(batch.len(), Ordering::SeqCst);
             WORKER_PENDING_TASK_VEC
@@ -285,9 +279,59 @@ fn poll<R, T, U, F>(
         if should_tick {
             runner.on_tick();
         }
-        for task in timeout_tasks.drain(..) {
-            let timer = timer.as_mut().unwrap();
-            f(timer, task);
+    }
+    runner.shutdown();
+}
+
+fn poll_with_timer<R, T, U>(
+    mut runner: R,
+    rx: Receiver<Option<T>>,
+    counter: Arc<AtomicUsize>,
+    batch_size: usize,
+    mut timer: Timer<U>,
+) where
+    R: BatchRunnableWithTimer<T, U> + Send + 'static,
+    T: Display + Send + 'static,
+    U: Send + 'static,
+{
+    let name = thread::current().name().unwrap().to_owned();
+    let mut batch = Vec::with_capacity(batch_size);
+    let mut keep_going = true;
+    let mut tick_time = None;
+    while keep_going {
+        tick_time = tick_time.or_else(|| timer.next_timeout());
+        let timeout = tick_time.map(|t| t.checked_sub(Instant::now()));
+
+        keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
+        let mut should_tick = !batch.is_empty();
+
+        if !batch.is_empty() {
+            counter.fetch_sub(batch.len(), Ordering::SeqCst);
+            WORKER_PENDING_TASK_VEC
+                .with_label_values(&[&name])
+                .sub(batch.len() as f64);
+            WORKER_HANDLED_TASK_VEC
+                .with_label_values(&[&name])
+                .inc_by(batch.len() as f64)
+                .unwrap();
+            runner.run_batch(&mut batch);
+            batch.clear();
+        }
+
+        match tick_time {
+            Some(t) if t <= Instant::now() => {
+                should_tick = true;
+                tick_time = None;
+                let mut tasks = timer.tasks_before(t);
+                while let Some(task) = tasks.next() {
+                    runner.on_timeout(task, tasks.as_timer());
+                }
+            }
+            _ => {}
+        }
+
+        if should_tick {
+            runner.on_tick();
         }
     }
     runner.shutdown();
@@ -333,22 +377,27 @@ impl<T: Display + Send + 'static> Worker<T> {
     where
         R: BatchRunnable<T> + Send + 'static,
     {
-        let timer: Option<Timer<EmptyTask>> = None;
-        let f = |_: &mut Timer<EmptyTask>, _: TimeoutTask<EmptyTask>| {};
-        self.start_with_timer(runner, timer, f)
+        let mut receiver = self.receiver.lock().unwrap();
+        info!("starting working thread: {}", self.scheduler.name);
+        if receiver.is_none() {
+            warn!("worker {} has been started.", self.scheduler.name);
+            return Ok(());
+        }
+
+        let rx = receiver.take().unwrap();
+        let counter = self.scheduler.counter.clone();
+        let batch_size = self.batch_size;
+        let h = ThreadBuilder::new()
+            .name(thd_name!(self.scheduler.name.as_ref()))
+            .spawn(move || poll(runner, rx, counter, batch_size))?;
+        self.handle = Some(h);
+        Ok(())
     }
 
-    /// Start the worker.
-    pub fn start_with_timer<R, U, F>(
-        &mut self,
-        runner: R,
-        timer: Option<Timer<U>>,
-        f: F,
-    ) -> Result<(), io::Error>
+    pub fn start_with_timer<R, U>(&mut self, runner: R, timer: Timer<U>) -> Result<(), io::Error>
     where
-        R: BatchRunnable<T> + Send + 'static,
+        R: BatchRunnableWithTimer<T, U> + Send + 'static,
         U: Send + 'static,
-        F: FnMut(&mut Timer<U>, TimeoutTask<U>) + Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.scheduler.name);
@@ -362,7 +411,9 @@ impl<T: Display + Send + 'static> Worker<T> {
         let batch_size = self.batch_size;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size, timer, f))?;
+            .spawn(move || {
+                poll_with_timer(runner, rx, counter, batch_size, timer)
+            })?;
         self.handle = Some(h);
         Ok(())
     }

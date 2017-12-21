@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem::replace;
 use std::cmp::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::collections::BinaryHeap;
 
-/// A empty task for keeping compatible.
-pub struct EmptyTask;
+use util::time::Instant;
 
+#[derive(Debug)]
 pub struct TimeoutTask<T> {
     next_tick: Instant,
     timeout: Duration,
@@ -75,14 +76,12 @@ impl<T> Ord for TimeoutTask<T> {
 }
 
 pub struct Timer<T> {
-    now: Instant,
     pending: BinaryHeap<TimeoutTask<T>>,
 }
 
 impl<T> Timer<T> {
     pub fn new(capacity: usize) -> Self {
         Timer {
-            now: Instant::now(),
             pending: BinaryHeap::with_capacity(capacity),
         }
     }
@@ -98,27 +97,63 @@ impl<T> Timer<T> {
         self.pending.push(task);
     }
 
-    /// Get the next `timeout` from the timer, and fill `delivered`
-    /// with tasks will be triggered after `timeout` elapsed.
-    /// If there is no pending tasks, `delivered` won't be changed.
-    pub fn next_timeout(&mut self, delivered: &mut Vec<TimeoutTask<T>>) -> Option<Duration> {
-        if let Some(timeout_task) = self.pending.pop() {
-            let tick_time = timeout_task.next_tick;
-            delivered.push(timeout_task);
-            while let Some(timeout_task) = self.pending.pop() {
-                if timeout_task.next_tick > tick_time {
-                    self.pending.push(timeout_task);
-                    break;
-                }
-                delivered.push(timeout_task);
-            }
-            self.now = Instant::now();
-            if self.now > tick_time {
-                return Some(Duration::default());
-            }
-            return Some(tick_time.duration_since(self.now));
+    /// Remove a task from the timer. Returns the `TimeoutTask` if found.
+    pub fn remove_task<F>(&mut self, f: F) -> Option<TimeoutTask<T>>
+    where
+        F: Fn(&TimeoutTask<T>) -> bool,
+    {
+        let mut res = None;
+        let mut vec = replace(&mut self.pending, BinaryHeap::new()).into_vec();
+        if let Some((idx, _)) = vec.iter().enumerate().find(|&(_, task)| f(task)) {
+            res = Some(vec.swap_remove(idx));
         }
-        None
+        self.pending = BinaryHeap::from(vec);
+        res
+    }
+
+    /// Get the next `timeout` from the timer.
+    pub fn next_timeout(&mut self) -> Option<Instant> {
+        self.pending.peek().map(|task| task.next_tick)
+    }
+
+    pub fn tasks_before(&mut self, instant: Instant) -> TimerTaskBefore<T> {
+        TimerTaskBefore {
+            instant: instant,
+            timer: self,
+        }
+    }
+}
+
+pub struct TimerTaskBefore<'a, T: 'a> {
+    instant: Instant,
+    timer: &'a mut Timer<T>,
+}
+
+impl<'a, T: 'a> TimerTaskBefore<'a, T> {
+    pub fn as_timer(&mut self) -> &mut Timer<T> {
+        self.timer
+    }
+}
+
+impl<'a, T: 'a> Drop for TimerTaskBefore<'a, T> {
+    fn drop(&mut self) {
+        while let Some(_) = self.next() {}
+    }
+}
+
+impl<'a, T: 'a> Iterator for TimerTaskBefore<'a, T> {
+    type Item = TimeoutTask<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.timer.pending.pop() {
+            Some(timeout_task) => if timeout_task.next_tick > self.instant {
+                self.timer.pending.push(timeout_task);
+                return None;
+            } else {
+                return Some(timeout_task);
+            },
+            None => None,
+        }
     }
 }
 
@@ -126,7 +161,7 @@ impl<T> Timer<T> {
 mod tests {
     use super::*;
     use std::sync::mpsc::{self, Sender};
-    use util::worker::{Builder as WorkerBuilder, Runnable};
+    use util::worker::{BatchRunnableWithTimer, Builder as WorkerBuilder, Runnable};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     enum Task {
@@ -136,6 +171,7 @@ mod tests {
     }
 
     struct Runner {
+        counter: usize,
         ch: Sender<&'static str>,
     }
 
@@ -148,36 +184,41 @@ mod tests {
         }
     }
 
+    impl BatchRunnableWithTimer<&'static str, Task> for Runner {
+        fn on_timeout(&mut self, task: TimeoutTask<Task>, timer: &mut Timer<Task>) {
+            match *task.as_ref() {
+                Task::A => self.ch.send("task a").unwrap(),
+                Task::B => self.ch.send("task b").unwrap(),
+                _ => unreachable!(),
+            };
+            if self.counter < 2 {
+                timer.add_task(task.timeout(), task.into_inner());
+            }
+            self.counter += 1;
+        }
+    }
+
     #[test]
     fn test_timer() {
         let mut timer = Timer::new(10);
-        let mut events = Vec::new();
         timer.add_task(Duration::from_millis(20), Task::A);
         timer.add_task(Duration::from_millis(150), Task::C);
         timer.add_task(Duration::from_millis(100), Task::B);
         assert_eq!(timer.pending.len(), 3);
 
-        assert!(timer.next_timeout(&mut events).is_some());
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].as_ref(), &Task::A);
+        let tick_time = timer.next_timeout().unwrap();
+        assert_eq!(
+            timer.tasks_before(tick_time).next().unwrap().into_inner(),
+            Task::A
+        );
+        assert_eq!(timer.tasks_before(tick_time).next(), None);
 
-        events.clear();
-        assert!(timer.next_timeout(&mut events).is_some());
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].as_ref(), &Task::B);
-
-        for event in events.drain(..) {
-            timer.add_task(event.timeout(), event.into_inner());
-        }
-
-        assert!(timer.next_timeout(&mut events).is_some());
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].as_ref(), &Task::B);
-
-        events.clear();
-        assert!(timer.next_timeout(&mut events).is_some());
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].as_ref(), &Task::C);
+        let tick_time = timer.next_timeout().unwrap();
+        assert_eq!(
+            timer.tasks_before(tick_time).next().unwrap().into_inner(),
+            Task::B
+        );
+        assert_eq!(timer.tasks_before(tick_time).next(), None);
     }
 
     #[test]
@@ -188,37 +229,26 @@ mod tests {
         }
 
         let (tx, rx) = mpsc::channel();
-        let runner = Runner { ch: tx.clone() };
+        let runner = Runner {
+            counter: 0,
+            ch: tx.clone(),
+        };
 
-        let mut counter = 0;
         let mut timer = Timer::new(10);
         timer.add_task(Duration::from_millis(200), Task::A);
         timer.add_task(Duration::from_millis(300), Task::B);
 
-        worker
-            .start_with_timer(runner, Some(timer), move |ref mut timer, timeout_task| {
-                match *timeout_task.as_ref() {
-                    Task::A => tx.send("task a").unwrap(),
-                    Task::B => tx.send("task b").unwrap(),
-                    _ => unreachable!(),
-                };
-                counter += 1;
-                if counter <= 2 {
-                    timer.add_task(timeout_task.timeout(), timeout_task.into_inner());
-                }
-            })
-            .unwrap();
+        worker.start_with_timer(runner, timer).unwrap();
 
-        for i in 0..14 {
+        for _ in 0..10 {
             let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-            if i == 1 || i == 3 || i == 5 {
-                assert_eq!(msg, "task a");
-            } else if i == 7 {
-                assert_eq!(msg, "task b");
-            } else {
-                assert_eq!(msg, "normal msg");
-            }
+            assert_eq!(msg, "normal msg");
         }
+        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(msg, "task a");
+        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(msg, "task b");
+
         worker.stop().unwrap().join().unwrap();
     }
 }

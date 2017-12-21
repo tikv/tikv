@@ -263,6 +263,14 @@ impl Instant {
         }
     }
 
+    pub fn checked_sub(&self, other: Instant) -> Duration {
+        if *self > other {
+            self.duration_since(other)
+        } else {
+            Duration::default()
+        }
+    }
+
     fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
             (later - earlier).to_std().unwrap()
