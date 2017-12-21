@@ -507,6 +507,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
+        self.register_sst_importer_gc_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
             self.kv_engine.clone(),
