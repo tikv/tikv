@@ -34,6 +34,7 @@ pub struct TableScanExecutor {
     col_ids: HashSet<i64>,
     key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
+    count: i64,
 }
 
 impl TableScanExecutor {
@@ -62,6 +63,7 @@ impl TableScanExecutor {
             col_ids: col_ids,
             key_ranges: key_ranges.into_iter(),
             scanner: None,
+            count: 0,
         }
     }
 
@@ -97,6 +99,7 @@ impl TableScanExecutor {
 
 impl Executor for TableScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
+        self.count += 1;
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
                 return Ok(Some(row));
@@ -121,6 +124,10 @@ impl Executor for TableScanExecutor {
             }
             return Ok(None);
         }
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        counts.push(self.count - 1);
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
@@ -210,6 +217,10 @@ mod test {
             assert_eq!(expect_row[&cid], v.to_vec());
         }
         assert!(table_scanner.next().unwrap().is_none());
+        let expected_counts = vec![1];
+        let mut counts = Vec::with_capacity(1);
+        table_scanner.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub struct SelectionExecutor {
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: Arc<EvalContext>,
     src: Box<Executor>,
+    count: i64,
 }
 
 impl SelectionExecutor {
@@ -49,6 +50,7 @@ impl SelectionExecutor {
             related_cols_offset: visitor.column_offsets(),
             ctx: ctx,
             src: src,
+            count: 0,
         })
     }
 }
@@ -56,6 +58,7 @@ impl SelectionExecutor {
 #[allow(never_loop)]
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
+        self.count += 1;
         'next: while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(
                 &self.ctx,
@@ -73,6 +76,11 @@ impl Executor for SelectionExecutor {
             return Ok(Some(row));
         }
         Ok(None)
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        self.src.collect_output_counts(counts);
+        counts.push(self.count - 1);
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
@@ -276,5 +284,9 @@ mod tests {
         assert_eq!(selection_rows.len(), expect_row_handles.len());
         let result_row = selection_rows.iter().map(|r| r.handle).collect::<Vec<_>>();
         assert_eq!(result_row, expect_row_handles);
+        let expected_counts = vec![raw_data.len() as i64, expect_row_handles.len() as i64];
+        let mut counts = Vec::with_capacity(2);
+        selection_executor.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
     }
 }
