@@ -1713,9 +1713,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let replicated_idx = peer.raft_group
                 .raft
                 .prs()
-                .voters()
-                .values()
-                .map(|p| p.matched)
+                .iter()
+                .map(|(_, p)| p.matched)
                 .min()
                 .unwrap();
             // When an election happened or a new peer is added, replicated_idx can be 0.
