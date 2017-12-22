@@ -20,11 +20,12 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use time::Timespec;
+use time::{Duration, Timespec};
 
 use storage::LARGE_CFS;
 use util::properties::SizeProperties;
 use util::{rocksdb as rocksdb_util, Either};
+use util::time::monotonic_raw_now;
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
@@ -212,6 +213,9 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 ///     current peer lose its leader lease.
 ///     Within this suspect leader lease expire time, read requests could not be performed
 ///     locally.
+///   - The valid leader lease should be `lease = max_lease - (quorum_commit - send_to_quorum)`
+///     And the expired timestamp for that leader lease is `quorum_commit + lease`,
+///     which is `send_to_quorum + max_lease` in short.
 // TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
 //       to the local read thread, so name it remote. If Lease expires, the remote must
 //       expire too.
@@ -219,6 +223,7 @@ pub struct Lease {
     // A suspect timestamp is in the Either::Left(_),
     // a valid timestamp is in the Either::Right(_).
     bound: Option<Either<Timespec, Timespec>>,
+    max_lease: Duration,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -232,34 +237,43 @@ pub enum LeaseState {
 }
 
 impl Lease {
-    pub fn new() -> Lease {
-        Lease { bound: None }
+    pub fn new(max_lease: Duration) -> Lease {
+        Lease {
+            bound: None,
+            max_lease: max_lease,
+        }
     }
 
-    /// Renew the lease to the `bound`.
-    pub fn renew(&mut self, bound: Timespec) {
+    fn next_expired_time(&self, send_to_quorum: Timespec) -> Timespec {
+        send_to_quorum + self.max_lease
+    }
+
+    /// Renew the lease to the `send_to_quorum + max_lease`.
+    pub fn renew(&mut self, send_to_quorum: Timespec) {
+        let next_expired_time = self.next_expired_time(send_to_quorum);
         match self.bound {
             // Longer than suspect ts or longer than valid ts.
-            Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts < bound {
-                self.bound = Some(Either::Right(bound));
+            Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts < next_expired_time {
+                self.bound = Some(Either::Right(next_expired_time));
             },
             // Or an empty lease
             None => {
-                self.bound = Some(Either::Right(bound));
+                self.bound = Some(Either::Right(next_expired_time));
             }
         }
     }
 
-    /// Suspect the lease.
-    pub fn suspect(&mut self, bound: Timespec) {
-        self.bound = Some(Either::Left(bound));
+    /// Suspect the lease to the `send_to_quorum + max_lease`.
+    pub fn suspect(&mut self, send_to_quorum: Timespec) {
+        let next_expired_time = self.next_expired_time(send_to_quorum);
+        self.bound = Some(Either::Left(next_expired_time));
     }
 
-    /// Inspect the lease state for the ts.
-    pub fn inspect(&self, ts: Timespec) -> LeaseState {
+    /// Inspect the lease state for the ts or now.
+    pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
         match self.bound {
             Some(Either::Left(_)) => LeaseState::Suspect,
-            Some(Either::Right(bound)) => if ts < bound {
+            Some(Either::Right(bound)) => if ts.unwrap_or_else(monotonic_raw_now) < bound {
                 LeaseState::Valid
             } else {
                 LeaseState::Expired
@@ -308,28 +322,46 @@ mod tests {
         let duration = TimeDuration::milliseconds(1500);
 
         // Empty lease.
-        let mut lease = Lease::new();
-        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Expired);
+        let mut lease = Lease::new(duration);
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
 
         // Transit to the Valid state.
-        lease.renew(monotonic_raw_now() + duration);
-        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Valid);
+        lease.renew(monotonic_raw_now());
+        assert_eq!(lease.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
+        assert_eq!(lease.inspect(None), LeaseState::Valid);
 
         // After lease expired time.
         thread::sleep(duration.to_std().unwrap());
-        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Expired);
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+        assert_eq!(lease.inspect(None), LeaseState::Expired);
 
         // Transit to the Suspect state.
-        lease.suspect(monotonic_raw_now() + duration);
-        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Suspect);
+        lease.suspect(monotonic_raw_now());
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Suspect
+        );
+        assert_eq!(lease.inspect(None), LeaseState::Suspect);
 
         // After lease expired time. Always suspect.
         thread::sleep(duration.to_std().unwrap());
-        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Suspect);
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Suspect
+        );
 
         // Clear lease.
         lease.expire();
-        assert_eq!(lease.inspect(monotonic_raw_now()), LeaseState::Expired);
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
     }
 
     // Tests the util function `check_key_in_region`.
