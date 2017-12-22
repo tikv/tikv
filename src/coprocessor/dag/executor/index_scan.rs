@@ -37,6 +37,7 @@ pub struct IndexScanExecutor {
     key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
     unique: bool,
+    count: i64,
 }
 
 impl IndexScanExecutor {
@@ -67,6 +68,7 @@ impl IndexScanExecutor {
             key_ranges: key_ranges.into_iter(),
             scanner: None,
             unique: unique,
+            count: 0,
         }
     }
 
@@ -86,6 +88,7 @@ impl IndexScanExecutor {
             key_ranges: key_ranges.into_iter(),
             scanner: None,
             unique: false,
+            count: 0,
         }
     }
 
@@ -149,12 +152,14 @@ impl Executor for IndexScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
+                self.count += 1;
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
                 if self.is_point(&range) {
                     COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
                     if let Some(row) = self.get_row_from_point(range)? {
+                        self.count += 1;
                         return Ok(Some(row));
                     }
                     continue;
@@ -170,6 +175,11 @@ impl Executor for IndexScanExecutor {
             }
             return Ok(None);
         }
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        counts.push(self.count);
+        self.count = 0;
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
@@ -389,6 +399,10 @@ mod test {
             }
         }
         assert!(scanner.next().unwrap().is_none());
+        let expected_counts = vec![KEY_NUMBER as i64];
+        let mut counts = Vec::with_capacity(1);
+        scanner.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
     }
 
     #[test]
