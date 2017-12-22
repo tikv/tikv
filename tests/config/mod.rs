@@ -133,7 +133,8 @@ fn test_serde_custom_tikv_config() {
         info_log_roll_time: ReadableDuration::secs(12),
         info_log_dir: "/var".to_owned(),
         rate_bytes_per_sec: ReadableSize::kb(1),
-        wal_bytes_per_sync: ReadableSize::mb(1),
+        bytes_per_sync: ReadableSize::mb(1),
+        wal_bytes_per_sync: ReadableSize::kb(32),
         max_sub_compactions: 12,
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
@@ -169,6 +170,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -200,6 +204,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -231,6 +238,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -262,6 +272,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
     };
     value.raftdb = RaftDbConfig {
@@ -284,7 +297,8 @@ fn test_serde_custom_tikv_config() {
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
         allow_concurrent_memtable_write: true,
-        wal_bytes_per_sync: ReadableSize::mb(1),
+        bytes_per_sync: ReadableSize::mb(1),
+        wal_bytes_per_sync: ReadableSize::kb(32),
         defaultcf: RaftDefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -315,6 +329,9 @@ fn test_serde_custom_tikv_config() {
             level0_stop_writes_trigger: 123,
             max_compaction_bytes: ReadableSize::gb(1),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
         },
     };
     value.storage = StorageConfig {

@@ -25,8 +25,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::cmp;
+use super::FlatMap;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {
@@ -41,6 +41,96 @@ impl Default for ProgressState {
     }
 }
 
+/// `ProgressSet` contains several `Progress`es,
+/// which could be `Leader`, `Follower` and `Learner`.
+#[derive(Default, Clone)]
+pub struct ProgressSet {
+    voters: FlatMap<u64, Progress>,
+    learners: FlatMap<u64, Progress>,
+}
+
+impl ProgressSet {
+    pub fn new(voter_size: usize, learner_size: usize) -> Self {
+        ProgressSet {
+            voters: FlatMap::with_capacity(voter_size),
+            learners: FlatMap::with_capacity(learner_size),
+        }
+    }
+
+    pub fn voters(&self) -> &FlatMap<u64, Progress> {
+        &self.voters
+    }
+
+    pub fn learners(&self) -> &FlatMap<u64, Progress> {
+        &self.learners
+    }
+
+    pub fn nodes(&self) -> Vec<u64> {
+        let mut nodes = Vec::with_capacity(self.voters.len() + self.learners.len());
+        nodes.extend(self.voters.keys());
+        nodes.extend(self.learners.keys());
+        nodes.sort();
+        nodes
+    }
+
+    pub fn get(&self, id: u64) -> Option<&Progress> {
+        self.voters.get(&id).or_else(|| self.learners.get(&id))
+    }
+
+    pub fn get_mut(&mut self, id: u64) -> Option<&mut Progress> {
+        let progress = self.voters.get_mut(&id);
+        if progress.is_none() {
+            return self.learners.get_mut(&id);
+        }
+        progress
+    }
+
+    // We need explicit lifetime here because of a compiler bug.
+    // See https://github.com/rust-lang/rust/issues/43396.
+    #[allow(needless_lifetimes)]
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a u64, &'a Progress)> {
+        self.voters.iter().chain(&self.learners)
+    }
+
+    #[allow(needless_lifetimes)]
+    pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = (&'a u64, &'a mut Progress)> {
+        self.voters.iter_mut().chain(&mut self.learners)
+    }
+
+    pub fn insert_voter(&mut self, id: u64, pr: Progress) {
+        if self.learners.contains_key(&id) {
+            panic!("insert voter {} but already in learners", id);
+        }
+        if self.voters.insert(id, pr).is_some() {
+            panic!("insert voter {} twice", id);
+        }
+    }
+
+    pub fn insert_learner(&mut self, id: u64, pr: Progress) {
+        if self.voters.contains_key(&id) {
+            panic!("insert learner {} but already in voters", id);
+        }
+        if self.learners.insert(id, pr).is_some() {
+            panic!("insert learner {} twice", id);
+        }
+    }
+
+    pub fn remove(&mut self, id: u64) -> Option<Progress> {
+        match self.voters.remove(&id) {
+            None => self.learners.remove(&id),
+            some => some,
+        }
+    }
+
+    pub fn promote_learner(&mut self, id: u64) {
+        if let Some(mut pr) = self.learners.remove(&id) {
+            pr.is_learner = false;
+            self.voters.insert(id, pr);
+            return;
+        }
+        panic!("promote not exists learner: {}", id);
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct Progress {
@@ -79,9 +169,10 @@ pub struct Progress {
     // When a leader receives a reply, the previous inflights should
     // be freed by calling inflights.freeTo.
     pub ins: Inflights,
+
+    // Indicates the Progress is a learner or not.
+    pub is_learner: bool,
 }
-
-
 
 impl Progress {
     fn reset_state(&mut self, state: ProgressState) {
@@ -188,7 +279,6 @@ impl Progress {
     }
 }
 
-
 #[derive(Debug, Default, Clone)]
 pub struct Inflights {
     // the starting index in the buffer
@@ -270,7 +360,6 @@ impl Inflights {
         let start = self.buffer[self.start];
         self.free_to(start);
     }
-
 
     // resets frees all inflights.
     pub fn reset(&mut self) {

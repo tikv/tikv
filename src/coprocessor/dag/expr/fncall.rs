@@ -96,7 +96,8 @@ impl FnCall {
             ScalarFuncSig::DivideReal |
             ScalarFuncSig::BitAndSig |
             ScalarFuncSig::BitOrSig |
-            ScalarFuncSig::BitXorSig => (2, 2),
+            ScalarFuncSig::BitXorSig |
+            ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt |
             ScalarFuncSig::CastIntAsReal |
@@ -544,6 +545,8 @@ dispatch_call! {
         CaseWhenString => case_when_string,
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
+
+        DateFormatSig => date_format,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,

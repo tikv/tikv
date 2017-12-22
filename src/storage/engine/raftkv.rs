@@ -286,6 +286,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         mut modifies: Vec<Modify>,
         cb: Callback<()>,
     ) -> engine::Result<()> {
+        fail_point!("raftkv_async_write");
         let mut reqs = Vec::with_capacity(modifies.len());
         while !modifies.is_empty() {
             let m = modifies.pop().unwrap();
@@ -335,7 +336,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC
                     .with_label_values(&["write", "success"])
                     .inc();
-
+                fail_point!("raftkv_async_write_finish");
                 cb((cb_ctx, Ok(())))
             }
             Ok(CmdRes::Snap(_)) => cb((
@@ -359,6 +360,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     }
 
     fn async_snapshot(&self, ctx: &Context, cb: Callback<Box<Snapshot>>) -> engine::Result<()> {
+        fail_point!("raftkv_async_snapshot");
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Snap);
 
@@ -379,6 +381,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC
                     .with_label_values(&["snapshot", "success"])
                     .inc();
+                fail_point!("raftkv_async_snapshot_finish");
                 cb((cb_ctx, Ok(box s)))
             }
             Err(e) => {
@@ -402,6 +405,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         batch: Vec<Context>,
         on_finished: BatchCallback<Box<Snapshot>>,
     ) -> engine::Result<()> {
+        fail_point!("raftkv_async_batch_snapshot");
         let batch_size = batch.len();
         ASYNC_REQUESTS_COUNTER_VEC
             .with_label_values(&["snapshot", "all"])
@@ -439,6 +443,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     None => snapshots.push(None),
                 }
             }
+            fail_point!("raftkv_async_batch_snapshot_finish");
             on_finished(snapshots);
         };
 
@@ -467,16 +472,25 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
 impl Snapshot for RegionSnapshot {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
+        fail_point!("raftkv_snapshot_get", |_| {
+            Err(box_err!("injected error for get"))
+        });
         let v = box_try!(self.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
+        fail_point!("raftkv_snapshot_get_cf", |_| {
+            Err(box_err!("injected error for get_cf"))
+        });
         let v = box_try!(self.get_value_cf(cf, key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
+        fail_point!("raftkv_snapshot_iter", |_| {
+            Err(box_err!("injected error for iter"))
+        });
         Ok(Cursor::new(
             Box::new(RegionSnapshot::iter(self, iter_opt)),
             mode,
@@ -484,6 +498,9 @@ impl Snapshot for RegionSnapshot {
     }
 
     fn iter_cf(&self, cf: CfName, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor> {
+        fail_point!("raftkv_snapshot_iter_cf", |_| {
+            Err(box_err!("injected error for iter_cf"))
+        });
         Ok(Cursor::new(
             Box::new(RegionSnapshot::iter_cf(self, cf, iter_opt)?),
             mode,
@@ -509,10 +526,16 @@ impl EngineIterator for RegionIterator {
     }
 
     fn seek(&mut self, key: &Key) -> engine::Result<bool> {
+        fail_point!("raftkv_iter_seek", |_| {
+            Err(box_err!("injected error for iter_seek"))
+        });
         RegionIterator::seek(self, key.encoded()).map_err(From::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> engine::Result<bool> {
+        fail_point!("raftkv_iter_seek_for_prev", |_| {
+            Err(box_err!("injected error for iter_seek_for_prev"))
+        });
         RegionIterator::seek_for_prev(self, key.encoded()).map_err(From::from)
     }
 

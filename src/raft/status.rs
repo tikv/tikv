@@ -40,6 +40,7 @@ pub struct Status {
     pub ss: SoftState,
     pub applied: u64,
     pub progress: FlatMap<u64, Progress>,
+    pub learner_progress: FlatMap<u64, Progress>,
 }
 
 impl Status {
@@ -53,7 +54,8 @@ impl Status {
         s.ss = raft.soft_state();
         s.applied = raft.raft_log.get_applied();
         if s.ss.raft_state == StateRole::Leader {
-            s.progress = raft.prs.clone().unwrap();
+            s.progress = raft.prs().voters().clone();
+            s.learner_progress = raft.prs().learners().clone();
         }
         s
     }

@@ -85,6 +85,9 @@ macro_rules! cf_config {
             pub max_compaction_bytes: ReadableSize,
             #[serde(with = "config::compaction_pri_serde")]
             pub compaction_pri: CompactionPriority,
+            pub dynamic_level_bytes: bool,
+            pub num_levels: i32,
+            pub max_bytes_for_level_multiplier: i32,
         }
     }
 }
@@ -106,7 +109,10 @@ macro_rules! build_cf_opt {
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_block_based_table_factory(&block_base_opts);
-        cf_opts.compression_per_level(&$opt.compression_per_level);
+        cf_opts.set_num_levels($opt.num_levels);
+        assert!($opt.compression_per_level.len() >= $opt.num_levels as usize);
+        let compression_per_level = $opt.compression_per_level[..$opt.num_levels as usize].to_vec();
+        cf_opts.compression_per_level(compression_per_level.as_slice());
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
         cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
@@ -117,6 +123,9 @@ macro_rules! build_cf_opt {
         cf_opts.set_level_zero_stop_writes_trigger($opt.level0_stop_writes_trigger);
         cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
         cf_opts.compaction_priority($opt.compaction_pri);
+        cf_opts.set_level_compaction_dynamic_level_bytes($opt.dynamic_level_bytes);
+        cf_opts.set_max_bytes_for_level_multiplier($opt.max_bytes_for_level_multiplier);
+
         cf_opts
     }};
 }
@@ -155,6 +164,9 @@ impl Default for DefaultCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -202,6 +214,9 @@ impl Default for WriteCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -251,6 +266,9 @@ impl Default for LockCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -293,6 +311,9 @@ impl Default for RaftCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -330,6 +351,7 @@ pub struct DbConfig {
     pub info_log_roll_time: ReadableDuration,
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
+    pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
@@ -361,6 +383,7 @@ impl Default for DbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
+            bytes_per_sync: ReadableSize::mb(0),
             wal_bytes_per_sync: ReadableSize::kb(0),
             max_sub_compactions: 1,
             writable_file_max_buffer_size: ReadableSize::mb(1),
@@ -408,6 +431,7 @@ impl DbConfig {
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter(self.rate_bytes_per_sec.0 as i64);
         }
+        opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
@@ -470,6 +494,9 @@ impl Default for RaftDefaultCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
+            dynamic_level_bytes: false,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
         }
     }
 }
@@ -513,6 +540,7 @@ pub struct RaftDbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
     pub allow_concurrent_memtable_write: bool,
+    pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub defaultcf: RaftDefaultCfConfig,
 }
@@ -539,6 +567,7 @@ impl Default for RaftDbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             allow_concurrent_memtable_write: false,
+            bytes_per_sync: ReadableSize::mb(0),
             wal_bytes_per_sync: ReadableSize::kb(0),
             defaultcf: RaftDefaultCfConfig::default(),
         }
@@ -582,6 +611,7 @@ impl RaftDbConfig {
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
         opts.add_event_listener(EventListener::new("raft"));
+        opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
 
         opts

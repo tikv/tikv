@@ -679,6 +679,8 @@ impl Peer {
                 }
                 _ => {}
             }
+            self.coprocessor_host
+                .on_role_change(self.region(), ss.raft_state);
         }
     }
 

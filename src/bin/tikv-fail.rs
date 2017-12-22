@@ -49,6 +49,7 @@ fn main() {
         .about("A tool for injecting failures to TiKV and recovery")
         .arg(
             Arg::with_name("addr")
+                .required(true)
                 .short("a")
                 .takes_value(true)
                 .help("set tikv ip:port"),
