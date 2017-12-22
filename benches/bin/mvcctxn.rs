@@ -5,6 +5,8 @@ use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
 use tikv::storage::{new_local_engine, Engine, Key, Modify, Mutation, Options, SnapshotStore,
                     Statistics, ALL_CFS, TEMP_DIR};
 use tikv::storage::mvcc::MvccTxn;
+use tikv::coprocessor::codec::table::encode_row_key;
+use tikv::util::codec::number::NumberEncoder;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 
 use super::print_result;
@@ -20,26 +22,16 @@ fn next_ts() -> u64 {
 }
 
 #[inline]
-fn to_bytes(value: u64) -> Vec<u8> {
-    let mut result = Vec::new();
-    // big endian
-    for shift in (0..8).rev() {
-        result.push(((value >> shift) & 0xff) as u8);
-    }
-    result
-}
-
-fn create_row_key(tableid: u64, rowid: u64) -> Vec<u8> {
-    let mut result = to_bytes(tableid);
-    result.extend(b"_r".iter());
-    result.extend(to_bytes(rowid).iter());
-    result
+fn create_row_key(tableid: i64, rowid: i64) -> Vec<u8> {
+    let mut handle = Vec::with_capacity(8);
+    handle.encode_i64(rowid).unwrap();
+    encode_row_key(tableid, &handle)
 }
 
 fn generate_keys(count: usize) -> Vec<Vec<u8>> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(count);
     for i in 0..count {
-        result.push(create_row_key(1u64, i as u64));
+        result.push(create_row_key(1, i as i64));
     }
     result
 }
