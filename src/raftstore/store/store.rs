@@ -1268,7 +1268,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer,
                 self.store_id()
             );
-
         }
     }
 
@@ -1712,10 +1711,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             //                  |-----------------threshold------------ |
             //              first_index                         replicated_index
             let replicated_idx = peer.raft_group
-                .status()
-                .progress
-                .values()
-                .map(|p| p.matched)
+                .raft
+                .prs()
+                .iter()
+                .map(|(_, p)| p.matched)
                 .min()
                 .unwrap();
             // When an election happened or a new peer is added, replicated_idx can be 0.
