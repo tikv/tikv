@@ -91,6 +91,9 @@ impl DAGContext {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    let mut counts = Vec::with_capacity(4);
+                    self.exec.collect_output_counts(&mut counts);
+                    sel_resp.set_output_counts(counts);
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
