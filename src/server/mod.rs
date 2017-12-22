@@ -28,9 +28,9 @@ use std::fmt;
 use std::boxed::FnBox;
 
 use grpc::Error as GrpcError;
-use futures::{future, Async, Future, Poll, Stream};
-use futures::sync::mpsc::{self, SpawnHandle};
-use futures_cpupool::CpuPool;
+use futures::{Async, Future, Poll, Stream};
+use futures::future::{self, Executor};
+use futures::sync::mpsc::{self, Execute, SpawnHandle};
 
 use kvproto::coprocessor::Response;
 
@@ -43,24 +43,30 @@ pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
 pub struct ResponseStream {
-    head: Option<Response>,
+    cursor: usize,
+    head: [Option<Response>; 2],
     remain: Option<SpawnHandle<Response, GrpcError>>,
 }
 
 impl ResponseStream {
-    pub fn spawn<S>(mut s: S, pool: CpuPool) -> Self
+    pub fn spawn<S, E>(mut s: S, executor: &E) -> Self
     where
         S: Stream<Item = Response, Error = GrpcError> + Send + 'static,
+        E: Executor<Execute<S>>,
     {
         let mut resp_stream = ResponseStream {
-            head: None,
+            cursor: 0,
+            head: [None, None],
             remain: None,
         };
-        match future::poll_fn(|| s.poll()).wait().unwrap() {
-            Some(resp) => resp_stream.head = Some(resp),
-            None => return,
+        for i in 0..2 {
+            match future::poll_fn(|| s.poll()).wait().unwrap() {
+                Some(resp) => resp_stream.head[i] = Some(resp),
+                None => return resp_stream,
+            }
         }
-        resp_stream.remain = Some(mpsc::spawn(s, &pool, 8));
+        resp_stream.remain = Some(mpsc::spawn(s, executor, 8));
+        resp_stream
     }
 }
 
@@ -69,8 +75,11 @@ impl Stream for ResponseStream {
     type Error = GrpcError;
 
     fn poll(&mut self) -> Poll<Option<Response>, GrpcError> {
-        if let Some(resp) = self.head.take() {
-            return Ok(Async::Ready(Some(resp)));
+        if self.cursor < 2 {
+            if let Some(resp) = self.head[self.cursor].take() {
+                self.cursor += 1;
+                return Ok(Async::Ready(Some(resp)));
+            }
         }
         if let Some(mut remain) = self.remain.as_mut() {
             return remain.poll();
@@ -96,8 +105,11 @@ impl OnResponse {
         match self {
             OnResponse::Unary(cb) => cb(resp),
             OnResponse::Streaming(cb) => {
-                let mut s = ResponseStream::new(1);
-                s.head.push_back(resp);
+                let s = ResponseStream {
+                    cursor: 0,
+                    head: [Some(resp), None],
+                    remain: None,
+                };
                 cb(s);
             }
         }
