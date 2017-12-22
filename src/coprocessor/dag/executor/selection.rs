@@ -58,7 +58,6 @@ impl SelectionExecutor {
 #[allow(never_loop)]
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        self.count += 1;
         'next: while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(
                 &self.ctx,
@@ -73,6 +72,7 @@ impl Executor for SelectionExecutor {
                     continue 'next;
                 }
             }
+            self.count += 1;
             return Ok(Some(row));
         }
         Ok(None)
@@ -80,7 +80,8 @@ impl Executor for SelectionExecutor {
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count - 1);
+        counts.push(self.count);
+        self.count = 0;
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {

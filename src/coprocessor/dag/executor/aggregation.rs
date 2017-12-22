@@ -161,7 +161,6 @@ impl AggregationExecutor {
 
 impl Executor for AggregationExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        self.count += 1;
         if !self.executed {
             self.aggregate()?;
             self.executed = true;
@@ -184,6 +183,7 @@ impl Executor for AggregationExecutor {
                 if !self.group_by.is_empty() {
                     value.extend_from_slice(group_key);
                 }
+                self.count += 1;
                 Ok(Some(Row {
                     handle: 0,
                     data: RowColsDict::new(map![], value),
@@ -195,7 +195,8 @@ impl Executor for AggregationExecutor {
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count - 1);
+        counts.push(self.count);
+        self.count = 0;
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {

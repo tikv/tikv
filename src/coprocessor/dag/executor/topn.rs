@@ -116,24 +116,27 @@ impl TopNExecutor {
 
 impl Executor for TopNExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        self.count += 1;
         if self.iter.is_none() {
             self.fetch_all()?;
             self.iter = Some(self.heap.take().unwrap().into_sorted_vec()?.into_iter());
         }
         let iter = self.iter.as_mut().unwrap();
         match iter.next() {
-            Some(sort_row) => Ok(Some(Row {
-                handle: sort_row.handle,
-                data: sort_row.data,
-            })),
+            Some(sort_row) => {
+                self.count += 1;
+                Ok(Some(Row {
+                    handle: sort_row.handle,
+                    data: sort_row.data,
+                }))
+            }
             None => Ok(None),
         }
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
-        counts.push(self.count - 1);
+        counts.push(self.count);
+        self.count = 0;
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {

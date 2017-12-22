@@ -99,9 +99,9 @@ impl TableScanExecutor {
 
 impl Executor for TableScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        self.count += 1;
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
+                self.count += 1;
                 return Ok(Some(row));
             }
 
@@ -109,6 +109,7 @@ impl Executor for TableScanExecutor {
                 if is_point(&range) {
                     COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
                     if let Some(row) = self.get_row_from_point(range)? {
+                        self.count += 1;
                         return Ok(Some(row));
                     }
                     continue;
@@ -127,7 +128,8 @@ impl Executor for TableScanExecutor {
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        counts.push(self.count - 1);
+        counts.push(self.count);
+        self.count = 0;
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
