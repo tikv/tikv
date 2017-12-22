@@ -21,7 +21,6 @@ use std::fmt::{self, Debug, Display, Formatter};
 use protobuf::{CodedInputStream, Message as PbMsg};
 use grpc::Error as GrpcError;
 use futures::{future, stream};
-use futures::sync::mpsc;
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 
 use tipb::select::{self, DAGRequest, SelectRequest};
@@ -35,7 +34,7 @@ use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 use util::time::{duration_to_sec, Instant};
 use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
 use util::collections::HashMap;
-use server::{Config, OnResponse};
+use server::{Config, OnResponse, ResponseStream};
 use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
 use pd::PdTask;
@@ -318,20 +317,28 @@ impl Host {
                     };
                     return pool.spawn_fn(do_request).forget();
                 }
-                let s = stream::unfold(Some(ctx), move |ctx_opt| {
-                    ctx_opt.and_then(|mut ctx| {
-                        let (resp, remain) = ctx.handle_streaming_request()
-                            .unwrap_or_else(|e| (err_resp(e), false));
-                        if remain {
-                            return Some(future::ok::<_, GrpcError>((resp, Some(ctx))));
-                        }
-                        let mut stats = Statistics::default();
-                        ctx.collect_statistics_into(&mut stats);
-                        on_finish(&task_count, &stats, &mut metrics, &mut ctx_pool);
-                        Some(future::ok::<_, GrpcError>((resp, None)))
-                    })
-                });
-                on_resp.respond_stream(box mpsc::spawn(s, pool, 16));
+                // For streaming.
+                let pool_1 = pool.clone();
+                let f = move || {
+                    let s = stream::unfold(Some(ctx), move |ctx_opt| {
+                        ctx_opt.and_then(|mut ctx| {
+                            let (resp, remain) = ctx.handle_streaming_request()
+                                .unwrap_or_else(|e| (err_resp(e), false));
+                            if remain {
+                                return Some(future::ok::<_, GrpcError>((resp, Some(ctx))));
+                            }
+                            let mut stats = Statistics::default();
+                            ctx.collect_statistics_into(&mut stats);
+                            on_finish(&task_count, &stats, &mut metrics, &mut ctx_pool);
+                            Some(future::ok::<_, GrpcError>((resp, None)))
+                        })
+                    });
+                    let pre_resolve_size = 2;
+                    let mut resp_stream = ResponseStream::new(pre_resolve_size);
+                    resp_stream.pre_resolve_and_spawn(s, pool_1);
+                    future::ok::<_, ()>(on_resp.respond_stream(resp_stream))
+                };
+                pool.spawn_fn(f).forget()
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
