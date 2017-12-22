@@ -19,15 +19,12 @@ use std::thread;
 use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{self, make_key, Key, Mutation, Storage, ALL_CFS};
-use tikv::storage::engine::{self, Engine, EngineRocksdb, TEMP_DIR};
+use tikv::storage::{make_key, Key, Mutation, ALL_CFS};
+use tikv::storage::engine::{Engine, EngineRocksdb, TEMP_DIR};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
-use tikv::storage::config::Config;
 
-use super::util::new_raft_engine;
 use super::assert_storage::AssertionStorage;
-use storage::util;
 use std::u64;
 
 #[test]
@@ -826,50 +823,9 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
     });
 }
 
-fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
-    let mut engine = util::BlockEngine::new(engine);
-    let config = Config::default();
-    let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
-    storage.start(&config).unwrap();
-    let (stx, srx) = channel();
-    engine.block_snapshot(stx);
-    let (tx1, rx1) = channel();
-    storage
-        .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
-            assert!(res.is_ok());
-            tx1.send(1).unwrap();
-        })
-        .unwrap();
-
-    // Old GC command is blocked at snapshot stage, the other one will get ServerIsBusy error.
-    let (tx2, rx2) = channel();
-    storage
-        .async_gc(Context::new(), 1, box move |res: storage::Result<()>| {
-            match res {
-                Err(storage::Error::SchedTooBusy) => {}
-                _ => panic!("expect too busy"),
-            }
-            tx2.send(1).unwrap();
-        })
-        .unwrap();
-
-    srx.recv_timeout(Duration::from_secs(2)).unwrap();
-    rx2.recv().unwrap();
-    engine.unblock_snapshot();
-    rx1.recv().unwrap();
-}
-
-#[test]
-fn test_storage_1gc() {
-    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
-    test_storage_1gc_with_engine(engine, Context::new());
-    let (_cluster, raft_engine, ctx) = new_raft_engine(3, "");
-    test_storage_1gc_with_engine(raft_engine, ctx);
-}
-
 #[test]
 fn test_conflict_commands_on_fault_engine() {
-    let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS).unwrap();
+    let engine = EngineRocksdb::new(TEMP_DIR, ALL_CFS, None).unwrap();
     let box_engine = engine.clone();
     let config = Default::default();
     let mut store = SyncStorage::prepare(box_engine, &config);
