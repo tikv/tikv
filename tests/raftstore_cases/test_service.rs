@@ -469,12 +469,12 @@ fn test_raft() {
     let (_cluster, client, _) = must_new_cluster_and_kv_client();
 
     // Raft commands
-    let (sink, _) = client.raft();
+    let (sink, _) = client.raft().unwrap();
     sink.send((RaftMessage::new(), Default::default()))
         .wait()
         .unwrap();
 
-    let (sink, _) = client.snapshot();
+    let (sink, _) = client.snapshot().unwrap();
     let mut chunk = SnapshotChunk::new();
     chunk.set_message(RaftMessage::new());
     sink.send((chunk, Default::default())).wait().unwrap();
@@ -756,7 +756,7 @@ fn test_debug_scan_mvcc() {
     req.set_to_key(keys::data_key(b"n"));
     req.set_limit(1);
 
-    let receiver = debug_client.scan_mvcc(&req);
+    let receiver = debug_client.scan_mvcc(&req).unwrap();
     let future = receiver.fold(Vec::new(), |mut keys, mut resp| {
         let key = resp.take_key();
         keys.push(key);

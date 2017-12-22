@@ -97,7 +97,7 @@ impl LeaderClient {
         client: PdClient,
         members: GetMembersResponse,
     ) -> LeaderClient {
-        let (tx, rx) = client.region_heartbeat();
+        let (tx, rx) = client.region_heartbeat().unwrap();
         LeaderClient {
             timer: Timer::default(),
             inner: Arc::new(RwLock::new(Inner {
@@ -169,7 +169,7 @@ impl LeaderClient {
 
         {
             let mut inner = self.inner.wl();
-            let (tx, rx) = client.region_heartbeat();
+            let (tx, rx) = client.region_heartbeat().unwrap();
             inner.hb_sender = Either::Left(Some(tx));
             if let Either::Right(ref mut task) = inner.hb_receiver {
                 task.notify();
