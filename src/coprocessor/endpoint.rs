@@ -333,9 +333,7 @@ impl Host {
                             Some(future::ok::<_, GrpcError>((resp, None)))
                         })
                     });
-                    let pre_resolve_size = 2;
-                    let mut resp_stream = ResponseStream::new(pre_resolve_size);
-                    resp_stream.pre_resolve_and_spawn(s, pool_1);
+                    let resp_stream = ResponseStream::spawn(s, pool_1);
                     future::ok::<_, ()>(on_resp.respond_stream(resp_stream))
                 };
                 pool.spawn_fn(f).forget()

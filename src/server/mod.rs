@@ -26,7 +26,6 @@ pub mod debug;
 
 use std::fmt;
 use std::boxed::FnBox;
-use std::collections::VecDeque;
 
 use grpc::Error as GrpcError;
 use futures::{future, Async, Future, Poll, Stream};
@@ -44,31 +43,24 @@ pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
 pub struct ResponseStream {
-    pre_resolve_size: usize,
-    pre_resolve: VecDeque<Response>,
+    head: Option<Response>,
     remain: Option<SpawnHandle<Response, GrpcError>>,
 }
 
 impl ResponseStream {
-    pub fn new(pre_resolve_size: usize) -> ResponseStream {
-        ResponseStream {
-            pre_resolve_size: pre_resolve_size,
-            pre_resolve: VecDeque::with_capacity(pre_resolve_size),
-            remain: None,
-        }
-    }
-
-    pub fn pre_resolve_and_spawn<S>(&mut self, mut s: S, pool: CpuPool)
+    pub fn spawn<S>(mut s: S, pool: CpuPool) -> Self
     where
         S: Stream<Item = Response, Error = GrpcError> + Send + 'static,
     {
-        for _ in 0..self.pre_resolve_size {
-            match future::poll_fn(|| s.poll()).wait().unwrap() {
-                Some(resp) => self.pre_resolve.push_back(resp),
-                None => return,
-            }
+        let mut resp_stream = ResponseStream {
+            head: None,
+            remain: None,
+        };
+        match future::poll_fn(|| s.poll()).wait().unwrap() {
+            Some(resp) => resp_stream.head = Some(resp),
+            None => return,
         }
-        self.remain = Some(mpsc::spawn(s, &pool, 16));
+        resp_stream.remain = Some(mpsc::spawn(s, &pool, 8));
     }
 }
 
@@ -77,7 +69,7 @@ impl Stream for ResponseStream {
     type Error = GrpcError;
 
     fn poll(&mut self) -> Poll<Option<Response>, GrpcError> {
-        if let Some(resp) = self.pre_resolve.pop_front() {
+        if let Some(resp) = self.head.take() {
             return Ok(Async::Ready(Some(resp)));
         }
         if let Some(mut remain) = self.remain.as_mut() {
@@ -105,7 +97,7 @@ impl OnResponse {
             OnResponse::Unary(cb) => cb(resp),
             OnResponse::Streaming(cb) => {
                 let mut s = ResponseStream::new(1);
-                s.pre_resolve.push_back(resp);
+                s.head.push_back(resp);
                 cb(s);
             }
         }
