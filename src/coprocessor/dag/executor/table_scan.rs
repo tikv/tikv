@@ -95,7 +95,13 @@ impl TableScanExecutor {
     }
 
     fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
-        Scanner::new(&self.store, ScanOn::Table, self.desc, false, range).map_err(Error::from)
+        Scanner::new(
+            &self.store,
+            ScanOn::Table,
+            self.desc,
+            self.col_ids.is_empty(),
+            range,
+        ).map_err(Error::from)
     }
 }
 
