@@ -484,7 +484,6 @@ impl<'a> Select<'a> {
         self.aggr_col(col, ExprType::Max)
     }
 
-
     fn min(self, col: Column) -> Select<'a> {
         self.aggr_col(col, ExprType::Min)
     }
