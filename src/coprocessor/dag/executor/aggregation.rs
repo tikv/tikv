@@ -334,7 +334,12 @@ mod test {
         let group_by_cols = vec![1, 2];
         let group_by = build_group_by(&group_by_cols);
         aggregation.set_group_by(RepeatedField::from_vec(group_by));
-        let aggr_funcs = vec![(ExprType::Avg, 0), (ExprType::Count, 2), (ExprType::Sum, 3), (ExprType::Avg, 4)];
+        let aggr_funcs = vec![
+            (ExprType::Avg, 0),
+            (ExprType::Count, 2),
+            (ExprType::Sum, 3),
+            (ExprType::Avg, 4)
+        ];
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init Aggregation Executor
