@@ -338,7 +338,7 @@ mod test {
             (ExprType::Avg, 0),
             (ExprType::Count, 2),
             (ExprType::Sum, 3),
-            (ExprType::Avg, 4)
+            (ExprType::Avg, 4),
         ];
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
