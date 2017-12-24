@@ -1,6 +1,6 @@
 machine:
   environment:
-    PATH: "$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+    PATH: "$HOME/.local/cmake/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     LD_LIBRARY_PATH: "$LD_LIBRARY_PATH:$HOME/.local/lib"
     LD_RUN_PATH: "$LD_RUN_PATH:$HOME/.local/lib"
     DYLD_LIBRARY_PATH: "$DYLD_LIBRARY_PATH:$HOME/.local/lib"
@@ -19,7 +19,7 @@ machine:
     - |
       sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
       sudo apt-get update -y;
-      sudo apt-get install -y g++-4.8 zlib1g-dev libbz2-dev libsnappy-dev curl libdw-dev libelf-dev elfutils binutils-dev
+      sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev
   post:
     # Fixes: cargo under CircleCI
     - sed -i 's/github/git-non-exist-hub/g' ~/.gitconfig
@@ -33,6 +33,12 @@ dependencies:
   pre:
     # install rust/cargo
     - |
+      if [[ ! -f $HOME/.local/cmake/bin/cmake ]]; then
+          curl https://cmake.org/files/v3.10/cmake-3.10.0-Linux-x86_64.tar.gz -sSf | tar xzf -;
+          rm -rf $HOME/.local/cmake
+          mv cmake-3.10.0-Linux-x86_64 $HOME/.local/cmake
+      fi
+    - |
       if [[ ! -e $HOME/.cargo ]]; then
         curl https://sh.rustup.rs -sSf |
           sh -s -- --no-modify-path --default-toolchain "nightly-${RUSTC_DATE}" -y;
@@ -40,7 +46,7 @@ dependencies:
       else
         rustup default "nightly-${RUSTC_DATE}";
       fi
-    - make -f travis-build/Makefile prepare-rustfmt
+    - make -f ci-build/Makefile prepare-rustfmt
     - |
       if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
         cd /tmp && \
@@ -50,15 +56,6 @@ dependencies:
         cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_PREFIX} . && \
         make -j && \
         make install;
-      fi
-    - |
-      if [[ ! -e $HOME/.local/lib/librocksdb.so.5.7.3 ]]; then
-        export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
-        cd /tmp && \
-        curl -L https://github.com/facebook/rocksdb/archive/v5.7.3.tar.gz -o rocksdb.tar.gz && \
-        tar xf rocksdb.tar.gz && \
-        cd rocksdb-5.7.3 && \
-        INSTALL_PATH=${LOCAL_PREFIX} make -j 1 install-shared;
       fi
   post:
     # check format first
