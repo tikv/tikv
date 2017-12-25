@@ -80,6 +80,7 @@ pub struct AggregationExecutor {
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor>,
+    count: i64,
 }
 
 impl AggregationExecutor {
@@ -108,6 +109,7 @@ impl AggregationExecutor {
             cols: columns,
             related_cols_offset: visitor.column_offsets(),
             src: src,
+            count: 0,
         })
     }
 
@@ -181,6 +183,7 @@ impl Executor for AggregationExecutor {
                 if !self.group_by.is_empty() {
                     value.extend_from_slice(group_key);
                 }
+                self.count += 1;
                 Ok(Some(Row {
                     handle: 0,
                     data: RowColsDict::new(map![], value),
@@ -188,6 +191,12 @@ impl Executor for AggregationExecutor {
             }
             None => Ok(None),
         }
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        self.src.collect_output_counts(counts);
+        counts.push(self.count);
+        self.count = 0;
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
@@ -253,42 +262,58 @@ mod test {
             new_col_info(1, types::LONG_LONG),
             new_col_info(2, types::VARCHAR),
             new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(4, types::FLOAT),
+            new_col_info(5, types::DOUBLE),
         ];
         let raw_data = vec![
             vec![
                 Datum::I64(1),
                 Datum::Bytes(b"a".to_vec()),
                 Datum::Dec(7.into()),
+                Datum::F64(1.0),
+                Datum::F64(1.0),
             ],
             vec![
                 Datum::I64(2),
                 Datum::Bytes(b"a".to_vec()),
                 Datum::Dec(7.into()),
+                Datum::F64(2.0),
+                Datum::F64(2.0),
             ],
             vec![
                 Datum::I64(3),
                 Datum::Bytes(b"b".to_vec()),
                 Datum::Dec(8.into()),
+                Datum::F64(3.0),
+                Datum::F64(3.0),
             ],
             vec![
                 Datum::I64(4),
                 Datum::Bytes(b"a".to_vec()),
                 Datum::Dec(7.into()),
+                Datum::F64(4.0),
+                Datum::F64(4.0),
             ],
             vec![
                 Datum::I64(5),
                 Datum::Bytes(b"f".to_vec()),
                 Datum::Dec(5.into()),
+                Datum::F64(5.0),
+                Datum::F64(5.0),
             ],
             vec![
                 Datum::I64(6),
                 Datum::Bytes(b"b".to_vec()),
                 Datum::Dec(8.into()),
+                Datum::F64(6.0),
+                Datum::F64(6.0),
             ],
             vec![
                 Datum::I64(7),
                 Datum::Bytes(b"f".to_vec()),
                 Datum::Dec(6.into()),
+                Datum::F64(7.0),
+                Datum::F64(7.0),
             ],
         ];
         let table_data = gen_table_data(tid, &cis, &raw_data);
@@ -308,7 +333,12 @@ mod test {
         let group_by_cols = vec![1, 2];
         let group_by = build_group_by(&group_by_cols);
         aggregation.set_group_by(RepeatedField::from_vec(group_by));
-        let aggr_funcs = vec![(ExprType::Avg, 0), (ExprType::Count, 2)];
+        let aggr_funcs = vec![
+            (ExprType::Avg, 0),
+            (ExprType::Count, 2),
+            (ExprType::Sum, 3),
+            (ExprType::Avg, 4),
+        ];
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init Aggregation Executor
@@ -329,6 +359,9 @@ mod test {
                 3 as u64,
                 Decimal::from(7),
                 3 as u64,
+                7.0 as f64,
+                3 as u64,
+                7.0 as f64,
                 b"a".as_ref(),
                 Decimal::from(7),
             ),
@@ -336,6 +369,9 @@ mod test {
                 2 as u64,
                 Decimal::from(9),
                 2 as u64,
+                9.0 as f64,
+                2 as u64,
+                9.0 as f64,
                 b"b".as_ref(),
                 Decimal::from(8),
             ),
@@ -343,6 +379,9 @@ mod test {
                 1 as u64,
                 Decimal::from(5),
                 1 as u64,
+                5.0 as f64,
+                1 as u64,
+                5.0 as f64,
                 b"f".as_ref(),
                 Decimal::from(5),
             ),
@@ -350,11 +389,14 @@ mod test {
                 1 as u64,
                 Decimal::from(7),
                 1 as u64,
+                7.0 as f64,
+                1 as u64,
+                7.0 as f64,
                 b"f".as_ref(),
                 Decimal::from(6),
             ),
         ];
-        let expect_col_cnt = 5;
+        let expect_col_cnt = 8;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
             let ds = row.value.as_slice().decode().unwrap();
             assert_eq!(ds.len(), expect_col_cnt);
@@ -364,5 +406,9 @@ mod test {
             assert_eq!(ds[3], Datum::from(expect_cols.3));
             assert_eq!(ds[4], Datum::from(expect_cols.4));
         }
+        let expected_counts = vec![raw_data.len() as i64, expect_row_cnt as i64];
+        let mut counts = Vec::with_capacity(2);
+        aggr_ect.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
     }
 }

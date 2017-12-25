@@ -51,6 +51,10 @@ impl<'a> Executor for LimitExecutor<'a> {
         }
     }
 
+    fn collect_output_counts(&mut self, _: &mut Vec<i64>) {
+        // We do not know whether `limit` has consumed all of it's source, so just ignore it.
+    }
+
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
         self.src.collect_statistics_into(statistics);
     }

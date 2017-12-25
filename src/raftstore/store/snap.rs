@@ -1417,13 +1417,13 @@ mod test {
 
     pub fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
-        let db = rocksdb::new_engine(p, ALL_CFS)?;
+        let db = rocksdb::new_engine(p, ALL_CFS, None)?;
         Ok(Arc::new(db))
     }
 
     pub fn get_test_db(path: &TempDir) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
-        let db = rocksdb::new_engine(p, ALL_CFS)?;
+        let db = rocksdb::new_engine(p, ALL_CFS, None)?;
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in ALL_CFS.iter().enumerate() {
@@ -1640,7 +1640,7 @@ mod test {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs).unwrap());
+        let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs, None).unwrap());
         let options = ApplyOptions {
             db: dst_db.clone(),
             region: region.clone(),
