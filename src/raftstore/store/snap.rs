@@ -39,7 +39,7 @@ use util::io_limiter::{IOLimiter, LimitWriter};
 use util::HandyRwLock;
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
-use util::rocksdb::prepare_sst_for_ingestion;
+use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
 use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
@@ -589,8 +589,14 @@ impl Snap {
             if plain_file_used(cf_file.cf) {
                 check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
             } else {
-                prepare_sst_for_ingestion(&db, cf_file.cf, &cf_file.path, &cf_file.clone_path)?;
-                check_file_size_and_checksum(&cf_file.clone_path, cf_file.size, cf_file.checksum)?;
+                prepare_sst_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
+                validate_sst_for_ingestion(
+                    &db,
+                    cf_file.cf,
+                    &cf_file.clone_path,
+                    cf_file.size,
+                    cf_file.checksum,
+                )?;
             }
         }
         Ok(())

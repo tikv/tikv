@@ -19,7 +19,7 @@ pub mod metrics_flusher;
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
 
-use std::fs;
+use std::fs::{self, File};
 use std::path::Path;
 use std::sync::Arc;
 use std::str::FromStr;
@@ -32,7 +32,7 @@ use rocksdb::set_external_sst_file_global_seq_no;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
                                     ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
 use util::rocksdb;
-use util::file::copy_and_sync;
+use util::file::{copy_and_sync, calc_crc32};
 
 pub use rocksdb::CFHandle;
 
@@ -370,11 +370,9 @@ pub fn compact_range(
 /// 3. If the file has been ingested to `RocksDB`, we should not modified the
 ///    global seqno directly, because that may corrupt RocksDB's data.
 #[cfg(target_os = "linux")]
-pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
-    db: &DB,
-    cf: &str,
+pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     path: P,
-    clone: P,
+    clone: Q,
 ) -> Result<(), String> {
     use std::os::linux::fs::MetadataExt;
 
@@ -399,16 +397,13 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
     }
 
-    let cf_handle = get_cf_handle(db, cf)?;
-    set_external_sst_file_global_seq_no(db, cf_handle, clone, 0).map(|_| ())
+    Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
-    db: &DB,
-    cf: &str,
+pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     path: P,
-    clone: P,
+    clone: Q,
 ) -> Result<(), String> {
     let path = path.as_ref().to_str().unwrap();
     let clone = clone.as_ref().to_str().unwrap();
@@ -421,6 +416,53 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
     }
 }
 
+pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
+    db: &DB,
+    cf: &str,
+    path: P,
+    expected_size: u64,
+    expected_checksum: u32,
+) -> Result<(), String> {
+    let path = path.as_ref().to_str().unwrap();
+    let f = File::open(path)
+        .map_err(|e| format!("open {}: {:?}", path, e))?;
+
+    let meta = f.metadata()
+        .map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
+    if meta.len() != expected_size {
+        return Err(format!(
+            "invalid size {} for {}, expected {}",
+            meta.len(),
+            path,
+            expected_size
+        ));
+    }
+
+    let checksum = calc_crc32(path)
+        .map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
+    if checksum == expected_checksum {
+        return Ok(());
+    }
+
+    // RocksDB may have modified the global seqno.
+    let cf_handle = get_cf_handle(db, cf)?;
+    set_external_sst_file_global_seq_no(db, cf_handle, path, 0)?;
+    f.sync_all().map_err(|e| format!("sync {}: {:?}", path, e))?;
+
+    let checksum = calc_crc32(path)
+        .map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
+    if checksum != expected_checksum {
+        return Err(format!(
+            "invalid checksum {} for {}, expected {}",
+            checksum,
+            path,
+            expected_checksum
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,7 +470,6 @@ mod tests {
                   SstFileWriter, Writable, DB};
     use tempdir::TempDir;
     use storage::CF_DEFAULT;
-    use util::file::calc_crc32;
 
     #[test]
     fn test_check_and_open() {
@@ -527,19 +568,20 @@ mod tests {
         ingest_opts.move_files(true);
 
         gen_sst_with_kvs(&db, cf, sst_path.to_str().unwrap(), &kvs);
-        let crc32 = calc_crc32(&sst_path).unwrap();
+        let size = fs::metadata(&sst_path).unwrap().len();
+        let checksum = calc_crc32(&sst_path).unwrap();
 
         // The first ingestion will hard link sst_path to sst_clone.
         check_hard_link(&sst_path, 1);
-        prepare_sst_for_ingestion(&db, cf_name, &sst_path, &sst_clone).unwrap();
+        prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
+        validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        assert_eq!(calc_crc32(&sst_clone).unwrap(), crc32);
         // If we prepare again, it will use hard link too.
-        prepare_sst_for_ingestion(&db, cf_name, &sst_path, &sst_clone).unwrap();
+        prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
+        validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        assert_eq!(calc_crc32(&sst_clone).unwrap(), crc32);
         db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
             .unwrap();
         check_db_with_kvs(&db, cf, &kvs);
@@ -547,10 +589,10 @@ mod tests {
 
         // The second ingestion will copy sst_path to sst_clone.
         check_hard_link(&sst_path, 2);
-        prepare_sst_for_ingestion(&db, cf_name, &sst_path, &sst_clone).unwrap();
+        prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
+        validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
-        assert_eq!(calc_crc32(&sst_clone).unwrap(), crc32);
         db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
             .unwrap();
         check_db_with_kvs(&db, cf, &kvs);

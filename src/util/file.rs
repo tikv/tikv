@@ -43,7 +43,7 @@ pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Resu
     Ok(res)
 }
 
-const DIGEST_BUFFER_SIZE: usize = 10240;
+const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
 pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
     let mut digest = Digest::new(crc32::IEEE);
@@ -68,6 +68,7 @@ mod test {
     use std::io::Write;
     use std::fs::OpenOptions;
     use tempdir::TempDir;
+    use rand::{thread_rng, Rng};
 
     use super::*;
 
@@ -146,5 +147,26 @@ mod test {
 
         let non_existent_file = dir_path.join("non_existent_file");
         delete_file_if_exist(&non_existent_file);
+    }
+
+    fn gen_rand_file<P: AsRef<Path>>(path: P, size: usize) -> u32 {
+        let s: String = thread_rng().gen_ascii_chars().take(size).collect();
+        File::create(path).unwrap().write_all(s.as_bytes()).unwrap();
+        let mut digest = Digest::new(crc32::IEEE);
+        digest.write(s.as_bytes());
+        digest.sum32()
+    }
+
+    #[test]
+    fn test_calc_crc32() {
+        let tmp_dir = TempDir::new("").unwrap();
+
+        let small_file = tmp_dir.path().join("small.txt");
+        let small_checksum = gen_rand_file(&small_file, 1024);
+        assert_eq!(calc_crc32(&small_file).unwrap(), small_checksum);
+
+        let large_file = tmp_dir.path().join("large.txt");
+        let large_checksum = gen_rand_file(&large_file, DIGEST_BUFFER_SIZE * 4);
+        assert_eq!(calc_crc32(&large_file).unwrap(), large_checksum);
     }
 }
