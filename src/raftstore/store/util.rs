@@ -244,29 +244,30 @@ impl Lease {
         }
     }
 
-    fn next_expired_time(&self, send_to_quorum: Timespec) -> Timespec {
+    /// The valid leader lease should be `lease = max_lease - (quorum_commit - send_to_quorum)`
+    /// And the expired timestamp for that leader lease is `quorum_commit + lease`,
+    /// which is `send_to_quorum + max_lease` in short.
+    pub fn next_expired_time(&self, send_to_quorum: Timespec) -> Timespec {
         send_to_quorum + self.max_lease
     }
 
-    /// Renew the lease to the `send_to_quorum + max_lease`.
-    pub fn renew(&mut self, send_to_quorum: Timespec) {
-        let next_expired_time = self.next_expired_time(send_to_quorum);
+    /// Renew the lease to the bound.
+    pub fn renew(&mut self, bound: Timespec) {
         match self.bound {
             // Longer than suspect ts or longer than valid ts.
-            Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts < next_expired_time {
-                self.bound = Some(Either::Right(next_expired_time));
+            Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts <= bound {
+                self.bound = Some(Either::Right(bound));
             },
             // Or an empty lease
             None => {
-                self.bound = Some(Either::Right(next_expired_time));
+                self.bound = Some(Either::Right(bound));
             }
         }
     }
 
-    /// Suspect the lease to the `send_to_quorum + max_lease`.
-    pub fn suspect(&mut self, send_to_quorum: Timespec) {
-        let next_expired_time = self.next_expired_time(send_to_quorum);
-        self.bound = Some(Either::Left(next_expired_time));
+    /// Suspect the lease to the bound.
+    pub fn suspect(&mut self, bound: Timespec) {
+        self.bound = Some(Either::Left(bound));
     }
 
     /// Inspect the lease state for the ts or now.
@@ -328,8 +329,12 @@ mod tests {
             LeaseState::Expired
         );
 
+        let now = monotonic_raw_now();
+        let next_expired_time = lease.next_expired_time(now);
+        assert_eq!(next_expired_time, now + duration);
+
         // Transit to the Valid state.
-        lease.renew(monotonic_raw_now());
+        lease.renew(next_expired_time);
         assert_eq!(lease.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
         assert_eq!(lease.inspect(None), LeaseState::Valid);
 
@@ -342,7 +347,8 @@ mod tests {
         assert_eq!(lease.inspect(None), LeaseState::Expired);
 
         // Transit to the Suspect state.
-        lease.suspect(monotonic_raw_now());
+        let next_expired_time = lease.next_expired_time(monotonic_raw_now());
+        lease.suspect(next_expired_time);
         assert_eq!(
             lease.inspect(Some(monotonic_raw_now())),
             LeaseState::Suspect

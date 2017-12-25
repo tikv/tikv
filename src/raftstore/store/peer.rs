@@ -872,6 +872,8 @@ impl Peer {
         }
 
         if let Some(propose_time) = propose_time {
+            // `propose_time` is a placeholder, here cares about `Suspect` only,
+            // and if it is in `Suspect` phase, the actual timestamp is useless.
             if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
                 return;
             }
@@ -932,7 +934,8 @@ impl Peer {
         if !self.is_leader() {
             return;
         }
-        self.leader_lease.renew(ts);
+        let next_expired_time = self.leader_lease.next_expired_time(ts);
+        self.leader_lease.renew(next_expired_time);
     }
 
     /// Try to update lease.
