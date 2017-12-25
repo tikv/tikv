@@ -35,6 +35,7 @@ pub struct TableScanExecutor {
     key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
     count: i64,
+    query_metrics: ScanCounterMetrics,
 }
 
 impl TableScanExecutor {
@@ -64,12 +65,13 @@ impl TableScanExecutor {
             key_ranges: key_ranges.into_iter(),
             scanner: None,
             count: 0,
+            query_metrics: ScanCounterMetrics::new(),
         }
     }
 
     fn get_row_from_range_scanner(&mut self) -> Result<Option<Row>> {
         if let Some(scanner) = self.scanner.as_mut() {
-            COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+            self.query_metrics.add_range_query();
             let (key, value) = match scanner.next_row()? {
                 Some((key, value)) => (key, value),
                 None => return Ok(None),
@@ -113,7 +115,7 @@ impl Executor for TableScanExecutor {
 
             if let Some(range) = self.key_ranges.next() {
                 if is_point(&range) {
-                    COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
+                    self.query_metrics.add_point_query();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));

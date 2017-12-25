@@ -44,6 +44,7 @@ pub struct SelectContext {
     core: SelectContextCore,
     req_ctx: Arc<ReqContext>,
     scanner: Option<Scanner>,
+    query_metrics: ScanCounterMetrics,
 }
 
 impl SelectContext {
@@ -65,6 +66,7 @@ impl SelectContext {
             statistics: Statistics::default(),
             req_ctx: req_ctx,
             scanner: None,
+            query_metrics: ScanCounterMetrics::new(),
         })
     }
 
@@ -146,7 +148,7 @@ impl SelectContext {
     fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
-            COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
+            self.query_metrics.add_point_query();
             let value = match self.snap
                 .get(&Key::from_raw(range.get_start()), &mut self.statistics)?
             {
@@ -166,7 +168,7 @@ impl SelectContext {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     self.req_ctx.check_if_outdated()?;
                 }
-                COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+                self.query_metrics.add_range_query();
                 if let Some((key, value)) = scanner.next_row()? {
                     let h = box_try!(table::decode_handle(&key));
                     let row_data = {

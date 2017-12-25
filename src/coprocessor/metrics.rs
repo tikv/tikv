@@ -98,3 +98,35 @@ lazy_static! {
             20.0, 24.0, 28.0, 32.0, 48.0, 64.0, 96.0, 128.0, 192.0, 256.0]
         ).unwrap();
 }
+
+/// `ScanCounterMetrics` is for recording range query and point query.
+pub struct ScanCounterMetrics {
+    range_query: usize,
+    point_query: usize,
+}
+
+impl ScanCounterMetrics {
+    pub fn new() -> Self {
+        ScanCounterMetrics {
+            range_query: 0,
+            point_query: 0,
+        }
+    }
+
+    pub fn add_range_query(&mut self) {
+        self.range_query += 1;
+    }
+
+    pub fn add_point_query(&mut self) {
+        self.point_query += 1;
+    }
+}
+
+impl Drop for ScanCounterMetrics {
+    fn drop(&mut self) {
+        let range_counter = COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]);
+        range_counter.inc_by(self.range_query as f64).unwrap();
+        let point_counter = COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]);
+        point_counter.inc_by(self.point_query as f64).unwrap();
+    }
+}

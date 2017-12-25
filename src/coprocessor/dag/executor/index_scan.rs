@@ -38,6 +38,7 @@ pub struct IndexScanExecutor {
     scanner: Option<Scanner>,
     unique: bool,
     count: i64,
+    query_metrics: ScanCounterMetrics,
 }
 
 impl IndexScanExecutor {
@@ -69,6 +70,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: unique,
             count: 0,
+            query_metrics: ScanCounterMetrics::new(),
         }
     }
 
@@ -89,6 +91,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: false,
             count: 0,
+            query_metrics: ScanCounterMetrics::new(),
         }
     }
 
@@ -96,7 +99,7 @@ impl IndexScanExecutor {
         if self.scanner.is_none() {
             return Ok(None);
         }
-        COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+        self.query_metrics.add_range_query();
 
         let (key, value) = {
             let scanner = self.scanner.as_mut().unwrap();
@@ -157,7 +160,7 @@ impl Executor for IndexScanExecutor {
             }
             if let Some(range) = self.key_ranges.next() {
                 if self.is_point(&range) {
-                    COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
+                    self.query_metrics.add_point_query();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));
