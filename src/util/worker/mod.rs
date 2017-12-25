@@ -303,7 +303,6 @@ fn poll_with_timer<R, T, U>(
         let timeout = tick_time.map(|t| t.checked_sub(Instant::now()));
 
         keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
-        let mut should_tick = !batch.is_empty();
 
         if !batch.is_empty() {
             counter.fetch_sub(batch.len(), Ordering::SeqCst);
@@ -320,19 +319,15 @@ fn poll_with_timer<R, T, U>(
 
         match tick_time {
             Some(t) if t <= Instant::now() => {
-                should_tick = true;
                 tick_time = None;
-                let mut tasks = timer.tasks_before(t);
-                while let Some(task) = tasks.next() {
-                    runner.on_timeout(task, tasks.as_timer());
+                while let Some(task) = timer.pop_task_before(t) {
+                    runner.on_timeout(task, &mut timer);
                 }
             }
             _ => {}
         }
 
-        if should_tick {
-            runner.on_tick();
-        }
+        runner.on_tick();
     }
     runner.shutdown();
 }

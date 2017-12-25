@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::mem::replace;
-use std::cmp::Ordering;
+use std::cmp::{Ord, Ordering};
 use std::time::Duration;
 use std::collections::BinaryHeap;
 
@@ -59,13 +59,7 @@ impl<T> Eq for TimeoutTask<T> {}
 
 impl<T> PartialOrd for TimeoutTask<T> {
     fn partial_cmp(&self, other: &TimeoutTask<T>) -> Option<Ordering> {
-        Some(if self.next_tick > other.next_tick {
-            Ordering::Less
-        } else if self.next_tick < other.next_tick {
-            Ordering::Greater
-        } else {
-            Ordering::Equal
-        })
+        Some(self.next_tick.cmp(&other.next_tick).reverse())
     }
 }
 
@@ -86,8 +80,7 @@ impl<T> Timer<T> {
         }
     }
 
-    /// Add a periodic task into the `Timer`. The `timeout` will
-    /// be aligned up to `tick` of the `Timer` if need.
+    /// Add a periodic task into the `Timer`.
     pub fn add_task(&mut self, timeout: Duration, task: T) {
         let task = TimeoutTask {
             next_tick: Instant::now() + timeout,
@@ -116,38 +109,15 @@ impl<T> Timer<T> {
         self.pending.peek().map(|task| task.next_tick)
     }
 
-    pub fn tasks_before(&mut self, instant: Instant) -> TimerTaskBefore<T> {
-        TimerTaskBefore {
-            instant: instant,
-            timer: self,
-        }
-    }
-}
-
-pub struct TimerTaskBefore<'a, T: 'a> {
-    instant: Instant,
-    timer: &'a mut Timer<T>,
-}
-
-impl<'a, T: 'a> TimerTaskBefore<'a, T> {
-    pub fn as_timer(&mut self) -> &mut Timer<T> {
-        self.timer
-    }
-}
-
-impl<'a, T: 'a> Drop for TimerTaskBefore<'a, T> {
-    fn drop(&mut self) {
-        while let Some(_) = self.next() {}
-    }
-}
-
-impl<'a, T: 'a> Iterator for TimerTaskBefore<'a, T> {
-    type Item = TimeoutTask<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.timer.pending.pop() {
-            Some(timeout_task) => if timeout_task.next_tick > self.instant {
-                self.timer.pending.push(timeout_task);
+    /// Pop a `TimeoutTask` from the `Timer`, which should be tick before `instant`.
+    /// If there is no tasks should be ticked any more, None will be returned.
+    ///
+    /// The normal use case is keeping `pop_task_before` until get `None` in order
+    /// to retreive all avaliable events.
+    pub fn pop_task_before(&mut self, instant: Instant) -> Option<TimeoutTask<T>> {
+        match self.pending.pop() {
+            Some(timeout_task) => if timeout_task.next_tick > instant {
+                self.pending.push(timeout_task);
                 return None;
             } else {
                 return Some(timeout_task);
@@ -161,6 +131,7 @@ impl<'a, T: 'a> Iterator for TimerTaskBefore<'a, T> {
 mod tests {
     use super::*;
     use std::sync::mpsc::{self, Sender};
+    use std::sync::mpsc::RecvTimeoutError;
     use util::worker::{BatchRunnableWithTimer, Builder as WorkerBuilder, Runnable};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -193,6 +164,8 @@ mod tests {
             };
             if self.counter < 2 {
                 timer.add_task(task.timeout(), task.into_inner());
+            } else {
+                timer.remove_task(|t| t.as_ref() == &Task::B);
             }
             self.counter += 1;
         }
@@ -208,17 +181,17 @@ mod tests {
 
         let tick_time = timer.next_timeout().unwrap();
         assert_eq!(
-            timer.tasks_before(tick_time).next().unwrap().into_inner(),
+            timer.pop_task_before(tick_time).unwrap().into_inner(),
             Task::A
         );
-        assert_eq!(timer.tasks_before(tick_time).next(), None);
+        assert_eq!(timer.pop_task_before(tick_time), None);
 
         let tick_time = timer.next_timeout().unwrap();
         assert_eq!(
-            timer.tasks_before(tick_time).next().unwrap().into_inner(),
+            timer.pop_task_before(tick_time).unwrap().into_inner(),
             Task::B
         );
-        assert_eq!(timer.tasks_before(tick_time).next(), None);
+        assert_eq!(timer.pop_task_before(tick_time), None);
     }
 
     #[test]
@@ -235,8 +208,10 @@ mod tests {
         };
 
         let mut timer = Timer::new(10);
-        timer.add_task(Duration::from_millis(200), Task::A);
-        timer.add_task(Duration::from_millis(300), Task::B);
+        timer.add_task(Duration::from_millis(100), Task::A);
+        timer.add_task(Duration::from_millis(120), Task::B);
+        timer.add_task(Duration::from_millis(130), Task::A);
+        timer.add_task(Duration::from_millis(140), Task::B);
 
         worker.start_with_timer(runner, timer).unwrap();
 
@@ -248,6 +223,16 @@ mod tests {
         assert_eq!(msg, "task a");
         let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(msg, "task b");
+
+        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(msg, "task a");
+        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(msg, "task a");
+
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)),
+            Err(RecvTimeoutError::Timeout)
+        );
 
         worker.stop().unwrap().join().unwrap();
     }

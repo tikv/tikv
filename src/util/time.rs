@@ -317,6 +317,8 @@ impl PartialEq for Instant {
     }
 }
 
+impl Eq for Instant {}
+
 impl PartialOrd for Instant {
     fn partial_cmp(&self, other: &Instant) -> Option<Ordering> {
         match (*self, *other) {
@@ -327,6 +329,12 @@ impl PartialOrd for Instant {
             // The Order of different types of Instants is meaningless.
             _ => None,
         }
+    }
+}
+
+impl Ord for Instant {
+    fn cmp(&self, other: &Instant) -> Ordering {
+        self.partial_cmp(other).unwrap()
     }
 }
 
