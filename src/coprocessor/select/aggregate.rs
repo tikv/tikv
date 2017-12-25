@@ -129,7 +129,7 @@ impl AggrFunc for Sum {
             _ => {
                 let d = box_try!(res.into_dec());
                 collector.push(Datum::Dec(d));
-            },
+            }
         }
         Ok(())
     }
