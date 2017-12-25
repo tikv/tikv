@@ -746,7 +746,7 @@ impl<T: Simulator> Cluster<T> {
             region_id: region.get_id(),
             region_epoch: region.get_region_epoch().clone(),
             split_key: split_key.clone(),
-            callback: Some(cb),
+            callback: cb,
         }).unwrap();
     }
 

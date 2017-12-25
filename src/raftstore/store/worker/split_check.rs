@@ -21,7 +21,7 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::metapb::Region;
 
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{keys, Msg};
+use raftstore::store::{keys, Callback, Msg};
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::Result;
 use util::escape;
@@ -234,6 +234,6 @@ fn new_split_region(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> M
         region_id: region_id,
         region_epoch: epoch,
         split_key: key,
-        callback: None,
+        callback: Callback::None,
     }
 }

@@ -28,7 +28,8 @@ mod worker;
 mod metrics;
 mod local_metrics;
 
-pub use self::msg::{BatchCallback, Callback, Msg, SignificantMsg, Tick};
+pub use self::msg::{BatchReadCallback, Callback, Msg, ReadArgs, ReadCallback, SignificantMsg,
+                    Tick, WriteArgs, WriteCallback};
 pub use self::store::{create_event_loop, Engines, Store, StoreChannel, StoreStat};
 pub use self::config::Config;
 pub use self::transport::Transport;

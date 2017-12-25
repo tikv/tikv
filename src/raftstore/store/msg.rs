@@ -18,11 +18,33 @@ use std::fmt;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
+
 use raft::SnapshotStatus;
 use util::escape;
 
-pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
-pub type BatchCallback = Box<FnBox(Vec<Option<RaftCmdResponse>>) + Send>;
+use super::engine::Snapshot;
+
+#[derive(Debug)]
+pub struct ReadArgs {
+    pub response: RaftCmdResponse,
+    pub snapshot: Option<Snapshot>,
+}
+
+#[derive(Debug)]
+pub struct WriteArgs {
+    pub response: RaftCmdResponse,
+}
+
+pub type ReadCallback = Box<FnBox(ReadArgs) + Send>;
+pub type WriteCallback = Box<FnBox(WriteArgs) + Send>;
+pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadArgs>>) + Send>;
+
+pub enum Callback {
+    None,
+    Read(ReadCallback),
+    Write(WriteCallback),
+    BatchRead(BatchReadCallback),
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Tick {
@@ -62,7 +84,7 @@ pub enum Msg {
     BatchRaftSnapCmds {
         send_time: Instant,
         batch: Vec<RaftCmdRequest>,
-        on_finished: BatchCallback,
+        on_finished: Callback,
     },
 
     SplitRegion {
@@ -71,7 +93,7 @@ pub enum Msg {
         // It's an encoded key.
         // TODO: support meta key.
         split_key: Vec<u8>,
-        callback: Option<Callback>,
+        callback: Callback,
     },
 
     // For snapshot stats.
@@ -126,6 +148,14 @@ impl fmt::Debug for Msg {
 }
 
 impl Msg {
+    pub fn new_read_raft_cmd(request: RaftCmdRequest, read: ReadCallback) -> Msg {
+        Msg::new_raft_cmd(request, Callback::Read(read))
+    }
+
+    pub fn new_write_raft_cmd(request: RaftCmdRequest, write: WriteCallback) -> Msg {
+        Msg::new_raft_cmd(request, Callback::Write(write))
+    }
+
     pub fn new_raft_cmd(request: RaftCmdRequest, callback: Callback) -> Msg {
         Msg::RaftCmd {
             send_time: Instant::now(),
@@ -136,12 +166,12 @@ impl Msg {
 
     pub fn new_batch_raft_snapshot_cmd(
         batch: Vec<RaftCmdRequest>,
-        on_finished: BatchCallback,
+        on_finished: BatchReadCallback,
     ) -> Msg {
         Msg::BatchRaftSnapCmds {
             send_time: Instant::now(),
             batch: batch,
-            on_finished: on_finished,
+            on_finished: Callback::BatchRead(on_finished),
         }
     }
 }

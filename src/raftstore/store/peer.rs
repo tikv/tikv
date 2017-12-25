@@ -877,7 +877,7 @@ impl Peer {
                     // TODO: we should add test case that a split happens before pending
                     // read-index is handled. To do this we need to control async-apply
                     // procedure precisely.
-                    cb(self.handle_read(req));
+                    call_cb(cb, self.handle_read(req));
                 }
                 propose_time = Some(read.renew_lease_time);
             }
@@ -948,7 +948,7 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 for (req, cb) in read.cmds.drain(..) {
-                    cb(self.handle_read(req));
+                    call_cb(cb, self.handle_read(req));
                 }
             }
             self.pending_reads.ready_cnt = 0;
@@ -1075,7 +1075,7 @@ impl Peer {
         match res {
             Err(e) => {
                 cmd_resp::bind_error(&mut err_resp, e);
-                cb(err_resp);
+                call_cb(cb, err_resp);
                 false
             }
             Ok(idx) => {
@@ -1097,11 +1097,12 @@ impl Peer {
         &mut self,
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
-    ) -> Option<RaftCmdResponse> {
+    ) -> Option<ReadArgs> {
         if self.pending_remove {
-            let mut resp = RaftCmdResponse::new();
-            cmd_resp::bind_error(&mut resp, box_err!("peer is pending remove"));
-            return Some(resp);
+            let mut response = RaftCmdResponse::new();
+            cmd_resp::bind_error(&mut response, box_err!("peer is pending remove"));
+            let snapshot = None;
+            return Some(ReadArgs { response, snapshot });
         }
         metrics.all += 1;
 
@@ -1110,15 +1111,18 @@ impl Peer {
         match self.get_handle_policy(&req) {
             Ok(RequestPolicy::ReadLocal) => {
                 metrics.local_read += 1;
-                Some(self.handle_read(req))
+                let response = self.handle_read(req);
+                let snapshot = Some(Snapshot::new(self.kv_engine.clone()));
+                Some(ReadArgs { response, snapshot })
             }
             // require to propose again, and use the `propose` above.
             Ok(RequestPolicy::ReadIndex) => None,
             Ok(_) => unreachable!(),
             Err(e) => {
-                let mut resp = cmd_resp::new_error(e);
-                cmd_resp::bind_term(&mut resp, self.term());
-                Some(resp)
+                let mut response = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut response, self.term());
+                let snapshot = None;
+                Some(ReadArgs { response, snapshot })
             }
         }
     }
@@ -1321,7 +1325,7 @@ impl Peer {
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
-        cb(self.handle_read(req));
+        call_cb(cb, self.handle_read(req))
     }
 
     fn read_index(
@@ -1382,7 +1386,7 @@ impl Peer {
                 term: self.term(),
                 renew_lease_time: Some(renew_lease_time),
             };
-            self.post_propose(meta, false, box |_| {});
+            self.post_propose(meta, false, Callback::None);
         }
 
         true
@@ -1445,7 +1449,7 @@ impl Peer {
 
         // transfer leader command doesn't need to replicate log and apply, so we
         // return immediately. Note that this command may fail, we can view it just as an advice
-        cb(make_transfer_leader_response());
+        call_cb(cb, make_transfer_leader_response());
 
         transferred
     }
@@ -1755,4 +1759,23 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::new();
     resp.set_admin_response(response);
     resp
+}
+
+use raftstore::store::msg::{ReadArgs, WriteArgs};
+fn call_cb(cb: Callback, resp: RaftCmdResponse) {
+    match cb {
+        Callback::None => (),
+        Callback::Read(read) => {
+            let args = ReadArgs {
+                response: resp,
+                snapshot: None,
+            };
+            read(args);
+        }
+        Callback::Write(write) => {
+            let args = WriteArgs { response: resp };
+            write(args);
+        }
+        Callback::BatchRead(_) => unreachable!(),
+    }
 }

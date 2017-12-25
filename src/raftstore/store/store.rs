@@ -57,7 +57,7 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::{BatchCallback, Callback};
+use super::msg::{Callback, ReadArgs, WriteArgs};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
@@ -1557,11 +1557,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
-                cb.call_box((resp,));
+                call_cb(cb, resp);
                 return;
             }
             Err(e) => {
-                cb.call_box((new_error(e),));
+                call_cb(cb, new_error(e));
                 return;
             }
             _ => (),
@@ -1588,7 +1588,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn propose_batch_raft_snapshot_command(
         &mut self,
         batch: Vec<RaftCmdRequest>,
-        on_finished: BatchCallback,
+        on_finished: Callback,
     ) {
         let size = batch.len();
         BATCH_SNAPSHOT_COMMANDS.observe(size as f64);
@@ -1596,11 +1596,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for msg in batch {
             match self.pre_propose_raft_command(&msg) {
                 Ok(Some(resp)) => {
-                    ret.push(Some(resp));
+                    ret.push(Some(ReadArgs {
+                        response: resp,
+                        snapshot: None,
+                    }));
                     continue;
                 }
                 Err(e) => {
-                    ret.push(Some(new_error(e)));
+                    ret.push(Some(ReadArgs {
+                        response: new_error(e),
+                        snapshot: None,
+                    }));
                     continue;
                 }
                 _ => (),
@@ -1610,7 +1616,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let peer = self.region_peers.get_mut(&region_id).unwrap();
             ret.push(peer.propose_snapshot(msg, &mut self.raft_metrics.propose));
         }
-        on_finished.call_box((ret,));
+        match on_finished {
+            Callback::BatchRead(on_finished) => on_finished(ret),
+            _ => unreachable!(),
+        }
     }
 
     fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
@@ -1762,7 +1771,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
 
             if let Err(e) = self.sendch
-                .try_send(Msg::new_raft_cmd(request, Box::new(|_| {})))
+                .try_send(Msg::new_raft_cmd(request, Callback::None))
             {
                 error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
             }
@@ -1852,10 +1861,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         region_id: u64,
         region_epoch: metapb::RegionEpoch,
         split_key: Vec<u8>, // `split_key` is a encoded key.
-        cb: Option<Callback>,
+        cb: Callback,
     ) {
         if let Err(e) = self.validate_split_region(region_id, &region_epoch, &split_key) {
-            cb.map(|cb| cb(new_error(e)));
+            call_cb(cb, new_error(e));
             return;
         }
         let peer = &self.region_peers[&region_id];
@@ -1871,7 +1880,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} failed to notify pd to split: Stopped", peer.tag);
             match t {
                 PdTask::AskSplit { callback, .. } => {
-                    callback.map(|cb| cb(new_error(box_err!("failed to split: Stopped"))));
+                    call_cb(callback, new_error(box_err!("failed to split: Stopped")));
                 }
                 _ => unreachable!(),
             }
@@ -2286,7 +2295,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("{} scheduling consistent check", peer.tag);
             let msg = Msg::new_raft_cmd(
                 new_compute_hash_request(candidate_id, peer.peer.clone()),
-                Box::new(|_| {}),
+                Callback::None,
             );
 
             if let Err(e) = self.sendch.send(msg) {
@@ -2351,7 +2360,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let msg = Msg::new_raft_cmd(
             new_verify_hash_request(region_id, peer.clone(), state),
-            Box::new(|_| {}),
+            Callback::None,
         );
         if let Err(e) = self.sendch.send(msg) {
             error!(
@@ -2431,6 +2440,24 @@ fn new_compact_log_request(
     admin.mut_compact_log().set_compact_term(compact_term);
     request.set_admin_request(admin);
     request
+}
+
+fn call_cb(cb: Callback, resp: RaftCmdResponse) {
+    match cb {
+        Callback::None => (),
+        Callback::Read(read) => {
+            let args = ReadArgs {
+                response: resp,
+                snapshot: None,
+            };
+            read(args);
+        }
+        Callback::Write(write) => {
+            let args = WriteArgs { response: resp };
+            write(args);
+        }
+        Callback::BatchRead(_) => unreachable!(),
+    }
 }
 
 impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
