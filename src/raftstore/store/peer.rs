@@ -32,7 +32,7 @@ use kvproto::pdpb::PeerStats;
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::Config;
+use raftstore::store::{Config, ReadArgs};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 
@@ -877,7 +877,7 @@ impl Peer {
                     // TODO: we should add test case that a split happens before pending
                     // read-index is handled. To do this we need to control async-apply
                     // procedure precisely.
-                    call_cb(cb, self.handle_read(req));
+                    cb.invoke_with_response(self.handle_read(req));
                 }
                 propose_time = Some(read.renew_lease_time);
             }
@@ -948,7 +948,7 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 for (req, cb) in read.cmds.drain(..) {
-                    call_cb(cb, self.handle_read(req));
+                    cb.invoke_with_response(self.handle_read(req));
                 }
             }
             self.pending_reads.ready_cnt = 0;
@@ -1075,7 +1075,7 @@ impl Peer {
         match res {
             Err(e) => {
                 cmd_resp::bind_error(&mut err_resp, e);
-                call_cb(cb, err_resp);
+                cb.invoke_with_response(err_resp);
                 false
             }
             Ok(idx) => {
@@ -1325,7 +1325,7 @@ impl Peer {
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
-        call_cb(cb, self.handle_read(req))
+        cb.invoke_with_response(self.handle_read(req))
     }
 
     fn read_index(
@@ -1449,7 +1449,7 @@ impl Peer {
 
         // transfer leader command doesn't need to replicate log and apply, so we
         // return immediately. Note that this command may fail, we can view it just as an advice
-        call_cb(cb, make_transfer_leader_response());
+        cb.invoke_with_response(make_transfer_leader_response());
 
         transferred
     }
@@ -1759,23 +1759,4 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::new();
     resp.set_admin_response(response);
     resp
-}
-
-use raftstore::store::msg::{ReadArgs, WriteArgs};
-fn call_cb(cb: Callback, resp: RaftCmdResponse) {
-    match cb {
-        Callback::None => (),
-        Callback::Read(read) => {
-            let args = ReadArgs {
-                response: resp,
-                snapshot: None,
-            };
-            read(args);
-        }
-        Callback::Write(write) => {
-            let args = WriteArgs { response: resp };
-            write(args);
-        }
-        Callback::BatchRead(_) => unreachable!(),
-    }
 }

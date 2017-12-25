@@ -57,7 +57,7 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::{Callback, ReadArgs, WriteArgs};
+use super::msg::{Callback, ReadArgs};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
@@ -1557,11 +1557,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
-                call_cb(cb, resp);
+                cb.invoke_with_response(resp);
                 return;
             }
             Err(e) => {
-                call_cb(cb, new_error(e));
+                cb.invoke_with_response(new_error(e));
                 return;
             }
             _ => (),
@@ -1864,7 +1864,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         cb: Callback,
     ) {
         if let Err(e) = self.validate_split_region(region_id, &region_epoch, &split_key) {
-            call_cb(cb, new_error(e));
+            cb.invoke_with_response(new_error(e));
             return;
         }
         let peer = &self.region_peers[&region_id];
@@ -1880,7 +1880,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} failed to notify pd to split: Stopped", peer.tag);
             match t {
                 PdTask::AskSplit { callback, .. } => {
-                    call_cb(callback, new_error(box_err!("failed to split: Stopped")));
+                    callback.invoke_with_response(new_error(box_err!("failed to split: Stopped")));
                 }
                 _ => unreachable!(),
             }
@@ -2440,24 +2440,6 @@ fn new_compact_log_request(
     admin.mut_compact_log().set_compact_term(compact_term);
     request.set_admin_request(admin);
     request
-}
-
-fn call_cb(cb: Callback, resp: RaftCmdResponse) {
-    match cb {
-        Callback::None => (),
-        Callback::Read(read) => {
-            let args = ReadArgs {
-                response: resp,
-                snapshot: None,
-            };
-            read(args);
-        }
-        Callback::Write(write) => {
-            let args = WriteArgs { response: resp };
-            write(args);
-        }
-        Callback::BatchRead(_) => unreachable!(),
-    }
 }
 
 impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {

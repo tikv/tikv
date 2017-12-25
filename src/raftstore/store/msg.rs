@@ -46,6 +46,26 @@ pub enum Callback {
     BatchRead(BatchReadCallback),
 }
 
+impl Callback {
+    pub fn invoke_with_response(self, resp: RaftCmdResponse) {
+        match self {
+            Callback::None => (),
+            Callback::Read(read) => {
+                let args = ReadArgs {
+                    response: resp,
+                    snapshot: None,
+                };
+                read(args);
+            }
+            Callback::Write(write) => {
+                let args = WriteArgs { response: resp };
+                write(args);
+            }
+            Callback::BatchRead(_) => unreachable!(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Tick {
     Raft,
@@ -225,29 +245,11 @@ mod tests {
                     if request.get_header().get_region_id() == u64::max_value() {
                         thread::sleep(Duration::from_millis(100));
                     }
-                    call_cb(callback, RaftCmdResponse::new());
+                    callback.invoke_with_response(RaftCmdResponse::new());
                 }
                 // we only test above message types, others panic.
                 _ => unreachable!(),
             }
-        }
-    }
-
-    fn call_cb(cb: Callback, resp: RaftCmdResponse) {
-        match cb {
-            Callback::None => (),
-            Callback::Read(read) => {
-                let args = ReadArgs {
-                    response: resp,
-                    snapshot: None,
-                };
-                read(args);
-            }
-            Callback::Write(write) => {
-                let args = WriteArgs { response: resp };
-                write(args);
-            }
-            Callback::BatchRead(_) => unreachable!(),
         }
     }
 

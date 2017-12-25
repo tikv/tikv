@@ -181,7 +181,7 @@ impl ApplyCallback {
     fn invoke_all(self, host: &CoprocessorHost) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
-            cb.map(|cb| call_cb(cb, resp));
+            cb.map(|cb| cb.invoke_with_response(resp));
         }
     }
 
@@ -246,7 +246,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
 pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
-    call_cb(cb, resp);
+    cb.invoke_with_response(resp);
 }
 
 /// Call the callback of `cmd` when it can not be processed further.
@@ -262,7 +262,7 @@ fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
 
 pub fn notify_stale_req(term: u64, cb: Callback) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
-    call_cb(cb, resp);
+    cb.invoke_with_response(resp);
 }
 
 fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
@@ -1631,25 +1631,6 @@ impl Runnable<Task> for Runner {
 
     fn shutdown(&mut self) {
         self.handle_shutdown();
-    }
-}
-
-use raftstore::store::msg::{ReadArgs, WriteArgs};
-fn call_cb(cb: Callback, resp: RaftCmdResponse) {
-    match cb {
-        Callback::None => (),
-        Callback::Read(read) => {
-            let args = ReadArgs {
-                response: resp,
-                snapshot: None,
-            };
-            read(args);
-        }
-        Callback::Write(write) => {
-            let args = WriteArgs { response: resp };
-            write(args);
-        }
-        Callback::BatchRead(_) => unreachable!(),
     }
 }
 
