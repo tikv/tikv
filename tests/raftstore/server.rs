@@ -27,7 +27,7 @@ use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{store, Error, Result};
-use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager, WriteArgs};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
@@ -219,7 +219,12 @@ impl Simulator for ServerCluster {
         };
         wait_op!(
             |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                router.send_command(request, cb).unwrap()
+                router
+                    .send_command(
+                        request,
+                        Callback::Write(box |write: WriteArgs| cb(write.response)),
+                    )
+                    .unwrap()
             },
             timeout
         ).ok_or_else(|| {

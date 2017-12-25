@@ -154,12 +154,15 @@ macro_rules! defer {
 #[macro_export]
 macro_rules! wait_op {
     ($expr:expr) => {
-        wait_op!(IMPL $expr, None)
+        wait_op!(IMPL $expr, None, |cb| { cb })
     };
     ($expr:expr, $timeout:expr) => {
-        wait_op!(IMPL $expr, Some($timeout))
+        wait_op!(IMPL $expr, Some($timeout), |cb| { cb })
     };
-    (IMPL $expr:expr, $timeout:expr) => {
+    ($expr:expr, $timeout:expr, $map:tt) => {
+        wait_op!(IMPL $map, $expr, $timeout, |cb| { cb })
+    };
+    (IMPL $expr:expr, $timeout:expr, $map:expr) => {
         {
             use std::sync::mpsc;
             let (tx, rx) = mpsc::channel();
@@ -167,7 +170,7 @@ macro_rules! wait_op {
                  // we don't care error actually.
                 let _ = tx.send(res);
             };
-            $expr(cb);
+            $expr($map(cb));
             match $timeout {
                 None => rx.recv().ok(),
                 Some(timeout) => rx.recv_timeout(timeout).ok()

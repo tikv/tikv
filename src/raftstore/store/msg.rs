@@ -196,7 +196,12 @@ mod tests {
     ) -> Result<RaftCmdResponse, Error> {
         wait_op!(
             |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                sendch.try_send(Msg::new_raft_cmd(request, cb)).unwrap()
+                sendch
+                    .try_send(Msg::new_raft_cmd(
+                        request,
+                        Callback::Write(box |write: WriteArgs| cb(write.response)),
+                    ))
+                    .unwrap()
             },
             timeout
         ).ok_or_else(|| {
@@ -220,11 +225,29 @@ mod tests {
                     if request.get_header().get_region_id() == u64::max_value() {
                         thread::sleep(Duration::from_millis(100));
                     }
-                    callback.call_box((RaftCmdResponse::new(),));
+                    call_cb(callback, RaftCmdResponse::new());
                 }
                 // we only test above message types, others panic.
                 _ => unreachable!(),
             }
+        }
+    }
+
+    fn call_cb(cb: Callback, resp: RaftCmdResponse) {
+        match cb {
+            Callback::None => (),
+            Callback::Read(read) => {
+                let args = ReadArgs {
+                    response: resp,
+                    snapshot: None,
+                };
+                read(args);
+            }
+            Callback::Write(write) => {
+                let args = WriteArgs { response: resp };
+                write(args);
+            }
+            Callback::BatchRead(_) => unreachable!(),
         }
     }
 

@@ -33,7 +33,7 @@ use pd::{PdClient, RegionStat};
 use raftstore::store::Msg;
 use raftstore::store::util::{get_region_approximate_size, is_epoch_stale};
 use raftstore::store::store::StoreInfo;
-use raftstore::store::{Callback};
+use raftstore::store::Callback;
 use storage::FlowStatistics;
 use util::collections::HashMap;
 use prometheus::local::LocalHistogram;

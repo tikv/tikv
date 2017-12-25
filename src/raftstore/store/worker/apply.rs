@@ -1755,7 +1755,9 @@ mod tests {
             false,
             1,
             0,
-            box move |resp| { resp_tx.send(resp).unwrap(); },
+            Callback::Write(box move |write: WriteArgs| {
+                resp_tx.send(write.response).unwrap();
+            }),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
         runner.run(Task::Proposals(vec![region_proposal]));
@@ -1766,8 +1768,15 @@ mod tests {
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
-            Proposal::new(false, 2, 0, box |_| {}),
-            Proposal::new(true, 3, 0, box move |resp| { cc_tx.send(resp).unwrap(); }),
+            Proposal::new(false, 2, 0, Callback::None),
+            Proposal::new(
+                true,
+                3,
+                0,
+                Callback::Write(box move |write: WriteArgs| {
+                    cc_tx.send(write.response).unwrap();
+                }),
+            ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
         runner.run(Task::Proposals(vec![region_proposal]));
@@ -1782,7 +1791,7 @@ mod tests {
             assert_eq!(cc.as_ref().map(|c| c.index), Some(3));
         }
 
-        let p = Proposal::new(true, 4, 0, box move |_| {});
+        let p = Proposal::new(true, 4, 0, Callback::None);
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
         runner.run(Task::Proposals(vec![region_proposal]));
         assert!(rx.try_recv().is_err());
@@ -1868,7 +1877,9 @@ mod tests {
             let cmd = PendingCmd::new(
                 self.entry.get_index(),
                 self.entry.get_term(),
-                box move |r| tx.send(r).unwrap(),
+                Callback::Write(box move |write: WriteArgs| {
+                    tx.send(write.response).unwrap();
+                }),
             );
             delegate.pending_cmds.append_normal(cmd);
             self
