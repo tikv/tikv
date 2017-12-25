@@ -180,7 +180,7 @@ pub fn build_exec(
                 src,
             )?),
             ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
-            _ => unimplemented!(),
+            ExecType::TypeStreamAgg => unimplemented!(),
         };
         src = curr;
     }

@@ -40,7 +40,7 @@ use util;
 use util::codec::number::NumberDecoder;
 use util::codec::Error as CError;
 
-/// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
+/// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
 /// truncate error.
 /// `FLAG_IGNORE_TRUNCATE` indicates if truncate error should be ignored.
 /// Read-only statements should ignore truncate error, write statements should not ignore
