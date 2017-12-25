@@ -49,7 +49,7 @@ pub mod pri {
             set_priority(10).unwrap();
             assert_eq!(get_priority().unwrap(), 10);
 
-            // only users which have `SYS_NICE_CAP` capability can increase priority.
+            // only users who have `SYS_NICE_CAP` capability can increase priority.
             let ret = set_priority(HIGH_PRI);
             if let Err(e) = ret {
                 assert_eq!(e.kind(), ErrorKind::PermissionDenied);
