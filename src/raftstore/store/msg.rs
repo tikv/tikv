@@ -64,6 +64,26 @@ impl Callback {
             Callback::BatchRead(_) => unreachable!(),
         }
     }
+
+    pub fn invoke_read(self, args: ReadArgs) {
+        match self {
+            Callback::Read(read) => {
+                read(args);
+            }
+            other => panic!("expect Callback::Read(..), got {:?}", other),
+        }
+    }
+}
+
+impl fmt::Debug for Callback {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Callback::None => write!(fmt, "Callback::None"),
+            Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
+            Callback::Write(_) => write!(fmt, "Callback::Write(..)"),
+            Callback::BatchRead(_) => write!(fmt, "Callback::BatchRead(..)"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

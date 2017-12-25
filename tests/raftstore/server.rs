@@ -114,9 +114,7 @@ impl Simulator for ServerCluster {
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create storage.
-        let mut store =
-            create_raft_storage(sim_router.clone(), engines.kv_engine.clone(), &cfg.storage)
-                .unwrap();
+        let mut store = create_raft_storage(sim_router.clone(), &cfg.storage).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 

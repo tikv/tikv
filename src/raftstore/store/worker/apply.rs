@@ -1644,11 +1644,13 @@ mod tests {
     use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::CmdType;
-    use raftstore::coprocessor::*;
 
-    use super::*;
+    use raftstore::coprocessor::*;
+    use raftstore::store::msg::WriteArgs;
     use storage::{ALL_CFS, CF_WRITE};
     use util::collections::HashMap;
+
+    use super::*;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
         let path = TempDir::new(path).unwrap();

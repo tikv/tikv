@@ -18,7 +18,6 @@ use std::time::Duration;
 use std::process;
 
 use mio::EventLoop;
-use rocksdb::DB;
 
 use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use kvproto::raft_serverpb::StoreIdent;
@@ -37,11 +36,11 @@ use super::transport::RaftStoreRouter;
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &StorageConfig) -> Result<Storage>
+pub fn create_raft_storage<S>(router: S, cfg: &StorageConfig) -> Result<Storage>
 where
     S: RaftStoreRouter + 'static,
 {
-    let engine = box RaftKv::new(db, router);
+    let engine = Box::new(RaftKv::new(router));
     let store = Storage::from_engine(engine, cfg)?;
     Ok(store)
 }

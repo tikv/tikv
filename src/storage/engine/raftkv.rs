@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use std::fmt::{self, Debug, Formatter};
 use std::io::Error as IoError;
 use std::time::Duration;
@@ -21,7 +20,6 @@ use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest
                           RaftCmdResponse, RaftRequestHeader, Request, Response};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
-use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use server::transport::RaftStoreRouter;
@@ -111,7 +109,6 @@ impl From<RaftServerError> for engine::Error {
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
 pub struct RaftKv<S: RaftStoreRouter + 'static> {
-    db: Arc<DB>,
     router: S,
 }
 
@@ -165,11 +162,8 @@ fn on_read_result(mut args: ReadArgs, resp_cnt: usize) -> (CbContext, Result<Cmd
 
 impl<S: RaftStoreRouter> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(db: Arc<DB>, router: S) -> RaftKv<S> {
-        RaftKv {
-            db: db,
-            router: router,
-        }
+    pub fn new(router: S) -> RaftKv<S> {
+        RaftKv { router }
     }
 
     fn batch_call_snap_commands(
@@ -489,7 +483,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     }
 
     fn clone(&self) -> Box<Engine> {
-        box RaftKv::new(self.db.clone(), self.router.clone())
+        Box::new(RaftKv::new(self.router.clone()))
     }
 }
 
