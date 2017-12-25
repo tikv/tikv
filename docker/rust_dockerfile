@@ -39,7 +39,7 @@ RUN go get golang.org/x/tools/go/gcimporter15 \
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2018-01-12 -y \
 	&& /root/.cargo/bin/rustup default nightly-2018-01-12 \
-	&& /root/.cargo/bin/cargo install --force rustfmt
+	&& /root/.cargo/bin/cargo install --vers 0.3.4 --force rustfmt-nightly
 
 # cache dep package
 RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/master.tar.gz \
