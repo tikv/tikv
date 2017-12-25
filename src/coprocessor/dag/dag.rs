@@ -119,6 +119,9 @@ impl DAGContext {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    let mut counts = Vec::with_capacity(4);
+                    self.exec.collect_output_counts(&mut counts);
+                    sel_resp.set_output_counts(counts);
                     let data = box_try!(sel_resp.write_to_bytes());
                     // If result data is greater than 5MB should not cache it.
                     if self.can_cache_with_size(&data) {
