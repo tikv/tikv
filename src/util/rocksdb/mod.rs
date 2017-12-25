@@ -32,6 +32,7 @@ use rocksdb::set_external_sst_file_global_seq_no;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
                                     ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
 use util::rocksdb;
+use util::file::copy_and_sync;
 
 pub use rocksdb::CFHandle;
 
@@ -394,7 +395,7 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
             .map_err(|e| format!("link from {} to {}: {:?}", path, clone, e))?;
     } else {
         // RocksDB may have this file, we should make a copy.
-        fs::copy(path, clone)
+        copy_and_sync(path, clone)
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
     }
 
@@ -412,7 +413,7 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>>(
     let path = path.as_ref().to_str().unwrap();
     let clone = clone.as_ref().to_str().unwrap();
     if !Path::new(clone).exists() {
-        fs::copy(path, clone)
+        copy_and_sync(path, clone)
             .map(|_| ())
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))
     } else {

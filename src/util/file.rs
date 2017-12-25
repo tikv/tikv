@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::io::{self, ErrorKind, Read};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use crc::crc32::{self, Digest, Hasher32};
@@ -35,6 +35,12 @@ pub fn delete_file_if_exist(file: &PathBuf) {
             warn!("failed to delete file {}: {:?}", file.display(), e);
         }
     }
+}
+
+pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
+    let res = fs::copy(&from, &to)?;
+    File::open(&to)?.sync_all()?;
+    Ok(res)
 }
 
 const DIGEST_BUFFER_SIZE: usize = 10240;
