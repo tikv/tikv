@@ -131,6 +131,7 @@ impl Row {
 
 pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_statistics_into(&mut self, stats: &mut Statistics);
 }
 

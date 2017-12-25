@@ -61,6 +61,7 @@ pub struct TopNExecutor {
     iter: Option<IntoIter<SortRow>>,
     ctx: Arc<EvalContext>,
     src: Box<Executor>,
+    count: i64,
 }
 
 impl TopNExecutor {
@@ -86,6 +87,7 @@ impl TopNExecutor {
             iter: None,
             ctx: ctx,
             src: src,
+            count: 0,
         })
     }
 
@@ -119,12 +121,21 @@ impl Executor for TopNExecutor {
         }
         let iter = self.iter.as_mut().unwrap();
         match iter.next() {
-            Some(sort_row) => Ok(Some(Row {
-                handle: sort_row.handle,
-                data: sort_row.data,
-            })),
+            Some(sort_row) => {
+                self.count += 1;
+                Ok(Some(Row {
+                    handle: sort_row.handle,
+                    data: sort_row.data,
+                }))
+            }
             None => Ok(None),
         }
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        self.src.collect_output_counts(counts);
+        counts.push(self.count);
+        self.count = 0;
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
@@ -435,5 +446,9 @@ pub mod test {
         for (row, handle) in topn_rows.iter().zip(expect_row_handles) {
             assert_eq!(row.handle, handle);
         }
+        let expected_counts = vec![6, limit as i64];
+        let mut counts = Vec::with_capacity(2);
+        topn_ect.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
     }
 }

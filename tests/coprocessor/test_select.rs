@@ -2033,3 +2033,22 @@ fn test_key_is_locked_for_index() {
     assert!(resp.has_locked(), "{:?}", resp);
     end_point.stop().unwrap().join().unwrap();
 }
+
+#[test]
+fn test_output_counts() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let req = DAGSelect::from(&product.table).build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_output_counts(), [data.len() as i64]);
+
+    end_point.stop().unwrap().join().unwrap();
+}

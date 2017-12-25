@@ -79,6 +79,7 @@ pub struct AggregationExecutor {
     cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor>,
+    count: i64,
 }
 
 impl AggregationExecutor {
@@ -107,6 +108,7 @@ impl AggregationExecutor {
             cols: columns,
             related_cols_offset: visitor.column_offsets(),
             src: src,
+            count: 0,
         })
     }
 
@@ -180,6 +182,7 @@ impl Executor for AggregationExecutor {
                 if !self.group_by.is_empty() {
                     value.extend_from_slice(group_key);
                 }
+                self.count += 1;
                 Ok(Some(Row {
                     handle: 0,
                     data: RowColsDict::new(map![], value),
@@ -187,6 +190,12 @@ impl Executor for AggregationExecutor {
             }
             None => Ok(None),
         }
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        self.src.collect_output_counts(counts);
+        counts.push(self.count);
+        self.count = 0;
     }
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
@@ -363,5 +372,9 @@ mod test {
             assert_eq!(ds[3], Datum::from(expect_cols.3));
             assert_eq!(ds[4], Datum::from(expect_cols.4));
         }
+        let expected_counts = vec![raw_data.len() as i64, expect_row_cnt as i64];
+        let mut counts = Vec::with_capacity(2);
+        aggr_ect.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
     }
 }
