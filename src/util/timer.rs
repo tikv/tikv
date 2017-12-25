@@ -91,6 +91,9 @@ impl<T> Timer<T> {
     }
 
     /// Remove a task from the timer. Returns the `TimeoutTask` if found.
+    ///
+    /// If there are many tasks according with the condition, only the first
+    /// task will be removed from pending queue.
     pub fn remove_task<F>(&mut self, f: F) -> Option<TimeoutTask<T>>
     where
         F: Fn(&TimeoutTask<T>) -> bool,
