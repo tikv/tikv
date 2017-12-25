@@ -44,6 +44,7 @@ use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
+use util::sys as util_sys;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -541,6 +542,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log);
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
+
+        if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
+            warn!("set priority for raftstore failed, error: {:?}", e);
+        }
 
         event_loop.run(self)?;
         Ok(())
@@ -1268,7 +1273,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer,
                 self.store_id()
             );
-
         }
     }
 
@@ -1712,10 +1716,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             //                  |-----------------threshold------------ |
             //              first_index                         replicated_index
             let replicated_idx = peer.raft_group
-                .status()
-                .progress
-                .values()
-                .map(|p| p.matched)
+                .raft
+                .prs()
+                .iter()
+                .map(|(_, p)| p.matched)
                 .min()
                 .unwrap();
             // When an election happened or a new peer is added, replicated_idx can be 0.
