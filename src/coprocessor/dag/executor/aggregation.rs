@@ -286,7 +286,6 @@ mod test {
                 Datum::Dec(8.into()),
                 Datum::F64(3.0),
                 Datum::F64(3.0),
-
             ],
             vec![
                 Datum::I64(4),
