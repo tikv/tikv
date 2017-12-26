@@ -24,13 +24,13 @@ use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC,
 use super::super::{Result, TEN_POW};
 
 
-const ZERO_DATETIME_STR: &'static str = "0000-00-00 00:00:00";
-const ZERO_DATE_STR: &'static str = "0000-00-00";
+const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
+const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
 /// `-0001-11-30 00:00:00 +0000 UTC`, whose timestamp is -62169984000.
 const ZERO_TIMESTAMP: i64 = -62169984000;
 
-const MONTH_NAMES: &'static [&'static str] = &[
+const MONTH_NAMES: &[&str] = &[
     "January",
     "February",
     "March",
@@ -45,7 +45,7 @@ const MONTH_NAMES: &'static [&'static str] = &[
     "December",
 ];
 
-const MONTH_NAMES_ABBR: &'static [&'static str] = &[
+const MONTH_NAMES_ABBR: &[&str] = &[
     "Jan",
     "Feb",
     "Mar",

@@ -26,17 +26,17 @@ use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFac
 use util::codec::{Error, Result};
 use util::codec::number::{NumberDecoder, NumberEncoder};
 
-const PROP_NUM_ERRORS: &'static str = "tikv.num_errors";
-const PROP_MIN_TS: &'static str = "tikv.min_ts";
-const PROP_MAX_TS: &'static str = "tikv.max_ts";
-const PROP_NUM_ROWS: &'static str = "tikv.num_rows";
-const PROP_NUM_PUTS: &'static str = "tikv.num_puts";
-const PROP_NUM_VERSIONS: &'static str = "tikv.num_versions";
-const PROP_MAX_ROW_VERSIONS: &'static str = "tikv.max_row_versions";
-const PROP_ROWS_INDEX: &'static str = "tikv.rows_index";
+const PROP_NUM_ERRORS: &str = "tikv.num_errors";
+const PROP_MIN_TS: &str = "tikv.min_ts";
+const PROP_MAX_TS: &str = "tikv.max_ts";
+const PROP_NUM_ROWS: &str = "tikv.num_rows";
+const PROP_NUM_PUTS: &str = "tikv.num_puts";
+const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
+const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
+const PROP_ROWS_INDEX: &str = "tikv.rows_index";
 const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
-const PROP_TOTAL_SIZE: &'static str = "tikv.total_size";
-const PROP_SIZE_INDEX: &'static str = "tikv.size_index";
+const PROP_TOTAL_SIZE: &str = "tikv.total_size";
+const PROP_SIZE_INDEX: &str = "tikv.size_index";
 const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default)]

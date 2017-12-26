@@ -47,9 +47,9 @@ pub const CF_LOCK: CfName = "lock";
 pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 // Cfs that should be very large generally.
-pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
-pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
-pub const DATA_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
+pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
+pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -300,7 +300,7 @@ impl Debug for Command {
     }
 }
 
-pub const CMD_TAG_GC: &'static str = "gc";
+pub const CMD_TAG_GC: &str = "gc";
 
 impl Command {
     pub fn readonly(&self) -> bool {

@@ -43,7 +43,7 @@ use server::Error;
 use raftstore::store::{Callback, Msg as StoreMessage};
 use coprocessor::{EndPointTask, RequestTask};
 
-const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
+const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {

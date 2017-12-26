@@ -247,7 +247,7 @@ mod tests {
         }
     }
 
-    const STORE_ADDR: &'static str = "127.0.0.1:12345";
+    const STORE_ADDR: &str = "127.0.0.1:12345";
 
     #[test]
     fn test_resolve_store_state_up() {

@@ -40,12 +40,12 @@ use super::FlatMap;
 
 // CAMPAIGN_PRE_ELECTION represents the first phase of a normal election when
 // Config.pre_vote is true.
-const CAMPAIGN_PRE_ELECTION: &'static [u8] = b"CampaignPreElection";
+const CAMPAIGN_PRE_ELECTION: &[u8] = b"CampaignPreElection";
 // CAMPAIGN_ELECTION represents a normal (time-based) election (the second phase
 // of the election when Config.pre_vote is true).
-const CAMPAIGN_ELECTION: &'static [u8] = b"CampaignElection";
+const CAMPAIGN_ELECTION: &[u8] = b"CampaignElection";
 // CAMPAIGN_TRANSFER represents the type of leader transfer.
-const CAMPAIGN_TRANSFER: &'static [u8] = b"CampaignTransfer";
+const CAMPAIGN_TRANSFER: &[u8] = b"CampaignTransfer";
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum StateRole {

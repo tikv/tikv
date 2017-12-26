@@ -43,11 +43,11 @@ use regex::Regex;
 use coprocessor::codec::Result;
 use super::json_unquote::unquote_string;
 
-pub const PATH_EXPR_ASTERISK: &'static str = "*";
+pub const PATH_EXPR_ASTERISK: &str = "*";
 
 // [a-zA-Z_][a-zA-Z0-9_]* matches any identifier;
 // "[^"\\]*(\\.[^"\\]*)*" matches any string literal which can carry escaped quotes.
-const PATH_EXPR_LEG_RE_STR: &'static str =
+const PATH_EXPR_LEG_RE_STR: &str =
     r#"(\.\s*([a-zA-Z_][a-zA-Z0-9_]*|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)"#;
 
 #[derive(Clone, Debug, PartialEq)]

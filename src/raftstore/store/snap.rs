@@ -50,16 +50,16 @@ use raftstore::store::metrics::{SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_CO
 use raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 
 // Data in CF_RAFT should be excluded for a snapshot.
-pub const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 /// Name prefix for the self-generated snapshot file.
-const SNAP_GEN_PREFIX: &'static str = "gen";
+const SNAP_GEN_PREFIX: &str = "gen";
 /// Name prefix for the received snapshot file.
-const SNAP_REV_PREFIX: &'static str = "rev";
+const SNAP_REV_PREFIX: &str = "rev";
 
-const TMP_FILE_SUFFIX: &'static str = ".tmp";
-const SST_FILE_SUFFIX: &'static str = ".sst";
-const CLONE_FILE_SUFFIX: &'static str = ".clone";
+const TMP_FILE_SUFFIX: &str = ".tmp";
+const SST_FILE_SUFFIX: &str = ".sst";
+const CLONE_FILE_SUFFIX: &str = ".clone";
 
 const DELETE_RETRY_MAX_TIMES: u32 = 6;
 const DELETE_RETRY_TIME_MILLIS: u64 = 500;
@@ -231,7 +231,7 @@ use util::file::{delete_file_if_exist, file_exists, get_file_size, calc_crc32};
 use util::rocksdb::get_fastest_supported_compression_type;
 
 pub const SNAPSHOT_VERSION: u64 = 2;
-const META_FILE_SUFFIX: &'static str = ".meta";
+const META_FILE_SUFFIX: &str = ".meta";
 
 fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());

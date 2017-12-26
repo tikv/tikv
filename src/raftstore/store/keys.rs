@@ -18,34 +18,34 @@ use util::escape;
 use kvproto::metapb::Region;
 use std::mem;
 
-pub const MIN_KEY: &'static [u8] = &[];
-pub const MAX_KEY: &'static [u8] = &[0xFF];
+pub const MIN_KEY: &[u8] = &[];
+pub const MAX_KEY: &[u8] = &[0xFF];
 
-pub const EMPTY_KEY: &'static [u8] = &[];
+pub const EMPTY_KEY: &[u8] = &[];
 
 // local is in (0x01, 0x02);
 pub const LOCAL_PREFIX: u8 = 0x01;
-pub const LOCAL_MIN_KEY: &'static [u8] = &[LOCAL_PREFIX];
-pub const LOCAL_MAX_KEY: &'static [u8] = &[LOCAL_PREFIX + 1];
+pub const LOCAL_MIN_KEY: &[u8] = &[LOCAL_PREFIX];
+pub const LOCAL_MAX_KEY: &[u8] = &[LOCAL_PREFIX + 1];
 
 pub const DATA_PREFIX: u8 = b'z';
-pub const DATA_PREFIX_KEY: &'static [u8] = &[DATA_PREFIX];
-pub const DATA_MIN_KEY: &'static [u8] = &[DATA_PREFIX];
-pub const DATA_MAX_KEY: &'static [u8] = &[DATA_PREFIX + 1];
+pub const DATA_PREFIX_KEY: &[u8] = &[DATA_PREFIX];
+pub const DATA_MIN_KEY: &[u8] = &[DATA_PREFIX];
+pub const DATA_MAX_KEY: &[u8] = &[DATA_PREFIX + 1];
 
 // Following keys are all local keys, so the first byte must be 0x01.
-pub const STORE_IDENT_KEY: &'static [u8] = &[LOCAL_PREFIX, 0x01];
-pub const PREPARE_BOOTSTRAP_KEY: &'static [u8] = &[LOCAL_PREFIX, 0x02];
+pub const STORE_IDENT_KEY: &[u8] = &[LOCAL_PREFIX, 0x01];
+pub const PREPARE_BOOTSTRAP_KEY: &[u8] = &[LOCAL_PREFIX, 0x02];
 // We save two types region data in DB, for raft and other meta data.
 // When the store starts, we should iterate all region meta data to
 // construct peer, no need to travel large raft data, so we separate them
 // with different prefixes.
 pub const REGION_RAFT_PREFIX: u8 = 0x02;
-pub const REGION_RAFT_PREFIX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
+pub const REGION_RAFT_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
 pub const REGION_META_PREFIX: u8 = 0x03;
-pub const REGION_META_PREFIX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
-pub const REGION_META_MIN_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
-pub const REGION_META_MAX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX + 1];
+pub const REGION_META_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
+pub const REGION_META_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
+pub const REGION_META_MAX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX + 1];
 
 // Following are the suffix after the local prefix.
 // For region id

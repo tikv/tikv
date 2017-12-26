@@ -84,8 +84,8 @@ pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
         msg.get_message().get_term() == peer_storage::RAFT_INIT_LOG_TERM + 1
 }
 
-const STR_CONF_CHANGE_ADD_NODE: &'static str = "AddNode";
-const STR_CONF_CHANGE_REMOVE_NODE: &'static str = "RemoveNode";
+const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
+const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 
 pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
     match *conf_type {

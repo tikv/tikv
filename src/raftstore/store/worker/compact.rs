@@ -100,7 +100,7 @@ mod test {
     use storage::CF_DEFAULT;
     use super::*;
 
-    const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-size";
+    const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 
     #[test]
     fn test_compact_range() {

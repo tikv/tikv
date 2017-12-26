@@ -26,7 +26,7 @@ use kvproto::{errorpb, metapb};
 use super::coprocessor::Error as CopError;
 use util::{escape, transport};
 
-const RAFTSTORE_IS_BUSY: &'static str = "raftstore is busy";
+const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
 quick_error!{
     #[derive(Debug)]

@@ -31,7 +31,7 @@ use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, Le
 use super::metrics::*;
 
 const CQ_COUNT: usize = 1;
-const CLIENT_PREFIX: &'static str = "pd";
+const CLIENT_PREFIX: &str = "pd";
 
 pub struct RpcClient {
     cluster_id: u64,

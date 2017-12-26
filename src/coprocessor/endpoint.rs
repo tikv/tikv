@@ -54,11 +54,11 @@ const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
-pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
+pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
-const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
+const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
-const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
+const ENDPOINT_IS_BUSY: &str = "endpoint is busy";
 
 pub struct Host {
     engine: Box<Engine>,
@@ -744,11 +744,11 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
-pub const STR_REQ_TYPE_SELECT: &'static str = "select";
-pub const STR_REQ_TYPE_INDEX: &'static str = "index";
-pub const STR_REQ_PRI_LOW: &'static str = "low";
-pub const STR_REQ_PRI_NORMAL: &'static str = "normal";
-pub const STR_REQ_PRI_HIGH: &'static str = "high";
+pub const STR_REQ_TYPE_SELECT: &str = "select";
+pub const STR_REQ_TYPE_INDEX: &str = "index";
+pub const STR_REQ_PRI_LOW: &str = "low";
+pub const STR_REQ_PRI_NORMAL: &str = "normal";
+pub const STR_REQ_PRI_HIGH: &str = "high";
 
 #[inline]
 pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
