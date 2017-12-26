@@ -104,6 +104,45 @@ fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> BenchSamples {
     }
 }
 
+fn bench_batch_set(
+    engine: &Engine,
+    keys: &[Vec<u8>],
+    value_len: usize,
+    batch_size: usize,
+) -> BenchSamples {
+    // Avoid writing duplicated keys in a single transaction
+    let mut indices: Vec<_> = (0..keys.len()).collect();
+    let mut rng = rand::thread_rng();
+
+    let mut keys_to_write: Vec<Key> = Vec::with_capacity(batch_size);
+    let mut mutations: Vec<Mutation> = Vec::with_capacity(batch_size);
+
+    bench!{
+        let start_ts = next_ts();
+        let commit_ts = next_ts();
+
+        keys_to_write.clear();
+        mutations.clear();
+        for i in 0..batch_size {
+            let selected = rng.gen_range(i, keys.len());
+            let tmp = indices[selected];
+            indices[selected] = indices[i];
+            indices[i] = tmp;
+
+            let key = Key::from_raw(&keys[tmp]);
+            let mut value = vec![0u8; value_len];
+            rng.fill_bytes(&mut value);
+
+            mutations.push(Mutation::Put((key.clone(), value)));
+            keys_to_write.push(key);
+        };
+
+        let primary = &keys[indices[0]];
+        prewrite(engine, &mutations, primary, start_ts);
+        commit(engine, &keys_to_write, start_ts, commit_ts)
+    }
+}
+
 fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> BenchSamples {
     let mut rng = rand::thread_rng();
     bench!{
@@ -133,7 +172,7 @@ fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> BenchSamples {
 
 
 // Run all bench with specified parameters
-fn bench_all(table_size: usize, version_count: usize, value_len: usize) {
+fn bench_row(table_size: usize, version_count: usize, value_len: usize) {
     let keys = generate_keys(table_size);
     let engine = prepare_test_engine(version_count, value_len, &keys);
 
@@ -163,18 +202,30 @@ fn bench_all(table_size: usize, version_count: usize, value_len: usize) {
         value_len
     );
     print_result(bench_delete(&*engine, &keys));
+
+    for batch_size in &[16, 128, 256, 512] {
+        let engine = prepare_test_engine(version_count, value_len, &keys);
+        printf!(
+            "benching mvcctxn batch write\trows:{} versions:{} value len:{} batch:{}\t...",
+            table_size,
+            version_count,
+            value_len,
+            batch_size,
+        );
+        print_result(bench_batch_set(&*engine, &keys, value_len, *batch_size));
+    }
 }
 
 pub fn bench_mvcctxn() {
     for table_size in &[1_000, 10_000, 100_000] {
-        bench_all(*table_size, 5, 128);
+        bench_row(*table_size, 5, 128);
     }
 
     for version_count in &[1, 5, 20] {
-        bench_all(10_000, *version_count, 128);
+        bench_row(10_000, *version_count, 128);
     }
 
     for value_len in &[32, 128, 1024] {
-        bench_all(10_000, 5, *value_len);
+        bench_row(10_000, 5, *value_len);
     }
 }
