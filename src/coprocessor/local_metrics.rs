@@ -31,9 +31,9 @@ impl ScanCounter {
         self.point += 1;
     }
 
-    /// Merge records from `other` into `self`.
+    /// Merge records from `other` into `self`, and clear `other`.
     #[inline]
-    pub fn merge(&mut self, other: ScanCounter) {
+    pub fn merge(&mut self, other: &mut ScanCounter) {
         self.range += other.range;
         self.point += other.point;
     }

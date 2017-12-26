@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
 use std::vec::IntoIter;
 use byteorder::{BigEndian, ReadBytesExt};
 
@@ -196,8 +195,7 @@ impl Executor for IndexScanExecutor {
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
-        let scan_counter = mem::replace(&mut self.scan_counter, ScanCounter::default());
-        metrics.merge(scan_counter);
+        metrics.merge(&mut self.scan_counter);
     }
 }
 

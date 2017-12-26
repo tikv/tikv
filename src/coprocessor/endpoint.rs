@@ -126,7 +126,7 @@ impl CopContext {
         flow_stats.add(&stats.data.flow_stats);
     }
 
-    fn add_scan_count(&mut self, scan_counter: ScanCounter) {
+    fn add_scan_count(&mut self, scan_counter: &mut ScanCounter) {
         self.scan_counter.merge(scan_counter);
     }
 
@@ -239,11 +239,11 @@ impl Host {
                 let region_id = req.req.get_context().get_region_id();
                 let CopStats {
                     stats,
-                    scan_counter,
+                    mut scan_counter,
                 } = end_point.handle_request(req, batch_row_limit);
                 ctx.add_statistics(type_str, &stats);
                 ctx.add_statistics_by_region(region_id, &stats);
-                ctx.add_scan_count(scan_counter);
+                ctx.add_scan_count(&mut scan_counter);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
