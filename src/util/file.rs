@@ -38,8 +38,18 @@ pub fn delete_file_if_exist(file: &PathBuf) {
 }
 
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
-    let res = fs::copy(&from, &to)?;
-    File::open(&to)?.sync_all()?;
+    if !from.as_ref().is_file() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "the source path is not an existing regular file",
+        ));
+    }
+
+    let mut reader = File::open(from)?;
+    let mut writer = File::create(to)?;
+
+    let res = io::copy(&mut reader, &mut writer)?;
+    writer.sync_all()?;
     Ok(res)
 }
 
