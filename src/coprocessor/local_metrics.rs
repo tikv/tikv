@@ -36,6 +36,8 @@ impl ScanCounter {
     pub fn merge(&mut self, other: &mut ScanCounter) {
         self.range += other.range;
         self.point += other.point;
+        other.range = 0;
+        other.point = 0;
     }
 
     #[inline]
