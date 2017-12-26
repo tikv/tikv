@@ -62,10 +62,10 @@ pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     let limit = entries
         .iter()
         .take_while(|&e| if size == 0 {
-            size += Message::compute_size(e) as u64;
+            size += u64::from(Message::compute_size(e));
             true
         } else {
-            size += Message::compute_size(e) as u64;
+            size += u64::from(Message::compute_size(e));
             size <= max
         })
         .count();
@@ -573,7 +573,7 @@ mod tests {
     fn test_limit_size() {
         let mut e = Entry::new();
         e.set_data(b"0123456789".to_vec());
-        let size = e.compute_size() as u64;
+        let size = u64::from(e.compute_size());
 
         let tbls = vec![
             (vec![], NO_LIMIT, 0),

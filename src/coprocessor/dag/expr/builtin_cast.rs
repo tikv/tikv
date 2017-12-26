@@ -28,7 +28,7 @@ impl FnCall {
 
     pub fn cast_real_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
-        if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
+        if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
             let uval = convert_float_to_uint(val, u64::MAX, types::DOUBLE)?;
             Ok(Some(uval as i64))
         } else {
@@ -40,7 +40,7 @@ impl FnCall {
     pub fn cast_decimal_as_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
-        if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
+        if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
             let uint = val.as_u64().unwrap();
             // TODO:handle overflow
             Ok(Some(uint as i64))
@@ -98,7 +98,7 @@ impl FnCall {
 
     pub fn cast_int_as_real(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if !mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+        if !mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
         } else {
             let uval = val as u64;
@@ -155,7 +155,7 @@ impl FnCall {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let field_type = &self.children[0].get_tp();
-        let res = if !mysql::has_unsigned_flag(field_type.get_flag() as u64) {
+        let res = if !mysql::has_unsigned_flag(u64::from(field_type.get_flag())) {
             Cow::Owned(Decimal::from(val))
         } else {
             let uval = val as u64;
@@ -246,7 +246,7 @@ impl FnCall {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let s = if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+        let s = if mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             let uval = val as u64;
             format!("{}", uval)
         } else {
@@ -629,7 +629,7 @@ impl FnCall {
             return Ok(Cow::Owned(res));
         }
 
-        if self.tp.get_tp() == types::STRING as i32 && s.len() < flen {
+        if self.tp.get_tp() == i32::from(types::STRING) && s.len() < flen {
             let mut s = s.into_owned();
             s.resize(flen, 0);
             return Ok(Cow::Owned(s));
@@ -781,7 +781,7 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, flag, col, expect) in cases {
-            let col_expr = col_expr(0, tp as i32);
+            let col_expr = col_expr(0, i32::from(tp));
             let mut exp = fncall_expr(sig, &[col_expr]);
             if flag.is_some() {
                 exp.mut_field_type().set_flag(flag.unwrap() as u32);
@@ -920,7 +920,7 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, decimal, expect) in cases {
-            let col_expr = col_expr(0, tp as i32);
+            let col_expr = col_expr(0, i32::from(tp));
             let mut exp = fncall_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
@@ -1057,7 +1057,7 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, decimal, expect) in cases {
-            let col_expr = col_expr(0, tp as i32);
+            let col_expr = col_expr(0, i32::from(tp));
             let mut exp = fncall_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
@@ -1103,7 +1103,7 @@ mod test {
                 ScalarFuncSig::CastStringAsString,
                 types::STRING,
                 charset::CHARSET_ASCII,
-                Some(types::STRING as i32),
+                Some(i32::from(types::STRING)),
                 vec![Datum::Bytes(b"1234".to_vec())],
                 6,
                 b"1234\0\0".to_vec(),
@@ -1211,7 +1211,7 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, charset, to_tp, col, flen, exp) in cases {
-            let col_expr = col_expr(0, tp as i32);
+            let col_expr = col_expr(0, i32::from(tp));
             let mut ex = fncall_expr(sig, &[col_expr]);
             ex.mut_field_type().set_flen(flen as i32);
             ex.mut_field_type().set_decimal(convert::UNSPECIFIED_LENGTH);
@@ -1390,10 +1390,10 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, to_tp, exp) in cases {
-            let col_expr = col_expr(0, tp as i32);
+            let col_expr = col_expr(0, i32::from(tp));
             let mut ex = fncall_expr(sig, &[col_expr]);
-            ex.mut_field_type().set_decimal(to_fsp as i32);
-            ex.mut_field_type().set_tp(to_tp as i32);
+            ex.mut_field_type().set_decimal(i32::from(to_fsp));
+            ex.mut_field_type().set_tp(i32::from(to_tp));
             let e = Expression::build(&ctx, ex).unwrap();
 
             let res = e.eval_time(&ctx, col).unwrap();
@@ -1554,9 +1554,9 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, exp) in cases {
-            let col_expr = col_expr(0, tp as i32);
+            let col_expr = col_expr(0, i32::from(tp));
             let mut ex = fncall_expr(sig, &[col_expr]);
-            ex.mut_field_type().set_decimal(to_fsp as i32);
+            ex.mut_field_type().set_decimal(i32::from(to_fsp));
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_duration(&ctx, col).unwrap();
             let data = res.unwrap().into_owned();
@@ -1601,7 +1601,7 @@ mod test {
             (None, vec![Datum::Null], None),
         ];
         for (flag, cols, exp) in cases {
-            let mut col_expr = col_expr(0, types::LONG_LONG as i32);
+            let mut col_expr = col_expr(0, i32::from(types::LONG_LONG));
             if flag.is_some() {
                 col_expr.mut_field_type().set_flag(flag.unwrap() as u32);
             }
@@ -1625,7 +1625,7 @@ mod test {
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
-            let col_expr = col_expr(0, types::DOUBLE as i32);
+            let col_expr = col_expr(0, i32::from(types::DOUBLE));
             let ex = fncall_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
@@ -1649,7 +1649,7 @@ mod test {
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
-            let col_expr = col_expr(0, types::NEW_DECIMAL as i32);
+            let col_expr = col_expr(0, i32::from(types::NEW_DECIMAL));
             let ex = fncall_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
 
             let e = Expression::build(&ctx, ex).unwrap();
@@ -1681,7 +1681,7 @@ mod test {
             (true, vec![Datum::Null], None),
         ];
         for (by_parse, cols, exp) in cases {
-            let col_expr = col_expr(0, types::STRING as i32);
+            let col_expr = col_expr(0, i32::from(types::STRING));
             let mut ex = fncall_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
             if by_parse {
                 let mut flag = ex.get_field_type().get_flag();
@@ -1736,7 +1736,7 @@ mod test {
             (0, vec![Datum::Null], None),
         ];
         for (tp, cols, exp) in cases {
-            let col_expr = col_expr(0, tp as i32);
+            let col_expr = col_expr(0, i32::from(tp));
             let ex = fncall_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
@@ -1763,7 +1763,7 @@ mod test {
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
-            let col_expr = col_expr(0, types::STRING as i32);
+            let col_expr = col_expr(0, i32::from(types::STRING));
             let ex = fncall_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();
@@ -1787,7 +1787,7 @@ mod test {
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
-            let col_expr = col_expr(0, types::STRING as i32);
+            let col_expr = col_expr(0, i32::from(types::STRING));
             let ex = fncall_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&ctx, &cols).unwrap();

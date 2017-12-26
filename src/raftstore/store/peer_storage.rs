@@ -151,7 +151,7 @@ impl EntryCache {
             .take_while(|e| {
                 let cur_idx = end_idx as u64 + cache_low;
                 assert_eq!(e.get_index(), cur_idx);
-                let m = e.compute_size() as u64;
+                let m = u64::from(e.compute_size());
                 fetched_size += m;
                 if fetched_size == m {
                     end_idx += 1;
@@ -1602,26 +1602,26 @@ mod test {
             (
                 4,
                 7,
-                (size_of(&ents[1]) + size_of(&ents[2])) as u64,
+                u64::from(size_of(&ents[1]) + size_of(&ents[2])),
                 Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
             ),
             (
                 4,
                 7,
-                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
+                u64::from(size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2),
                 Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
             ),
             (
                 4,
                 7,
-                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
+                u64::from(size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1),
                 Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
             ),
             // all
             (
                 4,
                 7,
-                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
+                u64::from(size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])),
                 Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]),
             ),
         ];
@@ -1850,12 +1850,12 @@ mod test {
         // size limit should be supported correctly.
         res = store.entries(4, 8, 0).unwrap();
         assert_eq!(res, vec![new_entry(4, 4)]);
-        let mut size = ents[1..].iter().map(|e| e.compute_size() as u64).sum();
+        let mut size = ents[1..].iter().map(|e| u64::from(e.compute_size())).sum();
         res = store.entries(4, 8, size).unwrap();
         let mut exp_res = ents[1..].to_vec();
         assert_eq!(res, exp_res);
         for e in &entries {
-            size += e.compute_size() as u64;
+            size += u64::from(e.compute_size());
             exp_res.push(e.clone());
             res = store.entries(4, 8, size).unwrap();
             assert_eq!(res, exp_res);

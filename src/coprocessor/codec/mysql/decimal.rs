@@ -598,10 +598,10 @@ fn do_div_mod(
     let r_len = r_stop - r_start;
     r_stop += 1;
 
-    let norm_factor = (WORD_BASE / (rhs.word_buf[r_start] + 1)) as i64;
-    let mut r_norm = norm_factor * rhs.word_buf[r_start] as i64;
+    let norm_factor = i64::from(WORD_BASE / (rhs.word_buf[r_start] + 1));
+    let mut r_norm = norm_factor * i64::from(rhs.word_buf[r_start]);
     if r_len > 0 {
-        r_norm += norm_factor * rhs.word_buf[r_start + 1] as i64 / WORD_BASE as i64;
+        r_norm += norm_factor * i64::from(rhs.word_buf[r_start + 1]) / i64::from(WORD_BASE);
     }
     let mut dcarry = 0;
     if buf[l_idx] < rhs.word_buf[r_start] {
@@ -613,29 +613,29 @@ fn do_div_mod(
         if dcarry == 0 && buf[l_idx] < rhs.word_buf[r_start] {
             guess = 0;
         } else {
-            let x = buf[l_idx] as i64 + dcarry as i64 * WORD_BASE as i64;
-            let y = buf[l_idx + 1] as i64;
-            guess = (norm_factor * x + norm_factor * y / WORD_BASE as i64) / r_norm;
-            if guess >= WORD_BASE as i64 {
-                guess = WORD_BASE as i64 - 1;
+            let x = i64::from(buf[l_idx]) + i64::from(dcarry) * i64::from(WORD_BASE);
+            let y = i64::from(buf[l_idx + 1]);
+            guess = (norm_factor * x + norm_factor * y / i64::from(WORD_BASE)) / r_norm;
+            if guess >= i64::from(WORD_BASE) {
+                guess = i64::from(WORD_BASE) - 1;
             }
             if r_len > 0 {
-                if rhs.word_buf[r_start + 1] as i64 * guess >
-                    (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y
+                if i64::from(rhs.word_buf[r_start + 1]) * guess >
+                    (x - guess * i64::from(rhs.word_buf[r_start])) * i64::from(WORD_BASE) + y
                 {
                     guess -= 1;
                 }
-                if rhs.word_buf[r_start + 1] as i64 * guess >
-                    (x - guess * rhs.word_buf[r_start] as i64) * WORD_BASE as i64 + y
+                if i64::from(rhs.word_buf[r_start + 1]) * guess >
+                    (x - guess * i64::from(rhs.word_buf[r_start])) * i64::from(WORD_BASE) + y
                 {
                     guess -= 1;
                 }
             }
             let mut carry = 0;
             for (r_idx, l_idx) in (r_start..r_stop).rev().zip((0..l_idx + r_len + 1).rev()) {
-                let x = guess * rhs.word_buf[r_idx] as i64;
-                let hi = x / WORD_BASE as i64;
-                let lo = x - hi * WORD_BASE as i64;
+                let x = guess * i64::from(rhs.word_buf[r_idx]);
+                let hi = x / i64::from(WORD_BASE);
+                let lo = x - hi * i64::from(WORD_BASE);
                 sub2(buf[l_idx], lo as u32, &mut carry, &mut buf[l_idx]);
                 carry += hi as i32;
             }
@@ -762,9 +762,9 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
         start_to -= 1;
         for r_idx in (0..r_start).rev() {
             idx_to -= 1;
-            let p = lhs.word_buf[l_idx] as u64 * rhs.word_buf[r_idx] as u64;
-            let hi = p / WORD_BASE as u64;
-            let lo = p - hi * WORD_BASE as u64;
+            let p = u64::from(lhs.word_buf[l_idx]) * u64::from(rhs.word_buf[r_idx]);
+            let hi = p / u64::from(WORD_BASE);
+            let lo = p - hi * u64::from(WORD_BASE);
             add(
                 dec.word_buf[idx_to],
                 lo as u32,
@@ -1442,9 +1442,9 @@ impl Decimal {
         let int_word_cnt = word_cnt!(self.int_cnt) as usize;
         for word_idx in 0..int_word_cnt {
             let y = x;
-            x = x.wrapping_mul(WORD_BASE as i64)
-                .wrapping_sub(self.word_buf[word_idx] as i64);
-            if y < i64::MIN / WORD_BASE as i64 || x > y {
+            x = x.wrapping_mul(i64::from(WORD_BASE))
+                .wrapping_sub(i64::from(self.word_buf[word_idx]));
+            if y < i64::MIN / i64::from(WORD_BASE) || x > y {
                 if self.negative {
                     return Res::Overflow(i64::MIN);
                 }
@@ -1480,9 +1480,9 @@ impl Decimal {
         let mut x = 0u64;
         let int_cnt = word_cnt!(self.int_cnt) as usize;
         for word_idx in 0..int_cnt {
-            x = match x.overflowing_mul(WORD_BASE as u64) {
+            x = match x.overflowing_mul(u64::from(WORD_BASE)) {
                 (_, true) => return Res::Overflow(u64::MAX),
-                (x, _) => match x.overflowing_add(self.word_buf[word_idx] as u64) {
+                (x, _) => match x.overflowing_add(u64::from(self.word_buf[word_idx])) {
                     (_, true) => return Res::Overflow(u64::MAX),
                     (x, _) => x,
                 },
@@ -1564,7 +1564,7 @@ impl Decimal {
         let mut word_idx = int_word_cnt as usize;
         let mut word = 0;
         for c in bs[int_idx - int_cnt as usize..int_idx].into_iter().rev() {
-            word += (c - b'0') as u32 * TEN_POW[inner_idx];
+            word += u32::from(c - b'0') * TEN_POW[inner_idx];
             inner_idx += 1;
             if inner_idx == DIGITS_PER_WORD as usize {
                 word_idx -= 1;
@@ -1582,7 +1582,7 @@ impl Decimal {
         word = 0;
         inner_idx = 0;
         for &c in bs.iter().skip(int_idx + 1).take(frac_cnt as usize) {
-            word = (c - b'0') as u32 + word * 10;
+            word = u32::from(c - b'0') + word * 10;
             inner_idx += 1;
             if inner_idx == DIGITS_PER_WORD as usize {
                 d.word_buf[word_idx] = word;
@@ -1597,11 +1597,11 @@ impl Decimal {
 
         if end_idx + 1 < bs.len() && (bs[end_idx] == b'e' || bs[end_idx] == b'E') {
             let exp = convert::bytes_to_int_without_context(&bs[end_idx + 1..])?;
-            if exp > i32::MAX as i64 / 2 {
+            if exp > i64::from(i32::MAX) / 2 {
                 d.reset_to_zero();
                 return Ok(Res::Overflow(d.unwrap()));
             }
-            if exp < i32::MIN as i64 / 2 && !d.is_overflow() {
+            if exp < i64::from(i32::MIN) / 2 && !d.is_overflow() {
                 d.reset_to_zero();
                 return Ok(Res::Truncated(d.unwrap()));
             }
@@ -1644,6 +1644,7 @@ macro_rules! enable_conv_for_int {
     ($s:ty, $t:ty) => {
         impl From<$s> for Decimal {
             fn from(t: $s) -> Decimal {
+                #[allow(cast_lossless)]
                 (t as $t).into()
             }
         }
@@ -1674,16 +1675,16 @@ impl From<i64> for Decimal {
 impl From<u64> for Decimal {
     fn from(u: u64) -> Decimal {
         let (mut x, mut word_idx) = (u, 1);
-        while x >= WORD_BASE as u64 {
+        while x >= u64::from(WORD_BASE) {
             word_idx += 1;
-            x /= WORD_BASE as u64;
+            x /= u64::from(WORD_BASE);
         }
         let mut d = Decimal::new(word_idx * DIGITS_PER_WORD, 0, false);
         x = u;
         while word_idx > 0 {
             word_idx -= 1;
-            d.word_buf[word_idx as usize] = (x % WORD_BASE as u64) as u32;
-            x /= WORD_BASE as u64;
+            d.word_buf[word_idx as usize] = (x % u64::from(WORD_BASE)) as u32;
+            x /= u64::from(WORD_BASE);
         }
         d
     }
@@ -1758,18 +1759,18 @@ macro_rules! read_word {
             $readed += size;
         }
         match size {
-            1 => buf[0] as i8 as i32 as u32,
-            2 => (((buf[0] as i8 as i32) << 8) + buf[1] as i32) as u32,
+            1 => i32::from(buf[0] as i8) as u32,
+            2 => ((i32::from(buf[0] as i8) << 8) + i32::from(buf[1])) as u32,
             3 => {
                 if buf[0] & 128 > 0 {
-                    (255 << 24) | ((buf[0] as u32) << 16) | ((buf[1] as u32) << 8) | (buf[2] as u32)
+                    (255 << 24) | (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2])
                 } else {
-                    ((buf[0] as u32) << 16) | ((buf[1] as u32) << 8) | (buf[2] as u32)
+                    (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2])
                 }
             }
             4 => {
-                (((buf[0] as i8 as i32) << 24) + ((buf[1] as i32) << 16) +
-                 ((buf[2] as i32) << 8) + (buf[3] as i32)) as u32
+                ((i32::from(u8::from(buf[0])) << 24) + (i32::from(buf[1]) << 16) +
+                 (i32::from(buf[2]) << 8) + i32::from(buf[3])) as u32
             }
             _ => unreachable!(),
         }

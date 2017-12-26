@@ -325,7 +325,7 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$i_sig => {
                         match self.$i_func(ctx, row, $($i_arg)*) {
                             Ok(Some(i)) => {
-                                if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
+                                if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
                                     Ok(Datum::U64(i as u64))
                                 } else {
                                     Ok(Datum::I64(i))

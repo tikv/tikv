@@ -340,7 +340,7 @@ impl Datum {
     /// Keep compatible with TiDB's `GetFloat64` function.
     pub fn f64(&self) -> f64 {
         let i = self.i64();
-        unsafe { mem::transmute(i) }
+        f64::from_bits(i as u64)
     }
 
     /// Keep compatible with TiDB's `GetInt64` function.
@@ -1590,7 +1590,7 @@ mod test {
             ),
             (
                 Datum::Dec(i32::MIN.into()),
-                Datum::Json(Json::Double(i32::MIN as f64)),
+                Datum::Json(Json::Double(f64::from(i32::MIN))),
                 Ordering::Equal,
             ),
             (

@@ -275,7 +275,7 @@ fn ymd_hms_nanos<T: TimeZone>(
         .and_hms_opt(hour, min, secs)
         .single()
         .and_then(|t| {
-            t.checked_add_signed(Duration::nanoseconds(nanos as i64))
+            t.checked_add_signed(Duration::nanoseconds(i64::from(nanos)))
         })
         .ok_or_else(|| {
             box_err!(
@@ -563,8 +563,8 @@ impl Time {
         if self.is_zero() {
             return Ok(MyDuration::zero());
         }
-        let nanos = self.time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC +
-            self.time.nanosecond() as i64;
+        let nanos = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC +
+            i64::from(self.time.nanosecond());
         MyDuration::from_nanos(nanos, self.fsp as i8)
     }
 
@@ -580,9 +580,9 @@ impl Time {
         } else {
             self.time.naive_local()
         };
-        let ymd = ((t.year() as u64 * 13 + t.month() as u64) << 5) | t.day() as u64;
-        let hms = ((t.hour() as u64) << 12) | ((t.minute() as u64) << 6) | t.second() as u64;
-        let micro = t.nanosecond() as u64 / 1000;
+        let ymd = ((t.year() as u64 * 13 + u64::from(t.month())) << 5) | u64::from(t.day());
+        let hms = (u64::from(t.hour()) << 12) | (u64::from(t.minute()) << 6) | u64::from(t.second());
+        let micro = u64::from(t.nanosecond()) / 1000;
         (((ymd << 17) | hms) << 24) | micro
     }
 
@@ -597,9 +597,9 @@ impl Time {
         }
         // TODO:support case month or day is 0(2012-00-00 12:12:12)
         let nanos = self.time.nanosecond();
-        let base = 10u32.pow(NANO_WIDTH - fsp as u32);
-        let expect_nanos = ((nanos as f64 / base as f64).round() as u32) * base;
-        let diff = nanos as i64 - expect_nanos as i64;
+        let base = 10u32.pow(NANO_WIDTH - u32::from(fsp));
+        let expect_nanos = ((f64::from(nanos) / f64::from(base)).round() as u32) * base;
+        let diff = i64::from(nanos) - i64::from(expect_nanos);
         let new_time = self.time.checked_add_signed(Duration::nanoseconds(diff));
 
         if new_time.is_none() {
@@ -891,7 +891,7 @@ mod test {
                     assert_eq!(t, utc_t);
                 } else {
                     let exp_t = Time::new(
-                        utc_t.time - Duration::seconds(offset as i64),
+                        utc_t.time - Duration::seconds(i64::from(offset)),
                         utc_t.tp,
                         utc_t.fsp as i8,
                     ).unwrap();
@@ -941,7 +941,7 @@ mod test {
                     Time::from_packed_u64(packed, types::TIMESTAMP, fsp, &tz).unwrap();
                 assert_eq!(
                     reverted_timestamp.time,
-                    reverted_datetime.time + Duration::seconds(offset as i64)
+                    reverted_datetime.time + Duration::seconds(i64::from(offset))
                 );
                 assert_eq!(reverted_timestamp.to_packed_u64(), packed);
             }

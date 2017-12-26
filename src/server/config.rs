@@ -78,7 +78,7 @@ impl Default for Config {
     fn default() -> Config {
         let cpu_num = sys_info::cpu_num().unwrap();
         let concurrency = if cpu_num > 8 {
-            (cpu_num as f64 * 0.8) as usize
+            (f64::from(cpu_num) * 0.8) as usize
         } else {
             4
         };

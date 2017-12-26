@@ -900,7 +900,7 @@ mod test {
         let (offset, num) = (100u64, 100u64);
         let (last, half) = (offset + num, offset + num / 2);
         let halfe = new_entry(half, half);
-        let halfe_size = protobuf::Message::compute_size(&halfe) as u64;
+        let halfe_size = u64::from(protobuf::Message::compute_size(&halfe));
 
         let store = MemStorage::new();
         store

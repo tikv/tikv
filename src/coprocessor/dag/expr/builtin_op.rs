@@ -92,7 +92,7 @@ impl FnCall {
 
     pub fn unary_minus_int(&self, ctx: &EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+        if mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             let uval = val as u64;
             if uval > i64::MAX as u64 + 1 {
                 return Err(Error::Overflow);

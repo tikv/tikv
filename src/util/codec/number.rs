@@ -47,7 +47,7 @@ fn order_decode_f64(u: u64) -> f64 {
     } else {
         !u
     };
-    unsafe { mem::transmute(u) }
+    f64::from_bits(u)
 }
 
 pub trait NumberEncoder: Write {
@@ -177,9 +177,9 @@ pub trait NumberDecoder: Read {
                         io::Error::new(ErrorKind::InvalidData, "overflow"),
                     ));
                 }
-                return Ok(x | ((b as u64) << s));
+                return Ok(x | (u64::from(b) << s));
             }
-            x |= ((b & 0x7f) as u64) << s;
+            x |= u64::from(b & 0x7f) << s;
             s += 7;
             i += 1;
         }

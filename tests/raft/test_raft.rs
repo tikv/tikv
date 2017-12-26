@@ -1465,7 +1465,7 @@ fn test_pass_election_timeout() {
                 c += 1;
             }
         }
-        let mut got = c as f64 / 10000.0;
+        let mut got = f64::from(c) / 10000.0;
         if round {
             got = (got * 10.0 + 0.5).floor() / 10.0;
         }

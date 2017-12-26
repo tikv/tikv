@@ -433,7 +433,7 @@ fn test_nonleaders_election_timeout_nonconfict(state: StateRole) {
         }
     }
 
-    assert!(conflicts as f64 / 1000.0 <= 0.3);
+    assert!(f64::from(conflicts) / 1000.0 <= 0.3);
 }
 
 // test_leader_start_replication tests that when receiving client proposals,

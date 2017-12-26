@@ -179,11 +179,11 @@ fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum>
     if let Datum::Null = datum {
         return Ok(datum);
     }
-    if col.get_tp() > u8::MAX as i32 || col.get_tp() < 0 {
+    if col.get_tp() > i32::from(u8::MAX) || col.get_tp() < 0 {
         error!("unknown type {} {:?}", col.get_tp(), datum);
     }
     match col.get_tp() as u8 {
-        types::FLOAT => Ok(Datum::F64(datum.f64() as f32 as f64)),
+        types::FLOAT => Ok(Datum::F64(f64::from(datum.f64() as f32))),
         types::DATE | types::DATETIME | types::TIMESTAMP => {
             let fsp = col.get_decimal() as i8;
             let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, &ctx.tz)?;
@@ -420,7 +420,7 @@ mod test {
 
     fn new_col_info(tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
-        col_info.set_tp(tp as i32);
+        col_info.set_tp(i32::from(tp));
         col_info
     }
 

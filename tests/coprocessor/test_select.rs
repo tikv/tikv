@@ -1302,7 +1302,7 @@ fn test_order_by_column() {
     for (row, (id, name, cnt)) in spliter.zip(exp) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
-            datum::encode_value(&[(id as i64).into(), name_datum, (cnt as i64).into()]).unwrap();
+            datum::encode_value(&[i64::from(id).into(), name_datum, i64::from(cnt).into()]).unwrap();
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;

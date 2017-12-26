@@ -1982,7 +1982,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         STORE_PD_HEARTBEAT_GAUGE_VEC
             .with_label_values(&["leader"])
-            .set(leader_count as f64);
+            .set(f64::from(leader_count));
         STORE_PD_HEARTBEAT_GAUGE_VEC
             .with_label_values(&["region"])
             .set(self.region_peers.len() as f64);
@@ -2029,7 +2029,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_applying_snap_count(apply_snapshot_count as u32);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["applying"])
-            .set(apply_snapshot_count as f64);
+            .set(f64::from(apply_snapshot_count));
 
         stats.set_start_time(self.start_time.sec as u32);
 

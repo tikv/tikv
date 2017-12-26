@@ -280,7 +280,7 @@ pub mod test {
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap
                 .try_add_row(
-                    handle as i64,
+                    i64::from(handle),
                     row_data,
                     ob_values,
                     Arc::clone(&order_cols),

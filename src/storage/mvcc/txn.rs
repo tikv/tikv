@@ -328,9 +328,9 @@ impl MvccTxn {
             self.delete_write(key, commit);
             delete_versions += 1;
         }
-        MVCC_VERSIONS_HISTOGRAM.observe(versions as f64);
+        MVCC_VERSIONS_HISTOGRAM.observe(f64::from(versions));
         if delete_versions > 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(delete_versions as f64);
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(f64::from(delete_versions));
         }
         Ok(())
     }

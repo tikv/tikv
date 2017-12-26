@@ -22,7 +22,7 @@ use time::{Duration as TimeDuration, Timespec};
 /// Convert Duration to milliseconds.
 #[inline]
 pub fn duration_to_ms(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
+    let nanos = u64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000 + (nanos / 1_000_000)
 }
@@ -30,7 +30,7 @@ pub fn duration_to_ms(d: Duration) -> u64 {
 /// Convert Duration to seconds.
 #[inline]
 pub fn duration_to_sec(d: Duration) -> f64 {
-    let nanos = d.subsec_nanos() as f64;
+    let nanos = f64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() as f64 + (nanos / 1_000_000_000.0)
 }
@@ -38,7 +38,7 @@ pub fn duration_to_sec(d: Duration) -> f64 {
 /// Convert Duration to nanoseconds.
 #[inline]
 pub fn duration_to_nanos(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
+    let nanos = u64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000_000_000 + nanos
 }
@@ -281,8 +281,8 @@ impl Instant {
         } else {
             panic!(
                 "monotonic time jumped back, {:.9} -> {:.9}",
-                earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
-                later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
+                earlier.sec as f64 + f64::from(earlier.nsec) / NANOSECONDS_PER_SECOND as f64,
+                later.sec as f64 + f64::from(later.nsec) / NANOSECONDS_PER_SECOND as f64
             );
         }
     }
@@ -294,17 +294,17 @@ impl Instant {
     // See more: https://linux.die.net/man/2/clock_gettime
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
         let later_ms =
-            later.sec * MILLISECOND_PER_SECOND + later.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
+            later.sec * MILLISECOND_PER_SECOND + i64::from(later.nsec) / NANOSECONDS_PER_MILLISECOND;
         let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND +
-            earlier.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
+            i64::from(earlier.nsec) / NANOSECONDS_PER_MILLISECOND;
         let dur = later_ms - earlier_ms;
         if dur >= 0 {
             Duration::from_millis(dur as u64)
         } else {
             debug!(
                 "coarse time jumped back, {:.3} -> {:.3}",
-                earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
-                later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
+                earlier.sec as f64 + f64::from(earlier.nsec) / NANOSECONDS_PER_SECOND as f64,
+                later.sec as f64 + f64::from(later.nsec) / NANOSECONDS_PER_SECOND as f64
             );
             Duration::from_millis(0)
         }

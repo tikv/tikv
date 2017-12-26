@@ -296,7 +296,7 @@ mod tests {
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap
                 .try_add_row(
-                    handle as i64,
+                    i64::from(handle),
                     row_data,
                     cur_key,
                     Arc::clone(&order_cols),
@@ -437,7 +437,7 @@ mod tests {
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap
                 .try_add_row(
-                    handle as i64,
+                    i64::from(handle),
                     row_data,
                     cur_key,
                     Arc::clone(&order_cols),

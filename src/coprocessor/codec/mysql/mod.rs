@@ -46,7 +46,7 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
     }
     let res = s.iter()
         .take(fsp as usize + 1)
-        .fold(0, |l, r| l * 10 + (r - b'0') as u32);
+        .fold(0, |l, r| l * 10 + u32::from(r - b'0'));
     if s.len() > fsp as usize {
         if res % 10 >= 5 {
             Ok(res / 10 + 1)

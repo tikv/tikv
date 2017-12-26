@@ -130,7 +130,7 @@ mod test {
             } else {
                 estimate - *num
             };
-            total += err as u64
+            total += u64::from(err)
         }
         total / map.len() as u64
     }
