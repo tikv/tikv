@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
-use tipb::select::{self, DAGRequest, SelectRequest};
+use tipb::select::{self, DAGRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
@@ -37,14 +37,11 @@ use pd::PdTask;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
-use super::select::select::SelectContext;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
 use super::{Error, Result};
 
-pub const REQ_TYPE_SELECT: i64 = 101;
-pub const REQ_TYPE_INDEX: i64 = 102;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 
@@ -258,7 +255,6 @@ impl Display for Task {
 }
 
 enum CopRequest {
-    Select(SelectRequest),
     DAG(DAGRequest),
     Analyze(AnalyzeReq),
 }
@@ -310,20 +306,6 @@ impl RequestTask {
         let tp = req.get_tp();
         let mut table_scan = false;
         let cop_req = match tp {
-            REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
-                if tp == REQ_TYPE_SELECT {
-                    table_scan = true;
-                }
-                let mut is = CodedInputStream::from_bytes(req.get_data());
-                is.set_recursion_limit(recursion_limit);
-                let mut sel = SelectRequest::new();
-                if let Err(e) = sel.merge_from(&mut is) {
-                    Err(box_err!(e))
-                } else {
-                    start_ts = Some(sel.get_start_ts());
-                    Ok(CopRequest::Select(sel))
-                }
-            }
             REQ_TYPE_DAG => {
                 let mut is = CodedInputStream::from_bytes(req.get_data());
                 is.set_recursion_limit(recursion_limit);
@@ -633,7 +615,6 @@ impl TiDbEndPoint {
             return on_error(e, t);
         }
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t, batch_row_limit),
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
@@ -642,19 +623,6 @@ impl TiDbEndPoint {
             Ok(r) => respond(r, t),
             Err(e) => on_error(e, t),
         }
-    }
-
-    fn handle_select(
-        self,
-        sel: SelectRequest,
-        t: &mut RequestTask,
-        batch_row_limit: usize,
-    ) -> Result<Response> {
-        let mut ctx = SelectContext::new(sel, self.snap, t.ctx.clone(), batch_row_limit)?;
-        let ranges = t.req.take_ranges().into_vec();
-        let res = ctx.handle_request(ranges);
-        ctx.collect_statistics_into(&mut t.statistics);
-        res
     }
 
     pub fn handle_dag(

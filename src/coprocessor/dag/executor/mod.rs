@@ -22,7 +22,7 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
-use coprocessor::select::xeval::EvalContext;
+use coprocessor::dag::expr::EvalContext;
 use coprocessor::{Error, Result};
 use storage::{SnapshotStore, Statistics};
 use util::codec::number::NumberDecoder;
@@ -33,8 +33,10 @@ mod table_scan;
 mod index_scan;
 mod selection;
 mod topn;
+mod topn_heap;
 mod limit;
 mod aggregation;
+mod aggregate;
 
 pub use self::table_scan::TableScanExecutor;
 pub use self::index_scan::IndexScanExecutor;
@@ -178,6 +180,7 @@ pub fn build_exec(
                 src,
             )?),
             ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
+            ExecType::TypeStreamAgg => unimplemented!(),
         };
         src = curr;
     }
