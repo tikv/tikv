@@ -99,7 +99,7 @@ impl IndexScanExecutor {
         if self.scanner.is_none() {
             return Ok(None);
         }
-        self.scan_counter.add_range_query();
+        self.scan_counter.inc_range();
 
         let (key, value) = {
             let scanner = self.scanner.as_mut().unwrap();
@@ -160,7 +160,7 @@ impl Executor for IndexScanExecutor {
             }
             if let Some(range) = self.key_ranges.next() {
                 if self.is_point(&range) {
-                    self.scan_counter.add_point_query();
+                    self.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));

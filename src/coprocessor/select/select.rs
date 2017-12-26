@@ -148,7 +148,7 @@ impl SelectContext {
     fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
-            self.scan_counter.add_point_query();
+            self.scan_counter.inc_point();
             let value = match self.snap
                 .get(&Key::from_raw(range.get_start()), &mut self.statistics)?
             {
@@ -168,7 +168,7 @@ impl SelectContext {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     self.req_ctx.check_if_outdated()?;
                 }
-                self.scan_counter.add_range_query();
+                self.scan_counter.inc_range();
                 if let Some((key, value)) = scanner.next_row()? {
                     let h = box_try!(table::decode_handle(&key));
                     let row_data = {

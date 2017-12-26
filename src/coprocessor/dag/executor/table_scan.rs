@@ -71,7 +71,7 @@ impl TableScanExecutor {
 
     fn get_row_from_range_scanner(&mut self) -> Result<Option<Row>> {
         if let Some(scanner) = self.scanner.as_mut() {
-            self.scan_counter.add_range_query();
+            self.scan_counter.inc_range();
             let (key, value) = match scanner.next_row()? {
                 Some((key, value)) => (key, value),
                 None => return Ok(None),
@@ -115,7 +115,7 @@ impl Executor for TableScanExecutor {
 
             if let Some(range) = self.key_ranges.next() {
                 if is_point(&range) {
-                    self.scan_counter.add_point_query();
+                    self.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));
