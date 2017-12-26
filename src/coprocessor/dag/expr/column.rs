@@ -63,8 +63,8 @@ mod test {
     use std::u64;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::select::xeval::evaluator::test::col_expr;
+    use coprocessor::dag::expr::{EvalContext, Expression};
+    use coprocessor::dag::expr::test::col_expr;
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
@@ -103,7 +103,7 @@ mod test {
             EvalResults(None, None, None, None, None, Some(dur.clone()), None),
         ];
 
-        let ctx = StatementContext::default();
+        let ctx = EvalContext::default();
         for (ii, exp) in expecteds.iter().enumerate().take(row.len()) {
             let c = col_expr(ii as i64);
             let e = Expression::build(&ctx, c).unwrap();
