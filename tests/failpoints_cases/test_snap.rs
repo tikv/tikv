@@ -29,7 +29,7 @@ fn test_overlap_cleanup() {
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
-    let gen_snapshot_fp = "region_handle_gen";
+    let gen_snapshot_fp = "region_gen_snap";
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
