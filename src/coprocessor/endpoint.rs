@@ -237,7 +237,7 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
-                let StatsAndMetrics {
+                let CopStats {
                     stats,
                     scan_counter,
                 } = end_point.handle_request(req, batch_row_limit);
@@ -596,12 +596,12 @@ fn err_resp(e: Error) -> Response {
     resp
 }
 
-struct StatsAndMetrics {
+struct CopStats {
     stats: Statistics,
     scan_counter: ScanCounter,
 }
 
-fn on_error(e: Error, req: RequestTask) -> StatsAndMetrics {
+fn on_error(e: Error, req: RequestTask) -> CopStats {
     let resp = err_resp(e);
     respond(resp, req)
 }
@@ -614,10 +614,10 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     }
 }
 
-fn respond(resp: Response, mut t: RequestTask) -> StatsAndMetrics {
+fn respond(resp: Response, mut t: RequestTask) -> CopStats {
     t.stop_record_handling();
     (t.on_resp)(resp);
-    StatsAndMetrics {
+    CopStats {
         stats: t.statistics,
         scan_counter: t.scan_counter,
     }
@@ -634,7 +634,7 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> StatsAndMetrics {
+    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> CopStats {
         t.stop_record_waiting();
 
         if let Err(e) = t.check_outdated() {
