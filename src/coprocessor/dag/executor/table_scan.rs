@@ -35,12 +35,9 @@ pub struct TableScanExecutor {
     col_ids: HashSet<i64>,
     key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
-<<<<<<< HEAD
     last_key: Option<Vec<u8>>,
-=======
     count: i64,
     scan_counter: ScanCounter,
->>>>>>> master
 }
 
 impl TableScanExecutor {
@@ -69,12 +66,9 @@ impl TableScanExecutor {
             col_ids: col_ids,
             key_ranges: key_ranges.into_iter(),
             scanner: None,
-<<<<<<< HEAD
             last_key: None,
-=======
             count: 0,
             scan_counter: ScanCounter::default(),
->>>>>>> master
         }
     }
 

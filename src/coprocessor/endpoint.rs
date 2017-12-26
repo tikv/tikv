@@ -23,7 +23,7 @@ use grpc::Error as GrpcError;
 use futures::{future, stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 
-use tipb::select::{self, DAGRequest, SelectRequest};
+use tipb::select::{self, DAGRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
@@ -41,14 +41,12 @@ use pd::PdTask;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
-use super::select::select::SelectContext;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
+use super::local_metrics::*;
 use super::{Error, Result};
 
-pub const REQ_TYPE_SELECT: i64 = 101;
-pub const REQ_TYPE_INDEX: i64 = 102;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 
@@ -108,9 +106,14 @@ impl CopContextInner {
         flow_stats.add(&stats.data.flow_stats);
     }
 
-    fn collect(&mut self, region_id: u64, scan_tag: &str, stats: &Statistics) {
-        self.add_statistics(scan_tag, stats);
-        self.add_flow_stats_by_region(region_id, stats);
+    fn collect(&mut self, region_id: u64, scan_tag: &str, stats: CopStats) {
+        let CopStats {
+            stats,
+            mut scan_counter,
+        } = stats;
+        self.add_statistics(scan_tag, &stats);
+        self.add_flow_stats_by_region(region_id, &stats);
+        scan_counter.flush();
 
         let new_timer = Instant::now_coarse();
         if new_timer.duration_since(self.timer) > Duration::from_secs(1) {
@@ -155,11 +158,18 @@ impl CopContextPool {
     }
 
     // Must run in CpuPool.
-    fn collect(&self, region_id: u64, scan_tag: &str, stats: &Statistics) {
+    fn collect(&self, region_id: u64, scan_tag: &str, stats: CopStats) {
         let thread_id = thread::current().id();
         let cop_ctx = self.cop_ctxs.get(&thread_id).unwrap();
         cop_ctx.0.borrow_mut().collect(region_id, scan_tag, stats);
     }
+}
+
+// TODO: here...
+#[derive(Default)]
+struct CopStats {
+    stats: Statistics,
+    scan_counter: ScanCounter,
 }
 
 struct ExecutorPool {
@@ -268,33 +278,20 @@ impl Host {
         let ranges = req.take_ranges().into_vec();
         let batch_row_limit = self.batch_row_limit;
         let stream_batch_row_limit = self.stream_batch_row_limit;
-        let mut statistics = Statistics::default();
+        let mut cop_stats = CopStats::default();
 
         fn on_finish(
             running_task_count: &AtomicUsize,
-            stats: &Statistics,
-            metrics: &mut CopMetrics,
+            stats: CopStats,
+            metrics: &mut ReqMetrics,
             ctxs: &mut CopContextPool,
         ) {
-            metrics.stop_record_handling(stats);
+            metrics.stop_record_handling(&stats.stats);
             ctxs.collect(metrics.region_id, metrics.scan_tag, stats);
             running_task_count.fetch_sub(1, Ordering::Release);
         }
 
         match cop_req {
-            CopRequest::Select(sel) => {
-                let mut ctx = match SelectContext::new(sel, snap, req_ctx, batch_row_limit) {
-                    Ok(ctx) => ctx,
-                    Err(e) => return on_resp.respond(err_resp(e)),
-                };
-                let do_request = move || {
-                    let resp = ctx.handle_request(ranges).unwrap_or_else(err_resp);
-                    ctx.collect_statistics_into(&mut statistics);
-                    on_finish(&task_count, &statistics, &mut metrics, &mut ctx_pool);
-                    future::ok::<_, ()>(on_resp.respond(resp))
-                };
-                pool.spawn_fn(do_request).forget();
-            }
             CopRequest::DAG(dag) => {
                 let mut ctx = match DAGContext::new(
                     dag,
@@ -311,8 +308,9 @@ impl Host {
                     let do_request = move || {
                         let res = ctx.handle_request();
                         let resp = res.unwrap_or_else(err_resp);
-                        ctx.collect_statistics_into(&mut statistics);
-                        on_finish(&task_count, &statistics, &mut metrics, &mut ctx_pool);
+                        ctx.collect_statistics_into(&mut cop_stats.stats);
+                        ctx.collect_metrics_into(&mut cop_stats.scan_counter);
+                        on_finish(&task_count, cop_stats, &mut metrics, &mut ctx_pool);
                         future::ok::<_, ()>(on_resp.respond(resp))
                     };
                     return pool.spawn_fn(do_request).forget();
@@ -327,9 +325,10 @@ impl Host {
                             if remain {
                                 return Some(future::ok::<_, GrpcError>((resp, Some(ctx))));
                             }
-                            let mut stats = Statistics::default();
-                            ctx.collect_statistics_into(&mut stats);
-                            on_finish(&task_count, &stats, &mut metrics, &mut ctx_pool);
+                            let mut cop_stats = CopStats::default();
+                            ctx.collect_statistics_into(&mut cop_stats.stats);
+                            ctx.collect_metrics_into(&mut cop_stats.scan_counter);
+                            on_finish(&task_count, cop_stats, &mut metrics, &mut ctx_pool);
                             Some(future::ok::<_, GrpcError>((resp, None)))
                         })
                     });
@@ -341,8 +340,9 @@ impl Host {
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
                 let do_request = move || {
-                    let resp = ctx.handle_request(&mut statistics).unwrap_or_else(err_resp);
-                    on_finish(&task_count, &statistics, &mut metrics, &mut ctx_pool);
+                    let resp = ctx.handle_request(&mut cop_stats.stats)
+                        .unwrap_or_else(err_resp);
+                    on_finish(&task_count, cop_stats, &mut metrics, &mut ctx_pool);
                     future::ok::<_, ()>(on_resp.respond(resp))
                 };
                 pool.spawn_fn(do_request).forget();
@@ -381,7 +381,6 @@ impl Display for Task {
 
 #[derive(Debug)]
 enum CopRequest {
-    Select(SelectRequest),
     DAG(DAGRequest),
     Analyze(AnalyzeReq),
 }
@@ -416,7 +415,7 @@ impl ReqContext {
 }
 
 #[derive(Debug)]
-struct CopMetrics {
+struct ReqMetrics {
     region_id: u64,
     ranges_len: usize,
     first_range: Option<KeyRange>,
@@ -427,7 +426,7 @@ struct CopMetrics {
     start_ts: u64,
 }
 
-impl CopMetrics {
+impl ReqMetrics {
     fn stop_record_waiting(&mut self) {
         if self.wait_time > 0f64 {
             return;
@@ -485,30 +484,21 @@ pub struct RequestTask {
     cop_req: CopRequest,
     ctx: ReqContext,
     on_resp: OnResponse,
-    metrics: CopMetrics,
+    metrics: ReqMetrics,
 }
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse, recursion_limit: u32) -> Result<RequestTask> {
-        let table_scan;
+        let mut table_scan = false;
         let (start_ts, cop_req) = match req.get_tp() {
-            tp @ REQ_TYPE_SELECT | tp @ REQ_TYPE_INDEX => {
-                let mut is = CodedInputStream::from_bytes(req.get_data());
-                is.set_recursion_limit(recursion_limit);
-                let mut sel = SelectRequest::new();
-                box_try!(sel.merge_from(&mut is));
-                table_scan = tp == REQ_TYPE_SELECT;
-                (sel.get_start_ts(), CopRequest::Select(sel))
-            }
             REQ_TYPE_DAG => {
                 let mut is = CodedInputStream::from_bytes(req.get_data());
                 is.set_recursion_limit(recursion_limit);
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
-                table_scan = dag.get_executors()
-                    .iter()
-                    .next()
-                    .map_or(false, |scan| scan.get_tp() == ExecType::TypeTableScan);
+                if let Some(scan) = dag.get_executors().iter().next() {
+                    table_scan = scan.get_tp() == ExecType::TypeTableScan;
+                }
                 (dag.get_start_ts(), CopRequest::DAG(dag))
             }
             REQ_TYPE_ANALYZE => {
@@ -530,7 +520,7 @@ impl RequestTask {
             fill_cache: !req.get_context().get_not_fill_cache(),
             table_scan: table_scan,
         };
-        let metrics = CopMetrics {
+        let metrics = ReqMetrics {
             region_id: req.get_context().get_region_id(),
             ranges_len: req.get_ranges().len(),
             first_range: req.get_ranges().get(0).cloned(),

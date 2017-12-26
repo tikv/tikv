@@ -86,4 +86,4 @@ impl From<txn::Error> for Error {
 }
 
 pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask, REQ_TYPE_DAG,
-                         REQ_TYPE_INDEX, SINGLE_GROUP};
+                         SINGLE_GROUP};
