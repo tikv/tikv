@@ -56,9 +56,6 @@ mod storage;
 mod failpoints_cases;
 
 use std::sync::*;
-use std::thread;
-
-use tikv::util::panic_hook;
 
 lazy_static! {
     /// Failpoints are global structs, hence rules set in different cases
@@ -67,20 +64,8 @@ lazy_static! {
 }
 
 fn setup<'a>() -> MutexGuard<'a, ()> {
-    // We don't want a failed test breaks others.
-    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = LOCK.lock().unwrap();
     fail::teardown();
     fail::setup();
     guard
-}
-
-#[test]
-fn test_setup() {
-    let _ = thread::spawn(move || {
-        panic_hook::mute();
-        let _g = setup();
-        panic!("Poison!");
-    }).join();
-
-    let _g = setup();
 }
