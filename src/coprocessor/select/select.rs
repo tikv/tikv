@@ -44,7 +44,7 @@ pub struct SelectContext {
     core: SelectContextCore,
     req_ctx: Arc<ReqContext>,
     scanner: Option<Scanner>,
-    query_metrics: ScanCounterMetrics,
+    scan_counter: ScanCounter,
 }
 
 impl SelectContext {
@@ -66,7 +66,7 @@ impl SelectContext {
             statistics: Statistics::default(),
             req_ctx: req_ctx,
             scanner: None,
-            query_metrics: ScanCounterMetrics::new(),
+            scan_counter: ScanCounter::new(),
         })
     }
 
@@ -148,7 +148,7 @@ impl SelectContext {
     fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
-            self.query_metrics.add_point_query();
+            self.scan_counter.add_point_query();
             let value = match self.snap
                 .get(&Key::from_raw(range.get_start()), &mut self.statistics)?
             {
@@ -168,7 +168,7 @@ impl SelectContext {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     self.req_ctx.check_if_outdated()?;
                 }
-                self.query_metrics.add_range_query();
+                self.scan_counter.add_range_query();
                 if let Some((key, value)) = scanner.next_row()? {
                     let h = box_try!(table::decode_handle(&key));
                     let row_data = {
@@ -241,11 +241,15 @@ impl SelectContext {
         Ok(row_cnt)
     }
 
-    pub fn collect_statistics_into(self, stats: &mut Statistics) {
+    pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
         stats.add(&self.statistics);
-        if let Some(scanner) = self.scanner {
+        if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(stats);
         }
+    }
+
+    pub fn collect_scan_count_into(&mut self, metrics: &mut ScanCounter) {
+        metrics.merge(&mut self.scan_counter);
     }
 }
 

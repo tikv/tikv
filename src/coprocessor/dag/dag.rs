@@ -21,6 +21,7 @@ use protobuf::{Message as PbMsg, RepeatedField};
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
 use coprocessor::select::xeval::EvalContext;
+use coprocessor::metrics::*;
 use coprocessor::{Error, Result};
 use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
@@ -114,6 +115,10 @@ impl DAGContext {
 
     pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
         self.exec.collect_statistics_into(statistics);
+    }
+
+    pub fn collect_scan_count_into(&mut self, metrics: &mut ScanCounter) {
+        self.exec.collect_scan_count_into(metrics);
     }
 }
 

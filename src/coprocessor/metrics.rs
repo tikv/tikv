@@ -99,15 +99,15 @@ lazy_static! {
         ).unwrap();
 }
 
-/// `ScanCounterMetrics` is for recording range query and point query.
-pub struct ScanCounterMetrics {
+/// `ScanCounter` is for recording range query and point query.
+pub struct ScanCounter {
     range_query: usize,
     point_query: usize,
 }
 
-impl ScanCounterMetrics {
+impl ScanCounter {
     pub fn new() -> Self {
-        ScanCounterMetrics {
+        ScanCounter {
             range_query: 0,
             point_query: 0,
         }
@@ -120,13 +120,24 @@ impl ScanCounterMetrics {
     pub fn add_point_query(&mut self) {
         self.point_query += 1;
     }
-}
 
-impl Drop for ScanCounterMetrics {
-    fn drop(&mut self) {
-        let range_counter = COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]);
-        range_counter.inc_by(self.range_query as f64).unwrap();
-        let point_counter = COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]);
-        point_counter.inc_by(self.point_query as f64).unwrap();
+    pub fn merge(&mut self, other: &mut ScanCounter) {
+        self.range_query += other.range_query;
+        self.point_query += other.point_query;
+        other.range_query = 0;
+        other.point_query = 0;
+    }
+
+    pub fn flush(&mut self) {
+        if self.range_query > 0 {
+            let range_counter = COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]);
+            range_counter.inc_by(self.range_query as f64).unwrap();
+            self.range_query = 0;
+        }
+        if self.point_query > 0 {
+            let point_counter = COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]);
+            point_counter.inc_by(self.point_query as f64).unwrap();
+            self.point_query = 0;
+        }
     }
 }

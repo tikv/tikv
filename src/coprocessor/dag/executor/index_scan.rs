@@ -38,7 +38,7 @@ pub struct IndexScanExecutor {
     scanner: Option<Scanner>,
     unique: bool,
     count: i64,
-    query_metrics: ScanCounterMetrics,
+    scan_counter: ScanCounter,
 }
 
 impl IndexScanExecutor {
@@ -70,7 +70,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: unique,
             count: 0,
-            query_metrics: ScanCounterMetrics::new(),
+            scan_counter: ScanCounter::new(),
         }
     }
 
@@ -91,7 +91,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: false,
             count: 0,
-            query_metrics: ScanCounterMetrics::new(),
+            scan_counter: ScanCounter::new(),
         }
     }
 
@@ -99,7 +99,7 @@ impl IndexScanExecutor {
         if self.scanner.is_none() {
             return Ok(None);
         }
-        self.query_metrics.add_range_query();
+        self.scan_counter.add_range_query();
 
         let (key, value) = {
             let scanner = self.scanner.as_mut().unwrap();
@@ -160,7 +160,7 @@ impl Executor for IndexScanExecutor {
             }
             if let Some(range) = self.key_ranges.next() {
                 if self.is_point(&range) {
-                    self.query_metrics.add_point_query();
+                    self.scan_counter.add_point_query();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));
@@ -191,6 +191,10 @@ impl Executor for IndexScanExecutor {
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(statistics);
         }
+    }
+
+    fn collect_scan_count_into(&mut self, metrics: &mut ScanCounter) {
+        metrics.merge(&mut self.scan_counter);
     }
 }
 

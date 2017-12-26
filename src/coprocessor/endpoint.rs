@@ -91,6 +91,7 @@ impl ContextFactory<CopContext> for CopContextFactory {
             select_stats: Default::default(),
             index_stats: Default::default(),
             request_stats: HashMap::default(),
+            scan_counter: ScanCounter::new(),
         }
     }
 }
@@ -100,6 +101,7 @@ struct CopContext {
     index_stats: StatisticsSummary,
     request_stats: CopRequestStatistics,
     sender: FutureScheduler<PdTask>,
+    scan_counter: ScanCounter,
 }
 
 impl CopContext {
@@ -124,6 +126,14 @@ impl CopContext {
             .or_insert_with(FlowStatistics::default);
         flow_stats.add(&stats.write.flow_stats);
         flow_stats.add(&stats.data.flow_stats);
+    }
+
+    fn add_scan_count(&mut self, scan_counter: &mut ScanCounter) {
+        self.scan_counter.merge(scan_counter);
+    }
+
+    fn flush_scan_count(&mut self) {
+        self.scan_counter.flush();
     }
 }
 
@@ -153,6 +163,7 @@ impl Context for CopContext {
                 error!("send coprocessor statistics: {:?}", e);
             };
         }
+        self.flush_scan_count();
     }
 }
 
@@ -228,9 +239,10 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
-                let stats = end_point.handle_request(req, batch_row_limit);
+                let (stats, mut scan_counter) = end_point.handle_request(req, batch_row_limit);
                 ctx.add_statistics(type_str, &stats);
                 ctx.add_statistics_by_region(region_id, &stats);
+                ctx.add_scan_count(&mut scan_counter);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
@@ -297,6 +309,7 @@ pub struct RequestTask {
     wait_time: Option<f64>,
     timer: Instant,
     statistics: Statistics,
+    scan_counter: ScanCounter,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
     ctx: Arc<ReqContext>,
@@ -369,6 +382,7 @@ impl RequestTask {
             wait_time: None,
             timer: timer,
             statistics: Default::default(),
+            scan_counter: ScanCounter::new(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
             ctx: Arc::new(req_ctx),
@@ -596,7 +610,7 @@ fn err_resp(e: Error) -> Response {
     resp
 }
 
-fn on_error(e: Error, req: RequestTask) -> Statistics {
+fn on_error(e: Error, req: RequestTask) -> (Statistics, ScanCounter) {
     let resp = err_resp(e);
     respond(resp, req)
 }
@@ -609,10 +623,10 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     }
 }
 
-fn respond(resp: Response, mut t: RequestTask) -> Statistics {
+fn respond(resp: Response, mut t: RequestTask) -> (Statistics, ScanCounter) {
     t.stop_record_handling();
     (t.on_resp)(resp);
-    t.statistics
+    (t.statistics, t.scan_counter)
 }
 
 pub struct TiDbEndPoint {
@@ -626,7 +640,11 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> Statistics {
+    fn handle_request(
+        self,
+        mut t: RequestTask,
+        batch_row_limit: usize,
+    ) -> (Statistics, ScanCounter) {
         t.stop_record_waiting();
 
         if let Err(e) = t.check_outdated() {
@@ -654,6 +672,7 @@ impl TiDbEndPoint {
         let ranges = t.req.take_ranges().into_vec();
         let res = ctx.handle_request(ranges);
         ctx.collect_statistics_into(&mut t.statistics);
+        ctx.collect_scan_count_into(&mut t.scan_counter);
         res
     }
 
@@ -667,6 +686,7 @@ impl TiDbEndPoint {
         let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
         let res = ctx.handle_request();
         ctx.collect_statistics_into(&mut t.statistics);
+        ctx.collect_scan_count_into(&mut t.scan_counter);
         res
     }
 

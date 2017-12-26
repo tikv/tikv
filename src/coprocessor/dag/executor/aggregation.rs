@@ -202,6 +202,10 @@ impl Executor for AggregationExecutor {
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
         self.src.collect_statistics_into(statistics);
     }
+
+    fn collect_scan_count_into(&mut self, metrics: &mut ScanCounter) {
+        self.src.collect_scan_count_into(metrics);
+    }
 }
 
 #[cfg(test)]
