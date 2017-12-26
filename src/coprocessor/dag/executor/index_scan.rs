@@ -21,6 +21,7 @@ use tipb::schema::ColumnInfo;
 use coprocessor::codec::{datum, mysql, table};
 use coprocessor::endpoint::is_point;
 use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
 use storage::{Key, SnapshotStore, Statistics};
 
@@ -38,6 +39,7 @@ pub struct IndexScanExecutor {
     scanner: Option<Scanner>,
     unique: bool,
     count: i64,
+    scan_counter: ScanCounter,
 }
 
 impl IndexScanExecutor {
@@ -69,6 +71,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: unique,
             count: 0,
+            scan_counter: ScanCounter::default(),
         }
     }
 
@@ -89,6 +92,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: false,
             count: 0,
+            scan_counter: ScanCounter::default(),
         }
     }
 
@@ -96,7 +100,7 @@ impl IndexScanExecutor {
         if self.scanner.is_none() {
             return Ok(None);
         }
-        COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+        self.scan_counter.inc_range();
 
         let (key, value) = {
             let scanner = self.scanner.as_mut().unwrap();
@@ -157,7 +161,7 @@ impl Executor for IndexScanExecutor {
             }
             if let Some(range) = self.key_ranges.next() {
                 if self.is_point(&range) {
-                    COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
+                    self.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));
@@ -188,6 +192,10 @@ impl Executor for IndexScanExecutor {
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(statistics);
         }
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+        metrics.merge(&mut self.scan_counter);
     }
 }
 
