@@ -21,13 +21,14 @@ use std::cmp::Ordering;
 
 use byteorder::ReadBytesExt;
 
-use coprocessor::select::xeval::EvalContext;
-use util::codec::bytes::BytesDecoder;
-use util::escape;
+use coprocessor::dag::expr::EvalContext;
 use coprocessor::codec::{convert, Error, Result, TEN_POW};
 
 // TODO: We should use same Error in mod `coprocessor`.
 use coprocessor::dag::expr::Error as ExprError;
+
+use util::codec::bytes::BytesDecoder;
+use util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
