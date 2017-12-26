@@ -38,7 +38,6 @@
 #![allow(dead_code)]
 
 use std::ops::Index;
-use std::ascii::AsciiExt;
 use regex::Regex;
 use coprocessor::codec::Result;
 use super::json_unquote::unquote_string;

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{str, i64};
+use std::i64;
 use std::slice::Iter;
 use std::cmp::Ordering;
 use std::borrow::Cow;

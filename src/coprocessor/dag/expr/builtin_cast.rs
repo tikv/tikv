@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::{str, i64, u64};
-use std::ascii::AsciiExt;
 use std::borrow::Cow;
 
 use coprocessor::codec::{mysql, Datum};

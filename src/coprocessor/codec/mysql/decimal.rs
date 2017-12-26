@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ascii::AsciiExt;
 use std::fmt::{self, Display, Formatter};
 use std::str::{self, FromStr};
 use std::io::Write;

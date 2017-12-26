@@ -16,7 +16,6 @@ use std::fmt::{self, Write};
 use std::fs;
 use std::path::Path;
 use std::str::{self, FromStr};
-use std::ascii::AsciiExt;
 use std::time::Duration;
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::ops::{Div, Mul};
