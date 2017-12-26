@@ -24,6 +24,7 @@ use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
 use coprocessor::dag::expr::EvalContext;
 use coprocessor::{Error, Result};
+use coprocessor::local_metrics::*;
 use storage::{SnapshotStore, Statistics};
 use util::codec::number::NumberDecoder;
 use util::collections::HashSet;
@@ -133,6 +134,7 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_statistics_into(&mut self, stats: &mut Statistics);
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter);
 }
 
 pub struct DAGExecutor {
