@@ -153,7 +153,7 @@ fn send_snap(
     let cb = ChannelBuilder::new(env);
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
-    let (sink, receiver) = client.snapshot();
+    let (sink, receiver) = client.snapshot()?;
     let send = chunks.forward(sink);
     let res = send.and_then(|_| receiver.map_err(Error::from))
         .and_then(|_| {
