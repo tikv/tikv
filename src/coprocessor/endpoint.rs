@@ -127,7 +127,7 @@ impl CopContext {
     }
 
     fn add_scan_count(&mut self, scan_counter: ScanCounter) {
-        scan_counter.collect_into(&mut self.scan_counter);
+        self.scan_counter.merge(scan_counter);
     }
 
     fn flush_scan_count(&mut self) {

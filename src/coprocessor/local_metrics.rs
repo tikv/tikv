@@ -31,11 +31,14 @@ impl ScanCounter {
         self.point += 1;
     }
 
-    pub fn collect_into(self, other: &mut ScanCounter) {
-        other.range += self.range;
-        other.point += self.point;
+    /// Merge records from `other` into `self`.
+    #[inline]
+    pub fn merge(&mut self, other: ScanCounter) {
+        self.range += other.range;
+        self.point += other.point;
     }
 
+    #[inline]
     pub fn flush(&mut self) {
         if self.range > 0 {
             let range_counter = COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]);

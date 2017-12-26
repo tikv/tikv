@@ -152,7 +152,7 @@ impl Executor for TableScanExecutor {
 
     fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
         let scan_counter = mem::replace(&mut self.scan_counter, ScanCounter::default());
-        scan_counter.collect_into(metrics);
+        metrics.merge(scan_counter);
     }
 }
 
