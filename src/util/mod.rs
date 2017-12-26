@@ -13,18 +13,22 @@
 
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::io;
 use std::{slice, thread};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 use std::collections::hash_map::Entry;
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{mpsc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::vec_deque::{Iter, VecDeque};
-use std::u64;
+use std::{io, u64};
 
 use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
+
+use raftstore;
+use raftstore::store::{Callback, ReadArgs, WriteArgs};
+use server::transport::RaftStoreRouter;
 
 #[macro_use]
 pub mod macros;
@@ -478,6 +482,49 @@ impl<T> Drop for MustConsumeVec<T> {
             panic!("resource leak detected: {}.", self.tag);
         }
     }
+}
+
+pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdResponse>) {
+    let (mut is_read, mut is_write) = (false, false);
+    is_read |= cmd.has_admin_request();
+    is_write |= cmd.has_status_request();
+    for req in cmd.get_requests() {
+        match req.get_cmd_type() {
+            CmdType::Get | CmdType::Snap => is_read |= true,
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write |= true,
+            CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
+        }
+    }
+    assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
+
+    let (tx, rx) = mpsc::channel();
+    let cb = if is_read {
+        Callback::Read(Box::new(move |args: ReadArgs| {
+            // we don't care error actually.
+            let _ = tx.send(args.response);
+        }))
+    } else {
+        Callback::Write(Box::new(move |args: WriteArgs| {
+            // we don't care error actually.
+            let _ = tx.send(args.response);
+        }))
+    };
+    (cb, rx)
+}
+
+pub fn wait_cb<R>(
+    router: R,
+    cmd: RaftCmdRequest,
+    timeout: Duration,
+) -> raftstore::Result<RaftCmdResponse>
+where
+    R: RaftStoreRouter,
+{
+    let (cb, rx) = make_cb(&cmd);
+    router.send_command(cmd, cb).unwrap();
+    rx.recv_timeout(timeout).map_err(|_| {
+        raftstore::Error::Timeout(format!("request timeout for {:?}", timeout))
+    })
 }
 
 #[cfg(test)]

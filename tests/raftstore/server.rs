@@ -14,30 +14,29 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
-use std::boxed::FnBox;
 
 use grpc::EnvBuilder;
 use tempdir::TempDir;
 
-use super::cluster::{Cluster, Simulator};
 use tikv::config::TiKvConfig;
 use tikv::server::{Server, ServerTransport};
 use tikv::server::{create_raft_storage, Config, Node, PdStoreAddrResolver, RaftClient};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::transport::RaftStoreRouter;
-use tikv::raftstore::{store, Error, Result};
-use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager, WriteArgs};
+use tikv::raftstore::{store, Result};
+use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
+use tikv::util::wait_cb;
 use tikv::storage::{CfName, Engine};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
+use super::cluster::{Cluster, Simulator};
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport = SimulateTransport<
@@ -215,19 +214,7 @@ impl Simulator for ServerCluster {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.router.clone(),
         };
-        wait_op!(
-            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                router
-                    .send_command(
-                        request,
-                        Callback::Write(box |write: WriteArgs| cb(write.response)),
-                    )
-                    .unwrap()
-            },
-            timeout
-        ).ok_or_else(|| {
-            Error::Timeout(format!("request timeout for {:?}", timeout))
-        })
+        wait_cb(router, request, timeout)
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {

@@ -12,7 +12,6 @@
 // limitations under the License.
 
 
-#![feature(fnbox)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![cfg_attr(feature = "dev", feature(plugin))]

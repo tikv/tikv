@@ -20,8 +20,8 @@ use rocksdb::DB;
 use protobuf;
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse,
+                          Request, StatusCmdType, StatusRequest};
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
 use kvproto::eraftpb::ConfChangeType;
 

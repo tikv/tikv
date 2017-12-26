@@ -123,33 +123,33 @@ fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
     cb_ctx
 }
 
-fn check_raft_cmd_response(resp: &mut RaftCmdResponse, resp_cnt: usize) -> Result<()> {
+fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result<()> {
     if resp.get_header().has_error() {
         return Err(Error::RequestFailed(resp.take_header().take_error()));
     }
-    if resp_cnt != resp.get_responses().len() {
-        return Err(Error::InvalidResponse(
-            "response count is not equal to requests, something \
-             must go wrong."
-                .to_owned(),
-        ));
+    if req_cnt != resp.get_responses().len() {
+        return Err(Error::InvalidResponse(format!(
+            "responses count {} is not equal to requests count {}",
+            resp.get_responses().len(),
+            req_cnt
+        )));
     }
 
     Ok(())
 }
 
-fn on_write_result(mut args: WriteArgs, resp_cnt: usize) -> (CbContext, Result<CmdRes>) {
+fn on_write_result(mut args: WriteArgs, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
     let cb_ctx = new_ctx(&args.response);
-    if let Err(e) = check_raft_cmd_response(&mut args.response, resp_cnt) {
+    if let Err(e) = check_raft_cmd_response(&mut args.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
     let resps = args.response.take_responses();
     (cb_ctx, Ok(CmdRes::Resp(resps.into_vec())))
 }
 
-fn on_read_result(mut args: ReadArgs, resp_cnt: usize) -> (CbContext, Result<CmdRes>) {
+fn on_read_result(mut args: ReadArgs, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
     let cb_ctx = new_ctx(&args.response);
-    if let Err(e) = check_raft_cmd_response(&mut args.response, resp_cnt) {
+    if let Err(e) = check_raft_cmd_response(&mut args.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
     let mut resps = args.response.take_responses();
@@ -302,13 +302,12 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     fn async_write(
         &self,
         ctx: &Context,
-        mut modifies: Vec<Modify>,
+        modifies: Vec<Modify>,
         cb: Callback<()>,
     ) -> engine::Result<()> {
         fail_point!("raftkv_async_write");
         let mut reqs = Vec::with_capacity(modifies.len());
-        while !modifies.is_empty() {
-            let m = modifies.pop().unwrap();
+        for m in modifies {
             let mut req = Request::new();
             match m {
                 Modify::Delete(cf, k) => {

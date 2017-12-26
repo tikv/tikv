@@ -171,6 +171,8 @@ pub struct ConsistencyState {
 }
 
 enum RequestPolicy {
+    // Handle the no op request.
+    NoOp,
     // Handle the read request directly without dispatch.
     ReadLocal,
     // Handle the read request via raft's SafeReadIndex mechanism.
@@ -1055,6 +1057,10 @@ impl Peer {
         let mut is_conf_change = false;
 
         let res = match self.get_handle_policy(&req) {
+            Ok(RequestPolicy::NoOp) => {
+                cb.invoke_with_response(err_resp);
+                return false;
+            }
             Ok(RequestPolicy::ReadLocal) => {
                 self.read_local(req, cb, metrics);
                 return false;
@@ -1143,6 +1149,10 @@ impl Peer {
                 return Ok(RequestPolicy::ProposeTransferLeader);
             }
             return Ok(RequestPolicy::ProposeNormal);
+        }
+
+        if req.get_requests().is_empty() {
+            return Ok(RequestPolicy::NoOp);
         }
 
         let mut is_read = false;
@@ -1711,7 +1721,12 @@ impl Peer {
                     }
                     apply::do_get(&self.tag, self.region(), snapshot.as_ref().unwrap(), req)?
                 }
-                CmdType::Snap => apply::do_snap(self.region().to_owned())?,
+                CmdType::Snap => {
+                    if snapshot.is_none() {
+                        snapshot = Some(Snapshot::new(self.kv_engine.clone()));
+                    }
+                    apply::do_snap(self.region().to_owned())?
+                }
                 CmdType::Prewrite |
                 CmdType::Put |
                 CmdType::Delete |

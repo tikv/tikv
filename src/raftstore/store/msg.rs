@@ -39,10 +39,20 @@ pub type ReadCallback = Box<FnBox(ReadArgs) + Send>;
 pub type WriteCallback = Box<FnBox(WriteArgs) + Send>;
 pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadArgs>>) + Send>;
 
+/// Variants of callbacks for `Msg`.
+///  - `Read`: a callbak for read only requests including `StatusRequest`,
+///         `GetRequest` and `SnapRequest`
+///  - `Write`: a callback for write only requests including `AdminRequest`
+///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
+///  - `BatchRead`: cllbacks for a batch read request.
 pub enum Callback {
+    /// No callback.
     None,
+    /// Read callback.
     Read(ReadCallback),
+    /// Write callback.
     Write(WriteCallback),
+    // Batch read callbacks.
     BatchRead(BatchReadCallback),
 }
 
@@ -188,14 +198,6 @@ impl fmt::Debug for Msg {
 }
 
 impl Msg {
-    pub fn new_read_raft_cmd(request: RaftCmdRequest, read: ReadCallback) -> Msg {
-        Msg::new_raft_cmd(request, Callback::Read(read))
-    }
-
-    pub fn new_write_raft_cmd(request: RaftCmdRequest, write: WriteCallback) -> Msg {
-        Msg::new_raft_cmd(request, Callback::Write(write))
-    }
-
     pub fn new_raft_cmd(request: RaftCmdRequest, callback: Callback) -> Msg {
         Msg::RaftCmd {
             send_time: Instant::now(),
@@ -219,14 +221,14 @@ impl Msg {
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::boxed::FnBox;
     use std::time::Duration;
 
     use mio::{EventLoop, Handler};
 
     use super::*;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
     use raftstore::Error;
+    use util::make_cb;
     use util::transport::SendCh;
 
     fn call_command(
@@ -234,17 +236,9 @@ mod tests {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse, Error> {
-        wait_op!(
-            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                sendch
-                    .try_send(Msg::new_raft_cmd(
-                        request,
-                        Callback::Write(box |write: WriteArgs| cb(write.response)),
-                    ))
-                    .unwrap()
-            },
-            timeout
-        ).ok_or_else(|| {
+        let (cb, rx) = make_cb(&request);
+        sendch.try_send(Msg::new_raft_cmd(request, cb)).unwrap();
+        rx.recv_timeout(timeout).map_err(|_| {
             Error::Timeout(format!("request timeout for {:?}", timeout))
         })
     }
@@ -282,6 +276,7 @@ mod tests {
 
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());
+        request.set_status_request(StatusRequest::new());
         assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
         match call_command(sendch, request, Duration::from_millis(10)) {
             Err(Error::Timeout(_)) => {}
