@@ -20,9 +20,8 @@ use tipb::expression::ByItem;
 
 use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::Datum;
+use coprocessor::dag::expr::EvalContext;
 use coprocessor::Result;
-
-use super::xeval::EvalContext;
 
 const HEAP_MAX_CAPACITY: usize = 1024;
 
@@ -187,7 +186,7 @@ mod tests {
     use util::codec::number::*;
     use coprocessor::codec::Datum;
     use coprocessor::codec::table::RowColsDict;
-    use coprocessor::select::xeval::EvalContext;
+    use coprocessor::dag::expr::EvalContext;
 
     use super::*;
 

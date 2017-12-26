@@ -13,13 +13,13 @@
 
 use std::borrow::Cow;
 use coprocessor::codec::Datum;
-use super::{FnCall, Result, StatementContext};
+use super::{EvalContext, FnCall, Result};
 
 impl FnCall {
     #[inline]
     pub fn date_format<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
@@ -38,10 +38,8 @@ mod test {
     use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Time;
-    use coprocessor::dag::expr::test::fncall_expr;
-    use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::select::xeval::evaluator::test::datum_expr;
-
+    use coprocessor::dag::expr::test::{datum_expr, fncall_expr};
+    use coprocessor::dag::expr::{EvalContext, Expression};
     #[test]
     fn test_date_format() {
         let tests = vec![
@@ -83,7 +81,7 @@ mod test {
                 2012 2012 12 %",
             ),
         ];
-        let ctx = StatementContext::default();
+        let ctx = EvalContext::default();
         for (arg1, arg2, exp) in tests {
             let arg1 = datum_expr(Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()));
             let arg2 = datum_expr(Datum::Bytes(arg2.to_string().into_bytes()));

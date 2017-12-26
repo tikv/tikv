@@ -22,8 +22,9 @@ use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{self, Datum};
 use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
-use coprocessor::select::xeval::EvalContext;
+use coprocessor::dag::expr::EvalContext;
 use coprocessor::{Error, Result};
+use coprocessor::local_metrics::*;
 use storage::{SnapshotStore, Statistics};
 use util::codec::number::NumberDecoder;
 use util::collections::HashSet;
@@ -33,8 +34,10 @@ mod table_scan;
 mod index_scan;
 mod selection;
 mod topn;
+mod topn_heap;
 mod limit;
 mod aggregation;
+mod aggregate;
 
 pub use self::table_scan::TableScanExecutor;
 pub use self::index_scan::IndexScanExecutor;
@@ -129,7 +132,9 @@ impl Row {
 
 pub trait Executor: Send {
     fn next(&mut self) -> Result<Option<Row>>;
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_statistics_into(&mut self, stats: &mut Statistics);
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter);
     /// Take the last key accessed by the executor.
     ///
     /// If the executor doesn't support this, return None.
@@ -183,6 +188,7 @@ pub fn build_exec(
                 src,
             )?),
             ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
+            ExecType::TypeStreamAgg => unimplemented!(),
         };
         src = curr;
     }
