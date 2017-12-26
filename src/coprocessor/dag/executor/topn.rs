@@ -21,12 +21,11 @@ use tipb::expression::ByItem;
 
 use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
-use coprocessor::select::xeval::EvalContext;
-use coprocessor::dag::expr::Expression;
-use coprocessor::select::topn_heap::{SortRow, TopNHeap};
+use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::metrics::*;
 use storage::Statistics;
 
+use super::topn_heap::{SortRow, TopNHeap};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
 struct OrderBy {
