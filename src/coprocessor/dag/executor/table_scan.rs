@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use std::vec::IntoIter;
 
 use kvproto::coprocessor::KeyRange;
@@ -20,6 +21,7 @@ use coprocessor::codec::table;
 use coprocessor::endpoint::is_point;
 use coprocessor::{Error, Result};
 use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use storage::{Key, SnapshotStore, Statistics};
 use util::collections::HashSet;
 
@@ -65,7 +67,7 @@ impl TableScanExecutor {
             key_ranges: key_ranges.into_iter(),
             scanner: None,
             count: 0,
-            scan_counter: ScanCounter::new(),
+            scan_counter: ScanCounter::default(),
         }
     }
 
@@ -149,7 +151,8 @@ impl Executor for TableScanExecutor {
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
-        metrics.merge(&mut self.scan_counter);
+        let scan_counter = mem::replace(&mut self.scan_counter, ScanCounter::default());
+        scan_counter.collect_into(metrics);
     }
 }
 

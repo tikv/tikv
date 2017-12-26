@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
 use std::vec::IntoIter;
 use byteorder::{BigEndian, ReadBytesExt};
 
@@ -21,6 +22,7 @@ use tipb::schema::ColumnInfo;
 use coprocessor::codec::{datum, mysql, table};
 use coprocessor::endpoint::is_point;
 use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
 use storage::{Key, SnapshotStore, Statistics};
 
@@ -70,7 +72,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: unique,
             count: 0,
-            scan_counter: ScanCounter::new(),
+            scan_counter: ScanCounter::default(),
         }
     }
 
@@ -91,7 +93,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: false,
             count: 0,
-            scan_counter: ScanCounter::new(),
+            scan_counter: ScanCounter::default(),
         }
     }
 
@@ -194,7 +196,8 @@ impl Executor for IndexScanExecutor {
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
-        metrics.merge(&mut self.scan_counter);
+        let scan_counter = mem::replace(&mut self.scan_counter, ScanCounter::default());
+        scan_counter.collect_into(metrics);
     }
 }
 

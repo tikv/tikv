@@ -17,6 +17,7 @@ use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 
 use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::Result;
 use storage::Statistics;

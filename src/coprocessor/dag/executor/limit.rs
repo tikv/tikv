@@ -18,6 +18,7 @@ use tipb::executor::Limit;
 
 use coprocessor::Result;
 use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use coprocessor::dag::executor::{Executor, Row};
 use storage::Statistics;
 

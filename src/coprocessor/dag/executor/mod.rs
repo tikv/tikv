@@ -24,7 +24,7 @@ use coprocessor::codec::table::{RowColsDict, TableDecoder};
 use coprocessor::endpoint::get_pk;
 use coprocessor::dag::expr::EvalContext;
 use coprocessor::{Error, Result};
-use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use storage::{SnapshotStore, Statistics};
 use util::codec::number::NumberDecoder;
 use util::collections::HashSet;

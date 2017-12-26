@@ -23,6 +23,7 @@ use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
 use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use coprocessor::Result;
 use storage::Statistics;
 

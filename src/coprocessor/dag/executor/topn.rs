@@ -23,6 +23,7 @@ use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
 use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use storage::Statistics;
 
 use super::topn_heap::{SortRow, TopNHeap};
