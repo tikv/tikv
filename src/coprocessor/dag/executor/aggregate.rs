@@ -17,7 +17,7 @@ use tipb::expression::ExprType;
 use coprocessor::codec::Datum;
 use coprocessor::Result;
 
-use super::xeval::{evaluator, EvalContext};
+use super::super::expr::{eval_arith, EvalContext};
 
 pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
     match tp {
@@ -188,7 +188,7 @@ impl Sum {
             return Ok(false);
         }
         let res = match self.res.take() {
-            Some(b) => box_try!(evaluator::eval_arith(ctx, a, b, Datum::checked_add)),
+            Some(b) => box_try!(eval_arith(ctx, a, b, Datum::checked_add)),
             None => a,
         };
         self.res = Some(res);
@@ -204,12 +204,13 @@ impl AggrFunc for Sum {
 
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
         let res = self.res.take().unwrap_or(Datum::Null);
-        if res == Datum::Null {
-            collector.push(res);
-            return Ok(());
+        match res {
+            Datum::Null | Datum::F64(_) => collector.push(res),
+            _ => {
+                let d = box_try!(res.into_dec());
+                collector.push(Datum::Dec(d));
+            }
         }
-        let d = box_try!(res.into_dec());
-        collector.push(Datum::Dec(d));
         Ok(())
     }
 }
