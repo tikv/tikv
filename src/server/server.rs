@@ -75,8 +75,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         );
         let raft_client = Arc::new(RwLock::new(RaftClient::new(
             Arc::clone(&env),
-            Arc::clone(&cfg),
-            Arc::clone(&security_mgr),
+            Arc::clone(cfg),
+            Arc::clone(security_mgr),
         )));
         let end_point_worker = WorkerBuilder::new("end-point-worker")
             .batch_size(DEFAULT_COPROCESSOR_BATCH)

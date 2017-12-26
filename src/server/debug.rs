@@ -378,7 +378,7 @@ impl MvccInfoIterator {
             let to = if to.is_empty() { None } else { Some(to) };
             let readopts = IterOption::new(None, to.map(Vec::from), false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
+            let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
             iter.seek(SeekKey::from(from));
             Ok(iter)
         };
