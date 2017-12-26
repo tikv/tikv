@@ -223,7 +223,7 @@ fn test_node_renew_lease() {
 // If the leader lease has expired, there may be new leader elected and
 // the old leader will fail to renew its lease.
 fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
@@ -386,7 +386,7 @@ fn test_node_callback_when_destroyed() {
         RegionPacketFilter::new(1, leader.get_store_id())
             .msg_type(MessageType::MsgAppendResponse)
             .direction(Direction::Recv)
-            .when(block.clone()),
+            .when(Arc::clone(&block)),
     ));
     let mut filter = LeaseReadFilter::default();
     filter.take = true;

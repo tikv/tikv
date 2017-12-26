@@ -930,7 +930,7 @@ fn main() {
     let cfg_path = matches.value_of("config");
 
     let mgr = new_security_mgr(&matches);
-    let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, mgr.clone());
+    let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();

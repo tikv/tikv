@@ -164,7 +164,7 @@ mod tests {
         cfg.region_split_size = ReadableSize(60);
 
         let mut runnable = SplitCheckRunner::new(
-            engine.clone(),
+            Arc::clone(&engine),
             ch.clone(),
             Arc::new(CoprocessorHost::new(cfg, ch.clone())),
         );

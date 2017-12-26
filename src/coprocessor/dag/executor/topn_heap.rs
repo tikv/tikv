@@ -125,7 +125,7 @@ impl TopNHeap {
         order_cols: Arc<Vec<ByItem>>,
         ctx: Arc<EvalContext>,
     ) -> Result<()> {
-        let row = SortRow::new(handle, data, values, order_cols, ctx, self.err.clone());
+        let row = SortRow::new(handle, data, values, order_cols, ctx, Arc::clone(&self.err));
         // push into heap when heap is not full
         if self.rows.len() < self.limit {
             self.rows.push(row);
@@ -299,8 +299,8 @@ mod tests {
                     handle as i64,
                     row_data,
                     cur_key,
-                    order_cols.clone(),
-                    ctx.clone(),
+                    Arc::clone(&order_cols),
+                    Arc::clone(&ctx),
                 )
                 .unwrap();
         }
@@ -325,7 +325,7 @@ mod tests {
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
         topn_heap
-            .try_add_row(0 as i64, row_data, std_key, order_cols.clone(), ctx.clone())
+            .try_add_row(0 as i64, row_data, std_key, Arc::clone(&order_cols), Arc::clone(&ctx))
             .unwrap();
 
         let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
@@ -335,8 +335,8 @@ mod tests {
                 0 as i64,
                 row_data2,
                 std_key2,
-                order_cols.clone(),
-                ctx.clone(),
+                Arc::clone(&order_cols),
+                Arc::clone(&ctx),
             )
             .unwrap();
 
@@ -349,8 +349,8 @@ mod tests {
                     0 as i64,
                     row_data3,
                     bad_key1,
-                    order_cols.clone(),
-                    ctx.clone()
+                    Arc::clone(&order_cols),
+                    Arc::clone(&ctx)
                 )
                 .is_err()
         );
@@ -440,8 +440,8 @@ mod tests {
                     handle as i64,
                     row_data,
                     cur_key,
-                    order_cols.clone(),
-                    ctx.clone(),
+                    Arc::clone(&order_cols),
+                    Arc::clone(&ctx),
                 )
                 .unwrap();
         }

@@ -279,7 +279,7 @@ impl Debugger {
         let to = keys::REGION_META_MAX_KEY.to_owned();
         let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
         let handle = box_try!(get_cf_handle(&self.engines.kv_engine, CF_RAFT));
-        let mut iter = DBIterator::new_cf(self.engines.kv_engine.clone(), handle, readopts);
+        let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv_engine), handle, readopts);
         iter.seek(SeekKey::from(from.as_ref()));
 
         let fake_snap_worker = Worker::new("fake snap worker");
@@ -308,8 +308,8 @@ impl Debugger {
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::new(
-                self.engines.kv_engine.clone(),
-                self.engines.raft_engine.clone(),
+                Arc::clone(&self.engines.kv_engine),
+                Arc::clone(&self.engines.raft_engine),
                 region,
                 fake_snap_worker.scheduler(),
                 tag.clone(),
@@ -378,7 +378,7 @@ impl MvccInfoIterator {
             let to = if to.is_empty() { None } else { Some(to) };
             let readopts = IterOption::new(None, to.map(Vec::from), false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(db.clone(), handle, readopts);
+            let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
             iter.seek(SeekKey::from(from));
             Ok(iter)
         };
@@ -592,7 +592,7 @@ mod tests {
             ).unwrap(),
         );
 
-        let engines = Engines::new(engine.clone(), engine);
+        let engines = Engines::new(Arc::clone(&engine), engine);
         Debugger::new(engines)
     }
 

@@ -704,7 +704,7 @@ impl PeerStorage {
     }
 
     pub fn raw_snapshot(&self) -> DbSnapshot {
-        DbSnapshot::new(self.kv_engine.clone())
+        DbSnapshot::new(Arc::clone(&self.kv_engine))
     }
 
     fn validate_snap(&self, snap: &Snapshot) -> bool {
@@ -982,7 +982,7 @@ impl PeerStorage {
     }
 
     pub fn get_raft_engine(&self) -> Arc<DB> {
-        self.raft_engine.clone()
+        Arc::clone(&self.raft_engine)
     }
 
     /// Check whether the storage has finished applying snapshot.
@@ -1070,7 +1070,7 @@ impl PeerStorage {
 
     pub fn schedule_applying_snapshot(&mut self) {
         let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
-        self.set_snap_state(SnapState::Applying(status.clone()));
+        self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
             status: status,
@@ -1416,7 +1416,7 @@ mod test {
         let raft_db = Arc::new(
             new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
         );
-        let engines = Engines::new(kv_db.clone(), raft_db.clone());
+        let engines = Engines::new(Arc::clone(&kv_db), Arc::clone(&raft_db));
         bootstrap::bootstrap_store(&engines, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
         let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
@@ -1684,7 +1684,7 @@ mod test {
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
-        let runner = RegionRunner::new(s.kv_engine.clone(), s.raft_engine.clone(), mgr, 0, true);
+        let runner = RegionRunner::new(Arc::clone(&s.kv_engine), Arc::clone(&s.raft_engine), mgr, 0, true);
         worker.start(runner).unwrap();
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -1968,8 +1968,8 @@ mod test {
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let runner = RegionRunner::new(
-            s1.kv_engine.clone(),
-            s1.raft_engine.clone(),
+            Arc::clone(&s1.kv_engine),
+            Arc::clone(&s1.raft_engine),
             mgr.clone(),
             0,
             true,

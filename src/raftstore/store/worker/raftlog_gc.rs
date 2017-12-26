@@ -164,7 +164,7 @@ mod test {
         let tbls = vec![
             (
                 Task {
-                    raft_engine: raft_db.clone(),
+                    raft_engine: Arc::clone(&raft_db),
                     region_id: region_id,
                     start_idx: 0,
                     end_idx: 10,
@@ -175,7 +175,7 @@ mod test {
             ),
             (
                 Task {
-                    raft_engine: raft_db.clone(),
+                    raft_engine: Arc::clone(&raft_db),
                     region_id: region_id,
                     start_idx: 0,
                     end_idx: 50,
@@ -186,7 +186,7 @@ mod test {
             ),
             (
                 Task {
-                    raft_engine: raft_db.clone(),
+                    raft_engine: Arc::clone(&raft_db),
                     region_id: region_id,
                     start_idx: 50,
                     end_idx: 50,
@@ -197,7 +197,7 @@ mod test {
             ),
             (
                 Task {
-                    raft_engine: raft_db.clone(),
+                    raft_engine: Arc::clone(&raft_db),
                     region_id: region_id,
                     start_idx: 50,
                     end_idx: 60,

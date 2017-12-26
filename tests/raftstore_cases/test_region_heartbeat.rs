@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::thread::sleep;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -91,7 +92,7 @@ fn test_server_down_peers() {
 }
 
 fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 

@@ -13,6 +13,7 @@
 
 
 use std::*;
+use std::sync::Arc;
 use std::time::*;
 
 use fail;
@@ -31,7 +32,7 @@ fn test_overlap_cleanup() {
 
     let gen_snapshot_fp = "region_gen_snap";
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 

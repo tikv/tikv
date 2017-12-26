@@ -181,7 +181,7 @@ mod test {
         runner.run(Task::ComputeHash {
             index: 10,
             region: region.clone(),
-            snap: Snapshot::new(db.clone()),
+            snap: Snapshot::new(Arc::clone(&db)),
         });
         let mut checksum_bytes = vec![];
         checksum_bytes.write_u32::<BigEndian>(sum).unwrap();

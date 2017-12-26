@@ -190,12 +190,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             raft_db_cf_opts,
         ).unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
     );
-    let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
+    let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
     // Create pd client and pd work, snapshot manager, server.
     let pd_client = Arc::new(pd_client);
     let pd_worker = FutureWorker::new("pd worker");
-    let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
+    let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
     let limiter = if cfg.server.snap_max_write_bytes_per_sec.0 > 0 {
         Some(Arc::new(
@@ -512,7 +512,7 @@ fn main() {
         SecurityManager::new(&config.security)
             .unwrap_or_else(|e| fatal!("failed to create security manager: {:?}", e)),
     );
-    let pd_client = RpcClient::new(&config.pd, security_mgr.clone())
+    let pd_client = RpcClient::new(&config.pd, Arc::clone(&security_mgr))
         .unwrap_or_else(|e| fatal!("failed to create rpc client: {:?}", e));
     let cluster_id = pd_client
         .get_cluster_id()

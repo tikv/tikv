@@ -55,7 +55,7 @@ impl Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
         let alive = Arc::new(AtomicBool::new(true));
-        let alive1 = alive.clone();
+        let alive1 = Arc::clone(&alive);
         let cb = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
@@ -142,7 +142,7 @@ impl RaftClient {
         // TODO: avoid to_owned
         self.conns
             .entry((addr.to_owned(), index))
-            .or_insert_with(|| Conn::new(env.clone(), addr, cfg, security_mgr, store_id))
+            .or_insert_with(|| Conn::new(Arc::clone(&env), addr, cfg, security_mgr, store_id))
     }
 
     pub fn send(&mut self, store_id: u64, addr: &str, msg: RaftMessage) -> Result<()> {

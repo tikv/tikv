@@ -915,7 +915,7 @@ impl Clone for Storage {
         Storage {
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
-            handle: self.handle.clone(),
+            handle: Arc::clone(&self.handle),
             gc_ratio_threshold: self.gc_ratio_threshold,
             max_key_size: self.max_key_size,
         }

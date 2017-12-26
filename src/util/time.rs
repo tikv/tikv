@@ -402,7 +402,7 @@ mod tests {
             SystemTime::now().sub(Duration::from_secs(2))
         };
 
-        let jumped2 = jumped.clone();
+        let jumped2 = Arc::clone(&jumped);
         let on_jumped = move || { jumped2.store(true, Ordering::SeqCst); };
 
         let _m = Monitor::new(on_jumped, now);

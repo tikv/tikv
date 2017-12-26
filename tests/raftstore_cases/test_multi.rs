@@ -469,7 +469,7 @@ fn test_node_leader_change_with_log_overlap() {
     );
     put_req.mut_header().set_peer(new_peer(1, 1));
     let called = Arc::new(AtomicBool::new(false));
-    let called_ = called.clone();
+    let called_ = Arc::clone(&called);
     cluster
         .sim
         .rl()
@@ -639,7 +639,7 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
             .direction(Direction::Send),
     ));
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.remove_peer(1, new_peer(1, 1));
 
     // wait for the leader receive the remove order.

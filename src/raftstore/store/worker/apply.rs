@@ -687,7 +687,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
     ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-        let req = ctx.exec_ctx.as_ref().unwrap().req.clone();
+        let req = Rc::clone(&ctx.exec_ctx.as_ref().unwrap().req);
         check_epoch(&self.region, &req)?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req.get_admin_request())
@@ -1284,7 +1284,7 @@ impl ApplyDelegate {
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: Snapshot::new(self.engine.clone()),
+                snap: Snapshot::new(Arc::clone(&self.engine)),
             }),
         ))
     }
@@ -1480,7 +1480,7 @@ impl Runner {
         }
         Runner {
             db: store.kv_engine(),
-            host: store.coprocessor_host.clone(),
+            host: Arc::clone(&store.coprocessor_host),
             delegates: delegates,
             notifier: notifier,
             sync_log: sync_log,
@@ -1600,7 +1600,7 @@ impl Runner {
         let peer_id = s.id;
         let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
+        let delegate = ApplyDelegate::from_registration(Arc::clone(&self.db), s);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag,
@@ -1728,7 +1728,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (_tmp, db) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
-        let mut runner = new_runner(db.clone(), host, tx);
+        let mut runner = new_runner(Arc::clone(&db), host, tx);
 
         let mut reg = Registration::default();
         reg.id = 1;
@@ -1989,7 +1989,7 @@ mod tests {
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
+        let mut delegate = ApplyDelegate::from_registration(Arc::clone(&db), reg);
         let (tx, rx) = mpsc::channel();
 
         let put_entry = EntryBuilder::new(1, 1)

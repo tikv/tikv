@@ -182,7 +182,7 @@ impl Clone for SyncStorage {
         self.cnt.fetch_add(1, Ordering::SeqCst);
         SyncStorage {
             store: self.store.clone(),
-            cnt: self.cnt.clone(),
+            cnt: Arc::clone(&self.cnt),
         }
     }
 }

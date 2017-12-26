@@ -332,7 +332,7 @@ where
         }
 
         let cfg = self.store_cfg.clone();
-        let pd_client = self.pd_client.clone();
+        let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
         let sender = event_loop.channel();
 

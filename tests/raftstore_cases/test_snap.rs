@@ -35,7 +35,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -66,7 +66,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster
         .sim
         .wl()
-        .add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(stale.clone()));
+        .add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(Arc::clone(&stale)));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
     loop {
@@ -109,7 +109,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(2);
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
     let r1 = cluster.run_conf_change();
@@ -210,7 +210,7 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -351,7 +351,7 @@ fn test_node_stale_snap() {
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
@@ -438,7 +438,7 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
     cluster.run();

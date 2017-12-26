@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
+use std::sync::Arc;
 use std::thread::*;
 use std::time::*;
 
@@ -30,7 +30,7 @@ fn test_pending_peers() {
 
     let region_worker_fp = "region_apply_snap";
 
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 

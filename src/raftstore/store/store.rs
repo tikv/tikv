@@ -250,7 +250,7 @@ impl<T, C> Store<T, C> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
-        let kv_engine = self.kv_engine.clone();
+        let kv_engine = Arc::clone(&self.kv_engine);
         let mut total_count = 0;
         let mut tomebstone_count = 0;
         let mut applying_count = 0;
@@ -409,11 +409,11 @@ impl<T, C> Store<T, C> {
     }
 
     pub fn kv_engine(&self) -> Arc<DB> {
-        self.kv_engine.clone()
+        Arc::clone(&self.kv_engine)
     }
 
     pub fn raft_engine(&self) -> Arc<DB> {
-        self.raft_engine.clone()
+        Arc::clone(&self.raft_engine)
     }
 
     pub fn store_id(&self) -> u64 {
@@ -425,7 +425,7 @@ impl<T, C> Store<T, C> {
     }
 
     pub fn config(&self) -> Rc<Config> {
-        self.cfg.clone()
+        Rc::clone(&self.cfg)
     }
 
     fn poll_significant_msg(&mut self) {
@@ -503,16 +503,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_consistency_check_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(
-            self.kv_engine.clone(),
+            Arc::clone(&self.kv_engine),
             self.sendch.clone(),
-            self.coprocessor_host.clone(),
+            Arc::clone(&self.coprocessor_host),
         );
 
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(
-            self.kv_engine.clone(),
-            self.raft_engine.clone(),
+            Arc::clone(&self.kv_engine),
+            Arc::clone(&self.raft_engine),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
             self.cfg.use_delete_range,
@@ -522,14 +522,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let compact_runner = CompactRunner::new(self.kv_engine.clone());
+        let compact_runner = CompactRunner::new(Arc::clone(&self.kv_engine));
         box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(
             self.store_id(),
-            self.pd_client.clone(),
+            Arc::clone(&self.pd_client),
             self.sendch.clone(),
-            self.kv_engine.clone(),
+            Arc::clone(&self.kv_engine),
         );
         box_try!(self.pd_worker.start(pd_runner));
 
@@ -1341,7 +1341,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let remain_cnt = peer.last_applying_idx - state.get_index() - 1;
         peer.raft_log_size_hint = peer.raft_log_size_hint * remain_cnt / total_cnt;
         let task = RaftlogGcTask {
-            raft_engine: peer.get_store().get_raft_engine().clone(),
+            raft_engine: Arc::clone(&peer.get_store().get_raft_engine()),
             region_id: peer.get_store().get_region_id(),
             start_idx: peer.last_compacted_idx,
             end_idx: state.get_index() + 1,
@@ -2050,7 +2050,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.is_busy = false;
 
         let store_info = StoreInfo {
-            engine: self.kv_engine.clone(),
+            engine: Arc::clone(&self.kv_engine),
             capacity: self.cfg.capacity.0,
         };
 

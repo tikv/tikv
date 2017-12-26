@@ -101,8 +101,8 @@ struct SnapContext {
 impl SnapContext {
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
-        let raft_db = self.raft_db.clone();
-        let raw_snap = Snapshot::new(self.kv_db.clone());
+        let raft_db = Arc::clone(&self.raft_db);
+        let raw_snap = Snapshot::new(Arc::clone(&self.kv_db));
 
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
@@ -196,9 +196,9 @@ impl SnapContext {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.kv_db.clone(),
+            db: Arc::clone(&self.kv_db),
             region: region.clone(),
-            abort: abort.clone(),
+            abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
         };
         s.apply(options)?;
@@ -228,7 +228,7 @@ impl SnapContext {
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_coarse_timer();
 
-        match self.apply_snap(region_id, status.clone()) {
+        match self.apply_snap(region_id, Arc::clone(&status)) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();

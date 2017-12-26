@@ -154,10 +154,10 @@ where
 {
     fn clone(&self) -> Self {
         ServerTransport {
-            raft_client: self.raft_client.clone(),
+            raft_client: Arc::clone(&self.raft_client),
             snap_scheduler: self.snap_scheduler.clone(),
             raft_router: self.raft_router.clone(),
-            resolving: self.resolving.clone(),
+            resolving: Arc::clone(&self.resolving),
             resolver: self.resolver.clone(),
         }
     }

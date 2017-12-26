@@ -275,7 +275,7 @@ fn test_raw_node_propose_add_duplicate_node() {
 #[test]
 fn test_raw_node_read_index() {
     let a = Rc::new(RefCell::new(Vec::new()));
-    let b = a.clone();
+    let b = Rc::clone(&a);
     let before_step_state = Box::new(move |m: &Message| {
         b.borrow_mut().push(m.clone());
         true

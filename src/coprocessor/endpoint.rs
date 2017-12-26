@@ -685,7 +685,7 @@ impl TiDbEndPoint {
         batch_row_limit: usize,
     ) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
-        let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
+        let mut ctx = DAGContext::new(dag, ranges, self.snap, Arc::clone(&t.ctx), batch_row_limit)?;
         let res = ctx.handle_request();
         ctx.collect_statistics_into(&mut t.statistics);
         ctx.collect_metrics_into(&mut t.scan_counter);

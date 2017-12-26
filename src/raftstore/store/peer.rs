@@ -290,7 +290,7 @@ impl Peer {
             region,
             sched,
             tag.clone(),
-            store.entry_cache_metries.clone(),
+            Rc::clone(&store.entry_cache_metries),
         )?;
 
         let applied_index = ps.applied_index();
@@ -322,7 +322,7 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
-            coprocessor_host: store.coprocessor_host.clone(),
+            coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
@@ -437,11 +437,11 @@ impl Peer {
     }
 
     pub fn kv_engine(&self) -> Arc<DB> {
-        self.kv_engine.clone()
+        Arc::clone(&self.kv_engine)
     }
 
     pub fn raft_engine(&self) -> Arc<DB> {
-        self.raft_engine.clone()
+        Arc::clone(&self.raft_engine)
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -1635,7 +1635,7 @@ impl Peer {
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
         check_epoch(self.region(), req)?;
         let mut need_snapshot = false;
-        let snapshot = Snapshot::new(self.kv_engine.clone());
+        let snapshot = Snapshot::new(Arc::clone(&self.kv_engine));
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 

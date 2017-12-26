@@ -46,7 +46,7 @@ impl RpcClient {
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        let (client, members) = validate_endpoints(env.clone(), cfg, &security_mgr)?;
+        let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
 
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),

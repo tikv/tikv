@@ -172,8 +172,8 @@ impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
 impl<M, C: Channel<M>> Clone for SimulateTransport<M, C> {
     fn clone(&self) -> SimulateTransport<M, C> {
         SimulateTransport {
-            filters: self.filters.clone(),
-            ch: self.ch.clone(),
+            filters: Arc::clone(&self.filters),
+            ch: Arc::clone(&self.ch),
         }
     }
 }

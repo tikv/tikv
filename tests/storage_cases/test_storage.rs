@@ -699,7 +699,7 @@ fn test_isolation_inc() {
 
     let mut threads = vec![];
     for _ in 0..THREAD_NUM {
-        let (punch_card, store, oracle) = (punch_card.clone(), store.clone(), oracle.clone());
+        let (punch_card, store, oracle) = (Arc::clone(&punch_card), store.clone(), Arc::clone(&oracle));
         threads.push(thread::spawn(move || for _ in 0..INC_PER_THREAD {
             let number = inc(&store.store, &oracle, b"key").unwrap() as usize;
             let mut punch = punch_card.lock().unwrap();
@@ -779,7 +779,7 @@ fn test_isolation_multi_inc() {
     let oracle = Arc::new(Oracle::new());
     let mut threads = vec![];
     for _ in 0..THREAD_NUM {
-        let (store, oracle) = (store.clone(), oracle.clone());
+        let (store, oracle) = (store.clone(), Arc::clone(&oracle));
         threads.push(thread::spawn(move || for _ in 0..INC_PER_THREAD {
             assert!(inc_multi(&store.store, &oracle, KEY_NUM));
         }));

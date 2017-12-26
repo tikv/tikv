@@ -275,7 +275,7 @@ impl<T: PdClient> Runner<T> {
         };
         stats.set_capacity(capacity);
 
-        let used_size = stats.get_used_size() + get_engine_used_size(store_info.engine.clone());
+        let used_size = stats.get_used_size() + get_engine_used_size(Arc::clone(&store_info.engine));
         stats.set_used_size(used_size);
 
 

@@ -179,11 +179,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        self.engines[&node_id].kv_engine.clone()
+        Arc::clone(&self.engines[&node_id].kv_engine)
     }
 
     pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
-        self.engines[&node_id].raft_engine.clone()
+        Arc::clone(&self.engines[&node_id].raft_engine)
     }
 
     pub fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {

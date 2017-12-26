@@ -938,7 +938,7 @@ impl Snapshot for Snap {
     }
 
     fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-        box_try!(self.validate(options.db.clone()));
+        box_try!(self.validate(Arc::clone(&options.db)));
 
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
@@ -1209,7 +1209,7 @@ impl SnapManager {
     ) -> RaftStoreResult<Box<Snapshot>> {
         let (dir, snap_size) = {
             let core = self.core.rl();
-            (core.base.clone(), core.snap_size.clone())
+            (core.base.clone(), Arc::clone(&core.snap_size))
         };
         let f = Snap::new_for_building(
             dir,
@@ -1227,7 +1227,7 @@ impl SnapManager {
         let s = Snap::new_for_sending(
             &core.base,
             key,
-            core.snap_size.clone(),
+            Arc::clone(&core.snap_size),
             Box::new(self.clone()),
         )?;
         Ok(Box::new(s))
@@ -1245,7 +1245,7 @@ impl SnapManager {
             &core.base,
             key,
             snapshot_data.take_meta(),
-            core.snap_size.clone(),
+            Arc::clone(&core.snap_size),
             Box::new(self.clone()),
             self.limiter.clone(),
         )?;
@@ -1257,7 +1257,7 @@ impl SnapManager {
         let s = Snap::new_for_applying(
             &core.base,
             key,
-            core.snap_size.clone(),
+            Arc::clone(&core.snap_size),
             Box::new(self.clone()),
         )?;
         if !s.exists() {
@@ -1551,7 +1551,7 @@ mod test {
         let region = get_test_region(region_id, 1, 1);
         let src_db_dir = TempDir::new("test-snap-file-db-src").unwrap();
         let db = get_db(&src_db_dir).unwrap();
-        let snapshot = DbSnapshot::new(db.clone());
+        let snapshot = DbSnapshot::new(Arc::clone(&db));
 
         let src_dir = TempDir::new("test-snap-file-src").unwrap();
         let key = SnapKey::new(region_id, 1, 1);
@@ -1561,7 +1561,7 @@ mod test {
             src_dir.path(),
             &key,
             &snapshot,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -1591,7 +1591,7 @@ mod test {
 
         // Ensure this snapshot could be read for sending.
         let mut s2 =
-            Snap::new_for_sending(src_dir.path(), &key, size_track.clone(), deleter.clone())
+            Snap::new_for_sending(src_dir.path(), &key, Arc::clone(&size_track), deleter.clone())
                 .unwrap();
         assert!(s2.exists());
 
@@ -1604,7 +1604,7 @@ mod test {
             dst_dir.path(),
             &key,
             snap_data.take_meta(),
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -1628,7 +1628,7 @@ mod test {
 
         // Ensure a snapshot could be applied to DB.
         let mut s4 =
-            Snap::new_for_applying(dst_dir.path(), &key, size_track.clone(), deleter).unwrap();
+            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter).unwrap();
         assert!(s4.exists());
 
         let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
@@ -1637,7 +1637,7 @@ mod test {
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
         let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs, None).unwrap());
         let options = ApplyOptions {
-            db: dst_db.clone(),
+            db: Arc::clone(&dst_db),
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
@@ -1670,7 +1670,7 @@ mod test {
         let region = get_test_region(region_id, 1, 1);
         let db_dir = TempDir::new("test-snap-validation-db").unwrap();
         let db = get_db(&db_dir).unwrap();
-        let snapshot = DbSnapshot::new(db.clone());
+        let snapshot = DbSnapshot::new(Arc::clone(&db));
 
         let dir = TempDir::new("test-snap-validation").unwrap();
         let key = SnapKey::new(region_id, 1, 1);
@@ -1680,7 +1680,7 @@ mod test {
             dir.path(),
             &key,
             &snapshot,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -1702,7 +1702,7 @@ mod test {
             dir.path(),
             &key,
             &snapshot,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -1821,7 +1821,7 @@ mod test {
         deleter: Box<DummyDeleter>,
     ) {
         let mut from =
-            Snap::new_for_sending(from_dir.path(), key, size_track.clone(), deleter.clone())
+            Snap::new_for_sending(from_dir.path(), key, Arc::clone(&size_track), deleter.clone())
                 .unwrap();
         assert!(from.exists());
 
@@ -1829,7 +1829,7 @@ mod test {
             to_dir.path(),
             key,
             snapshot_meta,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter,
             None,
         ).unwrap();
@@ -1856,7 +1856,7 @@ mod test {
             dir.path(),
             &key,
             &snapshot,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -1877,14 +1877,14 @@ mod test {
         corrupt_snapshot_size_in(dir.path());
 
         assert!(
-            Snap::new_for_sending(dir.path(), &key, size_track.clone(), deleter.clone()).is_err()
+            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone()).is_err()
         );
 
         let mut s2 = Snap::new_for_building(
             dir.path(),
             &key,
             &snapshot,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -1903,7 +1903,7 @@ mod test {
             &dir,
             &dst_dir,
             &key,
-            size_track.clone(),
+            Arc::clone(&size_track),
             snap_data.get_meta().clone(),
             deleter.clone(),
         );
@@ -1913,14 +1913,14 @@ mod test {
         let snap_meta = metas.pop().unwrap();
 
         let mut s5 =
-            Snap::new_for_applying(dst_dir.path(), &key, size_track.clone(), deleter.clone())
+            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter.clone())
                 .unwrap();
         assert!(s5.exists());
 
         let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
         let dst_db = get_test_empty_db(&dst_db_dir).unwrap();
         let options = ApplyOptions {
-            db: dst_db.clone(),
+            db: Arc::clone(&dst_db),
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
@@ -1933,13 +1933,13 @@ mod test {
                 dst_dir.path(),
                 &key,
                 snap_meta,
-                size_track.clone(),
+                Arc::clone(&size_track),
                 deleter.clone(),
                 None,
             ).is_err()
         );
         assert!(
-            Snap::new_for_applying(dst_dir.path(), &key, size_track.clone(), deleter.clone())
+            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter.clone())
                 .is_err()
         );
     }
@@ -1960,7 +1960,7 @@ mod test {
             dir.path(),
             &key,
             &snapshot,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -1981,14 +1981,14 @@ mod test {
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
         assert!(
-            Snap::new_for_sending(dir.path(), &key, size_track.clone(), deleter.clone()).is_err()
+            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone()).is_err()
         );
 
         let mut s2 = Snap::new_for_building(
             dir.path(),
             &key,
             &snapshot,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -2007,7 +2007,7 @@ mod test {
             &dir,
             &dst_dir,
             &key,
-            size_track.clone(),
+            Arc::clone(&size_track),
             snap_data.get_meta().clone(),
             deleter.clone(),
         );
@@ -2015,7 +2015,7 @@ mod test {
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
         assert!(
-            Snap::new_for_applying(dst_dir.path(), &key, size_track.clone(), deleter.clone())
+            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter.clone())
                 .is_err()
         );
         assert!(
@@ -2023,7 +2023,7 @@ mod test {
                 dst_dir.path(),
                 &key,
                 snap_data.take_meta(),
-                size_track.clone(),
+                Arc::clone(&size_track),
                 deleter.clone(),
                 None,
             ).is_err()
@@ -2066,7 +2066,7 @@ mod test {
             &path,
             &key1,
             &snapshot,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -2082,13 +2082,13 @@ mod test {
             deleter.clone(),
         ).unwrap();
         let mut s =
-            Snap::new_for_sending(&path, &key1, size_track.clone(), deleter.clone()).unwrap();
+            Snap::new_for_sending(&path, &key1, Arc::clone(&size_track), deleter.clone()).unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = Snap::new_for_receiving(
             &path,
             &key1,
             snap_data.get_meta().clone(),
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -2103,7 +2103,7 @@ mod test {
             &path,
             &key2,
             &snapshot,
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();
@@ -2111,7 +2111,7 @@ mod test {
             &path,
             &key2,
             snap_data.take_meta(),
-            size_track.clone(),
+            Arc::clone(&size_track),
             deleter.clone(),
             None,
         ).unwrap();

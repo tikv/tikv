@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 
@@ -77,7 +78,7 @@ fn test_node_basic_transfer_leader() {
 }
 
 fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_rule();
 
     cluster.run();
@@ -140,7 +141,7 @@ fn test_node_pd_transfer_leader() {
 }
 
 fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    let pd_client = cluster.pd_client.clone();
+    let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_rule();
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);

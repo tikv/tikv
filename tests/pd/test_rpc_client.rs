@@ -44,7 +44,7 @@ fn new_client(eps: Vec<String>) -> RpcClient {
 fn test_rpc_client() {
     let eps_count = 1;
     let se = Arc::new(Service::new());
-    let server = MockServer::run::<Service>(eps_count, se.clone(), None);
+    let server = MockServer::run::<Service>(eps_count, Arc::clone(&se), None);
     let eps: Vec<String> = server
         .bind_addrs()
         .into_iter()
@@ -136,7 +136,7 @@ fn test_reboot() {
     let eps_count = 1;
     let se = Arc::new(Service::new());
     let al = Arc::new(AlreadyBootstrapped);
-    let server = MockServer::run(eps_count, se.clone(), Some(al));
+    let server = MockServer::run(eps_count, Arc::clone(&se), Some(al));
     let eps: Vec<String> = server
         .bind_addrs()
         .into_iter()
@@ -186,7 +186,7 @@ fn test_retry<F: Fn(&RpcClient)>(func: F) {
     let se = Arc::new(Service::new());
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
     let retry = Arc::new(Retry::new(3));
-    let server = MockServer::run(eps_count, se.clone(), Some(retry));
+    let server = MockServer::run(eps_count, Arc::clone(&se), Some(retry));
     let eps: Vec<String> = server
         .bind_addrs()
         .into_iter()
@@ -223,7 +223,7 @@ fn test_restart_leader() {
     // Service has only one GetMembersResponse, so the leader never changes.
     let se = Arc::new(Service::new());
     // Start mock servers.
-    let server = MockServer::run::<Service>(eps_count, se.clone(), None);
+    let server = MockServer::run::<Service>(eps_count, Arc::clone(&se), None);
     let eps: Vec<String> = server
         .bind_addrs()
         .into_iter()
@@ -264,7 +264,7 @@ fn test_restart_leader() {
     drop(server);
     // Restart them again.
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, se.clone(), None);
+    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, Arc::clone(&se), None);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
@@ -282,7 +282,7 @@ fn test_secure_restart_leader() {
     let mgr = Arc::new(SecurityManager::new(&security_cfg).unwrap());
     // Start mock servers.
     let eps: Vec<(String, u16)> = (0..3).map(|_| ("127.0.0.1".to_owned(), 0)).collect();
-    let server = MockServer::run_with_eps::<Service>(&mgr, eps, se.clone(), None);
+    let server = MockServer::run_with_eps::<Service>(&mgr, eps, Arc::clone(&se), None);
     let eps: Vec<String> = server
         .bind_addrs()
         .into_iter()
@@ -292,7 +292,7 @@ fn test_secure_restart_leader() {
     thread::sleep(Duration::from_secs(2));
 
     let cfg = new_config(eps);
-    let client = RpcClient::new(&cfg, mgr.clone()).unwrap();
+    let client = RpcClient::new(&cfg, Arc::clone(&mgr)).unwrap();
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::new();
@@ -320,7 +320,7 @@ fn test_secure_restart_leader() {
     // Kill servers.
     drop(server);
     // Restart them again.
-    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, se.clone(), None);
+    let _server = MockServer::run_with_eps::<Service>(&mgr, eps, Arc::clone(&se), None);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
@@ -334,7 +334,7 @@ fn test_change_leader_async() {
     let eps_count = 3;
     let se = Arc::new(Service::new());
     let lc = Arc::new(LeaderChange::new());
-    let server = MockServer::run(eps_count, se.clone(), Some(lc.clone()));
+    let server = MockServer::run(eps_count, Arc::clone(&se), Some(Arc::clone(&lc)));
     let eps: Vec<String> = server
         .bind_addrs()
         .into_iter()
