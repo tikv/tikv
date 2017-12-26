@@ -193,7 +193,7 @@ impl Executor for IndexScanExecutor {
         }
     }
 
-    fn collect_scan_count_into(&mut self, metrics: &mut ScanCounter) {
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
         metrics.merge(&mut self.scan_counter);
     }
 }

@@ -117,8 +117,8 @@ impl DAGContext {
         self.exec.collect_statistics_into(statistics);
     }
 
-    pub fn collect_scan_count_into(&mut self, metrics: &mut ScanCounter) {
-        self.exec.collect_scan_count_into(metrics);
+    pub fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+        self.exec.collect_metrics_into(metrics);
     }
 }
 

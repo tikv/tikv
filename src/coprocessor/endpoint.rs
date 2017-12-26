@@ -653,7 +653,7 @@ impl TiDbEndPoint {
         let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
         let res = ctx.handle_request();
         ctx.collect_statistics_into(&mut t.statistics);
-        ctx.collect_scan_count_into(&mut t.scan_counter);
+        ctx.collect_metrics_into(&mut t.scan_counter);
         res
     }
 

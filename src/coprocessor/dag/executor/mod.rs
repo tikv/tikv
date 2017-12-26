@@ -134,7 +134,7 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_statistics_into(&mut self, stats: &mut Statistics);
-    fn collect_scan_count_into(&mut self, metrics: &mut ScanCounter);
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter);
 }
 
 pub struct DAGExecutor {

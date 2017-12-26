@@ -59,8 +59,8 @@ impl<'a> Executor for LimitExecutor<'a> {
         self.src.collect_statistics_into(statistics);
     }
 
-    fn collect_scan_count_into(&mut self, metrics: &mut ScanCounter) {
-        self.src.collect_scan_count_into(metrics);
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+        self.src.collect_metrics_into(metrics);
     }
 }
 
