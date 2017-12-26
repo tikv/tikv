@@ -120,7 +120,7 @@ fn main() {
             inject_req.set_actions(actions);
 
             let option = CallOption::default().timeout(Duration::from_secs(10));
-            client.inject_fail_point_opt(inject_req, option).unwrap();
+            client.inject_fail_point_opt(&inject_req, option).unwrap();
         }
     } else if let Some(matches) = matches.subcommand_matches("recover") {
         let mut list = matches.value_of("file").map_or_else(Vec::new, read_file);
@@ -135,12 +135,12 @@ fn main() {
             recover_req.set_name(name);
 
             let option = CallOption::default().timeout(Duration::from_secs(10));
-            client.recover_fail_point_opt(recover_req, option).unwrap();
+            client.recover_fail_point_opt(&recover_req, option).unwrap();
         }
     } else if matches.is_present("list") {
         let list_req = debugpb::ListFailPointsRequest::new();
         let option = CallOption::default().timeout(Duration::from_secs(10));
-        let resp = client.list_fail_points_opt(list_req, option).unwrap();
+        let resp = client.list_fail_points_opt(&list_req, option).unwrap();
         println!("{:?}", resp.get_entries());
     }
 }
