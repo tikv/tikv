@@ -239,6 +239,13 @@ impl PdMocker for Service {
         Some(Ok(resp))
     }
 
+    fn scatter_region(&self, _: &ScatterRegionRequest) -> Option<Result<ScatterRegionResponse>> {
+        let mut resp = ScatterRegionResponse::new();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
     fn set_endpoints(&self, eps: Vec<String>) {
         let members_resp = make_members_response(eps);
         info!("[Service] members_resp {:?}", members_resp);
