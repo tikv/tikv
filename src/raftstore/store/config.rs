@@ -64,7 +64,6 @@ pub struct Config {
     pub snap_gc_timeout: ReadableDuration,
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
-    pub sst_importer_gc_interval: ReadableDuration,
 
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
@@ -94,6 +93,8 @@ pub struct Config {
     pub allow_remove_leader: bool,
 
     pub use_delete_range: bool,
+
+    pub sst_importer_gc_interval: ReadableDuration,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -139,7 +140,6 @@ impl Default for Config {
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
-            sst_importer_gc_interval: ReadableDuration::minutes(30),
             // Disable consistency check by default as it will hurt performance.
             // We should turn on this only in our tests.
             consistency_check_interval: ReadableDuration::secs(0),
@@ -148,6 +148,7 @@ impl Default for Config {
             right_derive_when_split: true,
             allow_remove_leader: false,
             use_delete_range: false,
+            sst_importer_gc_interval: ReadableDuration::minutes(30),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

@@ -112,6 +112,7 @@ fn test_serde_custom_tikv_config() {
         right_derive_when_split: false,
         allow_remove_leader: true,
         use_delete_range: true,
+        sst_importer_gc_interval: ReadableDuration::minutes(12),
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
     };

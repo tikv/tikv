@@ -87,14 +87,14 @@ impl Client {
     ) -> Result<SplitRegionResponse> {
         let ch = self.resolve(store_id)?;
         let client = TikvClient::new(ch);
-        let res = client.split_region_opt(req, self.call_opt(3));
+        let res = client.split_region_opt(&req, self.call_opt(3));
         self.post_resolve(store_id, res.map_err(Error::from))
     }
 
     pub fn upload_sst(&self, store_id: u64, req: UploadStream) -> Result<UploadResponse> {
         let ch = self.resolve(store_id)?;
         let client = ImportSstClient::new(ch);
-        let (tx, rx) = client.upload_opt(self.call_opt(30));
+        let (tx, rx) = client.upload_opt(self.call_opt(30))?;
         let res = req.forward(tx).and_then(|_| rx.map_err(Error::from)).wait();
         self.post_resolve(store_id, res.map_err(Error::from))
     }
@@ -102,7 +102,7 @@ impl Client {
     pub fn ingest_sst(&self, store_id: u64, req: IngestRequest) -> Result<IngestResponse> {
         let ch = self.resolve(store_id)?;
         let client = ImportSstClient::new(ch);
-        let res = client.ingest_opt(req, self.call_opt(30));
+        let res = client.ingest_opt(&req, self.call_opt(30));
         self.post_resolve(store_id, res.map_err(Error::from))
     }
 }

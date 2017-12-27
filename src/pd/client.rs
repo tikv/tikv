@@ -197,7 +197,7 @@ impl PdClient for RpcClient {
 
         let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.get_region_opt(req.clone(), option)
+            client.get_region_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())?;
 

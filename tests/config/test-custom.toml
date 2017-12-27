@@ -75,6 +75,7 @@ raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
 allow-remove-leader = true
 use-delete-range = true
+sst-importer-gc-interval = "12m"
 
 [coprocessor]
 split-region-on-table = true

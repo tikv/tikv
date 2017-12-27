@@ -26,8 +26,7 @@ use rocksdb::{IngestExternalFileOptions, DB};
 use kvproto::metapb::*;
 use kvproto::importpb::*;
 
-use util::file::calc_crc32;
-use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion};
+use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
 use super::{Error, Result};
 
@@ -205,19 +204,14 @@ impl ImportDir {
 
     fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
         let path = self.join(meta)?;
-        prepare_sst_for_ingestion(db, meta.get_cf_name(), &path.save, &path.clone)?;
+        let cf = meta.get_cf_name();
+        prepare_sst_for_ingestion(&path.save, &path.clone)?;
+        validate_sst_for_ingestion(db, cf, &path.clone, meta.get_length(), meta.get_crc32())?;
 
-        if calc_crc32(&path.clone)? != meta.get_crc32() {
-            return Err(Error::FileCorrupted(path.clone));
-        }
-        if path.clone.metadata()?.len() != meta.get_length() {
-            return Err(Error::FileCorrupted(path.clone));
-        }
-
-        let cf = get_cf_handle(db, meta.get_cf_name())?;
+        let handle = get_cf_handle(db, cf)?;
         let mut opts = IngestExternalFileOptions::new();
         opts.move_files(true);
-        db.ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()])?;
+        db.ingest_external_file_cf(handle, &opts, &[path.clone.to_str().unwrap()])?;
         Ok(())
     }
 
