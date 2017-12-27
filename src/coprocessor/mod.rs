@@ -13,9 +13,9 @@
 
 mod endpoint;
 mod metrics;
+mod local_metrics;
 mod dag;
 mod statistics;
-pub mod select;
 pub mod codec;
 pub mod cache;
 
@@ -87,5 +87,4 @@ impl From<txn::Error> for Error {
 }
 
 pub use self::endpoint::{CopRequestStatistics, CopSender, Host as EndPointHost, RequestTask,
-                         Task as EndPointTask, REQ_TYPE_DAG, REQ_TYPE_INDEX, REQ_TYPE_SELECT,
-                         SINGLE_GROUP};
+                         Task as EndPointTask, REQ_TYPE_DAG, SINGLE_GROUP};

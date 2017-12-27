@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
-use tipb::select::{self, DAGRequest, SelectRequest};
+use tipb::select::{self, DAGRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
@@ -37,14 +37,12 @@ use pd::PdTask;
 
 use super::codec::mysql;
 use super::codec::datum::Datum;
-use super::select::select::SelectContext;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
+use super::local_metrics::*;
 use super::{Error, Result};
 
-pub const REQ_TYPE_SELECT: i64 = 101;
-pub const REQ_TYPE_INDEX: i64 = 102;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 
@@ -93,6 +91,7 @@ impl ContextFactory<CopContext> for CopContextFactory {
             select_stats: Default::default(),
             index_stats: Default::default(),
             request_stats: HashMap::default(),
+            scan_counter: ScanCounter::default(),
         }
     }
 }
@@ -102,6 +101,7 @@ struct CopContext {
     index_stats: StatisticsSummary,
     request_stats: CopRequestStatistics,
     sender: FutureScheduler<PdTask>,
+    scan_counter: ScanCounter,
 }
 
 impl CopContext {
@@ -126,6 +126,14 @@ impl CopContext {
             .or_insert_with(FlowStatistics::default);
         flow_stats.add(&stats.write.flow_stats);
         flow_stats.add(&stats.data.flow_stats);
+    }
+
+    fn add_scan_count(&mut self, scan_counter: &mut ScanCounter) {
+        self.scan_counter.merge(scan_counter);
+    }
+
+    fn flush_scan_count(&mut self) {
+        self.scan_counter.flush();
     }
 }
 
@@ -155,6 +163,7 @@ impl Context for CopContext {
                 error!("send coprocessor statistics: {:?}", e);
             };
         }
+        self.flush_scan_count();
     }
 }
 
@@ -236,9 +245,13 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
-                let stats = end_point.handle_request(req, batch_row_limit);
+                let CopStats {
+                    stats,
+                    mut scan_counter,
+                } = end_point.handle_request(req, batch_row_limit);
                 ctx.add_statistics(type_str, &stats);
                 ctx.add_statistics_by_region(region_id, &stats);
+                ctx.add_scan_count(&mut scan_counter);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
@@ -266,7 +279,6 @@ impl Display for Task {
 }
 
 enum CopRequest {
-    Select(SelectRequest),
     DAG(DAGRequest),
     Analyze(AnalyzeReq),
 }
@@ -305,6 +317,7 @@ pub struct RequestTask {
     wait_time: Option<f64>,
     timer: Instant,
     statistics: Statistics,
+    scan_counter: ScanCounter,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
     ctx: Arc<ReqContext>,
@@ -318,20 +331,6 @@ impl RequestTask {
         let tp = req.get_tp();
         let mut table_scan = false;
         let cop_req = match tp {
-            REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
-                if tp == REQ_TYPE_SELECT {
-                    table_scan = true;
-                }
-                let mut is = CodedInputStream::from_bytes(req.get_data());
-                is.set_recursion_limit(recursion_limit);
-                let mut sel = SelectRequest::new();
-                if let Err(e) = sel.merge_from(&mut is) {
-                    Err(box_err!(e))
-                } else {
-                    start_ts = Some(sel.get_start_ts());
-                    Ok(CopRequest::Select(sel))
-                }
-            }
             REQ_TYPE_DAG => {
                 let mut is = CodedInputStream::from_bytes(req.get_data());
                 is.set_recursion_limit(recursion_limit);
@@ -377,6 +376,7 @@ impl RequestTask {
             wait_time: None,
             timer: timer,
             statistics: Default::default(),
+            scan_counter: ScanCounter::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
             ctx: Arc::new(req_ctx),
@@ -604,7 +604,12 @@ fn err_resp(e: Error) -> Response {
     resp
 }
 
-fn on_error(e: Error, req: RequestTask) -> Statistics {
+struct CopStats {
+    stats: Statistics,
+    scan_counter: ScanCounter,
+}
+
+fn on_error(e: Error, req: RequestTask) -> CopStats {
     let resp = err_resp(e);
     respond(resp, req)
 }
@@ -617,10 +622,13 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     }
 }
 
-fn respond(resp: Response, mut t: RequestTask) -> Statistics {
+fn respond(resp: Response, mut t: RequestTask) -> CopStats {
     t.stop_record_handling();
     (t.on_resp)(resp);
-    t.statistics
+    CopStats {
+        stats: t.statistics,
+        scan_counter: t.scan_counter,
+    }
 }
 
 pub struct TiDbEndPoint {
@@ -644,14 +652,13 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> Statistics {
+    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> CopStats {
         t.stop_record_waiting();
 
         if let Err(e) = t.check_outdated() {
             return on_error(e, t);
         }
         let resp = match t.cop_req.take().unwrap() {
-            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t, batch_row_limit),
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Err(err) => Err(err),
@@ -660,19 +667,6 @@ impl TiDbEndPoint {
             Ok(r) => respond(r, t),
             Err(e) => on_error(e, t),
         }
-    }
-
-    fn handle_select(
-        self,
-        sel: SelectRequest,
-        t: &mut RequestTask,
-        batch_row_limit: usize,
-    ) -> Result<Response> {
-        let mut ctx = SelectContext::new(sel, self.snap, t.ctx.clone(), batch_row_limit)?;
-        let ranges = t.req.take_ranges().into_vec();
-        let res = ctx.handle_request(ranges);
-        ctx.collect_statistics_into(&mut t.statistics);
-        res
     }
 
     pub fn handle_dag(
@@ -694,6 +688,7 @@ impl TiDbEndPoint {
         )?;
         let res = ctx.handle_request(region_id);
         ctx.collect_statistics_into(&mut t.statistics);
+        ctx.collect_metrics_into(&mut t.scan_counter);
         res
     }
 

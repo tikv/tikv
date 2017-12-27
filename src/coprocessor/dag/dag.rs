@@ -20,7 +20,8 @@ use protobuf::{Message as PbMsg, RepeatedField};
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
-use coprocessor::select::xeval::EvalContext;
+use coprocessor::dag::expr::EvalContext;
+use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
 use coprocessor::cache::*;
 use coprocessor::metrics::*;
@@ -163,6 +164,10 @@ impl DAGContext {
         } else {
             self.can_cache()
         }
+    }
+
+    pub fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+        self.exec.collect_metrics_into(metrics);
     }
 }
 
