@@ -17,8 +17,8 @@ use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 
 use coprocessor::metrics::*;
-use coprocessor::select::xeval::EvalContext;
-use coprocessor::dag::expr::Expression;
+use coprocessor::local_metrics::*;
+use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::Result;
 use storage::Statistics;
 
@@ -86,6 +86,10 @@ impl Executor for SelectionExecutor {
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
         self.src.collect_statistics_into(statistics);
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+        self.src.collect_metrics_into(metrics);
     }
 }
 
