@@ -14,6 +14,7 @@
 
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
+#![feature(test)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
@@ -30,6 +31,7 @@
 #[macro_use]
 extern crate log;
 extern crate protobuf;
+extern crate test;
 #[macro_use]
 extern crate tikv;
 extern crate rand;
@@ -47,6 +49,8 @@ extern crate lazy_static;
 
 #[allow(dead_code)]
 mod raftstore;
+#[allow(dead_code)]
+mod storage;
 #[cfg(not(feature = "no-fail"))]
 mod failpoints_cases;
 

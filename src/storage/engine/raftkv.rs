@@ -354,7 +354,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC
                     .with_label_values(&["write", "success"])
                     .inc();
-
+                fail_point!("raftkv_async_write_finish");
                 cb((cb_ctx, Ok(())))
             }
             Ok(CmdRes::Snap(_)) => cb((
@@ -399,6 +399,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC
                     .with_label_values(&["snapshot", "success"])
                     .inc();
+                fail_point!("raftkv_async_snapshot_finish");
                 cb((cb_ctx, Ok(box s)))
             }
             Err(e) => {
@@ -460,6 +461,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     None => snapshots.push(None),
                 }
             }
+            fail_point!("raftkv_async_batch_snapshot_finish");
             on_finished(snapshots);
         };
 
