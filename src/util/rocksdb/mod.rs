@@ -391,12 +391,10 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         // RocksDB must not have this file, we can make a hard link.
         fs::hard_link(path, clone)
             .map_err(|e| format!("link from {} to {}: {:?}", path, clone, e))?;
-        info!("link from {} to {}", path, clone);
     } else {
         // RocksDB may have this file, we should make a copy.
         copy_and_sync(path, clone)
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
-        info!("copy from {} to {}", path, clone);
     }
 
     Ok(())
@@ -412,7 +410,6 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     if !Path::new(clone).exists() {
         copy_and_sync(path, clone)
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
-        info!("copy from {} to {}", path, clone);
     }
     Ok(())
 }
