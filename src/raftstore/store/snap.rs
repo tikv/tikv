@@ -39,6 +39,7 @@ use util::io_limiter::{IOLimiter, LimitWriter};
 use util::HandyRwLock;
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
+use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
 use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
@@ -58,6 +59,7 @@ const SNAP_REV_PREFIX: &'static str = "rev";
 
 const TMP_FILE_SUFFIX: &'static str = ".tmp";
 const SST_FILE_SUFFIX: &'static str = ".sst";
+const CLONE_FILE_SUFFIX: &'static str = ".clone";
 
 const DELETE_RETRY_MAX_TIMES: u32 = 6;
 const DELETE_RETRY_TIME_MILLIS: u64 = 500;
@@ -225,31 +227,11 @@ use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
 use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
 use util::rocksdb;
 use util::time::duration_to_sec;
-use util::file::{delete_file_if_exist, file_exists, get_file_size};
+use util::file::{delete_file_if_exist, file_exists, get_file_size, calc_crc32};
 use util::rocksdb::get_fastest_supported_compression_type;
 
 pub const SNAPSHOT_VERSION: u64 = 2;
 const META_FILE_SUFFIX: &'static str = ".meta";
-const DIGEST_BUFFER_SIZE: usize = 10240;
-
-
-fn calc_crc32(p: &PathBuf) -> io::Result<u32> {
-    let mut digest = Digest::new(crc32::IEEE);
-    let mut f = OpenOptions::new().read(true).open(&p)?;
-    let mut buf = vec![0; DIGEST_BUFFER_SIZE];
-    loop {
-        match f.read(&mut buf[..]) {
-            Ok(0) => {
-                return Ok(digest.sum32());
-            }
-            Ok(n) => {
-                digest.write(&buf[..n]);
-            }
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(err) => return Err(err),
-        }
-    }
-}
 
 fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());
@@ -311,6 +293,7 @@ struct CfFile {
     pub cf: CfName,
     pub path: PathBuf,
     pub tmp_path: PathBuf,
+    pub clone_path: PathBuf,
     pub sst_writer: Option<SstFileWriter>,
     pub file: Option<File>,
     pub kv_count: u64,
@@ -367,10 +350,12 @@ impl Snap {
             let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
             let path = dir_path.join(&filename);
             let tmp_path = dir_path.join(format!("{}{}", filename, TMP_FILE_SUFFIX));
+            let clone_path = dir_path.join(format!("{}{}", filename, CLONE_FILE_SUFFIX));
             let cf_file = CfFile {
                 cf: cf,
                 path: path,
                 tmp_path: tmp_path,
+                clone_path: clone_path,
                 ..Default::default()
             };
             cf_files.push(cf_file);
@@ -594,14 +579,25 @@ impl Snap {
         )
     }
 
-    fn validate(&self) -> RaftStoreResult<()> {
+    fn validate(&self, db: Arc<DB>) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
                 // this is checked when loading the snapshot meta.
                 continue;
             }
-            check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
+            if plain_file_used(cf_file.cf) {
+                check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
+            } else {
+                prepare_sst_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
+                validate_sst_for_ingestion(
+                    &db,
+                    cf_file.cf,
+                    &cf_file.clone_path,
+                    cf_file.size,
+                    cf_file.checksum,
+                )?;
+            }
         }
         Ok(())
     }
@@ -678,7 +674,7 @@ impl Snap {
         deleter: Box<SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         if self.exists() {
-            match self.validate() {
+            match self.validate(snap.get_db()) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
@@ -873,6 +869,7 @@ impl Snapshot for Snap {
                 *size_track = size_track.saturating_sub(cf_file.size);
             }
             delete_file_if_exist(&cf_file.path);
+            delete_file_if_exist(&cf_file.clone_path);
         }
         delete_file_if_exist(&self.meta_file.tmp_path);
         delete_file_if_exist(&self.meta_file.path);
@@ -941,7 +938,7 @@ impl Snapshot for Snap {
     }
 
     fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-        box_try!(self.validate());
+        box_try!(self.validate(options.db.clone()));
 
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
@@ -955,11 +952,9 @@ impl Snapshot for Snap {
                 let mut file = box_try!(File::open(&cf_file.path));
                 apply_plain_cf_file(&mut file, &options, cf_handle)?;
             } else {
-                let ingest_opt = IngestExternalFileOptions::new();
-                // TODO: move SST file instead of copy
-                // after changing logic in raft, ask for resending snapshot if applying fail.
-                // ingest_opt.move_files(true);
-                let path = cf_file.path.as_path().to_str().unwrap();
+                let mut ingest_opt = IngestExternalFileOptions::new();
+                ingest_opt.move_files(true);
+                let path = cf_file.clone_path.to_str().unwrap();
                 box_try!(
                     options
                         .db
