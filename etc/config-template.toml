@@ -151,8 +151,9 @@
 
 [coprocessor]
 # When it is true, it will try to split a region with table prefix if
-# that region crosses tables.
-# split-region-on-table = false
+# that region crosses tables. It is recommended to turn off this option
+# if there will be a large number of tables created.
+# split-region-on-table = true
 # When the region's size exceeds region-max-size, we will split the region
 # into two which the left region's size will be region-split-size or a little
 # bit smaller.
