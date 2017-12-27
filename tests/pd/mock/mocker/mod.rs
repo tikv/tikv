@@ -101,5 +101,9 @@ pub trait PdMocker {
         None
     }
 
+    fn scatter_region(&self, _: &ScatterRegionRequest) -> Option<Result<ScatterRegionResponse>> {
+        None
+    }
+
     fn set_endpoints(&self, _: Vec<String>) {}
 }
