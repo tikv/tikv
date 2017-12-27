@@ -538,6 +538,7 @@ pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::iter::FromIterator;
 
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb;
@@ -786,6 +787,7 @@ mod tests {
         let debugger = new_debugger();
         let kv_engine = debugger.engines.kv_engine.as_ref();
         let raft_engine = debugger.engines.raft_engine.as_ref();
+        let store_id = 1; // It's a fake id.
 
         let wb1 = WriteBatch::new();
         let handle1 = get_cf_handle(raft_engine, CF_DEFAULT).unwrap();
@@ -794,6 +796,24 @@ mod tests {
         let handle2 = get_cf_handle(kv_engine, CF_RAFT).unwrap();
 
         {
+            let mock_region_state = |region_id: u64, peers: &[u64]| {
+                let region_state_key = keys::region_state_key(region_id);
+                let mut region_state = RegionLocalState::new();
+                region_state.set_state(PeerState::Normal);
+                {
+                    let region = region_state.mut_region();
+                    region.set_id(region_id);
+                    let peers = peers.iter().enumerate().map(|(i, &sid)| {
+                        let mut peer = metapb::Peer::new();
+                        peer.id = i as u64;
+                        peer.store_id = sid;
+                        peer
+                    });
+                    region.set_peers(RepeatedField::from_iter(peers));
+                }
+                wb2.put_msg_cf(handle2, &region_state_key, &region_state)
+                    .unwrap();
+            };
             let mock_raft_state = |region_id: u64, last_index: u64, commit_index: u64| {
                 let raft_state_key = keys::raft_state_key(region_id);
                 let mut raft_state = RaftLocalState::new();
@@ -810,6 +830,10 @@ mod tests {
                     .unwrap();
             };
 
+            for &region_id in &[10, 11, 12] {
+                mock_region_state(region_id, &[store_id]);
+            }
+
             // last index < commit index
             mock_raft_state(10, 100, 110);
 
@@ -818,14 +842,18 @@ mod tests {
             mock_apply_state(11, 110);
             mock_raft_state(12, 100, 90);
             mock_apply_state(12, 95);
+
+            // region state doesn't contains the peer itself.
+            mock_region_state(13, &[]);
         }
 
         raft_engine.write_opt(wb1, &WriteOptions::new()).unwrap();
+        kv_engine.write_opt(wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
-        assert_eq!(bad_regions.len(), 3);
-        assert_eq!(bad_regions[0].0, 10);
-        assert_eq!(bad_regions[1].0, 11);
-        assert_eq!(bad_regions[2].0, 12);
+        assert_eq!(bad_regions.len(), 4);
+        for i in 0..4 {
+            assert_eq!(bad_regions[i].0, (10 + i) as u64);
+        }
     }
 }
