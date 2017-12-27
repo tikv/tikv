@@ -780,4 +780,52 @@ mod tests {
         }
         assert_eq!(count, 7);
     }
+
+    #[test]
+    fn test_bad_regions() {
+        let debugger = new_debugger();
+        let kv_engine = debugger.engines.kv_engine.as_ref();
+        let raft_engine = debugger.engines.raft_engine.as_ref();
+
+        let wb1 = WriteBatch::new();
+        let handle1 = get_cf_handle(raft_engine, CF_DEFAULT).unwrap();
+
+        let wb2 = WriteBatch::new();
+        let handle2 = get_cf_handle(kv_engine, CF_RAFT).unwrap();
+
+        {
+            let mock_raft_state = |region_id: u64, last_index: u64, commit_index: u64| {
+                let raft_state_key = keys::raft_state_key(region_id);
+                let mut raft_state = RaftLocalState::new();
+                raft_state.set_last_index(last_index);
+                raft_state.mut_hard_state().set_commit(commit_index);
+                wb1.put_msg_cf(handle1, &raft_state_key, &raft_state)
+                    .unwrap();
+            };
+            let mock_apply_state = |region_id: u64, apply_index: u64| {
+                let raft_apply_key = keys::apply_state_key(region_id);
+                let mut apply_state = RaftApplyState::new();
+                apply_state.set_applied_index(apply_index);
+                wb2.put_msg_cf(handle2, &raft_apply_key, &apply_state)
+                    .unwrap();
+            };
+
+            // last index < commit index
+            mock_raft_state(10, 100, 110);
+
+            // commit index < last index < apply index, or commit index < apply index < last index.
+            mock_raft_state(11, 100, 90);
+            mock_apply_state(11, 110);
+            mock_raft_state(12, 100, 90);
+            mock_apply_state(12, 95);
+        }
+
+        raft_engine.write_opt(wb1, &WriteOptions::new()).unwrap();
+
+        let bad_regions = debugger.bad_regions().unwrap();
+        assert_eq!(bad_regions.len(), 3);
+        assert_eq!(bad_regions[0].0, 10);
+        assert_eq!(bad_regions[1].0, 11);
+        assert_eq!(bad_regions[2].0, 12);
+    }
 }
