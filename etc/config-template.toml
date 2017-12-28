@@ -434,4 +434,4 @@
 # maximum concurrent import sst jobs.
 # max-import-sst-jobs = 4
 # stream channel buffer size, stream will be blocked on channel full.
-# stream-channel-size = 1024
+# stream-channel-size = 128

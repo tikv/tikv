@@ -232,6 +232,7 @@ impl ImportDir {
     }
 }
 
+#[derive(Clone)]
 pub struct ImportPath {
     save: PathBuf,
     temp: PathBuf,
@@ -371,6 +372,112 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
+    use tempdir::TempDir;
+    use rocksdb::{CFHandle, EnvOptions, SstFileWriter};
+    use util::rocksdb::new_engine;
+
+    #[test]
+    fn test_import_dir() {
+        let temp_dir = TempDir::new("tikv_test_import_dir").unwrap();
+        let dir = ImportDir::new(temp_dir.path()).unwrap();
+
+        let db_path = temp_dir.path().join("db");
+        let cf_name = "default";
+        let db = new_engine(db_path.to_str().unwrap(), &[cf_name], None).unwrap();
+        let cf = db.cf_handle(cf_name).unwrap();
+
+        let cases = vec![
+            [("k1", "v1"), ("k2", "v2"), ("k3", "v3")],
+            [("k3", "v3"), ("k4", "v4"), ("k5", "v5")],
+        ];
+
+        let mut ingested_ssts = Vec::new();
+        for (i, case) in cases.iter().enumerate() {
+            let sst_path = temp_dir.path().join(format!("{}.sst", i));
+
+            // Generate a valid SST file.
+            gen_sst_with_kvs(&db, cf, sst_path.to_str().unwrap(), case);
+            let mut data = Vec::new();
+            File::open(&sst_path)
+                .unwrap()
+                .read_to_end(&mut data)
+                .unwrap();
+            let crc32 = get_data_crc32(&data);
+
+            // Make a valid SSTMeta.
+            let mut meta = SSTMeta::new();
+            let uuid = Uuid::new_v4();
+            meta.set_uuid(uuid.as_bytes().to_vec());
+            meta.set_crc32(crc32);
+            meta.set_length(data.len() as u64);
+            meta.set_cf_name(cf_name.to_owned());
+
+            // Write the SST file to the dir.
+            let mut f = dir.create(&meta).unwrap();
+            f.append(&data).unwrap();
+            f.finish().unwrap();
+
+            dir.ingest(&meta, &db).unwrap();
+            check_db_with_kvs(&db, cf, case);
+
+            ingested_ssts.push(meta);
+        }
+
+        let ssts = dir.list_ssts().unwrap();
+        assert_eq!(ssts.len(), ingested_ssts.len());
+        for sst in &ingested_ssts {
+            ssts.iter()
+                .find(|s| s.get_uuid() == sst.get_uuid())
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_import_file() {
+        let temp_dir = TempDir::new("tikv_test_import_file").unwrap();
+
+        let path = ImportPath {
+            save: temp_dir.path().join("save"),
+            temp: temp_dir.path().join("temp"),
+            clone: temp_dir.path().join("clone"),
+        };
+
+        let data = b"import_file";
+        let crc32 = get_data_crc32(data);
+
+        let mut meta = SSTMeta::new();
+
+        {
+            let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
+            // Create the same file again will fail because the file exists.
+            assert!(ImportFile::create(meta.clone(), path.clone()).is_err());
+            f.append(data).unwrap();
+            // Validate will fail because the meta crc32 and length are 0.
+            assert!(f.finish().is_err());
+            assert!(path.temp.exists());
+            assert!(!path.save.exists());
+        }
+
+        meta.set_crc32(crc32);
+
+        {
+            let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
+            f.append(data).unwrap();
+            // Validate will fail because the meta length is 0.
+            assert!(f.finish().is_err());
+        }
+
+        meta.set_length(data.len() as u64);
+
+        {
+            let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
+            f.append(data).unwrap();
+            f.finish().unwrap();
+            assert!(!path.temp.exists());
+            assert!(path.save.exists());
+        }
+    }
 
     #[test]
     fn test_sst_meta_to_path() {
@@ -389,5 +496,27 @@ mod tests {
 
         let new_meta = path_to_sst_meta(path).unwrap();
         assert_eq!(meta, new_meta);
+    }
+
+    fn get_data_crc32(data: &[u8]) -> u32 {
+        let mut digest = crc32::Digest::new(crc32::IEEE);
+        digest.write(data);
+        digest.sum32()
+    }
+
+    fn gen_sst_with_kvs(db: &DB, cf: &CFHandle, path: &str, kvs: &[(&str, &str)]) {
+        let opts = db.get_options_cf(cf).clone();
+        let mut writer = SstFileWriter::new(EnvOptions::new(), opts);
+        writer.open(path).unwrap();
+        for &(k, v) in kvs {
+            writer.put(k.as_bytes(), v.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    fn check_db_with_kvs(db: &DB, cf: &CFHandle, kvs: &[(&str, &str)]) {
+        for &(k, v) in kvs {
+            assert_eq!(db.get_cf(cf, k.as_bytes()).unwrap().unwrap(), v.as_bytes());
+        }
     }
 }

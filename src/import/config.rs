@@ -34,7 +34,7 @@ impl Default for Config {
             num_threads: 4,
             max_import_jobs: 4,
             max_import_sst_jobs: 4,
-            stream_channel_size: 1024,
+            stream_channel_size: 128,
             region_split_size: 0, // Should derive from coprocessor.
         }
     }
