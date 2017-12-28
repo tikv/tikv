@@ -81,9 +81,12 @@ macro_rules! printf {
     });
 }
 
+mod utils;
+
 mod raftstore;
 mod mvcc;
 mod mvcctxn;
+mod concurrent_rocksdb;
 
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));
