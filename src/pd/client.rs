@@ -413,4 +413,24 @@ impl PdClient for RpcClient {
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
+
+    fn scatter_region(&self, mut region: RegionInfo) -> Result<()> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["scatter_region"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::ScatterRegionRequest::new();
+        req.set_header(self.header());
+        req.set_region_id(region.get_id());
+        if let Some(leader) = region.leader.take() {
+            req.set_leader(leader);
+        }
+        req.set_region(region.region);
+
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            client.scatter_region_opt(&req, option)
+        })?;
+        check_resp_header(resp.get_header())
+    }
 }
