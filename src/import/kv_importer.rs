@@ -227,9 +227,6 @@ impl EngineDir {
     fn new<P: AsRef<Path>>(root: P, opts: &DbConfig) -> Result<EngineDir> {
         let root_dir = root.as_ref().to_owned();
         let temp_dir = root_dir.join(Self::TEMP_DIR);
-        if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir)?;
-        }
         fs::create_dir_all(&temp_dir)?;
         Ok(EngineDir {
             opts: opts.clone(),
