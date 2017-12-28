@@ -270,4 +270,13 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         hijack_unary(self, ctx, sink, |c| c.put_cluster_config(&req))
     }
+
+    fn scatter_region(
+        &self,
+        ctx: RpcContext,
+        req: ScatterRegionRequest,
+        sink: UnarySink<ScatterRegionResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, |c| c.scatter_region(&req))
+    }
 }

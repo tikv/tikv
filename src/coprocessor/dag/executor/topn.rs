@@ -23,6 +23,7 @@ use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
 use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use storage::Statistics;
 
 use super::topn_heap::{SortRow, TopNHeap};
@@ -140,6 +141,10 @@ impl Executor for TopNExecutor {
 
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
         self.src.collect_statistics_into(statistics);
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+        self.src.collect_metrics_into(metrics);
     }
 }
 
