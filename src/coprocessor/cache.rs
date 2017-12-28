@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,13 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate linked_hash_map;
-
 use std::collections::HashMap;
 use std::option::Option;
 use std::boxed::Box;
 use std::sync::{Arc, Mutex};
-use self::linked_hash_map::LinkedHashMap;
+use linked_hash_map::LinkedHashMap;
 use super::metrics::*;
 
 type DistSQLCacheKey = String;
@@ -49,6 +47,8 @@ pub struct RegionDistSQLCacheEntry {
     cached_items: HashMap<DistSQLCacheKey, u8>,
 }
 
+
+#[derive(Default)]
 pub struct DistSQLCache {
     regions: HashMap<u64, RegionDistSQLCacheEntry>,
     max_size: usize,
@@ -60,10 +60,8 @@ impl DistSQLCache {
     // capacity is memory size unit is byte
     pub fn new(capacity: usize) -> DistSQLCache {
         DistSQLCache {
-            regions: HashMap::new(),
-            map: LinkedHashMap::new(),
             max_size: capacity,
-            size: 0,
+            ..Default::default()
         }
     }
 
@@ -256,7 +254,7 @@ impl DistSQLCache {
         let opt = match self.regions.get_mut(&region_id) {
             Some(entry) => {
                 entry.enable = false;
-                None
+                return
             }
             None => {
                 let rmap = HashMap::new();
