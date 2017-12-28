@@ -21,19 +21,20 @@ fn next_ts() -> u64 {
     CURRENT.fetch_add(1, Ordering::SeqCst)
 }
 
-#[inline]
-fn create_row_key(tableid: i64, rowid: i64) -> Vec<u8> {
-    let mut handle = Vec::with_capacity(8);
-    handle.encode_i64(rowid).unwrap();
-    encode_row_key(tableid, &handle)
-}
-
-fn generate_keys(count: usize) -> Vec<Vec<u8>> {
+fn generate_row_keys(table_id: i64, start_id: i64, count: usize) -> Vec<Vec<u8>> {
     let mut result = Vec::with_capacity(count);
-    for i in 0..count {
-        result.push(create_row_key(1, i as i64));
+    for i in (start_id)..(start_id + count as i64) {
+        let mut handle = Vec::with_capacity(8);
+        handle.encode_i64(i as i64).unwrap();
+        let key = encode_row_key(table_id, &handle);
+        result.push(key);
     }
     result
+}
+
+
+fn generate_unique_index_keys(table_id: i64, value_len: usize, count: usize) -> Vec<Vec<u8>> {
+    panic!("Not implemented");
 }
 
 #[inline]
@@ -170,25 +171,38 @@ fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> BenchSamples {
     }
 }
 
+enum BenchType {
+    Row,
+    UniqueIndex,
+}
 
 // Run all bench with specified parameters
-fn bench_row(table_size: usize, version_count: usize, value_len: usize) {
-    let keys = generate_keys(table_size);
+fn bench_all(table_size: usize, version_count: usize, data_len: usize, bench_type: &BenchType) {
+
+    let (keys, value_len, log_name) = match *bench_type {
+        BenchType::Row =>
+            (generate_row_keys(1, 0, table_size), data_len, "row"),
+        BenchType::UniqueIndex =>
+            (generate_unique_index_keys(1, 0, table_size), 8, "unique index"),
+    };
+
     let engine = prepare_test_engine(version_count, value_len, &keys);
 
     printf!(
-        "benching mvcctxn get\trows:{} versions:{} value len:{}\t...",
+        "benching mvcctxn {} get\trows:{} versions:{} data len:{}\t...",
+        log_name,
         table_size,
         version_count,
-        value_len
+        data_len
     );
     print_result(bench_get(&*engine, &keys));
 
     printf!(
-        "benching mvcctxn set\trows:{} versions:{} value len:{}\t...",
+        "benching mvcctxn {} set\trows:{} versions:{} data len:{}\t...",
+        log_name,
         table_size,
         version_count,
-        value_len
+        data_len
     );
     print_result(bench_set(&*engine, &keys, value_len));
 
@@ -196,36 +210,41 @@ fn bench_row(table_size: usize, version_count: usize, value_len: usize) {
     let engine = prepare_test_engine(version_count, value_len, &keys);
 
     printf!(
-        "benching mvcctxn delete\trows:{} versions:{} value len:{}\t...",
+        "benching mvcctxn {} delete\trows:{} versions:{} data len:{}\t...",
+        log_name,
         table_size,
         version_count,
-        value_len
+        data_len
     );
     print_result(bench_delete(&*engine, &keys));
 
     for batch_size in &[16, 128, 256, 512] {
         let engine = prepare_test_engine(version_count, value_len, &keys);
         printf!(
-            "benching mvcctxn batch write\trows:{} versions:{} value len:{} batch:{}\t...",
+            "benching mvcctxn {} batch write\trows:{} versions:{} data len:{} batch:{}\t...",
+            log_name,
             table_size,
             version_count,
-            value_len,
+            data_len,
             batch_size,
         );
         print_result(bench_batch_set(&*engine, &keys, value_len, *batch_size));
     }
 }
 
+
 pub fn bench_mvcctxn() {
-    for table_size in &[1_000, 10_000, 100_000] {
-        bench_row(*table_size, 5, 128);
-    }
+    for bench_type in &[BenchType::Row, BenchType::UniqueIndex] {
+        for table_size in &[1_000, 10_000, 100_000] {
+            bench_all(*table_size, 5, 128, bench_type);
+        }
 
-    for version_count in &[1, 5, 20] {
-        bench_row(10_000, *version_count, 128);
-    }
+        for version_count in &[1, 5, 20] {
+            bench_all(10_000, *version_count, 128, bench_type);
+        }
 
-    for value_len in &[32, 128, 1024] {
-        bench_row(10_000, 5, *value_len);
+        for value_len in &[32, 128, 1024] {
+            bench_all(10_000, 5, *value_len, bench_type);
+        }
     }
 }
