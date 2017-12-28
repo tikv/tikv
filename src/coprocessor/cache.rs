@@ -254,7 +254,7 @@ impl DistSQLCache {
         let opt = match self.regions.get_mut(&region_id) {
             Some(entry) => {
                 entry.enable = false;
-                return
+                return;
             }
             None => {
                 let rmap = HashMap::new();
