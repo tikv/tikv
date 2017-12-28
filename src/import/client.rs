@@ -14,7 +14,6 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::io::{Cursor, Read};
-use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,6 +28,28 @@ use kvproto::importpb_grpc::*;
 use pd::{PdClient, RegionInfo, RpcClient};
 
 use super::{Error, Result};
+
+pub trait ImportClient {
+    fn get_region(&self, _: &[u8]) -> Result<RegionInfo> {
+        unimplemented!()
+    }
+
+    fn scatter_region(&self, _: RegionInfo) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn split_region(&self, _: u64, _: SplitRegionRequest) -> Result<SplitRegionResponse> {
+        unimplemented!()
+    }
+
+    fn upload_sst(&self, _: u64, _: UploadStream) -> Result<UploadResponse> {
+        unimplemented!()
+    }
+
+    fn ingest_sst(&self, _: u64, _: IngestRequest) -> Result<IngestResponse> {
+        unimplemented!()
+    }
+}
 
 pub struct Client {
     rpc: Arc<RpcClient>,
@@ -82,23 +103,25 @@ impl Client {
         let timeout = Duration::from_secs(timeout_secs);
         CallOption::default().timeout(timeout)
     }
+}
 
-    pub fn get_region(&self, key: &[u8]) -> Result<RegionInfo> {
+impl ImportClient for Client {
+    fn get_region(&self, key: &[u8]) -> Result<RegionInfo> {
         self.rpc.get_region_info(key).map_err(Error::from)
     }
 
-    pub fn split_region(
-        &self,
-        store_id: u64,
-        req: SplitRegionRequest,
-    ) -> Result<SplitRegionResponse> {
+    fn scatter_region(&self, region: RegionInfo) -> Result<()> {
+        self.rpc.scatter_region(region).map_err(Error::from)
+    }
+
+    fn split_region(&self, store_id: u64, req: SplitRegionRequest) -> Result<SplitRegionResponse> {
         let ch = self.resolve(store_id)?;
         let client = TikvClient::new(ch);
         let res = client.split_region_opt(&req, self.call_opt(3));
         self.post_resolve(store_id, res.map_err(Error::from))
     }
 
-    pub fn upload_sst(&self, store_id: u64, req: UploadStream) -> Result<UploadResponse> {
+    fn upload_sst(&self, store_id: u64, req: UploadStream) -> Result<UploadResponse> {
         let ch = self.resolve(store_id)?;
         let client = ImportSstClient::new(ch);
         let (tx, rx) = client.upload_opt(self.call_opt(30))?;
@@ -106,19 +129,11 @@ impl Client {
         self.post_resolve(store_id, res.map_err(Error::from))
     }
 
-    pub fn ingest_sst(&self, store_id: u64, req: IngestRequest) -> Result<IngestResponse> {
+    fn ingest_sst(&self, store_id: u64, req: IngestRequest) -> Result<IngestResponse> {
         let ch = self.resolve(store_id)?;
         let client = ImportSstClient::new(ch);
         let res = client.ingest_opt(&req, self.call_opt(30));
         self.post_resolve(store_id, res.map_err(Error::from))
-    }
-}
-
-impl Deref for Client {
-    type Target = RpcClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.rpc
     }
 }
 
@@ -163,5 +178,45 @@ impl<'a> Stream for UploadStream<'a> {
         let mut chunk = UploadRequest::new();
         chunk.set_data(buf);
         Ok(Async::Ready(Some((chunk, flags))))
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use kvproto::metapb::*;
+    use pd::Error as PdError;
+    use import::{Error, Result};
+
+    pub struct MockClient {
+        regions: Vec<Region>,
+    }
+
+    impl MockClient {
+        pub fn new() -> MockClient {
+            MockClient {
+                regions: Vec::new(),
+            }
+        }
+
+        pub fn add_region_range(&mut self, start: &[u8], end: &[u8]) {
+            let mut r = Region::new();
+            r.set_start_key(start.to_owned());
+            r.set_end_key(end.to_owned());
+            self.regions.push(r);
+        }
+    }
+
+    impl ImportClient for MockClient {
+        fn get_region(&self, key: &[u8]) -> Result<RegionInfo> {
+            for r in &self.regions {
+                if key >= r.get_start_key() &&
+                    (r.get_end_key().is_empty() || key < r.get_end_key())
+                {
+                    return Ok(RegionInfo::new(r.clone(), None));
+                }
+            }
+            Err(Error::PdRPC(PdError::RegionNotFound(key.to_owned())))
+        }
     }
 }

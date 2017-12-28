@@ -25,7 +25,7 @@ use pd::RegionInfo;
 use kvproto::importpb::*;
 use kvproto::errorpb::NotLeader;
 
-use super::{Client, Config, Engine, Error, Result, UploadStream};
+use super::{Client, Config, Engine, Error, ImportClient, Result, UploadStream};
 use super::region::*;
 use super::stream::*;
 use super::prepare::*;

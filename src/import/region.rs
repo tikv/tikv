@@ -20,7 +20,7 @@ use kvproto::importpb::*;
 
 use pd::RegionInfo;
 
-use super::Client;
+use super::ImportClient;
 
 pub const RANGE_MIN: &'static [u8] = &[];
 pub const RANGE_MAX: &'static [u8] = &[];
@@ -94,15 +94,15 @@ pub fn new_context(region: &RegionInfo) -> Context {
 }
 
 /// A helper to decide how to cut ranges according to the size and region ranges.
-pub struct RegionContext {
-    client: Arc<Client>,
+pub struct RegionContext<C> {
+    client: Arc<C>,
     region: Option<RegionInfo>,
     raw_size: usize,
     limit_size: usize,
 }
 
-impl RegionContext {
-    pub fn new(client: Arc<Client>, limit_size: usize) -> RegionContext {
+impl<C: ImportClient> RegionContext<C> {
+    pub fn new(client: Arc<C>, limit_size: usize) -> RegionContext<C> {
         RegionContext {
             client: client,
             region: None,
@@ -148,5 +148,50 @@ impl RegionContext {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use import::client::tests::MockClient;
+
+    #[test]
+    fn test_range_end() {
+        let a = RANGE_MAX;
+        let b = RANGE_MAX;
+        let c = b"abc";
+        let d = b"bcd";
+
+        assert!(RangeEnd(a) == RangeEnd(b));
+        assert!(RangeEnd(b) > RangeEnd(c));
+        assert!(RangeEnd(c) < RangeEnd(d));
+    }
+
+    #[test]
+    fn test_region_context() {
+        let mut client = MockClient::new();
+        client.add_region_range(b"", b"k4");
+        client.add_region_range(b"k4", b"");
+
+        let mut ctx = RegionContext::new(Arc::new(client), 8);
+
+        ctx.add(b"k1", b"v1");
+        assert!(!ctx.should_stop_before(b"k2"));
+        ctx.add(b"k2", b"v2");
+        assert_eq!(ctx.raw_size(), 8);
+        // Reach size limit.
+        assert!(ctx.should_stop_before(b"k3"));
+
+        ctx.reset(b"k3");
+        assert_eq!(ctx.raw_size(), 0);
+        ctx.add(b"k3", b"v3");
+        // Reach region end.
+        assert!(ctx.should_stop_before(b"k4"));
+
+        ctx.reset(b"k4");
+        assert_eq!(ctx.raw_size(), 0);
+        ctx.add(b"k4", b"v4");
+        assert!(!ctx.should_stop_before(b"k5"));
     }
 }

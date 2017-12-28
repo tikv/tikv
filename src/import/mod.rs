@@ -28,7 +28,7 @@ mod kv_importer;
 mod sst_service;
 mod sst_importer;
 
-use self::client::{Client, UploadStream};
+use self::client::{Client, ImportClient, UploadStream};
 use self::engine::Engine;
 use self::import::ImportJob;
 

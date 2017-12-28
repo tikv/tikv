@@ -65,7 +65,7 @@ pub struct SSTFileStream {
     engine: Arc<Engine>,
     cf_name: String,
     range_iter: RangeIterator,
-    region_ctx: RegionContext,
+    region_ctx: RegionContext<Client>,
 }
 
 impl SSTFileStream {

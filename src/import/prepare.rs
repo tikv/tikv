@@ -20,10 +20,10 @@ use std::thread::{self, JoinHandle};
 use rocksdb::SeekKey;
 use kvproto::kvrpcpb::*;
 
-use pd::{PdClient, RegionInfo};
+use pd::RegionInfo;
 use storage::types::Key;
 
-use super::{Client, Config, Engine, Error, Result};
+use super::{Client, Config, Engine, Error, ImportClient, Result};
 use super::region::*;
 
 const MAX_RETRY_TIMES: u64 = 3;
@@ -35,7 +35,7 @@ pub struct PrepareJob {
     client: Arc<Client>,
     engine: Arc<Engine>,
     cf_name: String,
-    job_counter: Arc<AtomicUsize>,
+    counter: Arc<AtomicUsize>,
 }
 
 impl PrepareJob {
@@ -51,7 +51,7 @@ impl PrepareJob {
             client: client,
             engine: engine,
             cf_name: cf_name,
-            job_counter: Arc::new(AtomicUsize::new(0)),
+            counter: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -108,12 +108,12 @@ impl PrepareJob {
         let client = self.client.clone();
         let engine = self.engine.clone();
         let cf_name = self.cf_name.clone();
-        let job_counter = self.job_counter.clone();
+        let counter = self.counter.clone();
 
         thread::Builder::new()
             .name("prepare-job".to_owned())
             .spawn(move || while let Ok(range) = rx.lock().unwrap().recv() {
-                let id = job_counter.fetch_add(1, Ordering::SeqCst);
+                let id = counter.fetch_add(1, Ordering::SeqCst);
                 let tag = format!("[PrepareJob {}:{}:{}]", engine.uuid(), cf_name, id);
                 let job = PrepareRangeJob::new(tag, cfg.clone(), range, client.clone());
                 let _ = job.run(); // Don't care about error here.
@@ -227,7 +227,7 @@ impl PrepareRangeJob {
             }
             Err(e) => {
                 error!("{} scatter region {}: {:?}", self.tag, region_id, e);
-                Err(Error::PdRPC(e))
+                Err(e)
             }
         }
     }
