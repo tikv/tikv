@@ -38,7 +38,7 @@ pub struct ImportJob {
     dir: Arc<TempDir>,
     client: Arc<Client>,
     engine: Arc<Engine>,
-    job_counter: Arc<AtomicUsize>,
+    counter: Arc<AtomicUsize>,
 }
 
 impl ImportJob {
@@ -49,53 +49,39 @@ impl ImportJob {
             dir: Arc::new(dir),
             client: client,
             engine: Arc::new(engine),
-            job_counter: Arc::new(AtomicUsize::new(1)),
+            counter: Arc::new(AtomicUsize::new(1)),
         })
     }
 
     pub fn run(&self) -> Result<()> {
-        let mut handles = Vec::new();
-
         for cf_name in self.engine.cf_names() {
             let cfg = self.cfg.clone();
             let client = self.client.clone();
             let engine = self.engine.clone();
             let cf_name = cf_name.to_owned();
 
-            // We should prepare different column families one by one, since
-            // they contain overlapped ranges.
             let job = PrepareJob::new(cfg, client, engine, cf_name.clone());
             let cf_ranges = job.run();
 
-            let cf_handles = self.run_import_threads(cf_name, cf_ranges);
-            handles.extend(cf_handles);
-        }
-
-        let mut res = Ok(());
-        for h in handles {
-            if let Err(e) = h.join().unwrap() {
-                res = Err(e);
+            let handles = self.run_import_threads(cf_name, cf_ranges);
+            for h in handles {
+                h.join().unwrap()?;
             }
         }
-        res
+        Ok(())
     }
 
-    fn new_import_thread(
-        &self,
-        cf_name: String,
-        import_range: RangeInfo,
-    ) -> JoinHandle<Result<()>> {
+    fn new_import_thread(&self, cf_name: String, cf_range: RangeInfo) -> JoinHandle<Result<()>> {
         let cfg = self.cfg.clone();
         let dir = self.dir.clone();
         let client = self.client.clone();
         let engine = self.engine.clone();
-        let job_counter = self.job_counter.clone();
+        let counter = self.counter.clone();
 
         thread::Builder::new()
             .name("import-job".to_owned())
             .spawn(move || {
-                let job =
-                    SubImportJob::new(cfg, dir, client, engine, cf_name, job_counter, import_range);
+                let job = SubImportJob::new(cfg, dir, client, engine, counter, cf_name, cf_range);
                 job.run()
             })
             .unwrap()
@@ -147,9 +133,9 @@ struct SubImportJob {
     dir: Arc<TempDir>,
     client: Arc<Client>,
     engine: Arc<Engine>,
+    counter: Arc<AtomicUsize>,
     cf_name: String,
-    job_counter: Arc<AtomicUsize>,
-    import_range: RangeInfo,
+    cf_range: RangeInfo,
     finished_ranges: Arc<Mutex<Vec<Range>>>,
 }
 
@@ -159,26 +145,26 @@ impl SubImportJob {
         dir: Arc<TempDir>,
         client: Arc<Client>,
         engine: Arc<Engine>,
+        counter: Arc<AtomicUsize>,
         cf_name: String,
-        job_counter: Arc<AtomicUsize>,
-        import_range: RangeInfo,
+        cf_range: RangeInfo,
     ) -> SubImportJob {
         SubImportJob {
             tag: format!("[ImportJob {}:{}]", engine.uuid(), cf_name),
             cfg: cfg,
             dir: dir,
-            client: client,
+            client: Arc::new(Client::new_with(client)),
             engine: engine,
+            counter: counter,
             cf_name: cf_name,
-            job_counter: job_counter,
-            import_range: import_range,
+            cf_range: cf_range,
             finished_ranges: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     fn run(&self) -> Result<()> {
         let start = Instant::now();
-        info!("{} start {:?}", self.tag, self.import_range);
+        info!("{} start {:?}", self.tag, self.cf_range);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -231,7 +217,7 @@ impl SubImportJob {
             self.client.clone(),
             self.engine.clone(),
             self.cf_name.clone(),
-            self.import_range.range.clone(),
+            self.cf_range.range.clone(),
             self.finished_ranges.lock().unwrap().clone(),
         ))
     }
@@ -247,8 +233,8 @@ impl SubImportJob {
     fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<SSTFile>>>) -> JoinHandle<bool> {
         let client = self.client.clone();
         let engine = self.engine.clone();
+        let counter = self.counter.clone();
         let cf_name = self.cf_name.clone();
-        let job_counter = self.job_counter.clone();
         let finished_ranges = self.finished_ranges.clone();
 
         thread::Builder::new()
@@ -257,7 +243,7 @@ impl SubImportJob {
                 // Done if no error occurs.
                 let mut done = true;
                 while let Ok(sst) = rx.lock().unwrap().recv() {
-                    let id = job_counter.fetch_add(1, Ordering::SeqCst);
+                    let id = counter.fetch_add(1, Ordering::SeqCst);
                     let tag = format!("[ImportJob {}:{}:{}]", engine.uuid(), cf_name, id);
                     let mut job = ImportSSTJob::new(tag, sst, client.clone());
                     match job.run() {

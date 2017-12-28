@@ -274,7 +274,9 @@ impl EngineDir {
 }
 
 pub struct EnginePath {
+    // The path of the engine that has been closed.
     save: PathBuf,
+    // The path of the engine that is being wrote.
     temp: PathBuf,
 }
 

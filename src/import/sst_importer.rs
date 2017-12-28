@@ -234,8 +234,11 @@ impl ImportDir {
 
 #[derive(Clone)]
 pub struct ImportPath {
+    // The path of the file that has been uploaded.
     save: PathBuf,
+    // The path of the file that is being uploaded.
     temp: PathBuf,
+    // The path of the file that is going to be ingested.
     clone: PathBuf,
 }
 
