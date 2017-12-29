@@ -105,11 +105,9 @@ fn bench_batch_set_impl(
         mutations.clear();
         for i in 0..batch_size {
             let selected = rng.gen_range(i, keys.len());
-            let tmp = indices[selected];
-            indices[selected] = indices[i];
-            indices[i] = tmp;
+            indices.swap(selected, i);
 
-            let key = Key::from_raw(&keys[tmp]);
+            let key = Key::from_raw(&keys[indices[i]]);
             let value = vec![0u8; value_len];
 
             mutations.push(Mutation::Put((key.clone(), value)));
@@ -290,12 +288,12 @@ fn bench_concurrent_batch_impl(
                 let tx = tx.clone();
                 pool.execute(move |_| {
                     let mutations: Vec<_> = txn.iter()
-                        .map(|ref item| {
-                            Mutation::Put((Key::from_raw(&item), vec![0u8; value_len]))
+                        .map(|item| {
+                            Mutation::Put((Key::from_raw(item), vec![0u8; value_len]))
                         })
                         .collect();
                     let primary = txn[0].clone();
-                    let keys: Vec<_> = txn.drain(..).map(|ref item| Key::from_raw(&item)).collect();
+                    let keys: Vec<_> = txn.drain(..).map(|item| Key::from_raw(&item)).collect();
                     let start_ts = next_ts();
                     prewrite(&*engine, &mutations, &primary, start_ts);
                     commit(&*engine, &keys, start_ts, next_ts());
@@ -309,7 +307,7 @@ fn bench_concurrent_batch_impl(
 
             start_time.elapsed().unwrap()
         },
-        10,
+        1,
     );
     let total_time = average(&time_record);
     println!(
@@ -344,10 +342,16 @@ pub fn bench_mvcctxn() {
 
 
 pub fn bench_concurrent_batch() {
-    let txn_count = 100_000;
+    let table_size = 100_000;
     for batch_size in &[1, 8, 32, 64, 128, 256] {
         for threads in &[1, 2, 4, 8, 16] {
-            bench_concurrent_batch_impl(txn_count, 128, *batch_size, *threads, &BenchType::Row);
+            bench_concurrent_batch_impl(
+                table_size / *batch_size,
+                128,
+                *batch_size,
+                *threads,
+                &BenchType::Row,
+            );
         }
     }
 }

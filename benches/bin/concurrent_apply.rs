@@ -1,6 +1,6 @@
 extern crate tempdir;
 
-use std::time::{SystemTime};
+use std::time::SystemTime;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 
@@ -76,7 +76,7 @@ fn do_bench(batch_size: usize, data_count: usize, threads: usize, value_len: usi
 
             let mut current_batch_size = 0;
 
-            for key in keys.iter() {
+            for key in &keys {
                 if current_batch_size % batch_size == 0 {
                     tasks.push(Vec::with_capacity(batch_size * 2));
                 }
@@ -84,7 +84,7 @@ fn do_bench(batch_size: usize, data_count: usize, threads: usize, value_len: usi
 
                 let task = &mut tasks.last_mut().unwrap();
 
-                let encoded_key = Key::from_raw(&key);
+                let encoded_key = Key::from_raw(key);
 
                 let start_ts = next_ts();
 
