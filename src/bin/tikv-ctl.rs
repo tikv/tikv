@@ -490,11 +490,11 @@ impl DebugExecutor for DebugClient {
     }
 
     fn set_region_tombstone(&self, _: u64, _: Region) {
-        unimplemented!();
+        unimplemented!("only avaliable for local mode");
     }
 
     fn print_bad_regions(&self) {
-        panic!("only avaliable for local mode");
+        unimplemented!("only avaliable for local mode");
     }
 }
 
