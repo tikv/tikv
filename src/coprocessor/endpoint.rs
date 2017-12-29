@@ -276,8 +276,6 @@ impl Host {
         let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
         let mut metrics = t.metrics;
         let ranges = req.take_ranges().into_vec();
-        let batch_row_limit = self.batch_row_limit;
-        let stream_batch_row_limit = self.stream_batch_row_limit;
         let mut cop_stats = CopStats::default();
 
         fn on_finish(
@@ -293,20 +291,14 @@ impl Host {
 
         match cop_req {
             CopRequest::DAG(dag) => {
-                let mut ctx = match DAGContext::new(
-                    dag,
-                    ranges,
-                    snap,
-                    req_ctx,
-                    batch_row_limit,
-                    stream_batch_row_limit,
-                ) {
+                let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx) {
                     Ok(ctx) => ctx,
                     Err(e) => return on_resp.respond(err_resp(e)),
                 };
                 if !on_resp.is_streaming() {
+                    let batch_row_limit = self.batch_row_limit;
                     let do_request = move || {
-                        let res = ctx.handle_request();
+                        let res = ctx.handle_request(batch_row_limit);
                         let resp = res.unwrap_or_else(err_resp);
                         ctx.collect_statistics_into(&mut cop_stats.stats);
                         ctx.collect_metrics_into(&mut cop_stats.scan_counter);
@@ -317,20 +309,22 @@ impl Host {
                 }
                 // For streaming.
                 let pool_1 = pool.clone();
+                let batch_row_limit = self.stream_batch_row_limit;
                 let f = move || {
-                    let s = stream::unfold(Some(ctx), move |ctx_opt| {
-                        ctx_opt.and_then(|mut ctx| {
-                            let (resp, remain) = ctx.handle_streaming_request()
-                                .unwrap_or_else(|e| (err_resp(e), false));
-                            if remain {
-                                return Some(future::ok::<_, GrpcError>((resp, Some(ctx))));
-                            }
+                    let s = stream::unfold(ctx, move |mut ctx| {
+                        let (mut finished, mut item) = (true, None);
+                        if !ctx.finished() {
+                            item = ctx.handle_streaming_request(batch_row_limit)
+                                .unwrap_or_else(|e| Some(err_resp(e)));
+                            finished = ctx.finished();
+                        }
+                        if finished {
                             let mut cop_stats = CopStats::default();
                             ctx.collect_statistics_into(&mut cop_stats.stats);
                             ctx.collect_metrics_into(&mut cop_stats.scan_counter);
                             on_finish(&task_count, cop_stats, &mut metrics, &mut ctx_pool);
-                            Some(future::ok::<_, GrpcError>((resp, None)))
-                        })
+                        }
+                        item.map(|resp| future::ok::<_, GrpcError>((resp, ctx)))
                     });
                     let resp_stream = ResponseStream::spawn(s, &pool_1);
                     future::ok::<_, ()>(on_resp.respond_stream(resp_stream))

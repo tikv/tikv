@@ -487,7 +487,7 @@ fn test_coprocessor() {
     // SQL push down commands
     let mut req = Request::new();
     req.set_tp(REQ_TYPE_DAG);
-    client.coprocessor(req).unwrap();
+    client.coprocessor(&req).unwrap();
 }
 
 #[test]

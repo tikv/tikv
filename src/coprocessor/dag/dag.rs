@@ -34,8 +34,7 @@ pub struct DAGContext {
     req_ctx: ReqContext,
     exec: Box<Executor>,
     output_offsets: Vec<u32>,
-    batch_row_limit: usize,
-    stream_batch_row_limit: usize,
+    finished: bool, // Only used for streaming.
 }
 
 impl DAGContext {
@@ -44,8 +43,6 @@ impl DAGContext {
         ranges: Vec<KeyRange>,
         snap: Box<Snapshot>,
         req_ctx: ReqContext,
-        batch_row_limit: usize,
-        stream_batch_row_limit: usize,
     ) -> Result<DAGContext> {
         let eval_ctx = Arc::new(box_try!(EvalContext::new(
             req.get_time_zone_offset(),
@@ -65,19 +62,18 @@ impl DAGContext {
             req_ctx: req_ctx,
             exec: dag_executor.exec,
             output_offsets: req.take_output_offsets(),
-            batch_row_limit: batch_row_limit,
-            stream_batch_row_limit: stream_batch_row_limit,
+            finished: false,
         })
     }
 
-    pub fn handle_request(&mut self) -> Result<Response> {
+    pub fn handle_request(&mut self, batch_row_limit: usize) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
+                    if chunks.is_empty() || record_cnt >= batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);
                         record_cnt = 0;
@@ -116,18 +112,12 @@ impl DAGContext {
         }
     }
 
-    pub fn handle_streaming_request(&mut self) -> Result<(Response, bool)> {
+    pub fn handle_streaming_request(&mut self, batch_row_limit: usize) -> Result<Option<Response>> {
         let mut record_cnt = 0;
         let mut chunk = Chunk::new();
         let mut start_key = None;
-        let mut remain = false;
-        loop {
-            if record_cnt >= self.stream_batch_row_limit {
-                remain = true;
-                break;
-            }
+        while record_cnt < batch_row_limit {
             match self.exec.next() {
-                Ok(None) => break,
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
                     record_cnt += 1;
@@ -141,21 +131,31 @@ impl DAGContext {
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                 }
-                Err(e) => if let Error::Other(_) = e {
-                    let mut resp = Response::new();
-                    let mut stream_resp = StreamResponse::new();
-                    stream_resp.set_error(to_pb_error(&e));
-                    resp.set_data(box_try!(stream_resp.write_to_bytes()));
-                    resp.set_other_error(format!("{}", e));
-                    return Ok((resp, false));
-                } else {
-                    return Err(e);
-                },
+                Ok(None) => {
+                    self.finished = true;
+                    break;
+                }
+                Err(e) => {
+                    self.finished = true;
+                    if let Error::Other(_) = e {
+                        let mut resp = Response::new();
+                        let mut stream_resp = StreamResponse::new();
+                        stream_resp.set_error(to_pb_error(&e));
+                        resp.set_data(box_try!(stream_resp.write_to_bytes()));
+                        resp.set_other_error(format!("{}", e));
+                        return Ok(Some(resp));
+                    } else {
+                        return Err(e);
+                    }
+                }
             }
         }
+        if record_cnt == 0 {
+            return Ok(None);
+        }
         start_key = start_key.and_then(|k| if k.is_empty() { None } else { Some(k) });
-        DAGContext::make_stream_response(chunk, start_key, self.exec.take_last_key())
-            .map(|resp| (resp, remain))
+        let end_key = self.exec.take_last_key();
+        DAGContext::make_stream_response(chunk, start_key, end_key).map(Some)
     }
 
     fn make_stream_response(
@@ -189,6 +189,10 @@ impl DAGContext {
         range.set_end(end);
         resp.set_range(range);
         Ok(resp)
+    }
+
+    pub fn finished(&self) -> bool {
+        self.finished
     }
 
     pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {

@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use std::thread;
 use std::time::Duration;
+use futures::Stream;
 
 use tikv::coprocessor::*;
 use kvproto::kvrpcpb::Context;
@@ -29,7 +30,7 @@ use tikv::server::{Config, OnResponse};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 use kvproto::coprocessor::{KeyRange, Request, Response};
-use tipb::select::{Chunk, DAGRequest, SelectResponse};
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 use tipb::executor::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
@@ -822,6 +823,52 @@ fn test_batch_row_limit() {
 }
 
 #[test]
+fn test_stream_batch_row_limit() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let stream_row_limit = 2;
+    let (_, mut end_point) = {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_stream_batch_row_limit = stream_row_limit;
+        init_data_with_details(Context::new(), engine, &product, &data, true, cfg)
+    };
+
+    let req = DAGSelect::from(&product.table).build();
+    let resps = handle_streaming_select(&end_point, req);
+    assert_eq!(resps.len(), 2);
+
+    for (i, resp) in resps.into_iter().enumerate() {
+        if resp.get_encode_type() == EncodeType::TypeDefault {
+            let mut chunk = Chunk::new();
+            chunk.merge_from_bytes(resp.get_data()).unwrap();
+
+            let chunks = vec![chunk];
+            let chunk_data_limit = stream_row_limit * 3;
+            check_chunk_datum_count(&chunks, chunk_data_limit);
+
+            let spliter = DAGChunkSpliter::new(chunks, 3);
+            let cur_data = &data[i * stream_row_limit..(i + 1) * stream_row_limit];
+            for (row, &(id, name, cnt)) in spliter.zip(cur_data) {
+                let name_datum = name.map(|s| s.as_bytes()).into();
+                let expected_encoded =
+                    datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
+                let result_encoded = datum::encode_value(&row).unwrap();
+                assert_eq!(result_encoded, &*expected_encoded);
+            }
+        }
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
 fn test_select_after_lease() {
     let data = vec![
         (1, Some("name:0"), 2),
@@ -1338,6 +1385,20 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     sel_resp
+}
+
+fn handle_streaming_select(end_point: &Worker<EndPointTask>, req: Request) -> Vec<StreamResponse> {
+    let (tx, rx) = mpsc::channel();
+    let on_resp = OnResponse::Streaming(box move |s| for r in Stream::wait(s) {
+        let resp: Response = r.unwrap();
+        assert!(!resp.get_data().is_empty());
+        let mut stream_resp = StreamResponse::new();
+        stream_resp.merge_from_bytes(resp.get_data()).unwrap();
+        tx.send(stream_resp).unwrap();
+    });
+    let req = RequestTask::new(req, on_resp, 100).unwrap();
+    end_point.schedule(EndPointTask::Request(req)).unwrap();
+    rx.into_iter().collect()
 }
 
 #[test]
