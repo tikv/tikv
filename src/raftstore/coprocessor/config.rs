@@ -36,7 +36,7 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(SPLIT_SIZE_MB);
         Config {
-            split_region_on_table: false,
+            split_region_on_table: true,
             region_split_size: split_size,
             region_max_size: split_size / 2 * 3,
         }
