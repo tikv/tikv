@@ -86,7 +86,7 @@ mod utils;
 mod raftstore;
 mod mvcc;
 mod mvcctxn;
-mod concurrent_rocksdb;
+mod concurrent_apply;
 
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));
@@ -107,7 +107,7 @@ fn main() {
 
     let mut args: Vec<_> = env::args().skip(1).collect();
 
-    let available_options = vec!["raftstore", "tombstone-scan", "mvcctxn"];
+    let available_options = vec!["raftstore", "tombstone-scan", "mvcctxn", "concurrent-apply"];
 
     if args.is_empty() {
         args = available_options.iter().map(|&s| String::from(s)).collect();
@@ -133,6 +133,7 @@ fn main() {
                 "raftstore" => raftstore::bench_raftstore(),
                 "tombstone-scan" => mvcc::bench_engine(),
                 "mvcctxn" => mvcctxn::bench_mvcctxn(),
+                "concurrent-apply" => concurrent_apply::bench_concurrent_rocksdb(),
                 _ => eprintln!("*** Unknown bench item {}", item),
             }
         }

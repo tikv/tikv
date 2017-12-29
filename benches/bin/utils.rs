@@ -1,7 +1,10 @@
+extern crate rand;
+
 use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
 use tikv::coprocessor::codec::table::encode_row_key;
 use tikv::util::codec::number::NumberEncoder;
 
+use rand::Rng;
 
 #[inline]
 pub fn next_ts() -> u64 {
@@ -23,6 +26,14 @@ pub fn generate_row_keys(table_id: i64, start_id: i64, count: usize) -> Vec<Vec<
 
 pub fn generate_unique_index_keys(table_id: i64, value_len: usize, count: usize) -> Vec<Vec<u8>> {
     panic!("Not implemented");
+}
+
+pub fn shuffle<T>(data: &mut [T]) {
+    let mut rng = rand::thread_rng();
+    for i in 0..(data.len()) {
+        let j = rng.gen_range(i, data.len());
+        data.swap(i, j);
+    }
 }
 
 //#[inline]

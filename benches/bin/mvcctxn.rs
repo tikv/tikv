@@ -157,10 +157,12 @@ enum BenchType {
 fn bench_all(table_size: usize, version_count: usize, data_len: usize, bench_type: &BenchType) {
 
     let (keys, value_len, log_name) = match *bench_type {
-        BenchType::Row =>
-            (generate_row_keys(1, 0, table_size), data_len, "row"),
-        BenchType::UniqueIndex =>
-            (generate_unique_index_keys(1, 0, table_size), 8, "unique index"),
+        BenchType::Row => (generate_row_keys(1, 0, table_size), data_len, "row"),
+        BenchType::UniqueIndex => (
+            generate_unique_index_keys(1, 0, table_size),
+            8,
+            "unique index",
+        ),
     };
 
     let engine = prepare_test_engine(version_count, value_len, &keys);
