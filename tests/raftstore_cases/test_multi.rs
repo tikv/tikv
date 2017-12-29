@@ -476,10 +476,10 @@ fn test_node_leader_change_with_log_overlap() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(box move |args: WriteArgs| {
+            Callback::Write(box move |resp: WriteResponse| {
                 called_.store(true, Ordering::SeqCst);
-                assert!(args.response.get_header().has_error());
-                assert!(args.response.get_header().get_error().has_stale_command());
+                assert!(resp.response.get_header().has_error());
+                assert!(resp.response.get_header().get_error().has_stale_command());
             }),
         )
         .unwrap();
@@ -728,8 +728,8 @@ fn test_node_dropped_proposal() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(box move |args: WriteArgs| {
-                let _ = tx.send(args.response);
+            Callback::Write(box move |resp: WriteResponse| {
+                let _ = tx.send(resp.response);
             }),
         )
         .unwrap();

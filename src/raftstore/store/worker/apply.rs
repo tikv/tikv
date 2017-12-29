@@ -1646,7 +1646,7 @@ mod tests {
     use kvproto::raft_cmdpb::CmdType;
 
     use raftstore::coprocessor::*;
-    use raftstore::store::msg::WriteArgs;
+    use raftstore::store::msg::WriteResponse;
     use storage::{ALL_CFS, CF_WRITE};
     use util::collections::HashMap;
 
@@ -1738,8 +1738,8 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(box move |write: WriteArgs| {
-                resp_tx.send(write.response).unwrap();
+            Callback::Write(box move |resp: WriteResponse| {
+                resp_tx.send(resp.response).unwrap();
             }),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
@@ -1756,7 +1756,7 @@ mod tests {
                 true,
                 3,
                 0,
-                Callback::Write(box move |write: WriteArgs| {
+                Callback::Write(box move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
                 }),
             ),
@@ -1860,8 +1860,8 @@ mod tests {
             let cmd = PendingCmd::new(
                 self.entry.get_index(),
                 self.entry.get_term(),
-                Callback::Write(box move |write: WriteArgs| {
-                    tx.send(write.response).unwrap();
+                Callback::Write(box move |resp: WriteResponse| {
+                    tx.send(resp.response).unwrap();
                 }),
             );
             delegate.pending_cmds.append_normal(cmd);

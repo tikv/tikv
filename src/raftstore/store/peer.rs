@@ -32,7 +32,7 @@ use kvproto::pdpb::PeerStats;
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{Callback, Config, ReadArgs};
+use raftstore::store::{Callback, Config, ReadResponse};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 
@@ -1102,12 +1102,12 @@ impl Peer {
         &mut self,
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
-    ) -> Option<ReadArgs> {
+    ) -> Option<ReadResponse> {
         if self.pending_remove {
             let mut response = RaftCmdResponse::new();
             cmd_resp::bind_error(&mut response, box_err!("peer is pending remove"));
             let snapshot = None;
-            return Some(ReadArgs { response, snapshot });
+            return Some(ReadResponse { response, snapshot });
         }
         metrics.all += 1;
 
@@ -1125,7 +1125,7 @@ impl Peer {
                 let mut response = cmd_resp::new_error(e);
                 cmd_resp::bind_term(&mut response, self.term());
                 let snapshot = None;
-                Some(ReadArgs { response, snapshot })
+                Some(ReadResponse { response, snapshot })
             }
         }
     }
@@ -1508,13 +1508,13 @@ impl Peer {
         Ok(propose_index)
     }
 
-    fn handle_read(&mut self, req: RaftCmdRequest) -> ReadArgs {
+    fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
         let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
-            ReadArgs {
+            ReadResponse {
                 response: cmd_resp::new_error(e),
                 snapshot: None,
             }
@@ -1706,7 +1706,7 @@ impl Peer {
         Ok(())
     }
 
-    fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadArgs> {
+    fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
         check_epoch(self.region(), req)?;
         let mut snapshot = None;
         let requests = req.get_requests();
@@ -1741,7 +1741,7 @@ impl Peer {
 
         let mut response = RaftCmdResponse::new();
         response.set_responses(protobuf::RepeatedField::from_vec(responses));
-        Ok(ReadArgs { response, snapshot })
+        Ok(ReadResponse { response, snapshot })
     }
 }
 

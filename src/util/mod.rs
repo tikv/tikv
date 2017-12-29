@@ -27,7 +27,7 @@ use protobuf::Message;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 
 use raftstore;
-use raftstore::store::{Callback, ReadArgs, WriteArgs};
+use raftstore::store::{Callback, ReadResponse, WriteResponse};
 use server::transport::RaftStoreRouter;
 
 #[macro_use]
@@ -500,14 +500,14 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
 
     let (tx, rx) = mpsc::channel();
     let cb = if is_read {
-        Callback::Read(Box::new(move |args: ReadArgs| {
+        Callback::Read(Box::new(move |resp: ReadResponse| {
             // we don't care error actually.
-            let _ = tx.send(args.response);
+            let _ = tx.send(resp.response);
         }))
     } else {
-        Callback::Write(Box::new(move |args: WriteArgs| {
+        Callback::Write(Box::new(move |resp: WriteResponse| {
             // we don't care error actually.
-            let _ = tx.send(args.response);
+            let _ = tx.send(resp.response);
         }))
     };
     (cb, rx)

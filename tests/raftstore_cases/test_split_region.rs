@@ -26,7 +26,7 @@ use super::util;
 use tikv::pd::PdClient;
 use tikv::storage::{CF_DEFAULT, CF_WRITE};
 use tikv::raftstore::store::keys::data_key;
-use tikv::raftstore::store::{Callback, WriteArgs};
+use tikv::raftstore::store::{Callback, WriteResponse};
 use tikv::raftstore::store::engine::Iterable;
 use tikv::util::config::*;
 use super::transport_simulate::*;
@@ -150,8 +150,8 @@ fn test_server_split_region_twice() {
 
     let (tx, rx) = channel();
     let key = split_key.to_vec();
-    let c = Box::new(move |args: WriteArgs| {
-        let mut resp = args.response;
+    let c = Box::new(move |write_resp: WriteResponse| {
+        let mut resp = write_resp.response;
         let admin_resp = resp.mut_admin_response();
         let split_resp = admin_resp.mut_split();
         let left = split_resp.take_left();
@@ -168,10 +168,10 @@ fn test_server_split_region_twice() {
     cluster.must_put(split_key, b"v2");
 
     let (tx1, rx1) = channel();
-    let c = Box::new(move |args: WriteArgs| {
-        assert!(args.response.has_header());
-        assert!(args.response.get_header().has_error());
-        assert!(!args.response.has_admin_response());
+    let c = Box::new(move |write_resp: WriteResponse| {
+        assert!(write_resp.response.has_header());
+        assert!(write_resp.response.get_header().has_error());
+        assert!(!write_resp.response.has_admin_response());
         tx1.send(()).unwrap();
     });
     cluster.split_region(&region3, split_key, Callback::Write(c));

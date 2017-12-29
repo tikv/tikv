@@ -58,7 +58,7 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::{Callback, ReadArgs};
+use super::msg::{Callback, ReadResponse};
 use super::cmd_resp::{bind_term, new_error};
 use super::transport::Transport;
 use super::metrics::*;
@@ -1600,14 +1600,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for msg in batch {
             match self.pre_propose_raft_command(&msg) {
                 Ok(Some(resp)) => {
-                    ret.push(Some(ReadArgs {
+                    ret.push(Some(ReadResponse {
                         response: resp,
                         snapshot: None,
                     }));
                     continue;
                 }
                 Err(e) => {
-                    ret.push(Some(ReadArgs {
+                    ret.push(Some(ReadResponse {
                         response: new_error(e),
                         snapshot: None,
                     }));

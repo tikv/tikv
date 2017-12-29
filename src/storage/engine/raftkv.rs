@@ -23,7 +23,7 @@ use kvproto::kvrpcpb::Context;
 use protobuf::RepeatedField;
 
 use server::transport::RaftStoreRouter;
-use raftstore::store::{self, Callback as StoreCallback, ReadArgs, WriteArgs};
+use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionIterator, RegionSnapshot};
 use raftstore::store::engine::Peekable;
@@ -138,23 +138,23 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result
     Ok(())
 }
 
-fn on_write_result(mut args: WriteArgs, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
-    let cb_ctx = new_ctx(&args.response);
-    if let Err(e) = check_raft_cmd_response(&mut args.response, req_cnt) {
+fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
+    let cb_ctx = new_ctx(&write_resp.response);
+    if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
-    let resps = args.response.take_responses();
+    let resps = write_resp.response.take_responses();
     (cb_ctx, Ok(CmdRes::Resp(resps.into_vec())))
 }
 
-fn on_read_result(mut args: ReadArgs, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
-    let cb_ctx = new_ctx(&args.response);
-    if let Err(e) = check_raft_cmd_response(&mut args.response, req_cnt) {
+fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
+    let cb_ctx = new_ctx(&read_resp.response);
+    if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
-    let mut resps = args.response.take_responses();
+    let mut resps = read_resp.response.take_responses();
     let snap = RegionSnapshot::from_snapshot(
-        args.snapshot.unwrap().into_sync(),
+        read_resp.snapshot.unwrap().into_sync(),
         resps[0].take_snap().take_region(),
     );
     (cb_ctx, Ok(CmdRes::Snap(snap)))
@@ -178,22 +178,22 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             ls.push(l);
         }
         let on_finished: store::BatchReadCallback =
-            box move |resps: Vec<Option<store::ReadArgs>>| {
+            box move |resps: Vec<Option<store::ReadResponse>>| {
                 assert_eq!(batch_size, resps.len());
                 let mut cmd_resps = Vec::with_capacity(resps.len());
-                for (l, args) in ls.into_iter().zip(resps) {
-                    match args {
-                        Some(mut args) => {
-                            let cb_ctx = new_ctx(&args.response);
-                            if let Err(e) = check_raft_cmd_response(&mut args.response, l) {
+                for (l, resp) in ls.into_iter().zip(resps) {
+                    match resp {
+                        Some(mut resp) => {
+                            let cb_ctx = new_ctx(&resp.response);
+                            if let Err(e) = check_raft_cmd_response(&mut resp.response, l) {
                                 cmd_resps.push(Some((cb_ctx, Err(Error::into(e)))));
                                 continue;
                             }
 
-                            let mut rs = args.response.take_responses();
+                            let mut rs = resp.response.take_responses();
                             assert_eq!(rs[0].get_cmd_type(), CmdType::Snap);
                             let res = RegionSnapshot::from_snapshot(
-                                args.snapshot.unwrap().into_sync(),
+                                resp.snapshot.unwrap().into_sync(),
                                 rs[0].take_snap().take_region(),
                             );
                             cmd_resps.push(Some((cb_ctx, Ok(CmdRes::Snap(res)))));
@@ -235,8 +235,8 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         self.router
             .send_command(
                 cmd,
-                StoreCallback::Read(box move |args| {
-                    let (cb_ctx, res) = on_read_result(args, len);
+                StoreCallback::Read(box move |resp| {
+                    let (cb_ctx, res) = on_read_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
                 }),
             )
@@ -258,8 +258,8 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         self.router
             .send_command(
                 cmd,
-                StoreCallback::Write(box move |args| {
-                    let (cb_ctx, res) = on_write_result(args, len);
+                StoreCallback::Write(box move |resp| {
+                    let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
                 }),
             )

@@ -25,19 +25,19 @@ use util::escape;
 use super::engine::Snapshot;
 
 #[derive(Debug)]
-pub struct ReadArgs {
+pub struct ReadResponse {
     pub response: RaftCmdResponse,
     pub snapshot: Option<Snapshot>,
 }
 
 #[derive(Debug)]
-pub struct WriteArgs {
+pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-pub type ReadCallback = Box<FnBox(ReadArgs) + Send>;
-pub type WriteCallback = Box<FnBox(WriteArgs) + Send>;
-pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadArgs>>) + Send>;
+pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
+pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
+pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -61,21 +61,21 @@ impl Callback {
         match self {
             Callback::None => (),
             Callback::Read(read) => {
-                let args = ReadArgs {
+                let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
                 };
-                read(args);
+                read(resp);
             }
             Callback::Write(write) => {
-                let args = WriteArgs { response: resp };
-                write(args);
+                let resp = WriteResponse { response: resp };
+                write(resp);
             }
             Callback::BatchRead(_) => unreachable!(),
         }
     }
 
-    pub fn invoke_read(self, args: ReadArgs) {
+    pub fn invoke_read(self, args: ReadResponse) {
         match self {
             Callback::Read(read) => {
                 read(args);
