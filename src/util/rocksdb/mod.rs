@@ -532,7 +532,7 @@ mod tests {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
+    fn check_hard_link<P: AsRef<Path>>(_: P, _: u64) {
         // Just do nothing
     }
 
