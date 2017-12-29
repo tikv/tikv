@@ -89,6 +89,7 @@ fn test_scheduler_leader_change_twice() {
                         Options::default(),
                         box move |res: storage::Result<_>| {
             match res {
+                Err(storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e)))) |
                 Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
                     assert!(e.has_stale_command());
                     prewrite_tx.send(false).unwrap();
