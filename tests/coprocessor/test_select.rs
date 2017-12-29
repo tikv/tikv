@@ -673,6 +673,18 @@ impl DAGSelect {
         self.aggr_col(col, ExprType::Min)
     }
 
+    fn bit_and(self, col: Column) -> DAGSelect {
+        self.aggr_col(col, ExprType::Agg_BitAnd)
+    }
+
+    fn bit_or(self, col: Column) -> DAGSelect {
+        self.aggr_col(col, ExprType::Agg_BitOr)
+    }
+
+    fn bit_xor(self, col: Column) -> DAGSelect {
+        self.aggr_col(col, ExprType::Agg_BitXor)
+    }
+
     fn group_by(mut self, cols: &[Column]) -> DAGSelect {
         for col in cols {
             let offset = offset_for_column(&self.cols, col.id);
@@ -1217,6 +1229,82 @@ fn test_aggr_extre() {
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 3);
     for (row, (name, max, min)) in spliter.zip(exp) {
         let expected_datum = vec![max, min, name];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&row).unwrap();
+        assert_eq!(result_encoded, &*expected_encoded);
+        row_count += 1;
+    }
+    assert_eq!(row_count, exp_len);
+
+    end_point.stop().unwrap();
+}
+
+#[test]
+fn test_aggr_bit_ops() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 5),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (mut store, mut end_point) = init_with_data(&product, &data);
+
+    store.begin();
+    for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
+        store
+            .insert_into(&product.table)
+            .set(product.id, Datum::I64(id))
+            .set(product.name, Datum::Bytes(name.to_vec()))
+            .set(product.count, Datum::Null)
+            .execute();
+    }
+    store.commit();
+
+    let exp = vec![
+        (
+            Datum::Bytes(b"name:0".to_vec()),
+            Datum::U64(0),
+            Datum::U64(3),
+            Datum::U64(3),
+        ),
+        (
+            Datum::Bytes(b"name:3".to_vec()),
+            Datum::U64(3),
+            Datum::U64(3),
+            Datum::U64(3),
+        ),
+        (
+            Datum::Bytes(b"name:5".to_vec()),
+            Datum::U64(4),
+            Datum::U64(5),
+            Datum::U64(1),
+        ),
+        (Datum::Null, Datum::U64(4), Datum::U64(4), Datum::U64(4)),
+        (
+            Datum::Bytes(b"name:6".to_vec()),
+            Datum::U64(18446744073709551615),
+            Datum::U64(0),
+            Datum::U64(0),
+        ),
+    ];
+
+    // for dag
+    let req = DAGSelect::from(&product.table)
+        .bit_and(product.count)
+        .bit_or(product.count)
+        .bit_xor(product.count)
+        .group_by(&[product.name])
+        .build();
+    let mut resp = handle_select(&end_point, req);
+    let mut row_count = 0;
+    let exp_len = exp.len();
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 4);
+    for (row, (name, bitand, bitor, bitxor)) in spliter.zip(exp) {
+        let expected_datum = vec![bitand, bitor, bitxor, name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
