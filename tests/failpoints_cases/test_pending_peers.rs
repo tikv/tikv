@@ -28,7 +28,7 @@ fn test_pending_peers() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
 
-    let region_worker_fp = "tikv::raftstore::store::worker::region::apply_snap";
+    let region_worker_fp = "region_apply_snap";
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
