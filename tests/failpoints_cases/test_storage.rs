@@ -26,8 +26,8 @@ use storage::util::new_raft_engine;
 #[test]
 fn test_storage_1gc() {
     let _guard = ::setup();
-    let snapshot_fp = "tikv::storage::engine::raftkv::raftkv_async_snapshot_finish";
-    let batch_snapshot_fp = "tikv::storage::engine::raftkv::raftkv_async_batch_snapshot_finish";
+    let snapshot_fp = "raftkv_async_snapshot_finish";
+    let batch_snapshot_fp = "raftkv_async_batch_snapshot_finish";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
