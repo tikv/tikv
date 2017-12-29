@@ -1,18 +1,15 @@
 extern crate tempdir;
 
-use std::time::{Duration, SystemTime};
+use std::time::{SystemTime};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 
-use tikv::storage::{CfName, Key, Modify, Mutation, Options, Snapshot, Value, ALL_CFS, CF_DEFAULT,
-                    CF_LOCK, CF_RAFT, CF_WRITE};
-use tikv::storage::mvcc::MvccTxn;
-//use tikv::raftstore::store::engine::SyncSnapshot;
+use tikv::storage::{Key, Modify, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::util::rocksdb;
 use tikv::util::rocksdb::CFOptions;
 use rocksdb::{ColumnFamilyOptions, DB};
 use tikv::config;
-use tikv::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use tikv::util::threadpool::{DefaultContext, ThreadPoolBuilder};
 
 use tempdir::TempDir;
 
@@ -48,17 +45,6 @@ fn fake_write_value() -> Vec<u8> {
     vec![0; 11]
 }
 
-fn record_time<F>(mut job: F, iterations: u32) -> u64
-where
-    F: FnMut() -> Duration,
-{
-    let mut total_time = Duration::new(0, 0);
-    for _ in 0..iterations {
-        total_time += job();
-    }
-    total_time /= iterations;
-    total_time.as_secs() * 1_000_000_000 + (total_time.subsec_nanos() as u64)
-}
 
 fn do_bench(batch_size: usize, data_count: usize, threads: usize, value_len: usize) {
     let data_count = if data_count % batch_size == 0 {
@@ -77,7 +63,7 @@ fn do_bench(batch_size: usize, data_count: usize, threads: usize, value_len: usi
         data_count
     );
 
-    let time_ns = record_time(
+    let time_ns = average(&record_time(
         || {
             let db = Arc::new(create_default_db());
 
@@ -149,7 +135,7 @@ fn do_bench(batch_size: usize, data_count: usize, threads: usize, value_len: usi
                 let db = db.clone();
                 let tx = tx.clone();
                 pool.execute(move |_| {
-                    write_modifies(&*db, task);
+                    write_modifies(&*db, task).unwrap();
                     tx.send(()).unwrap();
                 });
             }
@@ -164,7 +150,8 @@ fn do_bench(batch_size: usize, data_count: usize, threads: usize, value_len: usi
             start_time.elapsed().unwrap()
         },
         1,
-    );
+    ));
+
     println!(
         "    total time:{:>11} ns  average time per key:{:>11} ns",
         time_ns,
@@ -175,7 +162,7 @@ fn do_bench(batch_size: usize, data_count: usize, threads: usize, value_len: usi
 pub fn bench_concurrent_rocksdb() {
     for batch_size in &[32, 64, 128, 256, 512] {
         for threads in &[1, 2, 4, 8, 16, 32] {
-            do_bench(*batch_size, 100000, *threads, 128);
+            do_bench(*batch_size, 100_000, *threads, 128);
         }
     }
 }

@@ -107,7 +107,13 @@ fn main() {
 
     let mut args: Vec<_> = env::args().skip(1).collect();
 
-    let available_options = vec!["raftstore", "tombstone-scan", "mvcctxn", "concurrent-apply"];
+    let available_options = vec![
+        "raftstore",
+        "tombstone-scan",
+        "mvcctxn",
+        "concurrent-apply",
+        "concurrent-batch-mvcctxn",
+    ];
 
     if args.is_empty() {
         args = available_options.iter().map(|&s| String::from(s)).collect();
@@ -133,6 +139,7 @@ fn main() {
                 "raftstore" => raftstore::bench_raftstore(),
                 "tombstone-scan" => mvcc::bench_engine(),
                 "mvcctxn" => mvcctxn::bench_mvcctxn(),
+                "concurrent-batch-mvcctxn" => mvcctxn::bench_concurrent_batch(),
                 "concurrent-apply" => concurrent_apply::bench_concurrent_rocksdb(),
                 _ => eprintln!("*** Unknown bench item {}", item),
             }

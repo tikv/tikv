@@ -1,7 +1,8 @@
 extern crate rand;
 
 use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
-use tikv::coprocessor::codec::table::encode_row_key;
+use std::time::Duration;
+use tikv::coprocessor::codec::table::{encode_index_seek_key, encode_row_key};
 use tikv::util::codec::number::NumberEncoder;
 
 use rand::Rng;
@@ -24,8 +25,21 @@ pub fn generate_row_keys(table_id: i64, start_id: i64, count: usize) -> Vec<Vec<
 }
 
 
-pub fn generate_unique_index_keys(table_id: i64, value_len: usize, count: usize) -> Vec<Vec<u8>> {
-    panic!("Not implemented");
+pub fn generate_unique_index_keys(
+    table_id: i64,
+    index_id: i64,
+    value_len: usize,
+    count: usize,
+) -> Vec<Vec<u8>> {
+    let mut result = Vec::with_capacity(count);
+    for _ in 0..count {
+        result.push(encode_index_seek_key(
+            table_id,
+            index_id,
+            &vec![0u8; value_len],
+        ));
+    }
+    result
 }
 
 pub fn shuffle<T>(data: &mut [T]) {
@@ -34,4 +48,20 @@ pub fn shuffle<T>(data: &mut [T]) {
         let j = rng.gen_range(i, data.len());
         data.swap(i, j);
     }
+}
+
+pub fn record_time<F>(mut job: F, iterations: u32) -> Vec<u64>
+where
+    F: FnMut() -> Duration,
+{
+    (0..iterations)
+        .map(|_| {
+            let time = job();
+            time.as_secs() * 1_000_000_000 + (time.subsec_nanos() as u64)
+        })
+        .collect()
+}
+
+pub fn average(data: &[u64]) -> u64 {
+    data.iter().sum::<u64>() / (data.len() as u64)
 }
