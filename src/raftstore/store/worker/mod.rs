@@ -51,6 +51,7 @@ mod compact;
 mod raftlog_gc;
 mod metrics;
 mod consistency_check;
+mod space_check;
 pub mod apply;
 
 pub use self::region::{Runner as RegionRunner, Task as RegionTask};
@@ -60,3 +61,5 @@ pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
 pub use self::apply::{Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, Registration,
                       Runner as ApplyRunner, Task as ApplyTask, TaskRes as ApplyTaskRes};
+pub use self::space_check::{Runner as SpaceCheckRunner, Task as SpaceCheckTask,
+                            TaskRes as SpaceCheckRes};

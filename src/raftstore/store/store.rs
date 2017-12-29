@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
@@ -50,7 +50,8 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{ApplyRunner, ApplyTask, ApplyTaskRes, CompactRunner, CompactTask,
                     ConsistencyCheckRunner, ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask,
-                    RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask};
+                    RegionRunner, RegionTask, SpaceCheckRes, SpaceCheckRunner, SpaceCheckTask,
+                    SplitCheckRunner, SplitCheckTask};
 use super::worker::apply::{ChangePeer, ExecResult};
 use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -150,6 +151,11 @@ pub struct Store<T, C: 'static> {
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
+    space_checker: Worker<SpaceCheckTask>,
+    space_res_receiver: Option<StdReceiver<SpaceCheckRes>>,
+    last_checked_key: Option<Key>,
+    ranges_need_compact: Option<VecDeque<(Key, Key)>>,
+
     trans: T,
     pd_client: Arc<C>,
 
@@ -225,6 +231,10 @@ impl<T, C> Store<T, C> {
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
+            space_checker: Worker::new("space checker"),
+            space_res_receiver: None,
+            last_checked_key: None,
+            ranges_need_compact: None,
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
             trans: trans,
@@ -543,6 +553,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
+        let (tx, rx) = mpsc::channel();
+        let space_check_runner = SpaceCheckRunner::new(self.kv_engine.clone(), tx);
+        self.space_res_receiver = Some(rx);
+        box_try!(self.space_checker.start(space_check_runner));
+
         if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
             warn!("set priority for raftstore failed, error: {:?}", e);
         }
@@ -568,6 +583,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.apply_worker.stop());
+        handles.push(self.space_checker.stop());
 
         for h in handles {
             if let Some(h) = h {
@@ -672,6 +688,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
             }
+        }
+    }
+
+    fn poll_space_check(&mut self) {
+        match self.space_res_receiver.as_ref().unwrap().try_recv() {
+            Ok(res) => {
+                self.ranges_need_compact = Some(res.ranges_need_compact);
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(e) => panic!("unexpected error {:?}", e),
         }
     }
 
@@ -1830,24 +1856,64 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for peer in self.region_peers.values_mut() {
-            if peer.delete_keys_hint < self.cfg.region_compact_delete_keys_count {
-                continue;
-            }
+        let has_pending_compact_tasks = match self.ranges_need_compact {
+            Some(ref tasks) => !tasks.is_empty(),
+            None => false,
+        };
+
+        if self.compact_worker.is_busy() || self.space_checker.is_busy() {
+            debug!("compact worker or space checker is busy, skip check space redundancy");
+        } else if has_pending_compact_tasks {
+            // Schedule compact task
+            let (start, end) = self.ranges_need_compact
+                .as_mut()
+                .unwrap()
+                .pop_front()
+                .unwrap();
             for &cf in &[CF_DEFAULT, CF_WRITE] {
                 let task = CompactTask {
                     cf_name: String::from(cf),
-                    start_key: Some(keys::enc_start_key(peer.region())),
-                    end_key: Some(keys::enc_end_key(peer.region())),
+                    start_key: Some(start.clone()),
+                    end_key: Some(end.clone()),
                 };
                 if let Err(e) = self.compact_worker.schedule(task) {
                     error!("{} failed to schedule compact task: {}", self.tag, e);
                 }
             }
-            peer.delete_keys_hint = 0;
-            // Compact only 1 region each check in case compact task accumulates.
-            break;
+        } else {
+            let mut ranges_need_check = BTreeSet::new();
+            let last_checked_key = match self.last_checked_key.take() {
+                Some(key) => key,
+                None => {
+                    let min_data_key = keys::data_key(b"");
+                    ranges_need_check.insert(min_data_key.clone());
+                    min_data_key
+                }
+            };
+
+            let left_ranges = self.region_ranges
+                .range((Included(last_checked_key), Unbounded::<Key>));
+            for (count, (key, _)) in left_ranges.enumerate() {
+                ranges_need_check.insert(key.to_vec());
+
+                // We check about 10GB data every time.
+                if count > 100 {
+                    self.last_checked_key = Some(key.to_vec());
+                    break;
+                }
+            }
+            if self.last_checked_key.is_none() {
+                ranges_need_check.insert(keys::DATA_MAX_KEY.to_vec());
+            }
+
+            // Schedule check task
+            if let Err(e) = self.space_checker.schedule(SpaceCheckTask {
+                ranges: ranges_need_check,
+            }) {
+                error!("{} failed to schedule space check task: {}", self.tag, e);
+            }
         }
+
         self.register_compact_check_tick(event_loop);
     }
 
@@ -2530,6 +2596,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         self.poll_apply();
+        self.poll_space_check();
 
         self.pending_snapshot_regions.clear();
     }
