@@ -372,6 +372,11 @@ trait DebugExecutor {
         }
     }
 
+    fn unsafe_recover(&self, region_id: u64) {
+        self.check_local_mode();
+        self.do_unsafe_recover(region_id);
+    }
+
     fn check_local_mode(&self);
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -394,6 +399,8 @@ trait DebugExecutor {
     fn do_compact(&self, db: DBType, cf: &str, from: Vec<u8>, to: Vec<u8>);
 
     fn set_region_tombstone(&self, region_id: u64, region: Region);
+
+    fn do_unsafe_recover(&self, u64);
 }
 
 
@@ -490,6 +497,10 @@ impl DebugExecutor for DebugClient {
     fn set_region_tombstone(&self, _: u64, _: Region) {
         unimplemented!();
     }
+
+    fn do_unsafe_recover(&self, _: u64) {
+        unimplemented!();
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -545,6 +556,11 @@ impl DebugExecutor for Debugger {
     fn set_region_tombstone(&self, region_id: u64, region: Region) {
         self.set_region_tombstone(region_id, region)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e))
+    }
+
+    fn do_unsafe_recover(&self, region_id: u64) {
+        self.do_unsafe_recover(region_id)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::do_unsafe_recover", e))
     }
 }
 
@@ -868,7 +884,19 @@ fn main() {
                         .value_delimiter(",")
                         .help("PD endpoints"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("unsafe-recover")
+                .about("recover the instance even if it's the only server")
+                .arg(
+                    Arg::with_name("region")
+                        .required(true)
+                        .short("r")
+                        .takes_value(true)
+                        .help("region id"),
+                ),
         );
+
     let matches = app.clone().get_matches();
 
     let hex_key = matches.value_of("hex-to-escaped");
@@ -960,6 +988,9 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, region);
+    } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
+        let region = matches.value_of("region").unwrap().parse().unwrap();
+        debug_executor.unsafe_recover(region);
     } else {
         let _ = app.print_help();
     }
