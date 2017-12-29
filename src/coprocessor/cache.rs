@@ -189,7 +189,7 @@ impl DistSQLCache {
         };
         if let Some(cached_items) = items {
             for (key, _) in (&cached_items).iter() {
-                self.remove(&key);
+                self.remove(key);
             }
         }
     }
