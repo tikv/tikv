@@ -27,7 +27,7 @@ use config::DbConfig;
 use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use storage::types::Key;
 use storage::mvcc::{Write, WriteType};
-use util::config::{KB, MB};
+use util::config::MB;
 use util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::{Error, Result};
@@ -113,7 +113,7 @@ impl Engine {
         // Don't need to cache since it is unlikely to read more than once.
         let mut ropts = ReadOptions::new();
         ropts.fill_cache(false);
-        ropts.set_readahead_size(2 * MB as usize);
+        ropts.set_readahead_size(4 * MB as usize);
         ropts.set_verify_checksums(verify_checksum);
         DBIterator::new_cf(self.db.clone(), cf_handle, ropts)
     }
@@ -163,6 +163,8 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) 
     db_opts.create_if_missing(true);
     db_opts.enable_statistics(false);
     db_opts.enable_pipelined_write(true);
+    db_opts.allow_concurrent_memtable_write(false);
+    db_opts.set_writable_file_max_buffer_size(4 * MB as i32);
     db_opts.set_use_direct_io_for_flush_and_compaction(true);
     // NOTE: RocksDB preserves `max_background_jobs/4` for flush.
     db_opts.set_max_background_jobs(opts.max_background_jobs);
@@ -170,13 +172,14 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) 
     // CF_WRITE and CF_DEFAULT use the same options.
     let mut block_base_opts = BlockBasedOptions::new();
     // Use a large block size for sequential access.
-    block_base_opts.set_block_size(512 * KB as usize);
+    block_base_opts.set_block_size(4 * MB as usize);
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
     cf_opts.compression_per_level(&opts.defaultcf.compression_per_level);
     // NOTE: Consider using a large write buffer, 1GB should be good enough.
     cf_opts.set_write_buffer_size(opts.defaultcf.write_buffer_size.0);
     cf_opts.set_target_file_size_base(opts.defaultcf.write_buffer_size.0);
+    cf_opts.set_vector_memtable_factory(opts.defaultcf.write_buffer_size.0);
     cf_opts.set_max_write_buffer_number(opts.defaultcf.max_write_buffer_number);
     cf_opts.set_min_write_buffer_number_to_merge(opts.defaultcf.min_write_buffer_number_to_merge);
     // Disable compaction and rate limit.

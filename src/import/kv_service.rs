@@ -41,7 +41,7 @@ pub struct ImportKVService {
 impl ImportKVService {
     pub fn new(cfg: &Config, rpc: Arc<RpcClient>, importer: Arc<KVImporter>) -> ImportKVService {
         let pool = Builder::new()
-            .name_prefix("import_kv")
+            .name_prefix("import-kv")
             .pool_size(cfg.num_threads)
             .create();
         let client = Arc::new(Client::new(rpc, cfg.max_import_jobs));
