@@ -47,7 +47,7 @@ fn prepare_test_engine(versions: usize, value_len: usize, keys: &[Vec<u8>]) -> B
     for _ in 0..versions {
         for key in keys {
             let mut value = vec![0u8; value_len];
-            rng.fill_bytes(&mut value);
+            // rng.fill_bytes(&mut value);
             let start_ts = next_ts();
             let commit_ts = next_ts();
 
@@ -109,7 +109,7 @@ fn bench_batch_set(
 
             let key = Key::from_raw(&keys[tmp]);
             let mut value = vec![0u8; value_len];
-            rng.fill_bytes(&mut value);
+            // rng.fill_bytes(&mut value);
 
             mutations.push(Mutation::Put((key.clone(), value)));
             keys_to_write.push(key);
@@ -127,7 +127,7 @@ fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> BenchSample
         let start_ts = next_ts();
         let commit_ts = next_ts();
         let mut value = vec![0u8; value_len];
-        rng.fill_bytes(&mut value);
+        // rng.fill_bytes(&mut value);
 
         let key = &keys[rng.gen_range(0, keys.len())];
 

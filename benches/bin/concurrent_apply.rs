@@ -64,7 +64,8 @@ fn do_bench(batch_size: usize, data_count: usize, threads: usize, value_len: usi
     let data_count = if data_count % batch_size == 0 {
         data_count
     } else {
-        data_count / batch_size * batch_size + data_count
+        // Upper bound
+        data_count / batch_size * batch_size + batch_size
     };
 
     println!(
