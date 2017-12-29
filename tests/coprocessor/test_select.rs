@@ -845,23 +845,23 @@ fn test_stream_batch_row_limit() {
     assert_eq!(resps.len(), 2);
 
     for (i, resp) in resps.into_iter().enumerate() {
-        if resp.get_encode_type() == EncodeType::TypeDefault {
-            let mut chunk = Chunk::new();
-            chunk.merge_from_bytes(resp.get_data()).unwrap();
+        // For now, we only support default encode type.
+        assert_eq!(resp.get_encode_type(), EncodeType::TypeDefault);
+        let mut chunk = Chunk::new();
+        chunk.merge_from_bytes(resp.get_data()).unwrap();
 
-            let chunks = vec![chunk];
-            let chunk_data_limit = stream_row_limit * 3;
-            check_chunk_datum_count(&chunks, chunk_data_limit);
+        let chunks = vec![chunk];
+        let chunk_data_limit = stream_row_limit * 3;
+        check_chunk_datum_count(&chunks, chunk_data_limit);
 
-            let spliter = DAGChunkSpliter::new(chunks, 3);
-            let cur_data = &data[i * stream_row_limit..(i + 1) * stream_row_limit];
-            for (row, &(id, name, cnt)) in spliter.zip(cur_data) {
-                let name_datum = name.map(|s| s.as_bytes()).into();
-                let expected_encoded =
-                    datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
-                let result_encoded = datum::encode_value(&row).unwrap();
-                assert_eq!(result_encoded, &*expected_encoded);
-            }
+        let spliter = DAGChunkSpliter::new(chunks, 3);
+        let cur_data = &data[i * stream_row_limit..(i + 1) * stream_row_limit];
+        for (row, &(id, name, cnt)) in spliter.zip(cur_data) {
+            let name_datum = name.map(|s| s.as_bytes()).into();
+            let expected_encoded =
+                datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
+            let result_encoded = datum::encode_value(&row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
         }
     }
 
