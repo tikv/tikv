@@ -1856,6 +1856,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        self.poll_space_check();
+
         let has_pending_compact_tasks = match self.ranges_need_compact {
             Some(ref tasks) => !tasks.is_empty(),
             None => false,
@@ -2596,7 +2598,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         self.poll_apply();
-        self.poll_space_check();
 
         self.pending_snapshot_regions.clear();
     }
