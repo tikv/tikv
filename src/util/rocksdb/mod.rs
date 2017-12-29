@@ -525,11 +525,16 @@ mod tests {
         assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_some());
     }
 
+    #[cfg(target_os = "linux")]
     fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
-        if cfg!(target_os = "linux") {
-            use std::os::linux::fs::MetadataExt;
-            assert_eq!(fs::metadata(path).unwrap().st_nlink(), nlink);
-        }
+        use std::os::linux::fs::MetadataExt;
+        assert_eq!(fs::metadata(path).unwrap().st_nlink(), nlink);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(fs::metadata(path).unwrap().nlink(), nlink);
     }
 
     fn gen_sst_with_kvs(db: &DB, cf: &CFHandle, path: &str, kvs: &[(&str, &str)]) {
