@@ -852,8 +852,8 @@ mod tests {
 
         let bad_regions = debugger.bad_regions().unwrap();
         assert_eq!(bad_regions.len(), 4);
-        for i in 0..4 {
-            assert_eq!(bad_regions[i].0, (10 + i) as u64);
+        for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
+            assert_eq!(region_id, (10 + i) as u64);
         }
     }
 }
