@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::ops::Deref;
-use std::cmp::{Ord, Ordering, PartialOrd};
 use std::sync::Arc;
 
 use kvproto::kvrpcpb::*;
@@ -22,6 +21,7 @@ use pd::RegionInfo;
 
 use super::ImportClient;
 
+// Just used as a mark, don't use them in comparison.
 pub const RANGE_MIN: &'static [u8] = &[];
 pub const RANGE_MAX: &'static [u8] = &[];
 
@@ -32,27 +32,20 @@ pub fn new_range(start: &[u8], end: &[u8]) -> Range {
     range
 }
 
-#[derive(Eq, PartialEq)]
-pub struct RangeEnd<'a>(pub &'a [u8]);
-
-impl<'a> Ord for RangeEnd<'a> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        if self.0 == RANGE_MAX && other.0 == RANGE_MAX {
-            Ordering::Equal
-        } else if self.0 == RANGE_MAX {
-            Ordering::Greater
-        } else if other.0 == RANGE_MAX {
-            Ordering::Less
-        } else {
-            self.0.cmp(other.0)
-        }
+// Use this to check if `end1` is before `end2`.
+pub fn is_before_end(end1: &[u8], end2: &[u8]) -> bool {
+    if end1 == RANGE_MAX {
+        false
+    } else if end2 == RANGE_MAX {
+        true
+    } else {
+        end1 < end2
     }
 }
 
-impl<'a> PartialOrd for RangeEnd<'a> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+// Use this to check if the `key` belongs in the `end`.
+pub fn belongs_in_end(key: &[u8], end: &[u8]) -> bool {
+    key < end || end == RANGE_MAX
 }
 
 #[derive(Clone, Debug)]
@@ -119,8 +112,8 @@ impl<C: ImportClient> RegionContext<C> {
     pub fn reset(&mut self, key: &[u8]) {
         self.raw_size = 0;
         if let Some(ref region) = self.region {
-            if RangeEnd(key) < RangeEnd(region.get_end_key()) {
-                // Still belongs to this region, no need to update.
+            if belongs_in_end(key, region.get_end_key()) {
+                // Still belongs in this region, no need to update.
                 return;
             }
         }
@@ -143,7 +136,7 @@ impl<C: ImportClient> RegionContext<C> {
             return true;
         }
         if let Some(ref region) = self.region {
-            if RangeEnd(key) >= RangeEnd(region.get_end_key()) {
+            if !belongs_in_end(key, region.get_end_key()) {
                 return true;
             }
         }
@@ -157,15 +150,21 @@ mod tests {
     use import::client::tests::MockClient;
 
     #[test]
-    fn test_range_end() {
-        let a = RANGE_MAX;
-        let b = RANGE_MAX;
-        let c = b"abc";
-        let d = b"bcd";
+    fn test_is_before_end() {
+        assert!(!is_before_end(b"ab", b"ab"));
+        assert!(is_before_end(b"ab", b"bc"));
+        assert!(!is_before_end(b"cd", b"bc"));
+        assert!(is_before_end(b"cd", RANGE_MAX));
+        assert!(!is_before_end(RANGE_MAX, RANGE_MAX));
+    }
 
-        assert!(RangeEnd(a) == RangeEnd(b));
-        assert!(RangeEnd(b) > RangeEnd(c));
-        assert!(RangeEnd(c) < RangeEnd(d));
+    #[test]
+    fn test_belongs_in_end() {
+        assert!(!belongs_in_end(b"ab", b"ab"));
+        assert!(belongs_in_end(b"ab", b"bc"));
+        assert!(!belongs_in_end(b"cd", b"bc"));
+        assert!(belongs_in_end(b"cd", RANGE_MAX));
+        assert!(belongs_in_end(RANGE_MAX, RANGE_MAX));
     }
 
     #[test]

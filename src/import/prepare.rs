@@ -173,9 +173,9 @@ impl PrepareRangeJob {
     }
 
     fn prepare(&self) -> Result<()> {
-        let mut region = self.client.get_region(&self.range.start)?;
+        let mut region = self.client.get_region(self.range.get_start())?;
 
-        if RangeEnd(self.range.get_end()) >= RangeEnd(region.get_end_key()) {
+        if !is_before_end(self.range.get_end(), region.get_end_key()) {
             return Ok(());
         }
 

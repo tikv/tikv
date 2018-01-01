@@ -38,7 +38,7 @@ impl SSTFile {
     pub fn is_inside(&self, region: &Region) -> bool {
         let range = self.meta.get_range();
         range.get_start() >= region.get_start_key() &&
-            RangeEnd(range.get_end()) < RangeEnd(region.get_end_key())
+            belongs_in_end(range.get_end(), region.get_end_key())
     }
 
     pub fn extended_range(&self) -> Range {
@@ -170,25 +170,25 @@ impl RangeIterator {
         range: Range,
         mut finished_ranges: Vec<Range>,
     ) -> RangeIterator {
-        // Finished ranges are guaranteed to be not overlapped with each other,
-        // so we just need to sort them by the start.
         finished_ranges.sort_by(|a, b| a.get_start().cmp(b.get_start()));
 
         // Collect unfinished ranges.
         let mut ranges = Vec::new();
-        let mut start = range.get_start();
+        let mut last_end = range.get_start();
         for range in &finished_ranges {
-            assert!(start <= range.get_start());
-            if start < range.get_start() {
-                ranges.push(new_range(start, range.get_start()));
+            if last_end < range.get_start() {
+                ranges.push(new_range(last_end, range.get_start()));
             }
-            start = range.get_end();
-            if start == RANGE_MAX {
-                break; // All ranges are covered.
+            if belongs_in_end(last_end, range.get_end()) {
+                last_end = range.get_end();
+            }
+            if last_end == RANGE_MAX {
+                break;
             }
         }
-        if RangeEnd(start) < RangeEnd(range.get_end()) || finished_ranges.is_empty() {
-            ranges.push(new_range(start, range.get_end()));
+        // Handle the last unfinished range.
+        if finished_ranges.is_empty() || is_before_end(last_end, range.get_end()) {
+            ranges.push(new_range(last_end, range.get_end()));
         }
 
         let mut res = RangeIterator {
@@ -208,7 +208,7 @@ impl RangeIterator {
         }
         {
             let range = &self.ranges[self.ranges_index];
-            if RangeEnd(self.iter.key()) < RangeEnd(range.get_end()) {
+            if belongs_in_end(self.iter.key(), range.get_end()) {
                 return true;
             }
             self.ranges_index += 1;
@@ -229,7 +229,7 @@ impl RangeIterator {
                 break;
             }
             assert!(self.iter.key() >= range.get_start());
-            if RangeEnd(self.iter.key()) < RangeEnd(range.get_end()) {
+            if belongs_in_end(self.iter.key(), range.get_end()) {
                 break;
             }
             self.ranges_index += 1;
@@ -297,150 +297,118 @@ mod tests {
         }
     }
 
+    fn test_range_iterator_with(
+        db: Arc<DB>,
+        range_opt: (Option<i32>, Option<i32>),
+        finished_ranges_opt: &[(Option<i32>, Option<i32>)],
+        unfinished_ranges: &[(i32, i32)],
+    ) {
+        let range = new_int_range(range_opt.0, range_opt.1);
+        let mut finished_ranges = Vec::new();
+        for &(start, end) in finished_ranges_opt {
+            finished_ranges.push(new_int_range(start, end));
+        }
+        let mut iter = new_range_iter(db, range, finished_ranges);
+        for &(start, end) in unfinished_ranges {
+            check_range_iter(&mut iter, start, end);
+        }
+        assert!(!iter.next());
+        assert!(!iter.valid());
+    }
+
     #[test]
     fn test_range_iterator() {
         let dir = TempDir::new("_tikv_test_tmp_db").unwrap();
         let db = open_db(dir.path());
 
-        let num_keys = 100;
-        for i in 0..num_keys {
+        for i in 0..100 {
             let k = format!("k-{:04}", i);
             let v = format!("v-{:04}", i);
             db.put(k.as_bytes(), v.as_bytes()).unwrap();
         }
 
         // No finished ranges.
-        {
-            let range = new_int_range(None, None);
-            let finished_ranges = Vec::new();
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            check_range_iter(&mut iter, 0, num_keys);
-            assert!(!iter.valid());
-        }
+        test_range_iterator_with(db.clone(), (None, None), &[], &[(0, 100)]);
+        test_range_iterator_with(db.clone(), (None, Some(25)), &[], &[(0, 25)]);
+        test_range_iterator_with(db.clone(), (Some(0), Some(25)), &[], &[(0, 25)]);
+        test_range_iterator_with(db.clone(), (Some(25), Some(75)), &[], &[(25, 75)]);
+        test_range_iterator_with(db.clone(), (Some(75), Some(100)), &[], &[(75, 100)]);
+        test_range_iterator_with(db.clone(), (Some(75), None), &[], &[(75, 100)]);
 
-        // Range [0, 25) with no finished ranges.
-        {
-            let range = new_int_range(None, Some(25));
-            let finished_ranges = Vec::new();
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            check_range_iter(&mut iter, 0, 25);
-            assert!(!iter.valid());
-        }
-
-        // Range [25, 75) with no finished ranges.
-        {
-            let range = new_int_range(Some(25), Some(75));
-            let finished_ranges = Vec::new();
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            check_range_iter(&mut iter, 25, 75);
-            assert!(!iter.valid());
-        }
-
-        // Range [75, 100) with no finished ranges.
-        {
-            let range = new_int_range(Some(75), None);
-            let finished_ranges = Vec::new();
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            check_range_iter(&mut iter, 75, 100);
-            assert!(!iter.valid());
-        }
-
-        // Finished all ranges.
-        {
-            let range = new_int_range(None, None);
-            let mut finished_ranges = Vec::new();
-            finished_ranges.push(new_int_range(Some(0), Some(100)));
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            assert!(!iter.next());
-            assert!(!iter.valid());
-        }
+        // Range [None, None) with some finished ranges.
+        test_range_iterator_with(db.clone(), (None, None), &[(None, None)], &[]);
+        test_range_iterator_with(
+            db.clone(),
+            (None, None),
+            &[(None, Some(25)), (Some(50), Some(75))],
+            &[(25, 50), (75, 100)],
+        );
+        test_range_iterator_with(
+            db.clone(),
+            (None, None),
+            &[(Some(25), Some(50)), (Some(75), None)],
+            &[(0, 25), (50, 75)],
+        );
+        test_range_iterator_with(
+            db.clone(),
+            (None, None),
+            &[
+                (Some(0), Some(25)),
+                (Some(50), Some(60)),
+                (Some(60), Some(70)),
+            ],
+            &[(25, 50), (70, 100)],
+        );
+        test_range_iterator_with(
+            db.clone(),
+            (None, None),
+            &[
+                (Some(10), Some(30)),
+                (Some(50), Some(70)),
+                (Some(80), Some(90)),
+                (Some(20), Some(40)),
+                (Some(60), Some(80)),
+                (Some(70), Some(100)),
+            ],
+            &[(0, 10), (40, 50)],
+        );
 
         // Range [25, 75) with some finished ranges.
-        {
-            let range = new_int_range(Some(25), Some(75));
-            let mut finished_ranges = Vec::new();
-            finished_ranges.push(new_int_range(Some(30), Some(40)));
-            finished_ranges.push(new_int_range(Some(40), Some(50)));
-            finished_ranges.push(new_int_range(Some(60), Some(70)));
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            check_range_iter(&mut iter, 25, 30);
-            check_range_iter(&mut iter, 50, 60);
-            check_range_iter(&mut iter, 70, 75);
-            assert!(!iter.next());
-            assert!(!iter.valid());
-        }
-
-        // Finished all segment ranges.
-        {
-            let range = new_int_range(None, None);
-            let mut finished_ranges = Vec::new();
-            finished_ranges.push(new_int_range(Some(0), Some(10)));
-            finished_ranges.push(new_int_range(Some(30), Some(60)));
-            finished_ranges.push(new_int_range(Some(10), Some(30)));
-            finished_ranges.push(new_int_range(Some(60), Some(100)));
-            finished_ranges.push(new_int_range(Some(100), Some(1000)));
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            assert!(!iter.next());
-            assert!(!iter.valid());
-        }
-
-        // Finished head and tail.
-        {
-            let range = new_int_range(Some(20), Some(80));
-            let mut finished_ranges = Vec::new();
-            finished_ranges.push(new_int_range(Some(20), Some(50)));
-            finished_ranges.push(new_int_range(Some(70), None));
-            finished_ranges.push(new_int_range(Some(60), None));
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            check_range_iter(&mut iter, 50, 60);
-            assert!(!iter.next());
-            assert!(!iter.valid());
-        }
-
-        // Finished head and tail.
-        {
-            let range = new_int_range(Some(20), Some(80));
-            let mut finished_ranges = Vec::new();
-            finished_ranges.push(new_int_range(Some(20), Some(50)));
-            finished_ranges.push(new_int_range(Some(70), Some(80)));
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            check_range_iter(&mut iter, 50, 70);
-            assert!(!iter.next());
-            assert!(!iter.valid());
-        }
-
-        // Finished head and middle.
-        {
-            let range = new_int_range(None, Some(90));
-            let mut finished_ranges = Vec::new();
-            finished_ranges.push(new_int_range(None, Some(10)));
-            finished_ranges.push(new_int_range(Some(60), Some(80)));
-            finished_ranges.push(new_int_range(Some(20), Some(30)));
-            finished_ranges.push(new_int_range(Some(30), Some(40)));
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            check_range_iter(&mut iter, 10, 20);
-            check_range_iter(&mut iter, 40, 60);
-            check_range_iter(&mut iter, 80, 90);
-            assert!(!iter.next());
-            assert!(!iter.valid());
-        }
-
-        // Finished middle and tail.
-        {
-            let range = new_int_range(Some(10), None);
-            let mut finished_ranges = Vec::new();
-            finished_ranges.push(new_int_range(Some(90), None));
-            finished_ranges.push(new_int_range(Some(80), None));
-            finished_ranges.push(new_int_range(Some(60), Some(70)));
-            finished_ranges.push(new_int_range(Some(30), Some(40)));
-            finished_ranges.push(new_int_range(Some(40), Some(50)));
-            finished_ranges.push(new_int_range(Some(20), Some(30)));
-            let mut iter = new_range_iter(db.clone(), range, finished_ranges);
-            check_range_iter(&mut iter, 10, 20);
-            check_range_iter(&mut iter, 50, 60);
-            check_range_iter(&mut iter, 70, 80);
-            assert!(!iter.next());
-            assert!(!iter.valid());
-        }
+        test_range_iterator_with(db.clone(), (Some(25), Some(75)), &[(None, None)], &[]);
+        test_range_iterator_with(
+            db.clone(),
+            (Some(25), Some(75)),
+            &[(None, Some(30)), (Some(50), Some(75))],
+            &[(30, 50)],
+        );
+        test_range_iterator_with(
+            db.clone(),
+            (Some(25), Some(75)),
+            &[(Some(30), Some(50)), (Some(60), None)],
+            &[(25, 30), (50, 60)],
+        );
+        test_range_iterator_with(
+            db.clone(),
+            (Some(25), Some(75)),
+            &[
+                (Some(25), Some(30)),
+                (Some(50), Some(60)),
+                (Some(60), Some(70)),
+            ],
+            &[(30, 50), (70, 75)],
+        );
+        test_range_iterator_with(
+            db.clone(),
+            (Some(25), Some(75)),
+            &[
+                (Some(35), Some(45)),
+                (Some(55), Some(60)),
+                (Some(70), Some(75)),
+                (Some(30), Some(40)),
+                (Some(50), Some(65)),
+                (Some(60), Some(75)),
+            ],
+            &[(25, 30), (45, 50)],
+        );
     }
 }
