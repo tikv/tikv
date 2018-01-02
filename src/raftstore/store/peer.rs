@@ -525,7 +525,9 @@ impl Peer {
                     // network partition from the new leader.
                     // For lease safety during leader transfer, transit `leader_lease`
                     // to suspect.
-                    self.leader_lease.suspect(monotonic_raw_now());
+                    let next_expired_time =
+                        self.leader_lease.next_expired_time(monotonic_raw_now());
+                    self.leader_lease.suspect(next_expired_time);
 
                     metrics.timeout_now += 1;
                 }

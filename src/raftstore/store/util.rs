@@ -316,7 +316,7 @@ impl fmt::Debug for Lease {
         match self.bound {
             Some(Either::Left(ts)) => fmter.field("suspect", &ts).finish(),
             Some(Either::Right(ts)) => fmter.field("valid", &ts).finish(),
-            None => fmter.field("none", &"").finish(),
+            None => fmter.finish(),
         }
     }
 }
