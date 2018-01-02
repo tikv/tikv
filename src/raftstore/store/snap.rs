@@ -73,6 +73,9 @@ quick_error! {
             description("abort")
             display("abort")
         }
+        SpaceFull {
+            description("too many snapshots")
+        }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -1284,6 +1287,10 @@ impl SnapManager {
         let core = self.core.rl();
         let size = *core.snap_size.rl();
         size
+    }
+
+    pub fn max_total_snap_size(&self) -> u64 {
+        self.max_total_size
     }
 
     pub fn register(&self, key: SnapKey, entry: SnapEntry) {

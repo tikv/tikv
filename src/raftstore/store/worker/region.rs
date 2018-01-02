@@ -104,6 +104,10 @@ impl SnapContext {
         let raft_db = self.raft_db.clone();
         let raw_snap = Snapshot::new(self.kv_db.clone());
 
+        if self.mgr.get_total_snap_size() > self.mgr.max_total_snap_size() {
+            return Err(Error::SpaceFull);
+        }
+
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
             &raft_db,
