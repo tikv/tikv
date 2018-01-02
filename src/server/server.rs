@@ -283,7 +283,7 @@ mod tests {
                 quick_fail: quick_fail.clone(),
                 addr: addr.clone(),
             },
-            SnapManager::new("", None, None),
+            SnapManager::new("", None, SnapManagerOption::default()),
             pd_worker.scheduler(),
             None,
         ).unwrap();

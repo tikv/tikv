@@ -14,7 +14,7 @@
 use std::sync::{mpsc, Arc};
 use std::path::Path;
 use tikv::raftstore::store::{bootstrap_store, create_event_loop, keys, Engines, Peekable,
-                             SnapManager};
+                             SnapManager, SnapManagerOption};
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -72,7 +72,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let snap_mgr = SnapManager::new(
         tmp_mgr.path().to_str().unwrap(),
         Some(node.get_sendch()),
-        None,
+        SnapManagerOption::default(),
     );
     let (_, snapshot_status_receiver) = mpsc::channel();
     let pd_worker = FutureWorker::new("test-pd-worker");

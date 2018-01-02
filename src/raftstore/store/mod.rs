@@ -39,7 +39,7 @@ pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::peer_storage::{do_snapshot, write_peer_state, CacheQueryStats, PeerStorage,
                              SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
 pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, SnapEntry, SnapKey, SnapManager,
-                     Snapshot, SnapshotDeleter, SnapshotStatistics};
+                     SnapManagerOption, Snapshot, SnapshotDeleter, SnapshotStatistics};
 
 // Only used in tests
 #[cfg(test)]

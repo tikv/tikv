@@ -27,7 +27,7 @@ use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{store, Error, Result};
-use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::store::{Engines, Msg as StoreMsg, SnapManager, SnapManagerOption};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
@@ -122,7 +122,7 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(self.pd_client.clone()).unwrap();
-        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), None);
+        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch), SnapManagerOption::default());
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());

@@ -49,6 +49,8 @@ use raftstore::store::metrics::{SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_CO
                                 SNAPSHOT_CF_SIZE};
 use raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 
+use server::config::Config as ServerConfig;
+
 // Data in CF_RAFT should be excluded for a snapshot.
 pub const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
@@ -1096,15 +1098,19 @@ pub struct SnapManager {
     core: Arc<RwLock<SnapManagerCore>>,
     ch: Option<SendCh<Msg>>,
     limiter: Option<Arc<IOLimiter>>,
+    max_total_size: u64,
 }
 
 impl SnapManager {
     pub fn new<T: Into<String>>(
         path: T,
         ch: Option<SendCh<Msg>>,
-        limiter: Option<Arc<IOLimiter>>,
-        _max_total_size: usize,
+        option: SnapManagerOption,
     ) -> SnapManager {
+        let mut limiter = None;
+        if option.max_write_bytes_per_sec > 0 {
+            limiter = Some(Arc::new(IOLimiter::new(option.max_write_bytes_per_sec)));
+        }
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
                 base: path.into(),
@@ -1113,6 +1119,7 @@ impl SnapManager {
             })),
             ch: ch,
             limiter: limiter,
+            max_total_size: option.max_total_size,
         }
     }
 
@@ -1370,6 +1377,21 @@ impl SnapshotDeleter for SnapManager {
     }
 }
 
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SnapManagerOption {
+    max_write_bytes_per_sec: u64,
+    max_total_size: u64,
+}
+
+impl SnapManagerOption {
+    pub fn from_server_config(config: &ServerConfig) -> SnapManagerOption {
+        SnapManagerOption {
+            max_write_bytes_per_sec: config.snap_max_write_bytes_per_sec.0,
+            max_total_size: config.snap_max_total_size.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -1380,8 +1402,9 @@ mod test {
     use tempdir::TempDir;
     use protobuf::Message;
 
-    use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, Snapshot, SnapshotDeleter,
-                SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX};
+    use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerOption, Snapshot,
+                SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
+                SNAP_GEN_PREFIX};
 
     use std::path::PathBuf;
     use kvproto::metapb::{Peer, Region};
@@ -2038,7 +2061,7 @@ mod test {
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
-        let mut mgr = SnapManager::new(path, None, None);
+        let mut mgr = SnapManager::new(path, None, SnapManagerOption::default());
         mgr.init().unwrap();
         assert!(temp_path.exists());
 
@@ -2046,7 +2069,7 @@ mod test {
         let temp_path2 = temp_dir.path().join("snap2");
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
-        mgr = SnapManager::new(path2, None, None);
+        mgr = SnapManager::new(path2, None, SnapManagerOption::default());
         assert!(mgr.init().is_err());
     }
 
@@ -2054,7 +2077,7 @@ mod test {
     fn test_snap_mgr_v2() {
         let temp_dir = TempDir::new("test-snap-mgr-v2").unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let mgr = SnapManager::new(path.clone(), None, None);
+        let mgr = SnapManager::new(path.clone(), None, SnapManagerOption::default());
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
@@ -2122,7 +2145,7 @@ mod test {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        let mgr = SnapManager::new(path, None, None);
+        let mgr = SnapManager::new(path, None, SnapManagerOption::default());
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
 
@@ -2153,7 +2176,7 @@ mod test {
     fn test_snap_deletion_on_registry() {
         let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(src_path.clone(), None, None);
+        let src_mgr = SnapManager::new(src_path.clone(), None, SnapManagerOption::default());
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
@@ -2188,7 +2211,7 @@ mod test {
 
         let dst_temp_dir = TempDir::new("test-snap-deletion-on-registry-dst").unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(dst_path.clone(), None, None);
+        let dst_mgr = SnapManager::new(dst_path.clone(), None, SnapManagerOption::default());
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.
