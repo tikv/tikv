@@ -163,7 +163,6 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) 
     db_opts.create_if_missing(true);
     db_opts.enable_statistics(false);
     db_opts.enable_pipelined_write(true);
-    db_opts.allow_concurrent_memtable_write(false);
     db_opts.set_writable_file_max_buffer_size(4 * MB as i32);
     db_opts.set_use_direct_io_for_flush_and_compaction(true);
     // NOTE: RocksDB preserves `max_background_jobs/4` for flush.
@@ -179,7 +178,6 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) 
     // NOTE: Consider using a large write buffer, 1GB should be good enough.
     cf_opts.set_write_buffer_size(opts.defaultcf.write_buffer_size.0);
     cf_opts.set_target_file_size_base(opts.defaultcf.write_buffer_size.0);
-    cf_opts.set_vector_memtable_factory(opts.defaultcf.write_buffer_size.0);
     cf_opts.set_max_write_buffer_number(opts.defaultcf.max_write_buffer_number);
     cf_opts.set_min_write_buffer_number_to_merge(opts.defaultcf.min_write_buffer_number_to_merge);
     // Disable compaction and rate limit.
