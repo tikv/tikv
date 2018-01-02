@@ -18,57 +18,6 @@ use std::collections::BinaryHeap;
 
 use util::time::Instant;
 
-#[derive(Debug)]
-pub struct TimeoutTask<T> {
-    next_tick: Instant,
-    timeout: Duration,
-    task: T,
-}
-
-impl<T> TimeoutTask<T> {
-    pub fn into_inner(self) -> T {
-        self.task
-    }
-    pub fn timeout(&self) -> Duration {
-        self.timeout
-    }
-}
-
-impl<T> AsRef<T> for TimeoutTask<T> {
-    fn as_ref(&self) -> &T {
-        &self.task
-    }
-}
-
-impl<T> AsMut<T> for TimeoutTask<T> {
-    fn as_mut(&mut self) -> &mut T {
-        &mut self.task
-    }
-}
-
-impl<T> PartialEq for TimeoutTask<T> {
-    fn eq(&self, other: &TimeoutTask<T>) -> bool {
-        if self.next_tick == other.next_tick {
-            return true;
-        }
-        false
-    }
-}
-
-impl<T> Eq for TimeoutTask<T> {}
-
-impl<T> PartialOrd for TimeoutTask<T> {
-    fn partial_cmp(&self, other: &TimeoutTask<T>) -> Option<Ordering> {
-        Some(self.next_tick.cmp(&other.next_tick).reverse())
-    }
-}
-
-impl<T> Ord for TimeoutTask<T> {
-    fn cmp(&self, other: &TimeoutTask<T>) -> Ordering {
-        self.partial_cmp(other).unwrap()
-    }
-}
-
 pub struct Timer<T> {
     pending: BinaryHeap<TimeoutTask<T>>,
 }
@@ -127,6 +76,57 @@ impl<T> Timer<T> {
             },
             None => None,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct TimeoutTask<T> {
+    next_tick: Instant,
+    timeout: Duration,
+    task: T,
+}
+
+impl<T> TimeoutTask<T> {
+    pub fn into_inner(self) -> T {
+        self.task
+    }
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+}
+
+impl<T> AsRef<T> for TimeoutTask<T> {
+    fn as_ref(&self) -> &T {
+        &self.task
+    }
+}
+
+impl<T> AsMut<T> for TimeoutTask<T> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut self.task
+    }
+}
+
+impl<T> PartialEq for TimeoutTask<T> {
+    fn eq(&self, other: &TimeoutTask<T>) -> bool {
+        if self.next_tick == other.next_tick {
+            return true;
+        }
+        false
+    }
+}
+
+impl<T> Eq for TimeoutTask<T> {}
+
+impl<T> PartialOrd for TimeoutTask<T> {
+    fn partial_cmp(&self, other: &TimeoutTask<T>) -> Option<Ordering> {
+        Some(self.next_tick.cmp(&other.next_tick).reverse())
+    }
+}
+
+impl<T> Ord for TimeoutTask<T> {
+    fn cmp(&self, other: &TimeoutTask<T>) -> Ordering {
+        self.partial_cmp(other).unwrap()
     }
 }
 
