@@ -576,11 +576,6 @@ impl Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-
-// Export this for testing usage
-pub use self::rocksdb::write_modifies;
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

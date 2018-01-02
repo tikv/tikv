@@ -86,7 +86,6 @@ mod utils;
 mod raftstore;
 mod mvcc;
 mod mvcctxn;
-mod concurrent_apply;
 
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));
@@ -111,7 +110,6 @@ fn main() {
         "raftstore",
         "tombstone-scan",
         "mvcctxn",
-        "concurrent-apply",
         "concurrent-batch-mvcctxn",
     ];
 
@@ -140,7 +138,6 @@ fn main() {
                 "tombstone-scan" => mvcc::bench_engine(),
                 "mvcctxn" => mvcctxn::bench_mvcctxn(),
                 "concurrent-batch-mvcctxn" => mvcctxn::bench_concurrent_batch(),
-                "concurrent-apply" => concurrent_apply::bench_concurrent_rocksdb(),
                 _ => eprintln!("*** Unknown bench item {}", item),
             }
         }
