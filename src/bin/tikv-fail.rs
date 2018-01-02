@@ -22,7 +22,7 @@
 ///
 /// ```sh
 /// ./tikv-fail -a 127.0.0.1:9090 inject\
-//      tikv::raftstore::store::store::raft_between_save=panic
+//      raft_between_save=panic("boom")
 /// ```
 ///
 
