@@ -121,9 +121,9 @@ impl<T> Timer<T> {
         match self.pending.pop() {
             Some(timeout_task) => if timeout_task.next_tick > instant {
                 self.pending.push(timeout_task);
-                return None;
+                None
             } else {
-                return Some(timeout_task);
+                Some(timeout_task)
             },
             None => None,
         }

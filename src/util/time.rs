@@ -263,6 +263,8 @@ impl Instant {
         }
     }
 
+    /// checked_sub is simiar with `duration_since`, except it won't panic if `self`
+    /// is less than `other`. In this case the zero duration will be returned.
     pub fn checked_sub(&self, other: Instant) -> Duration {
         if *self > other {
             self.duration_since(other)
@@ -484,6 +486,10 @@ mod tests {
         let mut tmp_late_row = late_raw;
         tmp_late_row -= zero;
         assert_eq!(tmp_late_row, late_raw);
+
+        // checked_sub Duration.
+        assert_eq!(early_raw.checked_sub(late_raw), zero);
+        assert!(late_raw.checked_sub(early_raw) > zero);
 
         let mut tmp_late_coarse = late_coarse;
         tmp_late_coarse -= zero;
