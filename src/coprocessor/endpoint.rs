@@ -69,6 +69,7 @@ struct CopContextInner {
     index_stats: StatisticsSummary,
     flow_stats: HashMap<u64, FlowStatistics>,
     timer: Instant,
+    timeout: Duration,
     pd_task_sender: FutureScheduler<PdTask>,
 }
 
@@ -79,6 +80,7 @@ impl CopContextInner {
             index_stats: StatisticsSummary::default(),
             flow_stats: map![],
             timer: Instant::now_coarse(),
+            timeout: Duration::from_secs(1),
             pd_task_sender: pd_task_sender,
         }
     }
@@ -107,38 +109,36 @@ impl CopContextInner {
     }
 
     fn collect(&mut self, region_id: u64, scan_tag: &str, stats: CopStats) {
-        let CopStats {
-            stats,
-            mut scan_counter,
-        } = stats;
+        let (stats, mut scan_counter) = (stats.stats, stats.scan_counter);
         self.add_statistics(scan_tag, &stats);
         self.add_flow_stats_by_region(region_id, &stats);
         scan_counter.flush();
 
         let new_timer = Instant::now_coarse();
-        if new_timer.duration_since(self.timer) > Duration::from_secs(1) {
-            self.timer = new_timer;
-            for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
-                let this_statistics = self.get_statistics(type_str);
-                if this_statistics.count == 0 {
-                    continue;
-                }
-                for (cf, details) in this_statistics.stat.details() {
-                    for (tag, count) in details {
-                        COPR_SCAN_DETAILS
-                            .with_label_values(&[type_str, cf, tag])
-                            .inc_by(count as f64)
-                            .unwrap();
-                    }
-                }
-                mem::replace(this_statistics, StatisticsSummary::default());
+        if new_timer.duration_since(self.timer) < self.timeout {
+            return;
+        }
+        self.timer = new_timer;
+        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
+            let this_statistics = self.get_statistics(type_str);
+            if this_statistics.count == 0 {
+                continue;
             }
-            let pd_task = PdTask::ReadStats {
-                read_stats: mem::replace(&mut self.flow_stats, map![]),
-            };
-            if let Err(e) = self.pd_task_sender.schedule(pd_task) {
-                error!("send coprocessor statistics: {:?}", e);
+            for (cf, details) in this_statistics.stat.details() {
+                for (tag, count) in details {
+                    COPR_SCAN_DETAILS
+                        .with_label_values(&[type_str, cf, tag])
+                        .inc_by(count as f64)
+                        .unwrap();
+                }
             }
+            *this_statistics = StatisticsSummary::default();
+        }
+        let pd_task = PdTask::ReadStats {
+            read_stats: mem::replace(&mut self.flow_stats, map![]),
+        };
+        if let Err(e) = self.pd_task_sender.schedule(pd_task) {
+            error!("send coprocessor statistics: {:?}", e);
         }
     }
 }

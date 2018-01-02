@@ -765,6 +765,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     }
 
     fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
+        let label = "coprocessor";
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .with_label_values(&[label])
+            .start_coarse_timer();
+
         let (cb, future) = make_callback();
         let on_resp = OnResponse::Unary(cb);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
@@ -783,11 +788,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return self.send_fail_status(ctx, sink, error, code);
         }
 
-        let label = "coprocessor";
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .with_label_values(&[label])
-            .start_coarse_timer();
-
         let future = future
             .map_err(Error::from)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
@@ -805,6 +805,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         req: Request,
         sink: ServerStreamingSink<Response>,
     ) {
+        let label = "coprocessor_stream";
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .with_label_values(&[label])
+            .start_coarse_timer();
+
         let (cb, future) = make_callback();
         let on_resp = OnResponse::Streaming(cb);
         let req_task = match RequestTask::new(req, on_resp, self.recursion_limit) {
@@ -822,11 +827,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             let code = RpcStatusCode::ResourceExhausted;
             return self.send_fail_status_to_stream(ctx, sink, error, code);
         }
-
-        let label = "coprocessor_stream";
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .with_label_values(&[label])
-            .start_coarse_timer();
 
         let future = future
             .map_err(Error::from)
