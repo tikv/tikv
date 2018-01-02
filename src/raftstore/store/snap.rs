@@ -1103,6 +1103,7 @@ impl SnapManager {
         path: T,
         ch: Option<SendCh<Msg>>,
         limiter: Option<Arc<IOLimiter>>,
+        _max_total_size: usize,
     ) -> SnapManager {
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {

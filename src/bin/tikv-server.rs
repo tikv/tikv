@@ -208,6 +208,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
         limiter,
+        cfg.server.snap_max_total_size.0,
     );
 
     let server_cfg = Arc::new(cfg.server.clone());
