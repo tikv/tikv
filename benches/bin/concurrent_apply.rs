@@ -55,7 +55,7 @@ fn do_bench(batch_size: usize, data_count: usize, threads: usize, value_len: usi
     };
 
     println!(
-        "benching concurrent applying prewritet\t\
+        "benching concurrent applying\t\
          batch_size:{} threads:{} value_len:{} count:{} ...",
         batch_size,
         threads,
