@@ -13,6 +13,9 @@ pub fn next_ts() -> u64 {
     CURRENT.fetch_add(1, Ordering::SeqCst)
 }
 
+/// Generate `count` row keys that all with the specified `table_id`.
+///
+/// Row id will start with `start_id` and increment
 pub fn generate_row_keys(table_id: i64, start_id: i64, count: usize) -> Vec<Vec<u8>> {
     let mut result = Vec::with_capacity(count);
     for i in (start_id)..(start_id + count as i64) {
@@ -25,6 +28,8 @@ pub fn generate_row_keys(table_id: i64, start_id: i64, count: usize) -> Vec<Vec<
 }
 
 
+/// Generate `count` unique index keys that all with the specified `table_id`, `index_id`,
+/// and `value_len`.
 pub fn generate_unique_index_keys(
     table_id: i64,
     index_id: i64,
@@ -50,6 +55,11 @@ pub fn shuffle<T>(data: &mut [T]) {
     }
 }
 
+/// Run `job` for `iterations` times, and return a Vec containing nanoseconds of each turn `job`
+/// returns.
+///
+/// `job` must return a `Duration` type. Please calculate time cost of what you want to bench
+/// manually ant return it.
 pub fn record_time<F>(mut job: F, iterations: u32) -> Vec<u64>
 where
     F: FnMut() -> Duration,
