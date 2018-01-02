@@ -11,12 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{mem, thread, usize};
+use std::{mem, usize};
 use std::time::Duration;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::cell::RefCell;
+use std::iter::FromIterator;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Debug, Display, Formatter};
+use std::thread::{self, ThreadId};
 
 use protobuf::{CodedInputStream, Message as PbMsg};
 use grpc::Error as GrpcError;
@@ -74,17 +76,6 @@ struct CopContextInner {
 }
 
 impl CopContextInner {
-    fn new(pd_task_sender: FutureScheduler<PdTask>) -> Self {
-        CopContextInner {
-            select_stats: StatisticsSummary::default(),
-            index_stats: StatisticsSummary::default(),
-            flow_stats: map![],
-            timer: Instant::now_coarse(),
-            timeout: Duration::from_secs(1),
-            pd_task_sender: pd_task_sender,
-        }
-    }
-
     fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
         match type_str {
             STR_REQ_TYPE_SELECT => &mut self.select_stats,
@@ -145,6 +136,20 @@ impl CopContextInner {
 
 struct CopContext(RefCell<CopContextInner>);
 
+impl CopContext {
+    fn new(pd_task_sender: FutureScheduler<PdTask>) -> Self {
+        let inner = CopContextInner {
+            select_stats: StatisticsSummary::default(),
+            index_stats: StatisticsSummary::default(),
+            flow_stats: map![],
+            timer: Instant::now_coarse(),
+            timeout: Duration::from_secs(1),
+            pd_task_sender: pd_task_sender,
+        };
+        CopContext(RefCell::new(inner))
+    }
+}
+
 unsafe impl Sync for CopContext {}
 
 #[derive(Clone)]
@@ -153,10 +158,6 @@ struct CopContextPool {
 }
 
 impl CopContextPool {
-    fn new(ctxs: Arc<HashMap<thread::ThreadId, CopContext>>) -> Self {
-        CopContextPool { cop_ctxs: ctxs }
-    }
-
     // Must run in CpuPool.
     fn collect(&self, region_id: u64, scan_tag: &str, stats: CopStats) {
         let thread_id = thread::current().id();
@@ -165,7 +166,17 @@ impl CopContextPool {
     }
 }
 
-// TODO: here...
+impl FromIterator<(thread::ThreadId, CopContext)> for CopContextPool {
+    fn from_iter<T: IntoIterator<Item = (ThreadId, CopContext)>>(iter: T) -> Self {
+        let mut cop_ctxs = map![];
+        for (thread_id, cop_ctx) in iter {
+            cop_ctxs.insert(thread_id, cop_ctx);
+        }
+        let cop_ctxs = Arc::new(cop_ctxs);
+        CopContextPool { cop_ctxs: cop_ctxs }
+    }
+}
+
 #[derive(Default)]
 struct CopStats {
     stats: Statistics,
@@ -199,35 +210,23 @@ impl Host {
         pd_task_sender: FutureScheduler<PdTask>,
     ) -> Host {
         let create_pool = |name_prefix: &str, size: usize| {
-            let cop_ctxs = Arc::new(Mutex::new((map![], 0)));
+            let (tx, rx) = mpsc::sync_channel(size);
             let cpu_pool = {
-                let cop_ctxs = cop_ctxs.clone();
                 let sender = pd_task_sender.clone();
                 CpuPoolBuilder::new()
                     .name_prefix(name_prefix)
                     .pool_size(size)
+                    .stack_size(cfg.end_point_stack_size.0 as usize)
                     .after_start(move || {
                         let thread_id = thread::current().id();
-                        let cop_ctx =
-                            CopContext(RefCell::new(CopContextInner::new(sender.clone())));
-                        let mut map_counter = cop_ctxs.lock().unwrap();
-                        map_counter.0.insert(thread_id, cop_ctx);
-                        map_counter.1 += 1;
+                        let cop_ctx = CopContext::new(sender.clone());
+                        tx.send((thread_id, cop_ctx)).unwrap();
                     })
                     .create()
             };
-            loop {
-                // For now we can only use a Mutex to collect thread_ids.
-                // With next release of futures-cpupool, we can use a channel.
-                thread::sleep(Duration::from_millis(10));
-                let mut map_counter = cop_ctxs.lock().unwrap();
-                if map_counter.1 >= size {
-                    let cop_ctxs = mem::replace(&mut map_counter.0, map![]);
-                    return ExecutorPool {
-                        pool: cpu_pool,
-                        contexts: CopContextPool::new(Arc::new(cop_ctxs)),
-                    };
-                }
+            ExecutorPool {
+                pool: cpu_pool,
+                contexts: CopContextPool::from_iter(rx),
             }
         };
 
