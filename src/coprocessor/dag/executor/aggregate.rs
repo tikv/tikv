@@ -21,6 +21,11 @@ use super::super::expr::{eval_arith, EvalContext};
 
 pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
     match tp {
+        ExprType::Agg_BitAnd => Ok(box AggBitAnd {
+            c: 0xffffffffffffffff,
+        }),
+        ExprType::Agg_BitOr => Ok(box AggBitOr { c: 0 }),
+        ExprType::Agg_BitXor => Ok(box AggBitXor { c: 0 }),
         ExprType::Count => Ok(box Count { c: 0 }),
         ExprType::First => Ok(box First { e: None }),
         ExprType::Sum => Ok(box Sum { res: None }),
@@ -40,6 +45,81 @@ pub trait AggrFunc {
     fn update(&mut self, ctx: &EvalContext, args: Vec<Datum>) -> Result<()>;
     /// `calc` calculates the aggregated result and push it to collector.
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()>;
+}
+
+struct AggBitAnd {
+    c: u64,
+}
+
+impl AggrFunc for AggBitAnd {
+    fn update(&mut self, _: &EvalContext, args: Vec<Datum>) -> Result<()> {
+        if args.len() != 1 {
+            return Err(box_err!(
+                "bit_and only support one column, but got {}",
+                args.len()
+            ));
+        }
+        if args[0] == Datum::Null {
+            return Ok(());
+        }
+        self.c &= args[0].u64();
+        Ok(())
+    }
+
+    fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
+        collector.push(Datum::U64(self.c));
+        Ok(())
+    }
+}
+
+struct AggBitOr {
+    c: u64,
+}
+
+impl AggrFunc for AggBitOr {
+    fn update(&mut self, _: &EvalContext, args: Vec<Datum>) -> Result<()> {
+        if args.len() != 1 {
+            return Err(box_err!(
+                "bit_or only support one column, but got {}",
+                args.len()
+            ));
+        }
+        if args[0] == Datum::Null {
+            return Ok(());
+        }
+        self.c |= args[0].u64();
+        Ok(())
+    }
+
+    fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
+        collector.push(Datum::U64(self.c));
+        Ok(())
+    }
+}
+
+struct AggBitXor {
+    c: u64,
+}
+
+impl AggrFunc for AggBitXor {
+    fn update(&mut self, _: &EvalContext, args: Vec<Datum>) -> Result<()> {
+        if args.len() != 1 {
+            return Err(box_err!(
+                "bit_xor only support one column, but got {}",
+                args.len()
+            ));
+        }
+        if args[0] == Datum::Null {
+            return Ok(());
+        }
+        self.c ^= args[0].u64();
+        Ok(())
+    }
+
+    fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
+        collector.push(Datum::U64(self.c));
+        Ok(())
+    }
 }
 
 struct Count {

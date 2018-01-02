@@ -95,6 +95,7 @@ struct SnapContext {
     raft_db: Arc<DB>,
     batch_size: usize,
     mgr: SnapManager,
+    use_delete_range: bool,
 }
 
 impl SnapContext {
@@ -111,7 +112,7 @@ impl SnapContext {
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
-        fail_point!("handle_gen", region_id == 1, |_| Ok(()));
+        fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
         if let Err(e) = notifier.try_send(snap) {
             info!(
                 "[region {}] failed to notify snap result, maybe leadership has changed, \
@@ -143,7 +144,7 @@ impl SnapContext {
 
     fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
-        fail_point!("apply_snap");
+        fail_point!("region_apply_snap");
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
@@ -162,7 +163,12 @@ impl SnapContext {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        box_try!(util::delete_all_in_range(&self.kv_db, &start_key, &end_key));
+        box_try!(util::delete_all_in_range(
+            &self.kv_db,
+            &start_key,
+            &end_key,
+            self.use_delete_range
+        ));
         check_abort(&abort)?;
 
         let state_key = keys::apply_state_key(region_id);
@@ -254,7 +260,9 @@ impl SnapContext {
             escape(&start_key),
             escape(&end_key)
         );
-        if let Err(e) = util::delete_all_in_range(&self.kv_db, &start_key, &end_key) {
+        if let Err(e) =
+            util::delete_all_in_range(&self.kv_db, &start_key, &end_key, self.use_delete_range)
+        {
             error!(
                 "failed to delete data in [{}, {}): {:?}",
                 escape(&start_key),
@@ -271,7 +279,13 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(kv_db: Arc<DB>, raft_db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
+    pub fn new(
+        kv_db: Arc<DB>,
+        raft_db: Arc<DB>,
+        mgr: SnapManager,
+        batch_size: usize,
+        use_delete_range: bool,
+    ) -> Runner {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap generator"))
                 .thread_count(GENERATE_POOL_SIZE)
@@ -281,6 +295,7 @@ impl Runner {
                 raft_db: raft_db,
                 mgr: mgr,
                 batch_size: batch_size,
+                use_delete_range: use_delete_range,
             },
         }
     }
