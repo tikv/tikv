@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use mio::Token;
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
            ServerStreamingSink, UnarySink};
+use protobuf::{CodedInputStream, Message as PbMsg};
 use futures::{future, Future, Stream};
 use futures::sync::oneshot;
 use protobuf::RepeatedField;
@@ -41,7 +42,7 @@ use server::snap::Task as SnapTask;
 use server::metrics::*;
 use server::Error;
 use raftstore::store::Msg as StoreMessage;
-use coprocessor::{EndPointTask, RequestTask};
+use coprocessor::{EndPointTask, RequestTask, REQ_TYPE_BATCH_GET, REQ_TYPE_GET};
 
 const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
 
@@ -96,40 +97,41 @@ fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
 }
 
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
-    fn kv_get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
+    fn kv_get(&self, ctx: RpcContext, get_req: GetRequest, sink: UnarySink<GetResponse>) {
         let label = "kv_get";
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .with_label_values(&[label])
             .start_coarse_timer();
 
+        // build cop_req
+        let req_data = get_req.write_to_bytes().unwrap();
+        let mut cop_req = Request::new();
+        cop_req.set_data(req_data);
+        cop_req.set_tp(REQ_TYPE_GET);
+        cop_req.set_context(get_req.get_context().clone());
+
         let (cb, future) = make_callback();
-        let res = self.storage.async_get(
-            req.take_context(),
-            Key::from_raw(req.get_key()),
-            req.get_version(),
-            cb,
-        );
-        if let Err(e) = res {
+        let cop_res = self.end_point_scheduler.schedule(EndPointTask::Request(
+            RequestTask::new(cop_req, cb, self.recursion_limit),
+        ));
+        if let Err(e) = cop_res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
+        let recursion_limit = self.recursion_limit;
+
         let future = future
             .map_err(Error::from)
-            .map(|v| {
-                let mut res = GetResponse::new();
-                if let Some(err) = extract_region_error(&v) {
-                    res.set_region_error(err);
-                } else {
-                    match v {
-                        Ok(Some(val)) => res.set_value(val),
-                        Ok(None) => res.set_value(vec![]),
-                        Err(e) => res.set_error(extract_key_error(&e)),
-                    }
-                }
-                res
+            .map(move |cop_res| {
+                // map cop_res into get_res
+                let mut is = CodedInputStream::from_bytes(cop_res.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut get_res = GetResponse::new();
+                get_res.merge_from(&mut is).unwrap();
+                get_res
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
+            .and_then(|get_res| sink.success(get_res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);
@@ -340,7 +342,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     fn kv_batch_get(
         &self,
         ctx: RpcContext,
-        mut req: BatchGetRequest,
+        mut batch_get_req: BatchGetRequest,
         sink: UnarySink<BatchGetResponse>,
     ) {
         let label = "kv_batchget";
@@ -348,31 +350,37 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let keys = req.get_keys()
-            .into_iter()
-            .map(|x| Key::from_raw(x))
-            .collect();
+        // build cop_req
+        let req_data = batch_get_req.write_to_bytes().unwrap();
+        let mut cop_req = Request::new();
+        cop_req.set_data(req_data);
+        cop_req.set_tp(REQ_TYPE_BATCH_GET);
+        cop_req.set_context(batch_get_req.get_context().clone());
 
         let (cb, future) = make_callback();
-        let res = self.storage
-            .async_batch_get(req.take_context(), keys, req.get_version(), cb);
-        if let Err(e) = res {
+        let cop_res = self.end_point_scheduler.schedule(EndPointTask::Request(
+            RequestTask::new(cop_req, cb, self.recursion_limit),
+        ));
+        if let Err(e) = cop_res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
+        let recursion_limit = self.recursion_limit;
+
         let future = future
             .map_err(Error::from)
-            .map(|v| {
-                let mut resp = BatchGetResponse::new();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)))
-                }
-                resp
+            .map(move |cop_res| {
+                // map cop_res into get_res
+                let mut is = CodedInputStream::from_bytes(cop_res.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut batch_get_res = BatchGetResponse::new();
+                batch_get_res.merge_from(&mut is).unwrap();
+                batch_get_res
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
+            .and_then(|batch_get_res| {
+                sink.success(batch_get_res).map_err(Error::from)
+            })
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);

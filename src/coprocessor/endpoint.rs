@@ -21,18 +21,22 @@ use tipb::select::{self, DAGRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
-use protobuf::{CodedInputStream, Message as PbMsg};
+use protobuf::{CodedInputStream, Message as PbMsg, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Request, Response};
-use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
+use kvproto::errorpb::{self, Error as RegionError, ServerIsBusy};
+use kvproto::kvrpcpb::{BatchGetRequest, BatchGetResponse, CommandPri, GetRequest, GetResponse,
+                       IsolationLevel, KeyError, KvPair, LockInfo};
 
 use util::time::{duration_to_sec, Instant};
 use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
+use storage::{self, engine, Engine, Error as StorageError, FlowStatistics, Key, Snapshot,
+              SnapshotStore, Statistics, StatisticsSummary};
+use storage::txn::Error as TxnError;
 use storage::engine::Error as EngineError;
+use storage::mvcc::Error as MvccError;
 use pd::PdTask;
 
 use super::codec::mysql;
@@ -45,6 +49,8 @@ use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
+pub const REQ_TYPE_GET: i64 = 105;
+pub const REQ_TYPE_BATCH_GET: i64 = 106;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
@@ -273,6 +279,8 @@ impl Display for Task {
 enum CopRequest {
     DAG(DAGRequest),
     Analyze(AnalyzeReq),
+    Get(GetRequest),
+    BatchGet(BatchGetRequest),
 }
 
 pub struct ReqContext {
@@ -351,6 +359,28 @@ impl RequestTask {
                         table_scan = true;
                     }
                     Ok(CopRequest::Analyze(analyze))
+                }
+            }
+            REQ_TYPE_GET => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut req = GetRequest::new();
+                if let Err(e) = req.merge_from(&mut is) {
+                    Err(box_err!(e))
+                } else {
+                    start_ts = None;
+                    Ok(CopRequest::Get(req))
+                }
+            }
+            REQ_TYPE_BATCH_GET => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut req = BatchGetRequest::new();
+                if let Err(e) = req.merge_from(&mut is) {
+                    Err(box_err!(e))
+                } else {
+                    start_ts = None;
+                    Ok(CopRequest::BatchGet(req))
                 }
             }
 
@@ -643,6 +673,8 @@ impl TiDbEndPoint {
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
+            Ok(CopRequest::Get(req)) => self.handle_get(req, &mut t),
+            Ok(CopRequest::BatchGet(req)) => self.handle_batch_get(req, &mut t),
             Err(err) => Err(err),
         };
         match resp {
@@ -669,6 +701,154 @@ impl TiDbEndPoint {
         let ranges = t.req.take_ranges().into_vec();
         let ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
         ctx.handle_request(&mut t.statistics)
+    }
+
+    pub fn handle_get(self, req: GetRequest, t: &mut RequestTask) -> Result<Response> {
+        let snap_store = SnapshotStore::new(
+            self.snap,
+            req.get_version(),
+            t.ctx.isolation_level,
+            t.ctx.fill_cache,
+        );
+        let result = match snap_store.get(&Key::from_raw(req.get_key()), &mut t.statistics) {
+            Ok(val) => Ok(val),
+            Err(e) => Err(StorageError::from(e)),
+        };
+
+        let mut res = GetResponse::new();
+        if let Some(err) = extract_region_error(&result) {
+            res.set_region_error(err);
+        } else {
+            match result {
+                Ok(Some(val)) => res.set_value(val),
+                Ok(None) => res.set_value(vec![]),
+                Err(e) => res.set_error(extract_key_error(&e)),
+            }
+        }
+
+        let data = box_try!(res.write_to_bytes());
+        let mut res = Response::new();
+        res.set_data(data);
+        Ok(res)
+    }
+
+    pub fn handle_batch_get(self, req: BatchGetRequest, t: &mut RequestTask) -> Result<Response> {
+        let snap_store = SnapshotStore::new(
+            self.snap,
+            req.get_version(),
+            t.ctx.isolation_level,
+            t.ctx.fill_cache,
+        );
+
+        let keys: Vec<Key> = req.get_keys()
+            .into_iter()
+            .map(|x| Key::from_raw(x))
+            .collect();
+
+        let result = match snap_store.batch_get(&keys, &mut t.statistics) {
+            Ok(results) => {
+                let mut res = vec![];
+                for (k, v) in keys.into_iter().zip(results) {
+                    match v {
+                        Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
+                        Ok(None) => {}
+                        Err(e) => res.push(Err(StorageError::from(e))),
+                    }
+                }
+                Ok(res)
+            }
+            Err(e) => Err(StorageError::from(e)),
+        };
+
+        let mut res = BatchGetResponse::new();
+        if let Some(err) = extract_region_error(&result) {
+            res.set_region_error(err);
+        } else {
+            res.set_pairs(RepeatedField::from_vec(extract_kv_pairs(result)))
+        }
+
+        let data = box_try!(res.write_to_bytes());
+        let mut res = Response::new();
+        res.set_data(data);
+        Ok(res)
+    }
+}
+
+const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
+
+fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
+    use storage::Error;
+    match *res {
+        // TODO: use `Error::cause` instead.
+        Err(Error::Engine(EngineError::Request(ref e))) |
+        Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e)))) |
+        Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
+            Some(e.to_owned())
+        }
+        Err(Error::SchedTooBusy) => {
+            let mut err = RegionError::new();
+            let mut server_is_busy_err = ServerIsBusy::new();
+            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
+            err.set_server_is_busy(server_is_busy_err);
+            Some(err)
+        }
+        _ => None,
+    }
+}
+
+fn extract_key_error(err: &storage::Error) -> KeyError {
+    let mut key_error = KeyError::new();
+    match *err {
+        storage::Error::Txn(
+            TxnError::Mvcc(MvccError::KeyIsLocked {
+                ref key,
+                ref primary,
+                ts,
+                ttl,
+            }),
+        ) => {
+            let mut lock_info = LockInfo::new();
+            lock_info.set_key(key.to_owned());
+            lock_info.set_primary_lock(primary.to_owned());
+            lock_info.set_lock_version(ts);
+            lock_info.set_lock_ttl(ttl);
+            key_error.set_locked(lock_info);
+        }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. })) |
+        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
+            warn!("txn conflicts: {:?}", err);
+            key_error.set_retryable(format!("{:?}", err));
+        }
+        _ => {
+            error!("txn aborts: {:?}", err);
+            key_error.set_abort(format!("{:?}", err));
+        }
+    }
+    key_error
+}
+
+fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>) -> Vec<KvPair> {
+    match res {
+        Ok(res) => res.into_iter()
+            .map(|r| match r {
+                Ok((key, value)) => {
+                    let mut pair = KvPair::new();
+                    pair.set_key(key);
+                    pair.set_value(value);
+                    pair
+                }
+                Err(e) => {
+                    let mut pair = KvPair::new();
+                    pair.set_error(extract_key_error(&e));
+                    pair
+                }
+            })
+            .collect(),
+        Err(e) => {
+            let mut pair = KvPair::new();
+            pair.set_error(extract_key_error(&e));
+            vec![pair]
+        }
     }
 }
 
