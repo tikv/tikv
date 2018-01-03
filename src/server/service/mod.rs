@@ -13,6 +13,7 @@
 
 mod kv;
 mod debug;
+pub mod util;
 
 pub use self::kv::Service as KvService;
 pub use self::debug::Service as DebugService;

@@ -23,9 +23,8 @@ use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
 use protobuf::{CodedInputStream, Message as PbMsg, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Request, Response};
-use kvproto::errorpb::{self, Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb::{BatchGetRequest, BatchGetResponse, CommandPri, GetRequest, GetResponse,
-                       IsolationLevel, KeyError, KvPair, LockInfo};
+use kvproto::errorpb::{self, ServerIsBusy};
+use kvproto::kvrpcpb::*;
 
 use util::time::{duration_to_sec, Instant};
 use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
@@ -34,9 +33,8 @@ use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
 use storage::{self, engine, Engine, Error as StorageError, FlowStatistics, Key, Snapshot,
               SnapshotStore, Statistics, StatisticsSummary};
-use storage::txn::Error as TxnError;
 use storage::engine::Error as EngineError;
-use storage::mvcc::Error as MvccError;
+use server::service::util as service_util;
 use pd::PdTask;
 
 use super::codec::mysql;
@@ -716,13 +714,13 @@ impl TiDbEndPoint {
         };
 
         let mut res = GetResponse::new();
-        if let Some(err) = extract_region_error(&result) {
+        if let Some(err) = service_util::extract_region_error(&result) {
             res.set_region_error(err);
         } else {
             match result {
                 Ok(Some(val)) => res.set_value(val),
                 Ok(None) => res.set_value(vec![]),
-                Err(e) => res.set_error(extract_key_error(&e)),
+                Err(e) => res.set_error(service_util::extract_key_error(&e)),
             }
         }
 
@@ -761,94 +759,18 @@ impl TiDbEndPoint {
         };
 
         let mut res = BatchGetResponse::new();
-        if let Some(err) = extract_region_error(&result) {
+        if let Some(err) = service_util::extract_region_error(&result) {
             res.set_region_error(err);
         } else {
-            res.set_pairs(RepeatedField::from_vec(extract_kv_pairs(result)))
+            res.set_pairs(RepeatedField::from_vec(
+                service_util::extract_kv_pairs(result),
+            ))
         }
 
         let data = box_try!(res.write_to_bytes());
         let mut res = Response::new();
         res.set_data(data);
         Ok(res)
-    }
-}
-
-const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
-
-fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
-    use storage::Error;
-    match *res {
-        // TODO: use `Error::cause` instead.
-        Err(Error::Engine(EngineError::Request(ref e))) |
-        Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e)))) |
-        Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
-            Some(e.to_owned())
-        }
-        Err(Error::SchedTooBusy) => {
-            let mut err = RegionError::new();
-            let mut server_is_busy_err = ServerIsBusy::new();
-            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
-            Some(err)
-        }
-        _ => None,
-    }
-}
-
-fn extract_key_error(err: &storage::Error) -> KeyError {
-    let mut key_error = KeyError::new();
-    match *err {
-        storage::Error::Txn(
-            TxnError::Mvcc(MvccError::KeyIsLocked {
-                ref key,
-                ref primary,
-                ts,
-                ttl,
-            }),
-        ) => {
-            let mut lock_info = LockInfo::new();
-            lock_info.set_key(key.to_owned());
-            lock_info.set_primary_lock(primary.to_owned());
-            lock_info.set_lock_version(ts);
-            lock_info.set_lock_ttl(ttl);
-            key_error.set_locked(lock_info);
-        }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. })) |
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
-            warn!("txn conflicts: {:?}", err);
-            key_error.set_retryable(format!("{:?}", err));
-        }
-        _ => {
-            error!("txn aborts: {:?}", err);
-            key_error.set_abort(format!("{:?}", err));
-        }
-    }
-    key_error
-}
-
-fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>) -> Vec<KvPair> {
-    match res {
-        Ok(res) => res.into_iter()
-            .map(|r| match r {
-                Ok((key, value)) => {
-                    let mut pair = KvPair::new();
-                    pair.set_key(key);
-                    pair.set_value(value);
-                    pair
-                }
-                Err(e) => {
-                    let mut pair = KvPair::new();
-                    pair.set_error(extract_key_error(&e));
-                    pair
-                }
-            })
-            .collect(),
-        Err(e) => {
-            let mut pair = KvPair::new();
-            pair.set_error(extract_key_error(&e));
-            vec![pair]
-        }
     }
 }
 

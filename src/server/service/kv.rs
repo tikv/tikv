@@ -28,23 +28,17 @@ use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::coprocessor::*;
-use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
 use util::worker::Scheduler;
 use util::collections::HashMap;
 use util::buf::PipeBuffer;
-use storage::{self, Key, Mutation, Options, Storage, Value};
-use storage::txn::Error as TxnError;
-use storage::mvcc::{Error as MvccError, Write as MvccWrite, WriteType};
-use storage::engine::Error as EngineError;
+use storage::{Key, Mutation, Options, Storage};
 use server::transport::RaftStoreRouter;
 use server::snap::Task as SnapTask;
 use server::metrics::*;
 use server::Error;
 use raftstore::store::Msg as StoreMessage;
 use coprocessor::{EndPointTask, RequestTask, REQ_TYPE_BATCH_GET, REQ_TYPE_GET};
-
-const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
@@ -169,10 +163,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = ScanResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
-                    resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                    resp.set_pairs(RepeatedField::from_vec(super::util::extract_kv_pairs(v)));
                 }
                 resp
             })
@@ -228,10 +222,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = PrewriteResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
-                    resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+                    resp.set_errors(RepeatedField::from_vec(super::util::extract_key_errors(v)));
                 }
                 resp
             })
@@ -270,10 +264,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = CommitResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
-                    resp.set_error(extract_key_error(&e));
+                    resp.set_error(super::util::extract_key_error(&e));
                 }
                 resp
             })
@@ -318,13 +312,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = CleanupResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
-                    if let Some(ts) = extract_committed(&e) {
+                    if let Some(ts) = super::util::extract_committed(&e) {
                         resp.set_commit_version(ts);
                     } else {
-                        resp.set_error(extract_key_error(&e));
+                        resp.set_error(super::util::extract_key_error(&e));
                     }
                 }
                 resp
@@ -342,7 +336,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
     fn kv_batch_get(
         &self,
         ctx: RpcContext,
-        mut batch_get_req: BatchGetRequest,
+        batch_get_req: BatchGetRequest,
         sink: UnarySink<BatchGetResponse>,
     ) {
         let label = "kv_batchget";
@@ -418,10 +412,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = BatchRollbackResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
-                    resp.set_error(extract_key_error(&e));
+                    resp.set_error(super::util::extract_key_error(&e));
                 }
                 resp
             })
@@ -458,12 +452,12 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = ScanLockResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
                     match v {
                         Ok(locks) => resp.set_locks(RepeatedField::from_vec(locks)),
-                        Err(e) => resp.set_error(extract_key_error(&e)),
+                        Err(e) => resp.set_error(super::util::extract_key_error(&e)),
                     }
                 }
                 resp
@@ -513,10 +507,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = ResolveLockResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
-                    resp.set_error(extract_key_error(&e));
+                    resp.set_error(super::util::extract_key_error(&e));
                 }
                 resp
             })
@@ -548,10 +542,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = GCResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
-                    resp.set_error(extract_key_error(&e));
+                    resp.set_error(super::util::extract_key_error(&e));
                 }
                 resp
             })
@@ -592,7 +586,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = DeleteRangeResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
                     resp.set_error(format!("{}", e));
@@ -627,7 +621,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = RawGetResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
                     match v {
@@ -670,10 +664,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = RawScanResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
-                    resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                    resp.set_kvs(RepeatedField::from_vec(super::util::extract_kv_pairs(v)));
                 }
                 resp
             })
@@ -705,7 +699,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = RawPutResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
                     resp.set_error(format!("{}", e));
@@ -745,7 +739,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = RawDeleteResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
                     resp.set_error(format!("{}", e));
@@ -883,12 +877,12 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = MvccGetByKeyResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
                     match v {
                         Ok(mvcc) => {
-                            resp.set_info(extract_mvcc_info(key, mvcc));
+                            resp.set_info(super::util::extract_mvcc_info(key, mvcc));
                         }
                         Err(e) => resp.set_error(format!("{}", e)),
                     };
@@ -930,13 +924,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map_err(Error::from)
             .map(|v| {
                 let mut resp = MvccGetByStartTsResponse::new();
-                if let Some(err) = extract_region_error(&v) {
+                if let Some(err) = super::util::extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
                     match v {
                         Ok(Some((k, vv))) => {
                             resp.set_key(k.raw().unwrap());
-                            resp.set_info(extract_mvcc_info(k, vv));
+                            resp.set_info(super::util::extract_mvcc_info(k, vv));
                         }
                         Ok(None) => {
                             resp.set_info(Default::default());
@@ -1001,147 +995,5 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             });
 
         ctx.spawn(future);
-    }
-}
-
-fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
-    use storage::Error;
-    match *res {
-        // TODO: use `Error::cause` instead.
-        Err(Error::Engine(EngineError::Request(ref e))) |
-        Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e)))) |
-        Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
-            Some(e.to_owned())
-        }
-        Err(Error::SchedTooBusy) => {
-            let mut err = RegionError::new();
-            let mut server_is_busy_err = ServerIsBusy::new();
-            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
-            Some(err)
-        }
-        _ => None,
-    }
-}
-
-fn extract_committed(err: &storage::Error) -> Option<u64> {
-    match *err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::Committed { commit_ts })) => Some(commit_ts),
-        _ => None,
-    }
-}
-
-fn extract_key_error(err: &storage::Error) -> KeyError {
-    let mut key_error = KeyError::new();
-    match *err {
-        storage::Error::Txn(
-            TxnError::Mvcc(MvccError::KeyIsLocked {
-                ref key,
-                ref primary,
-                ts,
-                ttl,
-            }),
-        ) => {
-            let mut lock_info = LockInfo::new();
-            lock_info.set_key(key.to_owned());
-            lock_info.set_primary_lock(primary.to_owned());
-            lock_info.set_lock_version(ts);
-            lock_info.set_lock_ttl(ttl);
-            key_error.set_locked(lock_info);
-        }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. })) |
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
-            warn!("txn conflicts: {:?}", err);
-            key_error.set_retryable(format!("{:?}", err));
-        }
-        _ => {
-            error!("txn aborts: {:?}", err);
-            key_error.set_abort(format!("{:?}", err));
-        }
-    }
-    key_error
-}
-
-fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>) -> Vec<KvPair> {
-    match res {
-        Ok(res) => res.into_iter()
-            .map(|r| match r {
-                Ok((key, value)) => {
-                    let mut pair = KvPair::new();
-                    pair.set_key(key);
-                    pair.set_value(value);
-                    pair
-                }
-                Err(e) => {
-                    let mut pair = KvPair::new();
-                    pair.set_error(extract_key_error(&e));
-                    pair
-                }
-            })
-            .collect(),
-        Err(e) => {
-            let mut pair = KvPair::new();
-            pair.set_error(extract_key_error(&e));
-            vec![pair]
-        }
-    }
-}
-
-fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
-    let mut mvcc_info = MvccInfo::new();
-    if let Some(lock) = mvcc.lock {
-        let mut lock_info = LockInfo::new();
-        lock_info.set_primary_lock(lock.primary);
-        lock_info.set_key(key.raw().unwrap());
-        lock_info.set_lock_ttl(lock.ttl);
-        lock_info.set_lock_version(lock.ts);
-        mvcc_info.set_lock(lock_info);
-    }
-    let vv = extract_2pc_values(mvcc.values);
-    let vw = extract_2pc_writes(mvcc.writes);
-    mvcc_info.set_writes(RepeatedField::from_vec(vw));
-    mvcc_info.set_values(RepeatedField::from_vec(vv));
-    mvcc_info
-}
-
-fn extract_2pc_values(res: Vec<(u64, bool, Value)>) -> Vec<ValueInfo> {
-    res.into_iter()
-        .map(|(start_ts, is_short, value)| {
-            let mut value_info = ValueInfo::new();
-            value_info.set_ts(start_ts);
-            value_info.set_value(value);
-            value_info.set_is_short_value(is_short);
-            value_info
-        })
-        .collect()
-}
-
-fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
-    res.into_iter()
-        .map(|(commit_ts, write)| {
-            let mut write_info = WriteInfo::new();
-            write_info.set_start_ts(write.start_ts);
-            let op = match write.write_type {
-                WriteType::Put => Op::Put,
-                WriteType::Delete => Op::Del,
-                WriteType::Lock => Op::Lock,
-                WriteType::Rollback => Op::Rollback,
-            };
-            write_info.set_field_type(op);
-            write_info.set_commit_ts(commit_ts);
-            write_info
-        })
-        .collect()
-}
-
-fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<KeyError> {
-    match res {
-        Ok(res) => res.into_iter()
-            .filter_map(|x| match x {
-                Err(e) => Some(extract_key_error(&e)),
-                Ok(_) => None,
-            })
-            .collect(),
-        Err(e) => vec![extract_key_error(&e)],
     }
 }
