@@ -167,7 +167,7 @@ macro_rules! wait_op {
                  // we don't care error actually.
                 let _ = tx.send(res);
             };
-            $expr(cb);
+            $expr(cb)?;
             match $timeout {
                 None => rx.recv().ok(),
                 Some(timeout) => rx.recv_timeout(timeout).ok()

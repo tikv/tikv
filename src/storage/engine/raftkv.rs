@@ -84,6 +84,7 @@ fn get_tag_from_engine_error(e: &engine::Error) -> &'static str {
         engine::Error::Request(ref header) => storage::get_tag_from_header(header),
         engine::Error::RocksDb(_) => "rocksdb",
         engine::Error::Timeout(_) => "timeout",
+        engine::Error::Empty => "empty",
         engine::Error::Other(_) => "other",
     }
 }
@@ -306,6 +307,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         cb: Callback<()>,
     ) -> engine::Result<()> {
         fail_point!("raftkv_async_write");
+        if modifies.is_empty() {
+            return Err(engine::Error::Empty);
+        }
+
         let mut reqs = Vec::with_capacity(modifies.len());
         for m in modifies {
             let mut req = Request::new();
@@ -424,6 +429,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         on_finished: BatchCallback<Box<Snapshot>>,
     ) -> engine::Result<()> {
         fail_point!("raftkv_async_batch_snapshot");
+        if batch.is_empty() {
+            return Err(engine::Error::Empty);
+        }
+
         let batch_size = batch.len();
         ASYNC_REQUESTS_COUNTER_VEC
             .with_label_values(&["snapshot", "all"])

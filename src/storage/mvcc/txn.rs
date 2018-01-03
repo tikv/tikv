@@ -344,7 +344,7 @@ mod tests {
     use super::super::MvccReader;
     use super::super::write::{Write, WriteType};
     use storage::{make_key, Mutation, Options, ScanMode, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
-    use storage::engine::{self, Engine, TEMP_DIR};
+    use storage::engine::{self, Engine, Modify, TEMP_DIR};
 
     fn gen_value(v: u8, len: usize) -> Vec<u8> {
         let mut value = Vec::with_capacity(len);
@@ -353,6 +353,12 @@ mod tests {
         }
 
         value
+    }
+
+    fn maybe_write(engine: &Engine, ctx: &Context, modifies: Vec<Modify>) {
+        if !modifies.is_empty() {
+            engine.write(ctx, modifies).unwrap();
+        }
     }
 
     fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
@@ -857,7 +863,7 @@ mod tests {
             pk,
             &Options::default(),
         ).unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        maybe_write(engine, &ctx, txn.into_modifies());
     }
 
     fn must_prewrite_delete(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
@@ -893,7 +899,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         txn.commit(&make_key(key), commit_ts).unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        maybe_write(engine, &ctx, txn.into_modifies());
     }
 
     fn must_commit_err(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -908,7 +914,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         txn.rollback(&make_key(key)).unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        maybe_write(engine, &ctx, txn.into_modifies());
     }
 
     fn must_rollback_err(engine: &Engine, key: &[u8], start_ts: u64) {
@@ -923,7 +929,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 0, None, IsolationLevel::SI, true);
         txn.gc(&make_key(key), safe_point).unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        maybe_write(engine, &ctx, txn.into_modifies());
     }
 
     fn must_locked(engine: &Engine, key: &[u8], start_ts: u64) {

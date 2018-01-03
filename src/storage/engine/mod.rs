@@ -87,7 +87,7 @@ pub trait Engine: Send + Debug {
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout) {
+        match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::Timeout(timeout)),
         }
@@ -95,7 +95,7 @@ pub trait Engine: Send + Debug {
 
     fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_snapshot(ctx, cb).unwrap(), timeout) {
+        match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::Timeout(timeout)),
         }
@@ -554,6 +554,10 @@ quick_error! {
             description("request timeout")
             display("timeout after {:?}", d)
         }
+        Empty {
+            description("an empty request")
+            display("an empty request")
+        }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
@@ -569,6 +573,7 @@ impl Error {
             Error::Request(ref e) => Some(Error::Request(e.clone())),
             Error::RocksDb(ref msg) => Some(Error::RocksDb(msg.clone())),
             Error::Timeout(d) => Some(Error::Timeout(d)),
+            Error::Empty => Some(Error::Empty),
             Error::Other(_) => None,
         }
     }
@@ -601,6 +606,7 @@ mod tests {
         test_near_seek(e.as_ref());
         test_cf(e.as_ref());
         test_empty_write(e.as_ref());
+        test_empty_batch_snapshot(e.as_ref());
     }
 
     #[test]
@@ -973,6 +979,13 @@ mod tests {
     }
 
     fn test_empty_write(engine: &Engine) {
-        engine.write(&Context::new(), vec![]).unwrap();
+        engine.write(&Context::new(), vec![]).unwrap_err();
+    }
+
+    fn test_empty_batch_snapshot(engine: &Engine) {
+        let on_finished = box move |_| {};
+        engine
+            .async_batch_snapshot(vec![], on_finished)
+            .unwrap_err();
     }
 }

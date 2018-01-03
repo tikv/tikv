@@ -240,9 +240,7 @@ mod tests {
                 let callback = Callback::Write(Box::new(move |write_resp: WriteResponse| {
                     cb(write_resp.response);
                 }));
-                sendch
-                    .try_send(Msg::new_raft_cmd(request, callback))
-                    .unwrap();
+                sendch.try_send(Msg::new_raft_cmd(request, callback))
             },
             timeout
         ).ok_or_else(|| {
