@@ -24,7 +24,7 @@ use tipb::schema::ColumnInfo;
 use protobuf::{CodedInputStream, Message as PbMsg};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
+use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel, RunTimeDetails};
 
 use util::time::{duration_to_sec, Instant};
 use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
@@ -391,7 +391,7 @@ impl RequestTask {
         self.wait_time = Some(wait_time);
     }
 
-    fn stop_record_handling(&mut self) {
+    fn stop_record_handling(&mut self) -> Option<RunTimeDetails> {
         self.stop_record_waiting();
 
         let query_time = duration_to_sec(self.timer.elapsed());
@@ -409,7 +409,6 @@ impl RequestTask {
             .with_label_values(&[type_str])
             .observe(self.statistics.total_op_count() as f64);
 
-
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
                 "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
@@ -424,6 +423,27 @@ impl RequestTask {
                 self.req.get_ranges().get(0)
             );
         }
+
+        let mut handle = HandleTime::new();
+        handle.set_process_ms((handle_time * 1000.0) as i64);
+        handle.set_wait_ms((wait_time * 1000.0) as i64);
+
+        let mut runtime = RunTimeDetails::new();
+        let ctx = self.req.get_context();
+        match (
+            ctx.get_handle_time(),
+            ctx.get_scan_detail(),
+            handle_time > SLOW_QUERY_LOWER_BOUND,
+        ) {
+            (true, true, _) | (_, _, true) => {
+                runtime.set_scan_detail(self.statistics.scan_detail());
+                runtime.set_handle_time(handle);
+            }
+            (true, false, false) => runtime.set_handle_time(handle),
+            (false, true, false) => runtime.set_scan_detail(self.statistics.scan_detail()),
+            (false, false, false) => return None,
+        };
+        Some(runtime)
     }
 
     pub fn priority(&self) -> CommandPri {
@@ -614,8 +634,11 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     }
 }
 
-fn respond(resp: Response, mut t: RequestTask) -> CopStats {
-    t.stop_record_handling();
+fn respond(mut resp: Response, mut t: RequestTask) -> CopStats {
+    if let Some(runtime) = t.stop_record_handling() {
+        resp.set_runtime_details(runtime);
+    }
+
     (t.on_resp)(resp);
     CopStats {
         stats: t.statistics,
