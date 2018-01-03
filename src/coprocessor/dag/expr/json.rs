@@ -16,13 +16,13 @@ use std::collections::BTreeMap;
 use coprocessor::codec::Datum;
 use coprocessor::codec::mysql::Json;
 use coprocessor::codec::mysql::json::{parse_json_path_expr, ModifyType, PathExpression};
-use super::{Error, Expression, FnCall, Result, StatementContext};
+use super::{Error, EvalContext, Expression, FnCall, Result};
 
 impl FnCall {
     #[inline]
     pub fn json_type<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
@@ -32,7 +32,7 @@ impl FnCall {
     #[inline]
     pub fn json_unquote<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
@@ -43,7 +43,7 @@ impl FnCall {
 
     pub fn json_array<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let parser = JsonFuncArgsParser::new(ctx, row);
@@ -53,7 +53,7 @@ impl FnCall {
 
     pub fn json_object<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let mut pairs = BTreeMap::new();
@@ -68,7 +68,7 @@ impl FnCall {
 
     pub fn json_extract<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         // TODO: We can cache the PathExpressions if children are Constant.
@@ -81,7 +81,7 @@ impl FnCall {
     #[inline]
     pub fn json_set<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         self.json_modify(ctx, row, ModifyType::Set)
@@ -90,7 +90,7 @@ impl FnCall {
     #[inline]
     pub fn json_insert<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         self.json_modify(ctx, row, ModifyType::Insert)
@@ -99,7 +99,7 @@ impl FnCall {
     #[inline]
     pub fn json_replace<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         self.json_modify(ctx, row, ModifyType::Replace)
@@ -107,7 +107,7 @@ impl FnCall {
 
     pub fn json_remove<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let mut j = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
@@ -120,7 +120,7 @@ impl FnCall {
 
     pub fn json_merge<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let parser = JsonFuncArgsParser::new(ctx, row);
@@ -134,7 +134,7 @@ impl FnCall {
 
     fn json_modify<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &EvalContext,
         row: &'a [Datum],
         mt: ModifyType,
     ) -> Result<Option<Cow<'a, Json>>> {
@@ -153,13 +153,13 @@ impl FnCall {
 }
 
 struct JsonFuncArgsParser<'a> {
-    ctx: &'a StatementContext,
+    ctx: &'a EvalContext,
     row: &'a [Datum],
 }
 
 impl<'a> JsonFuncArgsParser<'a> {
     #[inline]
-    fn new(ctx: &'a StatementContext, row: &'a [Datum]) -> Self {
+    fn new(ctx: &'a EvalContext, row: &'a [Datum]) -> Self {
         JsonFuncArgsParser { ctx: ctx, row: row }
     }
 
@@ -190,9 +190,8 @@ mod test {
     use tipb::expression::ScalarFuncSig;
     use coprocessor::codec::Datum;
     use coprocessor::codec::mysql::Json;
-    use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::dag::expr::test::{fncall_expr, make_null_datums};
-    use coprocessor::select::xeval::evaluator::test::datum_expr;
+    use coprocessor::dag::expr::{EvalContext, Expression};
+    use coprocessor::dag::expr::test::{datum_expr, fncall_expr, make_null_datums};
 
     #[test]
     fn test_json_type() {
@@ -206,7 +205,7 @@ mod test {
             (Some(r#"[1, 2, 3]"#), Some("ARRAY")),
             (Some(r#"{"name": 123}"#), Some("OBJECT")),
         ];
-        let ctx = StatementContext::default();
+        let ctx = EvalContext::default();
         for (input, exp) in cases {
             let input = match input {
                 None => Datum::Null,
@@ -240,7 +239,7 @@ mod test {
                 Some(r#"hello,"quoted string",world"#),
             ),
         ];
-        let ctx = StatementContext::default();
+        let ctx = EvalContext::default();
         for (input, parse, exp) in cases {
             let input = match input {
                 None => Datum::Null,
@@ -283,7 +282,7 @@ mod test {
                 Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap()),
             ),
         ];
-        let ctx = StatementContext::default();
+        let ctx = EvalContext::default();
         for (inputs, exp) in cases {
             let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
             let op = fncall_expr(ScalarFuncSig::JsonObjectSig, &args);
@@ -313,7 +312,7 @@ mod test {
                 Datum::Json(r#"[1, null, 2, "sdf", "k1", "v1"]"#.parse().unwrap()),
             ),
         ];
-        let ctx = StatementContext::default();
+        let ctx = EvalContext::default();
         for (inputs, exp) in cases {
             let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
             let op = fncall_expr(ScalarFuncSig::JsonArraySig, &args);
@@ -368,7 +367,7 @@ mod test {
                 Datum::Json(r#"{"a":null}"#.parse().unwrap()),
             ),
         ];
-        let ctx = StatementContext::default();
+        let ctx = EvalContext::default();
         for (sig, inputs, exp) in cases {
             let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
             let op = fncall_expr(sig, &args);
@@ -399,7 +398,7 @@ mod test {
                 Datum::Json(r#"[{}, 3, "4"]"#.parse().unwrap()),
             ),
         ];
-        let ctx = StatementContext::default();
+        let ctx = EvalContext::default();
         for (inputs, exp) in cases {
             let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
             let op = fncall_expr(ScalarFuncSig::JsonMergeSig, &args);
@@ -417,7 +416,7 @@ mod test {
             (ScalarFuncSig::JsonInsertSig, make_null_datums(6)),
             (ScalarFuncSig::JsonReplaceSig, make_null_datums(8)),
         ];
-        let ctx = StatementContext::default();
+        let ctx = EvalContext::default();
         for (sig, args) in cases {
             let args: Vec<_> = args.into_iter().map(datum_expr).collect();
             let op = Expression::build(&ctx, fncall_expr(sig, &args));
