@@ -73,7 +73,7 @@ quick_error! {
             description("abort")
             display("abort")
         }
-        SpaceFull {
+        TooManySnapshots {
             description("too many snapshots")
         }
         Other(err: Box<error::Error + Sync + Send>) {
@@ -1110,10 +1110,11 @@ impl SnapManager {
         ch: Option<SendCh<Msg>>,
         option: SnapManagerOption,
     ) -> SnapManager {
-        let mut limiter = None;
-        if option.max_write_bytes_per_sec > 0 {
-            limiter = Some(Arc::new(IOLimiter::new(option.max_write_bytes_per_sec)));
-        }
+        let limiter = if option.max_write_bytes_per_sec > 0 {
+            Some(Arc::new(IOLimiter::new(option.max_write_bytes_per_sec)))
+        } else {
+            None
+        };
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
                 base: path.into(),
@@ -1384,7 +1385,7 @@ impl SnapshotDeleter for SnapManager {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct SnapManagerOption {
     max_write_bytes_per_sec: u64,
     max_total_size: u64,

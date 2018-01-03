@@ -31,7 +31,7 @@ use raftstore::store::peer_storage::{JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING
                                      JOB_STATUS_RUNNING};
 use raftstore::store::{self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey,
                        SnapManager};
-use raftstore::store::snap::{Error, Result};
+use raftstore::store::snap::{Error, Result, SnapshotDeleter};
 use storage::CF_RAFT;
 
 use super::metrics::*;
@@ -104,8 +104,37 @@ impl SnapContext {
         let raft_db = self.raft_db.clone();
         let raw_snap = Snapshot::new(self.kv_db.clone());
 
-        if self.mgr.get_total_snap_size() > self.mgr.max_total_snap_size() {
-            return Err(Error::SpaceFull);
+        let mut old_snaps = None;
+        while self.mgr.get_total_snap_size() > self.mgr.max_total_snap_size() {
+            if old_snaps.is_none() {
+                let snaps = match self.mgr.list_idle_snap() {
+                    Ok(snaps) => snaps,
+                    Err(_) => break,
+                };
+                let mut key_and_snaps = snaps
+                    .into_iter()
+                    .filter_map(|(key, is_sending)| {
+                        if !is_sending {
+                            return None;
+                        }
+                        self.mgr
+                            .get_snapshot_for_sending(&key)
+                            .ok()
+                            .and_then(move |s| s.meta().ok().map(move |_| (key, s)))
+                    })
+                    .collect::<Vec<_>>();
+                key_and_snaps.sort_by(|lhs, rhs| {
+                    let lhs_modified = lhs.1.meta().unwrap().modified().unwrap();
+                    let rhs_modified = rhs.1.meta().unwrap().modified().unwrap();
+                    // sort it by decrease.
+                    rhs_modified.cmp(&lhs_modified)
+                });
+                old_snaps = Some(key_and_snaps);
+            }
+            match old_snaps.as_mut().unwrap().pop() {
+                Some((key, snap)) => self.mgr.delete_snapshot(&key, snap.as_ref(), false),
+                None => return Err(Error::TooManySnapshots),
+            };
         }
 
         let snap = box_try!(store::do_snapshot(
