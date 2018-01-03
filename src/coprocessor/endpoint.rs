@@ -31,8 +31,8 @@ use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, Error as StorageError, FlowStatistics, Key, Snapshot,
-              SnapshotStore, Statistics, StatisticsSummary};
+use storage::{self, engine, Engine, Error as StorageError, FlowStatistics, Key, ScanMode,
+              Snapshot, SnapshotStore, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
 use server::service::util as service_util;
 use pd::PdTask;
@@ -49,6 +49,7 @@ pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_GET: i64 = 105;
 pub const REQ_TYPE_BATCH_GET: i64 = 106;
+pub const REQ_TYPE_SCAN: i64 = 107;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
@@ -279,6 +280,7 @@ enum CopRequest {
     Analyze(AnalyzeReq),
     Get(GetRequest),
     BatchGet(BatchGetRequest),
+    Scan(ScanRequest),
 }
 
 pub struct ReqContext {
@@ -379,6 +381,17 @@ impl RequestTask {
                 } else {
                     start_ts = None;
                     Ok(CopRequest::BatchGet(req))
+                }
+            }
+            REQ_TYPE_SCAN => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut req = ScanRequest::new();
+                if let Err(e) = req.merge_from(&mut is) {
+                    Err(box_err!(e))
+                } else {
+                    start_ts = None;
+                    Ok(CopRequest::Scan(req))
                 }
             }
 
@@ -673,6 +686,7 @@ impl TiDbEndPoint {
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
             Ok(CopRequest::Get(req)) => self.handle_get(req, &mut t),
             Ok(CopRequest::BatchGet(req)) => self.handle_batch_get(req, &mut t),
+            Ok(CopRequest::Scan(req)) => self.handle_scan(req, &mut t),
             Err(err) => Err(err),
         };
         match resp {
@@ -765,6 +779,53 @@ impl TiDbEndPoint {
             res.set_pairs(RepeatedField::from_vec(
                 service_util::extract_kv_pairs(result),
             ))
+        }
+
+        let data = box_try!(res.write_to_bytes());
+        let mut res = Response::new();
+        res.set_data(data);
+        Ok(res)
+    }
+
+    pub fn handle_scan(self, req: ScanRequest, t: &mut RequestTask) -> Result<Response> {
+        let snap_store = SnapshotStore::new(
+            self.snap,
+            req.get_version(),
+            t.ctx.isolation_level,
+            t.ctx.fill_cache,
+        );
+
+        let start_key = Key::from_raw(req.get_start_key());
+        let limit = req.get_limit() as usize;
+
+        let result = snap_store
+            .scanner(ScanMode::Forward, req.get_key_only(), None, None)
+            .and_then(|mut scanner| {
+                let res = scanner.scan(start_key.clone(), limit);
+                t.statistics.add(scanner.get_statistics());
+                res
+            })
+            .and_then(|mut results| {
+                Ok(
+                    results
+                        .drain(..)
+                        .map(|x| x.map_err(StorageError::from))
+                        .collect(),
+                )
+            });
+
+        let result = match result {
+            Ok(pairs) => Ok(pairs),
+            Err(e) => Err(e.into()),
+        };
+
+        let mut res = ScanResponse::new();
+        if let Some(err) = service_util::extract_region_error(&result) {
+            res.set_region_error(err);
+        } else {
+            res.set_pairs(RepeatedField::from_vec(
+                service_util::extract_kv_pairs(result),
+            ));
         }
 
         let data = box_try!(res.write_to_bytes());

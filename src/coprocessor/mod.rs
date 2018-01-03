@@ -87,4 +87,4 @@ impl From<txn::Error> for Error {
 
 pub use self::endpoint::{CopRequestStatistics, CopSender, Host as EndPointHost, RequestTask,
                          Task as EndPointTask, REQ_TYPE_BATCH_GET, REQ_TYPE_DAG, REQ_TYPE_GET,
-                         SINGLE_GROUP};
+                         REQ_TYPE_SCAN, SINGLE_GROUP};
