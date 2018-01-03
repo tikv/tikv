@@ -1,9 +1,12 @@
 extern crate rand;
 
 use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::ops::Div;
+use std::iter::Sum;
 use tikv::coprocessor::codec::table::{encode_index_seek_key, encode_row_key};
 use tikv::util::codec::number::NumberEncoder;
+use test::black_box;
 
 use rand::Rng;
 
@@ -13,6 +16,9 @@ pub fn next_ts() -> u64 {
     CURRENT.fetch_add(1, Ordering::SeqCst)
 }
 
+/// Generate `count` row keys that all with the specified `table_id`.
+///
+/// Row id will start with `start_id` and increment
 pub fn generate_row_keys(table_id: i64, start_id: i64, count: usize) -> Vec<Vec<u8>> {
     let mut result = Vec::with_capacity(count);
     for i in (start_id)..(start_id + count as i64) {
@@ -25,19 +31,23 @@ pub fn generate_row_keys(table_id: i64, start_id: i64, count: usize) -> Vec<Vec<
 }
 
 
+/// Generate `count` unique index keys that all with the specified `table_id`, `index_id`,
+/// and `value_len`.
 pub fn generate_unique_index_keys(
     table_id: i64,
     index_id: i64,
     value_len: usize,
     count: usize,
 ) -> Vec<Vec<u8>> {
+    if value_len < 8 {
+        panic!("Value len should be at least 8.");
+    }
     let mut result = Vec::with_capacity(count);
-    for _ in 0..count {
-        result.push(encode_index_seek_key(
-            table_id,
-            index_id,
-            &vec![0u8; value_len],
-        ));
+    for i in 0..count {
+        let mut value = Vec::with_capacity(value_len);
+        value.resize(value_len - 8, 0);
+        value.encode_u64(i as u64).unwrap();
+        result.push(encode_index_seek_key(table_id, index_id, &value));
     }
     result
 }
@@ -50,6 +60,19 @@ pub fn shuffle<T>(data: &mut [T]) {
     }
 }
 
+
+/// Convert duration to nanoseconds
+pub fn to_total_nanos(duration: &Duration) -> u64 {
+    duration.as_secs() * 1_000_000_000 + (duration.subsec_nanos() as u64)
+}
+
+/// Run `job` for `iterations` times, and return a Vec containing nanoseconds of each turn `job`
+/// returns.
+///
+/// `job` must return a `Duration` type. Please calculate time cost of what you want to bench
+/// manually ant return it.
+///
+/// Attention that too short job may cause great inaccuracy.
 pub fn record_time<F>(mut job: F, iterations: u32) -> Vec<u64>
 where
     F: FnMut() -> Duration,
@@ -57,11 +80,30 @@ where
     (0..iterations)
         .map(|_| {
             let time = job();
-            time.as_secs() * 1_000_000_000 + (time.subsec_nanos() as u64)
+            to_total_nanos(&time)
         })
         .collect()
 }
 
-pub fn average(data: &[u64]) -> u64 {
-    data.iter().sum::<u64>() / (data.len() as u64)
+
+/// Run `job` for `iterations` times, and return the total time cost as nanoseconds.
+/// Attention that if `job` returns no value, it will be optimized out by the compiler.
+pub fn record_total_time<F, T>(mut job: F, iterations: u32) -> u64
+where
+    F: FnMut() -> T,
+{
+    let t = Instant::now();
+    for _ in 0..iterations {
+        // Avoid being optimized out by compiler
+        black_box(job());
+    }
+    to_total_nanos(&t.elapsed())
+}
+
+
+pub fn average<'a, T: 'a>(data: &'a [T]) -> <T as Div<u64>>::Output
+where
+    T: Sum<&'a T> + Div<u64>,
+{
+    data.iter().sum::<T>() / (data.len() as u64)
 }

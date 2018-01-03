@@ -403,7 +403,7 @@ pub fn recover_from_applying_state(
     Ok(())
 }
 
-fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> {
+pub fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
     Ok(match raft_engine.get_msg(&state_key)? {
         Some(s) => s,
@@ -421,7 +421,7 @@ fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> 
     })
 }
 
-fn init_apply_state(kv_engine: &DB, region: &Region) -> Result<RaftApplyState> {
+pub fn init_apply_state(kv_engine: &DB, region: &Region) -> Result<RaftApplyState> {
     Ok(match try!(
         kv_engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))
     ) {
@@ -1684,7 +1684,7 @@ mod test {
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
-        let runner = RegionRunner::new(s.kv_engine.clone(), s.raft_engine.clone(), mgr, 0);
+        let runner = RegionRunner::new(s.kv_engine.clone(), s.raft_engine.clone(), mgr, 0, true);
         worker.start(runner).unwrap();
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -1967,8 +1967,13 @@ mod test {
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
-        let runner =
-            RegionRunner::new(s1.kv_engine.clone(), s1.raft_engine.clone(), mgr.clone(), 0);
+        let runner = RegionRunner::new(
+            s1.kv_engine.clone(),
+            s1.raft_engine.clone(),
+            mgr.clone(),
+            0,
+            true,
+        );
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());
         let snap1 = match *s1.snap_state.borrow() {

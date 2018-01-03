@@ -520,21 +520,31 @@ impl Cursor {
     }
 }
 
-/// Create a local Rocskdb engine. (Without raft, mainly for tests).
-pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<Box<Engine>> {
+/// Create a local Rocskdb engine with custom config. (Without raft, mainly for tests).
+pub fn new_local_engine_with_config(
+    path: &str,
+    cfs: &[CfName],
+    conf: &config::DbConfig,
+    with_wal: bool,
+) -> Result<Box<Engine>> {
     let mut cfs_opts = Vec::with_capacity(cfs.len());
-    let cfg_rocksdb = config::DbConfig::default();
     for cf in cfs {
         let cf_opt = match *cf {
-            CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt()),
-            CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
-            CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
-            CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
+            CF_DEFAULT => CFOptions::new(CF_DEFAULT, conf.defaultcf.build_opt()),
+            CF_LOCK => CFOptions::new(CF_LOCK, conf.lockcf.build_opt()),
+            CF_WRITE => CFOptions::new(CF_WRITE, conf.writecf.build_opt()),
+            CF_RAFT => CFOptions::new(CF_RAFT, conf.raftcf.build_opt()),
             _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
         };
         cfs_opts.push(cf_opt);
     }
-    EngineRocksdb::new(path, cfs, Some(cfs_opts)).map(|engine| -> Box<Engine> { Box::new(engine) })
+    EngineRocksdb::new(path, cfs, Some(cfs_opts), with_wal)
+        .map(|engine| -> Box<Engine> { Box::new(engine) })
+}
+
+/// Create a local Rocskdb engine with default config. (Without raft, mainly for tests).
+pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<Box<Engine>> {
+    new_local_engine_with_config(path, cfs, &config::DbConfig::default(), true)
 }
 
 quick_error! {

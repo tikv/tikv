@@ -81,6 +81,7 @@ macro_rules! printf {
     });
 }
 
+#[allow(dead_code)]
 mod utils;
 
 mod raftstore;

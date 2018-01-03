@@ -20,6 +20,7 @@ use coprocessor::codec::table;
 use coprocessor::endpoint::is_point;
 use coprocessor::{Error, Result};
 use coprocessor::metrics::*;
+use coprocessor::local_metrics::*;
 use storage::{Key, SnapshotStore, Statistics};
 use util::collections::HashSet;
 
@@ -34,6 +35,8 @@ pub struct TableScanExecutor {
     col_ids: HashSet<i64>,
     key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
+    count: i64,
+    scan_counter: ScanCounter,
 }
 
 impl TableScanExecutor {
@@ -62,12 +65,14 @@ impl TableScanExecutor {
             col_ids: col_ids,
             key_ranges: key_ranges.into_iter(),
             scanner: None,
+            count: 0,
+            scan_counter: ScanCounter::default(),
         }
     }
 
     fn get_row_from_range_scanner(&mut self) -> Result<Option<Row>> {
         if let Some(scanner) = self.scanner.as_mut() {
-            COPR_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
+            self.scan_counter.inc_range();
             let (key, value) = match scanner.next_row()? {
                 Some((key, value)) => (key, value),
                 None => return Ok(None),
@@ -91,7 +96,13 @@ impl TableScanExecutor {
     }
 
     fn new_scanner(&self, range: KeyRange) -> Result<Scanner> {
-        Scanner::new(&self.store, ScanOn::Table, self.desc, false, range).map_err(Error::from)
+        Scanner::new(
+            &self.store,
+            ScanOn::Table,
+            self.desc,
+            self.col_ids.is_empty(),
+            range,
+        ).map_err(Error::from)
     }
 }
 
@@ -99,13 +110,15 @@ impl Executor for TableScanExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
+                self.count += 1;
                 return Ok(Some(row));
             }
 
             if let Some(range) = self.key_ranges.next() {
                 if is_point(&range) {
-                    COPR_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
+                    self.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
+                        self.count += 1;
                         return Ok(Some(row));
                     }
                     continue;
@@ -123,12 +136,21 @@ impl Executor for TableScanExecutor {
         }
     }
 
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        counts.push(self.count);
+        self.count = 0;
+    }
+
     fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
         statistics.add(&self.statistics);
         self.statistics = Statistics::default();
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(statistics);
         }
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+        metrics.merge(&mut self.scan_counter);
     }
 }
 
@@ -210,6 +232,10 @@ mod test {
             assert_eq!(expect_row[&cid], v.to_vec());
         }
         assert!(table_scanner.next().unwrap().is_none());
+        let expected_counts = vec![1];
+        let mut counts = Vec::with_capacity(1);
+        table_scanner.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
     }
 
     #[test]

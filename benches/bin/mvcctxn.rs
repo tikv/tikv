@@ -3,10 +3,12 @@ extern crate rand;
 use std::time::SystemTime;
 use std::sync::mpsc::channel;
 
-use tikv::storage::{new_local_engine, Engine, Key, Modify, Mutation, Options, SnapshotStore,
-                    Statistics, ALL_CFS, TEMP_DIR};
+use tikv::storage::{new_local_engine_with_config, Engine, Key, Modify, Mutation, Options,
+                    SnapshotStore, Statistics, ALL_CFS, TEMP_DIR};
+use tikv::config::DbConfig;
 use tikv::storage::mvcc::MvccTxn;
 use tikv::util::threadpool::{DefaultContext, ThreadPoolBuilder};
+use tikv::util::config::ReadableSize;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 
 use super::print_result;
@@ -45,7 +47,12 @@ fn commit(engine: &Engine, keys: &[Key], start_ts: u64, commit_ts: u64) {
 }
 
 fn prepare_test_engine(versions: usize, value_len: usize, keys: &[Vec<u8>]) -> Box<Engine> {
-    let engine = new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+    let mut config = DbConfig::default();
+    config.defaultcf.write_buffer_size = ReadableSize::gb(1);
+    config.writecf.write_buffer_size = ReadableSize::gb(1);
+    config.lockcf.write_buffer_size = ReadableSize::gb(1);
+
+    let engine = new_local_engine_with_config(TEMP_DIR, ALL_CFS, &config, false).unwrap();
 
     for _ in 0..versions {
         for key in keys {
@@ -270,7 +277,7 @@ fn bench_concurrent_batch_impl(
                 .map(|_| (&mut keys).take(batch_size).collect())
                 .collect();
 
-            let engine = new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+            let engine = prepare_test_engine(0, 0, &[]);
 
             let pool = ThreadPoolBuilder::<DefaultContext, _>::with_default_factory(
                 String::from("bench-concurrent-mvcctxn"),
