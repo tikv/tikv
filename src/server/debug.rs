@@ -14,8 +14,10 @@
 use std::{error, result};
 use std::cmp::Ordering;
 use std::sync::Arc;
+use std::rc::Rc;
+use std::cell::RefCell;
 
-use protobuf::RepeatedField;
+use protobuf::{self, RepeatedField};
 
 use rocksdb::{Kv, SeekKey, WriteBatch, WriteOptions, DB};
 use kvproto::metapb::Region;
@@ -24,14 +26,18 @@ use kvproto::debugpb::DB as DBType;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_serverpb::*;
 
-use raftstore::store::write_peer_state;
-use raftstore::store::{keys, Engines, Iterable, Peekable};
+use raft::{self, RawNode};
+use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
+use raftstore::store::{init_apply_state, init_raft_state, write_peer_state};
+use raftstore::store::util as raftstore_util;
 use raftstore::store::engine::IterOption;
 use storage::{is_short_value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use storage::types::{truncate_ts, Key};
 use storage::mvcc::{Lock, Write, WriteType};
 use util::escape;
+use util::config::ReadableSize;
 use util::rocksdb::{compact_range, get_cf_handle};
+use util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
@@ -266,6 +272,81 @@ impl Debugger {
         }
     }
 
+    pub fn bad_regions(&self) -> Result<Vec<(u64, Error)>> {
+        let mut res = Vec::new();
+
+        let from = keys::REGION_META_MIN_KEY.to_owned();
+        let to = keys::REGION_META_MAX_KEY.to_owned();
+        let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+        let handle = box_try!(get_cf_handle(&self.engines.kv_engine, CF_RAFT));
+        let mut iter = DBIterator::new_cf(self.engines.kv_engine.clone(), handle, readopts);
+        iter.seek(SeekKey::from(from.as_ref()));
+
+        let fake_snap_worker = Worker::new("fake snap worker");
+
+        let check_value = |value: Vec<u8>| -> Result<()> {
+            let local_state = box_try!(protobuf::parse_from_bytes::<RegionLocalState>(&value));
+            match local_state.get_state() {
+                PeerState::Tombstone | PeerState::Applying => return Ok(()),
+                _ => {}
+            }
+
+            let region = local_state.get_region();
+            let store_id = self.get_store_id()?;
+
+            let peer_id = raftstore_util::find_peer(region, store_id)
+                .map(|peer| peer.get_id())
+                .ok_or_else(|| {
+                    Error::Other("RegionLocalState doesn't contains peer itself".into())
+                })?;
+
+            let raft_state = box_try!(init_raft_state(&self.engines.raft_engine, region));
+            let apply_state = box_try!(init_apply_state(&self.engines.kv_engine, region));
+            if raft_state.get_last_index() < apply_state.get_applied_index() {
+                return Err(Error::Other("last index < applied index".into()));
+            }
+
+            let tag = format!("[region {}] {}", region.get_id(), peer_id);
+            let peer_storage = box_try!(PeerStorage::new(
+                self.engines.kv_engine.clone(),
+                self.engines.raft_engine.clone(),
+                region,
+                fake_snap_worker.scheduler(),
+                tag.clone(),
+                Rc::new(RefCell::new(CacheQueryStats::default())),
+            ));
+
+            let raft_cfg = raft::Config {
+                id: peer_id,
+                peers: vec![],
+                election_tick: 10,
+                heartbeat_tick: 2,
+                max_size_per_msg: ReadableSize::mb(1).0,
+                max_inflight_msgs: 256,
+                applied: apply_state.get_applied_index(),
+                check_quorum: true,
+                tag: tag,
+                skip_bcast_commit: true,
+                ..Default::default()
+            };
+
+            box_try!(RawNode::new(&raft_cfg, peer_storage, &[]));
+            Ok(())
+        };
+
+        for (key, value) in &mut iter {
+            if let Ok((region_id, suffix)) = keys::decode_region_meta_key(&key) {
+                if suffix != keys::REGION_STATE_SUFFIX {
+                    continue;
+                }
+                if let Err(e) = check_value(value) {
+                    res.push((region_id, e));
+                }
+            }
+        }
+        Ok(res)
+    }
+
     fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
         db.get_msg::<StoreIdent>(&keys::store_ident_key())
@@ -457,6 +538,7 @@ pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::iter::FromIterator;
 
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb;
@@ -698,5 +780,80 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 7);
+    }
+
+    #[test]
+    fn test_bad_regions() {
+        let debugger = new_debugger();
+        let kv_engine = debugger.engines.kv_engine.as_ref();
+        let raft_engine = debugger.engines.raft_engine.as_ref();
+        let store_id = 1; // It's a fake id.
+
+        let wb1 = WriteBatch::new();
+        let handle1 = get_cf_handle(raft_engine, CF_DEFAULT).unwrap();
+
+        let wb2 = WriteBatch::new();
+        let handle2 = get_cf_handle(kv_engine, CF_RAFT).unwrap();
+
+        {
+            let mock_region_state = |region_id: u64, peers: &[u64]| {
+                let region_state_key = keys::region_state_key(region_id);
+                let mut region_state = RegionLocalState::new();
+                region_state.set_state(PeerState::Normal);
+                {
+                    let region = region_state.mut_region();
+                    region.set_id(region_id);
+                    let peers = peers.iter().enumerate().map(|(i, &sid)| {
+                        let mut peer = metapb::Peer::new();
+                        peer.id = i as u64;
+                        peer.store_id = sid;
+                        peer
+                    });
+                    region.set_peers(RepeatedField::from_iter(peers));
+                }
+                wb2.put_msg_cf(handle2, &region_state_key, &region_state)
+                    .unwrap();
+            };
+            let mock_raft_state = |region_id: u64, last_index: u64, commit_index: u64| {
+                let raft_state_key = keys::raft_state_key(region_id);
+                let mut raft_state = RaftLocalState::new();
+                raft_state.set_last_index(last_index);
+                raft_state.mut_hard_state().set_commit(commit_index);
+                wb1.put_msg_cf(handle1, &raft_state_key, &raft_state)
+                    .unwrap();
+            };
+            let mock_apply_state = |region_id: u64, apply_index: u64| {
+                let raft_apply_key = keys::apply_state_key(region_id);
+                let mut apply_state = RaftApplyState::new();
+                apply_state.set_applied_index(apply_index);
+                wb2.put_msg_cf(handle2, &raft_apply_key, &apply_state)
+                    .unwrap();
+            };
+
+            for &region_id in &[10, 11, 12] {
+                mock_region_state(region_id, &[store_id]);
+            }
+
+            // last index < commit index
+            mock_raft_state(10, 100, 110);
+
+            // commit index < last index < apply index, or commit index < apply index < last index.
+            mock_raft_state(11, 100, 90);
+            mock_apply_state(11, 110);
+            mock_raft_state(12, 100, 90);
+            mock_apply_state(12, 95);
+
+            // region state doesn't contains the peer itself.
+            mock_region_state(13, &[]);
+        }
+
+        raft_engine.write_opt(wb1, &WriteOptions::new()).unwrap();
+        kv_engine.write_opt(wb2, &WriteOptions::new()).unwrap();
+
+        let bad_regions = debugger.bad_regions().unwrap();
+        assert_eq!(bad_regions.len(), 4);
+        for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
+            assert_eq!(region_id, (10 + i) as u64);
+        }
     }
 }
