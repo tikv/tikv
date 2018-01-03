@@ -1014,7 +1014,7 @@ impl ApplyDelegate {
         let first_index = peer_storage::first_index(&exec_ctx.apply_state);
         if index < first_index {
             warn!(
-                "{} first index {} < min_index {}, skip pre merge.",
+                "{} first index {} > min_index {}, skip pre merge.",
                 self.tag,
                 first_index,
                 index

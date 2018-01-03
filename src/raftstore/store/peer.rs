@@ -1355,14 +1355,15 @@ impl Peer {
         }
 
         let last_index = self.raft_group.raft.raft_log.last_index();
-        let min_index = self.get_min_progress();
+        let min_progress = self.get_min_progress();
+        let min_index = min_progress + 1;
         // It's OK that min_index < first_index, it will be filtered out reliably
         // when applied. Actually we can't ensure min_index >= first_index without
         // iterating all proposed logs.
-        if min_index == 0 || last_index - min_index > self.cfg.max_merge_log_gap {
+        if min_progress == 0 || last_index - min_progress > self.cfg.max_merge_log_gap {
             return Err(box_err!(
                 "log gap ({}, {}] is too large, skip merge",
-                min_index,
+                min_progress,
                 last_index
             ));
         }

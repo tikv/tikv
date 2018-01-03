@@ -1486,7 +1486,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             let peer = &self.region_peers[&region.get_id()];
-            let min_index = peer.get_min_progress();
+            let min_index = peer.get_min_progress() + 1;
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
             let entries = if low >= state.get_commit() {
@@ -1494,7 +1494,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             } else {
                 self.region_peers[&region.get_id()]
                     .get_store()
-                    .entries(low + 1, state.get_commit(), NO_LIMIT)
+                    .entries(low, state.get_commit(), NO_LIMIT)
                     .unwrap()
             };
 
