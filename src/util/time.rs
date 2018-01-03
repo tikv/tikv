@@ -263,15 +263,15 @@ impl Instant {
         }
     }
 
-    /// checked_sub is simiar with `duration_since`, except it won't panic if `self`
-    /// is less than `other`. In this case the zero duration will be returned.
+    /// checked_sub is simiar with `duration_since`, except it won't panic
+    /// if `self` is less than `other`. In this case None will be returned.
     ///
     /// Callers need to ensure that `self` and `other` are same type of Instantants.
-    pub fn checked_sub(&self, other: Instant) -> Duration {
+    pub fn checked_sub(&self, other: Instant) -> Option<Duration> {
         if self.partial_cmp(&other).unwrap() == Ordering::Greater {
-            self.duration_since(other)
+            Some(self.duration_since(other))
         } else {
-            Duration::default()
+            None
         }
     }
 
@@ -484,8 +484,8 @@ mod tests {
         assert_eq!(tmp_late_row, late_raw);
 
         // checked_sub Duration.
-        assert_eq!(early_raw.checked_sub(late_raw), zero);
-        assert!(late_raw.checked_sub(early_raw) > zero);
+        assert_eq!(early_raw.checked_sub(late_raw), None);
+        assert!(late_raw.checked_sub(early_raw).unwrap() > zero);
 
         let mut tmp_late_coarse = late_coarse;
         tmp_late_coarse -= zero;

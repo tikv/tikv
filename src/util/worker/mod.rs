@@ -28,7 +28,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use util::time::{Instant, SlowTimer};
-use util::timer::{TimeoutTask, Timer};
+use util::timer::Timer;
 use self::metrics::*;
 
 pub use self::future::Runnable as FutureRunnable;
@@ -92,7 +92,7 @@ pub trait BatchRunnable<T: Display> {
 }
 
 pub trait BatchRunnableWithTimer<T: Display, U>: BatchRunnable<T> {
-    fn on_timeout(&mut self, TimeoutTask<U>, &mut Timer<U>);
+    fn on_timeout(&mut self, &mut Timer<U>, U);
 }
 
 impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
@@ -298,9 +298,10 @@ fn poll_with_timer<R, T, U>(
     let mut batch = Vec::with_capacity(batch_size);
     let mut keep_going = true;
     let mut tick_time = None;
+    let zero_dur = Duration::default();
     while keep_going {
         tick_time = tick_time.or_else(|| timer.next_timeout());
-        let timeout = tick_time.map(|t| t.checked_sub(Instant::now()));
+        let timeout = tick_time.map(|t| t.checked_sub(Instant::now()).unwrap_or(zero_dur));
 
         keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
 
@@ -317,16 +318,13 @@ fn poll_with_timer<R, T, U>(
             batch.clear();
         }
 
-        match tick_time {
-            Some(t) if t <= Instant::now() => {
-                tick_time = None;
-                while let Some(task) = timer.pop_task_before(t) {
-                    runner.on_timeout(task, &mut timer);
-                }
+        if let Some(_) = tick_time {
+            tick_time = None;
+            let now = Instant::now();
+            while let Some(task) = timer.pop_task_before(now) {
+                runner.on_timeout(&mut timer, task);
             }
-            _ => {}
         }
-
         runner.on_tick();
     }
     runner.shutdown();

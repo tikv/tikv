@@ -33,7 +33,6 @@ impl<T> Timer<T> {
     pub fn add_task(&mut self, timeout: Duration, task: T) {
         let task = TimeoutTask {
             next_tick: Instant::now() + timeout,
-            timeout: timeout,
             task: task,
         };
         self.pending.push(task);
@@ -43,14 +42,14 @@ impl<T> Timer<T> {
     ///
     /// If there are many tasks according with the condition, only the first
     /// task will be removed from pending queue.
-    pub fn remove_task<F>(&mut self, f: F) -> Option<TimeoutTask<T>>
+    pub fn remove_task<F>(&mut self, f: F) -> Option<T>
     where
-        F: Fn(&TimeoutTask<T>) -> bool,
+        F: Fn(&T) -> bool,
     {
         let mut res = None;
         let mut vec = replace(&mut self.pending, BinaryHeap::new()).into_vec();
-        if let Some((idx, _)) = vec.iter().enumerate().find(|&(_, task)| f(task)) {
-            res = Some(vec.swap_remove(idx));
+        if let Some((idx, _)) = vec.iter().enumerate().find(|&(_, task)| f(&task.task)) {
+            res = Some(vec.swap_remove(idx)).map(|t| t.task);
         }
         self.pending = BinaryHeap::from(vec);
         res
@@ -66,45 +65,21 @@ impl<T> Timer<T> {
     ///
     /// The normal use case is keeping `pop_task_before` until get `None` in order
     /// to retreive all avaliable events.
-    pub fn pop_task_before(&mut self, instant: Instant) -> Option<TimeoutTask<T>> {
-        match self.pending.pop() {
-            Some(timeout_task) => if timeout_task.next_tick > instant {
-                self.pending.push(timeout_task);
-                None
-            } else {
-                Some(timeout_task)
-            },
-            None => None,
+    pub fn pop_task_before(&mut self, instant: Instant) -> Option<T> {
+        if self.pending
+            .peek()
+            .map_or(false, |t| t.next_tick <= instant)
+        {
+            return self.pending.pop().map(|t| t.task);
         }
+        None
     }
 }
 
 #[derive(Debug)]
-pub struct TimeoutTask<T> {
+struct TimeoutTask<T> {
     next_tick: Instant,
-    timeout: Duration,
     task: T,
-}
-
-impl<T> TimeoutTask<T> {
-    pub fn into_inner(self) -> T {
-        self.task
-    }
-    pub fn timeout(&self) -> Duration {
-        self.timeout
-    }
-}
-
-impl<T> AsRef<T> for TimeoutTask<T> {
-    fn as_ref(&self) -> &T {
-        &self.task
-    }
-}
-
-impl<T> AsMut<T> for TimeoutTask<T> {
-    fn as_mut(&mut self) -> &mut T {
-        &mut self.task
-    }
 }
 
 impl<T> PartialEq for TimeoutTask<T> {
@@ -159,16 +134,22 @@ mod tests {
     }
 
     impl BatchRunnableWithTimer<&'static str, Task> for Runner {
-        fn on_timeout(&mut self, task: TimeoutTask<Task>, timer: &mut Timer<Task>) {
-            match *task.as_ref() {
-                Task::A => self.ch.send("task a").unwrap(),
-                Task::B => self.ch.send("task b").unwrap(),
+        fn on_timeout(&mut self, timer: &mut Timer<Task>, task: Task) {
+            let timeout = match task {
+                Task::A => {
+                    self.ch.send("task a").unwrap();
+                    Duration::from_millis(60)
+                }
+                Task::B => {
+                    self.ch.send("task b").unwrap();
+                    Duration::from_millis(100)
+                }
                 _ => unreachable!(),
             };
             if self.counter < 2 {
-                timer.add_task(task.timeout(), task.into_inner());
+                timer.add_task(timeout, task);
             } else {
-                timer.remove_task(|t| t.as_ref() == &Task::B);
+                timer.remove_task(|t| *t == Task::B);
             }
             self.counter += 1;
         }
@@ -183,17 +164,15 @@ mod tests {
         assert_eq!(timer.pending.len(), 3);
 
         let tick_time = timer.next_timeout().unwrap();
-        assert_eq!(
-            timer.pop_task_before(tick_time).unwrap().into_inner(),
-            Task::A
-        );
+        assert_eq!(timer.pop_task_before(tick_time).unwrap(), Task::A);
         assert_eq!(timer.pop_task_before(tick_time), None);
 
         let tick_time = timer.next_timeout().unwrap();
-        assert_eq!(
-            timer.pop_task_before(tick_time).unwrap().into_inner(),
-            Task::B
-        );
+        assert_eq!(timer.pop_task_before(tick_time).unwrap(), Task::B);
+        assert_eq!(timer.pop_task_before(tick_time), None);
+
+        let tick_time = timer.next_timeout().unwrap();
+        assert_eq!(timer.pop_task_before(tick_time).unwrap(), Task::C);
         assert_eq!(timer.pop_task_before(tick_time), None);
     }
 
@@ -211,10 +190,8 @@ mod tests {
         };
 
         let mut timer = Timer::new(10);
-        timer.add_task(Duration::from_millis(100), Task::A);
-        timer.add_task(Duration::from_millis(120), Task::B);
-        timer.add_task(Duration::from_millis(130), Task::A);
-        timer.add_task(Duration::from_millis(140), Task::B);
+        timer.add_task(Duration::from_millis(60), Task::A);
+        timer.add_task(Duration::from_millis(100), Task::B);
 
         worker.start_with_timer(runner, timer).unwrap();
 
@@ -226,9 +203,6 @@ mod tests {
         assert_eq!(msg, "task a");
         let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(msg, "task b");
-
-        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(msg, "task a");
         let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(msg, "task a");
 
