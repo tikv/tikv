@@ -209,39 +209,58 @@ impl Host {
         cfg: &Config,
         pd_task_sender: FutureScheduler<PdTask>,
     ) -> Host {
-        let create_pool = |name_prefix: &str, size: usize| {
-            let (tx, rx) = mpsc::sync_channel(size);
-            let cpu_pool = {
-                let sender = pd_task_sender.clone();
-                CpuPoolBuilder::new()
-                    .name_prefix(name_prefix)
-                    .pool_size(size)
-                    .stack_size(cfg.end_point_stack_size.0 as usize)
-                    .after_start(move || {
-                        let thread_id = thread::current().id();
-                        let cop_ctx = CopContext::new(sender.clone());
-                        tx.send((thread_id, cop_ctx)).unwrap();
-                    })
-                    .create()
-            };
-            ExecutorPool {
-                pool: cpu_pool,
-                contexts: CopContextPool::from_iter(rx),
-            }
-        };
-
         Host {
             engine: engine,
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool: create_pool("endpoint-normal-pool", cfg.end_point_concurrency),
-            low_priority_pool: create_pool("endpoint-low-pool", cfg.end_point_concurrency),
-            high_priority_pool: create_pool("endpoint-high-pool", cfg.end_point_concurrency),
+            pool: Host::create_executor_pool(
+                "endpoint-normal-pool",
+                cfg.end_point_concurrency,
+                cfg.end_point_stack_size.0 as usize,
+                pd_task_sender.clone(),
+            ),
+            low_priority_pool: Host::create_executor_pool(
+                "endpoint-low-pool",
+                cfg.end_point_concurrency,
+                cfg.end_point_stack_size.0 as usize,
+                pd_task_sender.clone(),
+            ),
+            high_priority_pool: Host::create_executor_pool(
+                "endpoint-high-pool",
+                cfg.end_point_concurrency,
+                cfg.end_point_stack_size.0 as usize,
+                pd_task_sender,
+            ),
             max_running_task_count: cfg.end_point_max_tasks,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             running_task_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn create_executor_pool(
+        name_prefix: &str,
+        pool_size: usize,
+        thread_stack_size: usize,
+        pd_task_sender: FutureScheduler<PdTask>,
+    ) -> ExecutorPool {
+        let (tx, rx) = mpsc::sync_channel(pool_size);
+        let cpu_pool = {
+            CpuPoolBuilder::new()
+                .name_prefix(name_prefix)
+                .pool_size(pool_size)
+                .stack_size(thread_stack_size)
+                .after_start(move || {
+                    let thread_id = thread::current().id();
+                    let cop_ctx = CopContext::new(pd_task_sender.clone());
+                    tx.send((thread_id, cop_ctx)).unwrap();
+                })
+                .create()
+        };
+        ExecutorPool {
+            pool: cpu_pool,
+            contexts: CopContextPool::from_iter(rx),
         }
     }
 
@@ -310,20 +329,17 @@ impl Host {
                 let pool_1 = pool.clone();
                 let batch_row_limit = self.stream_batch_row_limit;
                 let f = move || {
-                    let s = stream::unfold(ctx, move |mut ctx| {
-                        let (mut finished, mut item) = (true, None);
-                        if !ctx.finished() {
-                            item = ctx.handle_streaming_request(batch_row_limit)
-                                .unwrap_or_else(|e| Some(err_resp(e)));
-                            finished = ctx.finished();
-                        }
+                    let s = stream::unfold((ctx, false), move |(mut ctx, finished)| {
                         if finished {
                             let mut cop_stats = CopStats::default();
                             ctx.collect_statistics_into(&mut cop_stats.stats);
                             ctx.collect_metrics_into(&mut cop_stats.scan_counter);
                             on_finish(&task_count, cop_stats, &mut metrics, &mut ctx_pool);
+                            return None;
                         }
-                        item.map(|resp| future::ok::<_, GrpcError>((resp, ctx)))
+                        let (item, finished) = ctx.handle_streaming_request(batch_row_limit)
+                            .unwrap_or_else(|e| (Some(err_resp(e)), true));
+                        item.map(|resp| future::ok::<_, GrpcError>((resp, (ctx, finished))))
                     });
                     let resp_stream = ResponseStream::spawn(s, &pool_1);
                     future::ok::<_, ()>(on_resp.respond_stream(resp_stream))

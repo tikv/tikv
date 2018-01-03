@@ -43,8 +43,7 @@ pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
 pub struct ResponseStream {
-    cursor: usize,
-    head: [Option<Response>; 2],
+    head: Option<Response>,
     remain: Option<SpawnHandle<Response, GrpcError>>,
 }
 
@@ -54,19 +53,12 @@ impl ResponseStream {
         S: Stream<Item = Response, Error = GrpcError> + Send + 'static,
         E: Executor<Execute<S>>,
     {
-        let mut resp_stream = ResponseStream {
-            cursor: 0,
-            head: [None, None],
-            remain: None,
-        };
-        for i in 0..2 {
-            match future::poll_fn(|| s.poll()).wait().unwrap() {
-                Some(resp) => resp_stream.head[i] = Some(resp),
-                None => return resp_stream,
-            }
+        let head = future::poll_fn(|| s.poll()).wait().unwrap();
+        let remain = head.as_ref().map(|_| mpsc::spawn(s, executor, 8));
+        ResponseStream {
+            head: head,
+            remain: remain,
         }
-        resp_stream.remain = Some(mpsc::spawn(s, executor, 8));
-        resp_stream
     }
 }
 
@@ -75,15 +67,13 @@ impl Stream for ResponseStream {
     type Error = GrpcError;
 
     fn poll(&mut self) -> Poll<Option<Response>, GrpcError> {
-        if self.cursor < 2 {
-            if let Some(resp) = self.head[self.cursor].take() {
-                self.cursor += 1;
-                return Ok(Async::Ready(Some(resp)));
-            }
+        if let Some(resp) = self.head.take() {
+            return Ok(Async::Ready(Some(resp)));
         }
-        if let Some(mut remain) = self.remain.as_mut() {
-            return remain.poll();
+        if let Some(mut stream) = self.remain.as_mut() {
+            return stream.poll();
         }
+        self.remain = None;
         Ok(Async::Ready(None))
     }
 }
@@ -104,14 +94,10 @@ impl OnResponse {
     pub fn respond(self, resp: Response) {
         match self {
             OnResponse::Unary(cb) => cb(resp),
-            OnResponse::Streaming(cb) => {
-                let s = ResponseStream {
-                    cursor: 0,
-                    head: [Some(resp), None],
-                    remain: None,
-                };
-                cb(s);
-            }
+            OnResponse::Streaming(cb) => cb(ResponseStream {
+                head: Some(resp),
+                remain: None,
+            }),
         }
     }
 
