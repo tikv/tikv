@@ -77,9 +77,7 @@ impl Callback {
 
     pub fn invoke_read(self, args: ReadResponse) {
         match self {
-            Callback::Read(read) => {
-                read(args);
-            }
+            Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),
         }
     }
