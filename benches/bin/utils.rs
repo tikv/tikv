@@ -2,6 +2,8 @@ extern crate rand;
 
 use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
 use std::time::Duration;
+use std::ops::Div;
+use std::iter::Sum;
 use tikv::coprocessor::codec::table::{encode_index_seek_key, encode_row_key};
 use tikv::util::codec::number::NumberEncoder;
 
@@ -36,13 +38,15 @@ pub fn generate_unique_index_keys(
     value_len: usize,
     count: usize,
 ) -> Vec<Vec<u8>> {
+    if value_len < 8 {
+        panic!("Value len should be at least 8.");
+    }
     let mut result = Vec::with_capacity(count);
-    for _ in 0..count {
-        result.push(encode_index_seek_key(
-            table_id,
-            index_id,
-            &vec![0u8; value_len],
-        ));
+    for i in 0..count {
+        let mut value = Vec::with_capacity(value_len);
+        value.resize(value_len - 8, 0);
+        value.encode_u64(i as u64).unwrap();
+        result.push(encode_index_seek_key(table_id, index_id, &value));
     }
     result
 }
@@ -72,6 +76,9 @@ where
         .collect()
 }
 
-pub fn average(data: &[u64]) -> u64 {
-    data.iter().sum::<u64>() / (data.len() as u64)
+pub fn average<'a, T: 'a>(data: &'a [T]) -> <T as Div<u64>>::Output
+where
+    T: Sum<&'a T> + Div<u64>,
+{
+    data.iter().sum::<T>() / (data.len() as u64)
 }
