@@ -81,11 +81,11 @@ macro_rules! printf {
     });
 }
 
+#[allow(dead_code)]
 mod utils;
 
 mod raftstore;
 mod mvcc;
-mod mvcctxn;
 
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));
@@ -106,12 +106,7 @@ fn main() {
 
     let mut args: Vec<_> = env::args().skip(1).collect();
 
-    let available_options = vec![
-        "raftstore",
-        "tombstone-scan",
-        "mvcctxn",
-        "concurrent-batch-mvcctxn",
-    ];
+    let available_options = vec!["raftstore", "tombstone-scan"];
 
     if args.is_empty() {
         args = available_options.iter().map(|&s| String::from(s)).collect();
@@ -136,8 +131,6 @@ fn main() {
             match item.as_ref() {
                 "raftstore" => raftstore::bench_raftstore(),
                 "tombstone-scan" => mvcc::bench_engine(),
-                "mvcctxn" => mvcctxn::bench_mvcctxn(),
-                "concurrent-batch-mvcctxn" => mvcctxn::bench_concurrent_batch(),
                 _ => eprintln!("*** Unknown bench item {}", item),
             }
         }
