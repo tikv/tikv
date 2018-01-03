@@ -126,6 +126,9 @@ fn test_rpc_client() {
         .report_split(metapb::Region::new(), metapb::Region::new())
         .wait()
         .unwrap();
+
+    let region_info = client.get_region_info(region_key).unwrap();
+    client.scatter_region(region_info).unwrap();
 }
 
 #[test]

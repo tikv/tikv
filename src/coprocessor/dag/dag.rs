@@ -20,7 +20,8 @@ use protobuf::{Message as PbMsg, RepeatedField};
 
 use coprocessor::codec::mysql;
 use coprocessor::codec::datum::{Datum, DatumEncoder};
-use coprocessor::select::xeval::EvalContext;
+use coprocessor::dag::expr::EvalContext;
+use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
 use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
 use storage::{Snapshot, SnapshotStore, Statistics};
@@ -91,6 +92,9 @@ impl DAGContext {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    let mut counts = Vec::with_capacity(4);
+                    self.exec.collect_output_counts(&mut counts);
+                    sel_resp.set_output_counts(counts);
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
@@ -111,6 +115,10 @@ impl DAGContext {
 
     pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
         self.exec.collect_statistics_into(statistics);
+    }
+
+    pub fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+        self.exec.collect_metrics_into(metrics);
     }
 }
 

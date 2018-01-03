@@ -12,19 +12,16 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::mpsc::channel;
 use std::time::Duration;
 
 use tikv::util::HandyRwLock;
-use tikv::storage::{self, make_key, Engine, Mutation, Options, Storage};
+use tikv::storage::{self, make_key, Mutation};
 use tikv::storage::{engine, mvcc, txn};
-use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::util::*;
-use storage::util;
 use super::sync_storage::SyncStorage;
 use super::util::new_raft_storage_with_store_count;
 
@@ -187,85 +184,5 @@ fn test_engine_leader_change_twice() {
         assert!(e.has_stale_command());
     } else {
         panic!("expect stale command, but got {:?}", res);
-    }
-}
-
-#[test]
-fn test_scheduler_leader_change_twice() {
-    let mut cluster = new_server_cluster(0, 2);
-    cluster.run();
-    let region0 = cluster.get_region(b"");
-    let peers = region0.get_peers();
-    cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
-    let config = Config::default();
-
-    let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let mut engine0 = util::BlockEngine::new(engine0);
-    let mut storage0 = Storage::from_engine(engine0.clone(), &config).unwrap();
-    storage0.start(&config).unwrap();
-
-    let mut ctx0 = Context::new();
-    ctx0.set_region_id(region0.get_id());
-    ctx0.set_region_epoch(region0.get_region_epoch().clone());
-    ctx0.set_peer(peers[0].clone());
-    let (prewrite_tx, prewrite_rx) = channel();
-    let (stx, srx) = channel();
-    engine0.block_snapshot(stx.clone());
-    storage0.async_prewrite(ctx0,
-                        vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
-                        b"k".to_vec(),
-                        10,
-                        Options::default(),
-                        box move |res: storage::Result<_>| {
-            match res {
-                Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
-                    assert!(e.has_stale_command());
-                    prewrite_tx.send(false).unwrap();
-                }
-                Ok(_) => {
-                    prewrite_tx.send(true).unwrap();
-                }
-                _ => {
-                    panic!("expect stale command, but got {:?}", res);
-                }
-            }
-        })
-        .unwrap();
-    // wait for the message, the prewrite should be blocked at snapshot stage.
-    srx.recv_timeout(Duration::from_secs(2)).unwrap();
-    // Transfer leader twice, then unblock snapshot.
-    cluster.must_transfer_leader(region0.get_id(), peers[1].clone());
-    cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
-    engine0.unblock_snapshot();
-
-    // the snapshot request may meet read index, scheduler will retry the request.
-    let ok = prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    if ok {
-        let region1 = cluster.get_region(b"");
-        cluster.must_transfer_leader(region1.get_id(), peers[1].clone());
-
-        let engine1 = cluster.sim.rl().storages[&peers[1].get_id()].clone();
-        let mut storage1 = Storage::from_engine(engine1, &config).unwrap();
-        storage1.start(&config).unwrap();
-        let mut ctx1 = Context::new();
-        ctx1.set_region_id(region1.get_id());
-        ctx1.set_region_epoch(region1.get_region_epoch().clone());
-        ctx1.set_peer(peers[1].clone());
-
-        let (commit_tx, commit_rx) = channel();
-        storage1
-            .async_commit(
-                ctx1,
-                vec![make_key(b"k")],
-                10,
-                11,
-                box move |res: storage::Result<_>| { commit_tx.send(res).unwrap(); },
-            )
-            .unwrap();
-        // wait for the commit result.
-        let res = commit_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        if res.as_ref().is_err() {
-            panic!("expect Ok(_), but got {:?}", res);
-        }
     }
 }

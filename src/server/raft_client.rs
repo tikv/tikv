@@ -69,7 +69,7 @@ impl Conn {
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
-        let (sink, _) = client.raft();
+        let (sink, _) = client.raft().unwrap();
         let addr = addr.to_owned();
         client.spawn(
             rx_close
