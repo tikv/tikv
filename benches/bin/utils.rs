@@ -86,9 +86,9 @@ where
 }
 
 
-/// Run `job` for `iterations` times, and return the total time cost as nanoseconds.
+/// Run `job` for `iterations` times, and return the average time cost as nanoseconds.
 /// Attention that if `job` returns no value, it will be optimized out by the compiler.
-pub fn record_total_time<F, T>(mut job: F, iterations: u32) -> u64
+pub fn do_bench<F, T>(mut job: F, iterations: u32) -> f64
 where
     F: FnMut() -> T,
 {
@@ -97,7 +97,7 @@ where
         // Avoid being optimized out by compiler
         black_box(job());
     }
-    to_total_nanos(&t.elapsed())
+    to_total_nanos(&t.elapsed()) / (iterations as f64)
 }
 
 

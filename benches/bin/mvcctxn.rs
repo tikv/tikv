@@ -83,7 +83,7 @@ fn get(engine: &Engine, key: &Key, statistics: &mut Statistics) -> Option<Vec<u8
 fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> u64 {
     let mut fake_statistics = Statistics::default();
     let mut rng = rand::thread_rng();
-    record_total_time(
+    do_bench(
         || {
             let index = rng.gen_range(0, keys.len());
             let key = Key::from_raw(&keys[index]);
@@ -96,7 +96,7 @@ fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> u64 {
 
 fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> u64 {
     let mut rng = rand::thread_rng();
-    record_total_time(
+    do_bench(
         || {
             let start_ts = next_ts();
             let commit_ts = next_ts();
@@ -118,7 +118,7 @@ fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> u64 {
 
 fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> u64 {
     let mut rng = rand::thread_rng();
-    record_total_time(
+    do_bench(
         || {
             let start_ts = next_ts();
             let commit_ts = next_ts();
@@ -149,7 +149,7 @@ fn bench_batch_set_impl(
     let mut keys_to_write: Vec<Key> = Vec::with_capacity(batch_size);
     let mut mutations: Vec<Mutation> = Vec::with_capacity(batch_size);
 
-    record_total_time(
+    do_bench(
         || {
             let start_ts = next_ts();
             let commit_ts = next_ts();
