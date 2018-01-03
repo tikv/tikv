@@ -235,9 +235,9 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 ///     current peer lose its leader lease.
 ///     Within this suspect leader lease expire time, read requests could not be performed
 ///     locally.
-///   - The valid leader lease should be `lease = max_lease - (quorum_commit - send_to_quorum)`
-///     And the expired timestamp for that leader lease is `quorum_commit + lease`,
-///     which is `send_to_quorum + max_lease` in short.
+///   - The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
+///     And the expired timestamp for that leader lease is `commit_ts + lease`,
+///     which is `send_ts + max_lease` in short.
 // TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
 //       to the local read thread, so name it remote. If Lease expires, the remote must
 //       expire too.
@@ -266,15 +266,16 @@ impl Lease {
         }
     }
 
-    /// The valid leader lease should be `lease = max_lease - (quorum_commit - send_to_quorum)`
-    /// And the expired timestamp for that leader lease is `quorum_commit + lease`,
-    /// which is `send_to_quorum + max_lease` in short.
-    pub fn next_expired_time(&self, send_to_quorum: Timespec) -> Timespec {
-        send_to_quorum + self.max_lease
+    /// The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
+    /// And the expired timestamp for that leader lease is `commit_ts + lease`,
+    /// which is `send_ts + max_lease` in short.
+    fn next_expired_time(&self, send_ts: Timespec) -> Timespec {
+        send_ts + self.max_lease
     }
 
     /// Renew the lease to the bound.
-    pub fn renew(&mut self, bound: Timespec) {
+    pub fn renew(&mut self, send_ts: Timespec) {
+        let bound = self.next_expired_time(send_ts);
         match self.bound {
             // Longer than suspect ts or longer than valid ts.
             Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts <= bound {
@@ -288,7 +289,8 @@ impl Lease {
     }
 
     /// Suspect the lease to the bound.
-    pub fn suspect(&mut self, bound: Timespec) {
+    pub fn suspect(&mut self, send_ts: Timespec) {
+        let bound = self.next_expired_time(send_ts);
         self.bound = Some(Either::Left(bound));
     }
 
@@ -356,7 +358,7 @@ mod tests {
         assert_eq!(next_expired_time, now + duration);
 
         // Transit to the Valid state.
-        lease.renew(next_expired_time);
+        lease.renew(now);
         assert_eq!(lease.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
         assert_eq!(lease.inspect(None), LeaseState::Valid);
 
@@ -369,8 +371,7 @@ mod tests {
         assert_eq!(lease.inspect(None), LeaseState::Expired);
 
         // Transit to the Suspect state.
-        let next_expired_time = lease.next_expired_time(monotonic_raw_now());
-        lease.suspect(next_expired_time);
+        lease.suspect(monotonic_raw_now());
         assert_eq!(
             lease.inspect(Some(monotonic_raw_now())),
             LeaseState::Suspect
