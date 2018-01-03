@@ -44,6 +44,7 @@ use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
+use util::sys as util_sys;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -517,6 +518,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.raft_engine.clone(),
             self.snap_mgr.clone(),
             self.cfg.snap_apply_batch_size.0 as usize,
+            self.cfg.use_delete_range,
         );
         box_try!(self.region_worker.start(runner));
 
@@ -541,9 +543,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
 
         let (tx, rx) = mpsc::channel();
-        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log);
+        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log, self.cfg.use_delete_range);
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
+
+        if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
+            warn!("set priority for raftstore failed, error: {:?}", e);
+        }
 
         event_loop.run(self)?;
         Ok(())
@@ -1271,7 +1277,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer,
                 self.store_id()
             );
-
         }
     }
 
@@ -1957,10 +1962,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             //                  |-----------------threshold------------ |
             //              first_index                         replicated_index
             let replicated_idx = peer.raft_group
-                .status()
-                .progress
-                .values()
-                .map(|p| p.matched)
+                .raft
+                .prs()
+                .iter()
+                .map(|(_, p)| p.matched)
                 .min()
                 .unwrap();
             // When an election happened or a new peer is added, replicated_idx can be 0.
@@ -2163,19 +2168,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         let region = peer.region();
+        let latest_epoch = region.get_region_epoch();
 
-        if region.get_region_epoch().get_version() != epoch.get_version() {
+        if latest_epoch.get_version() != epoch.get_version() {
             info!(
-                "{} epoch changed {:?} != {:?}, need re-check later",
+                "{} epoch changed {:?} != {:?}, retry later",
                 peer.tag,
                 region.get_region_epoch(),
                 epoch
             );
-            return Err(box_err!(
-                "{} epoch changed {:?} != {:?}, need re-check later",
-                peer.tag,
-                region.get_region_epoch(),
-                epoch
+            return Err(Error::StaleEpoch(
+                format!(
+                    "{} epoch changed {:?} != {:?}, retry later",
+                    peer.tag,
+                    latest_epoch,
+                    epoch
+                ),
+                vec![region.to_owned()],
             ));
         }
         Ok(())

@@ -13,12 +13,12 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use kvproto::metapb::{Region, Store};
+use kvproto::metapb::{Peer, Region, Store};
 use kvproto::pdpb::*;
 
-use protobuf::{Message, RepeatedField};
+use protobuf::RepeatedField;
 
 use super::*;
 
@@ -26,7 +26,10 @@ use super::*;
 pub struct Service {
     id_allocator: AtomicUsize,
     members_resp: Mutex<Option<GetMembersResponse>>,
-    storage: Mutex<HashMap<String, Vec<u8>>>,
+    is_bootstrapped: AtomicBool,
+    stores: Mutex<HashMap<u64, Store>>,
+    regions: Mutex<HashMap<u64, Region>>,
+    leaders: Mutex<HashMap<u64, Peer>>,
 }
 
 impl Service {
@@ -34,7 +37,10 @@ impl Service {
         Service {
             members_resp: Mutex::new(None),
             id_allocator: AtomicUsize::new(1), // start from 1.
-            storage: Mutex::new(HashMap::new()),
+            is_bootstrapped: AtomicBool::new(false),
+            stores: Mutex::new(HashMap::new()),
+            regions: Mutex::new(HashMap::new()),
+            leaders: Mutex::new(HashMap::new()),
         }
     }
 
@@ -73,20 +79,12 @@ impl PdMocker for Service {
 
     fn bootstrap(&self, req: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
         let store = req.get_store();
-        let store_path = make_region_key(store.get_id());
-        let store_value = store.write_to_bytes().unwrap();
-
         let region = req.get_region();
-        let region_path = make_region_key(region.get_id());
-        let region_value = region.write_to_bytes().unwrap();
 
         let mut resp = BootstrapResponse::new();
         let mut header = Service::header();
 
-        let mut storage = self.storage.lock().unwrap();
-        // try boot
-        let boot_key = CLUSTER_ROOT_PATH.to_owned();
-        if storage.contains_key(&boot_key) {
+        if self.is_bootstrapped.load(Ordering::SeqCst) {
             let mut err = Error::new();
             err.field_type = ErrorType::UNKNOWN;
             err.set_message("cluster is already bootstrapped".to_owned());
@@ -95,9 +93,15 @@ impl PdMocker for Service {
             return Some(Ok(resp));
         }
 
-        storage.insert(boot_key, vec![1]);
-        storage.insert(region_path, region_value);
-        storage.insert(store_path, store_value);
+        self.is_bootstrapped.store(true, Ordering::SeqCst);
+        self.stores
+            .lock()
+            .unwrap()
+            .insert(store.get_id(), store.clone());
+        self.regions
+            .lock()
+            .unwrap()
+            .insert(region.get_id(), region.clone());
         Some(Ok(resp))
     }
 
@@ -105,9 +109,7 @@ impl PdMocker for Service {
         let mut resp = IsBootstrappedResponse::new();
         let header = Service::header();
         resp.set_header(header);
-
-        let storage = self.storage.lock().unwrap();
-        resp.set_bootstrapped(storage.len() != 0);
+        resp.set_bootstrapped(self.is_bootstrapped.load(Ordering::SeqCst));
         Some(Ok(resp))
     }
 
@@ -123,15 +125,11 @@ impl PdMocker for Service {
     // TODO: not bootstrapped error.
     fn get_store(&self, req: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
         let mut resp = GetStoreResponse::new();
-        let mut store = Store::new();
-        let store_path = make_region_key(req.get_store_id());
-
-        let storage = self.storage.lock().unwrap();
-        match storage.get(&store_path) {
-            Some(value) => {
-                store.merge_from_bytes(value).unwrap();
+        let stores = self.stores.lock().unwrap();
+        match stores.get(&req.get_store_id()) {
+            Some(store) => {
                 resp.set_header(Service::header());
-                resp.set_store(store);
+                resp.set_store(store.clone());
                 Some(Ok(resp))
             }
             None => {
@@ -146,17 +144,46 @@ impl PdMocker for Service {
         }
     }
 
+    fn get_region(&self, req: &GetRegionRequest) -> Option<Result<GetRegionResponse>> {
+        let mut resp = GetRegionResponse::new();
+        let key = req.get_region_key();
+        let regions = self.regions.lock().unwrap();
+        let leaders = self.leaders.lock().unwrap();
+
+        for region in regions.values() {
+            if key >= region.get_start_key() &&
+                (region.get_end_key().is_empty() || key < region.get_end_key())
+            {
+                resp.set_header(Service::header());
+                resp.set_region(region.clone());
+                if let Some(leader) = leaders.get(&region.get_id()) {
+                    resp.set_leader(leader.clone());
+                }
+                return Some(Ok(resp));
+            }
+        }
+
+        let mut header = Service::header();
+        let mut err = Error::new();
+        err.field_type = ErrorType::UNKNOWN;
+        err.set_message(format!("region not found {:?}", key));
+        header.set_error(err);
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
     fn get_region_by_id(&self, req: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         let mut resp = GetRegionResponse::new();
-        let mut region = Region::new();
-        let region_path = make_region_key(req.region_id);
+        let regions = self.regions.lock().unwrap();
+        let leaders = self.leaders.lock().unwrap();
 
-        let storage = self.storage.lock().unwrap();
-        match storage.get(&region_path) {
-            Some(value) => {
-                region.merge_from_bytes(value).unwrap();
+        match regions.get(&req.get_region_id()) {
+            Some(region) => {
                 resp.set_header(Service::header());
-                resp.set_region(region);
+                resp.set_region(region.clone());
+                if let Some(leader) = leaders.get(&region.get_id()) {
+                    resp.set_leader(leader.clone());
+                }
                 Some(Ok(resp))
             }
             None => {
@@ -173,8 +200,18 @@ impl PdMocker for Service {
 
     fn region_heartbeat(
         &self,
-        _: &RegionHeartbeatRequest,
+        req: &RegionHeartbeatRequest,
     ) -> Option<Result<RegionHeartbeatResponse>> {
+        let region_id = req.get_region().get_id();
+        self.regions
+            .lock()
+            .unwrap()
+            .insert(region_id, req.get_region().clone());
+        self.leaders
+            .lock()
+            .unwrap()
+            .insert(region_id, req.get_leader().clone());
+
         let mut resp = RegionHeartbeatResponse::new();
         let header = Service::header();
         resp.set_header(header);
@@ -202,16 +239,17 @@ impl PdMocker for Service {
         Some(Ok(resp))
     }
 
+    fn scatter_region(&self, _: &ScatterRegionRequest) -> Option<Result<ScatterRegionResponse>> {
+        let mut resp = ScatterRegionResponse::new();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
     fn set_endpoints(&self, eps: Vec<String>) {
         let members_resp = make_members_response(eps);
         info!("[Service] members_resp {:?}", members_resp);
         let mut resp = self.members_resp.lock().unwrap();
         *resp = Some(members_resp);
     }
-}
-
-const CLUSTER_ROOT_PATH: &'static str = "raft";
-
-fn make_region_key(region_id: u64) -> String {
-    return format!("{}/r/{}", CLUSTER_ROOT_PATH, region_id);
 }

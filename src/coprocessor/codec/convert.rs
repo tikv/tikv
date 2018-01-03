@@ -14,7 +14,7 @@
 use std::{self, str, i64, u64};
 use std::borrow::Cow;
 
-use coprocessor::select::xeval::EvalContext;
+use coprocessor::dag::expr::EvalContext;
 use super::mysql::Res;
 use super::Result;
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
@@ -327,7 +327,7 @@ mod test {
 
     use chrono::FixedOffset;
 
-    use coprocessor::select::xeval::EvalContext;
+    use coprocessor::dag::expr::EvalContext;
     use coprocessor::codec::mysql::types;
 
     use super::*;

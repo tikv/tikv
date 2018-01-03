@@ -96,6 +96,8 @@ pub struct Config {
     pub max_merge_log_gap: u64,
     // Interval to repropose merge.
     pub merge_check_tick_interval: ReadableDuration,
+    
+    pub use_delete_range: bool,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -150,6 +152,7 @@ impl Default for Config {
             allow_remove_leader: false,
             max_merge_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(10),
+            use_delete_range: false,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

@@ -25,7 +25,7 @@ use util::escape;
 use util::codec::{bytes, number};
 use util::codec::number::NumberDecoder;
 use util::codec::bytes::BytesEncoder;
-use coprocessor::select::xeval::EvalContext;
+use coprocessor::dag::expr::EvalContext;
 use super::{convert, Result};
 use super::mysql::{self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration,
                    Json, JsonDecoder, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP};
@@ -1668,7 +1668,7 @@ mod test {
             (Datum::Dec(0u64.into()), Some(false)),
         ];
         use chrono::FixedOffset;
-        use coprocessor::select::xeval::EvalContext;
+        use coprocessor::dag::expr::EvalContext;
 
         let ctx = EvalContext {
             tz: FixedOffset::east(0),

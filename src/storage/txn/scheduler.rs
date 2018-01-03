@@ -40,6 +40,7 @@ use std::u64;
 use std::mem;
 
 use prometheus::HistogramTimer;
+use prometheus::local::LocalHistogramVec;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
@@ -406,10 +407,8 @@ fn process_read(
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
 ) -> Statistics {
+    fail_point!("txn_before_process_read");
     debug!("process read cmd(cid={}) in worker pool.", cid);
-    SCHED_WORKER_COUNTER_VEC
-        .with_label_values(&[cmd.tag(), "read"])
-        .inc();
     let tag = cmd.tag();
 
     let mut statistics = Statistics::default();
@@ -764,10 +763,7 @@ fn process_write(
     ch: SyncSendCh<Msg>,
     snapshot: Box<Snapshot>,
 ) -> Statistics {
-    SCHED_WORKER_COUNTER_VEC
-        .with_label_values(&[cmd.tag(), "write"])
-        .inc();
-
+    fail_point!("txn_before_process_write");
     let mut statistics = Statistics::default();
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot, &mut statistics) {
         if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
@@ -1007,9 +1003,20 @@ fn process_write_impl(
     Ok(())
 }
 
-#[derive(Default)]
 struct SchedContext {
     stats: HashMap<&'static str, StatisticsSummary>,
+    processing_read_duration: LocalHistogramVec,
+    processing_write_duration: LocalHistogramVec,
+}
+
+impl Default for SchedContext {
+    fn default() -> SchedContext {
+        SchedContext {
+            stats: HashMap::default(),
+            processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
+            processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
+        }
+    }
 }
 
 impl SchedContext {
@@ -1031,6 +1038,8 @@ impl ThreadContext for SchedContext {
                 }
             }
         }
+        self.processing_read_duration.flush();
+        self.processing_write_duration.flush();
     }
 }
 
@@ -1106,11 +1115,19 @@ impl Scheduler {
         let tag = cmd.tag();
         if readcmd {
             worker_pool.execute(move |ctx: &mut SchedContext| {
+                let _processing_read_timer = ctx.processing_read_duration
+                    .with_label_values(&[tag])
+                    .start_coarse_timer();
+
                 let s = process_read(cid, cmd, ch, snapshot);
                 ctx.add_statistics(tag, &s);
             });
         } else {
             worker_pool.execute(move |ctx: &mut SchedContext| {
+                let _processing_write_timer = ctx.processing_write_duration
+                    .with_label_values(&[tag])
+                    .start_coarse_timer();
+
                 let s = process_write(cid, cmd, ch, snapshot);
                 ctx.add_statistics(tag, &s);
             });
@@ -1167,6 +1184,7 @@ impl Scheduler {
     }
 
     fn too_busy(&self) -> bool {
+        fail_point!("txn_scheduler_busy", |_| true);
         self.running_write_bytes >= self.sched_pending_write_threshold
     }
 
@@ -1341,6 +1359,7 @@ impl Scheduler {
             cids,
             cb_ctx
         );
+
         match snapshot {
             Ok(snapshot) => for cid in cids {
                 SCHED_STAGE_COUNTER_VEC

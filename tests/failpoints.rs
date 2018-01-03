@@ -15,6 +15,7 @@
 #![feature(fnbox)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
+#![feature(test)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
@@ -31,6 +32,7 @@
 #[macro_use]
 extern crate log;
 extern crate protobuf;
+extern crate test;
 #[macro_use]
 extern crate tikv;
 extern crate rand;
@@ -48,10 +50,15 @@ extern crate lazy_static;
 
 #[allow(dead_code)]
 mod raftstore;
+#[allow(dead_code)]
+mod storage;
 #[cfg(not(feature = "no-fail"))]
 mod failpoints_cases;
 
 use std::sync::*;
+use std::thread;
+
+use tikv::util::panic_hook;
 
 lazy_static! {
     /// Failpoints are global structs, hence rules set in different cases
@@ -60,8 +67,20 @@ lazy_static! {
 }
 
 fn setup<'a>() -> MutexGuard<'a, ()> {
-    let guard = LOCK.lock().unwrap();
+    // We don't want a failed test breaks others.
+    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     fail::teardown();
     fail::setup();
     guard
+}
+
+#[test]
+fn test_setup() {
+    let _ = thread::spawn(move || {
+        panic_hook::mute();
+        let _g = setup();
+        panic!("Poison!");
+    }).join();
+
+    let _g = setup();
 }
