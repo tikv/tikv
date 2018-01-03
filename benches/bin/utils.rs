@@ -1,11 +1,12 @@
 extern crate rand;
 
 use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::ops::Div;
 use std::iter::Sum;
 use tikv::coprocessor::codec::table::{encode_index_seek_key, encode_row_key};
 use tikv::util::codec::number::NumberEncoder;
+use test::black_box;
 
 use rand::Rng;
 
@@ -59,11 +60,19 @@ pub fn shuffle<T>(data: &mut [T]) {
     }
 }
 
+
+/// Convert duration to nanoseconds
+pub fn to_total_nanos(duration: &Duration) -> u64 {
+    duration.as_secs() * 1_000_000_000 + (duration.subsec_nanos() as u64)
+}
+
 /// Run `job` for `iterations` times, and return a Vec containing nanoseconds of each turn `job`
 /// returns.
 ///
 /// `job` must return a `Duration` type. Please calculate time cost of what you want to bench
 /// manually ant return it.
+///
+/// Attention that too short job may cause great inaccuracy.
 pub fn record_time<F>(mut job: F, iterations: u32) -> Vec<u64>
 where
     F: FnMut() -> Duration,
@@ -71,10 +80,26 @@ where
     (0..iterations)
         .map(|_| {
             let time = job();
-            time.as_secs() * 1_000_000_000 + (time.subsec_nanos() as u64)
+            to_total_nanos(&time)
         })
         .collect()
 }
+
+
+/// Run `job` for `iterations` times, and return the total time cost as nanoseconds.
+/// Attention that if `job` returns no value, it will be optimized out by the compiler.
+pub fn record_total_time<F, T>(mut job: F, iterations: u32) -> u64
+where
+    F: FnMut() -> T,
+{
+    let t = Instant::now();
+    for _ in 0..iterations {
+        // Avoid being optimized out by compiler
+        black_box(job());
+    }
+    to_total_nanos(&t.elapsed())
+}
+
 
 pub fn average<'a, T: 'a>(data: &'a [T]) -> <T as Div<u64>>::Output
 where
