@@ -27,7 +27,7 @@ use super::{BatchCallback, Callback, CbContext, Cursor, Engine, Error, Iterator 
 use tempdir::TempDir;
 
 enum Task {
-    Write(Vec<Modify>, Callback<()>),
+    Write(Vec<Modify>, Callback<()>, bool),
     Snapshot(Callback<Box<Snapshot>>),
     SnapshotBath(usize, BatchCallback<Box<Snapshot>>),
 }
@@ -47,7 +47,10 @@ struct Runner(Arc<DB>);
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
-            Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
+            Task::Write(modifies, cb, with_wal) => cb((
+                CbContext::new(),
+                write_modifies(&self.0, modifies, with_wal),
+            )),
             Task::Snapshot(cb) => cb((
                 CbContext::new(),
                 Ok(box RocksSnapshot::new(self.0.clone())),
@@ -84,6 +87,7 @@ impl Drop for EngineRocksdbCore {
 pub struct EngineRocksdb {
     core: Arc<Mutex<EngineRocksdbCore>>,
     sched: Scheduler<Task>,
+    with_wal: bool,
 }
 
 impl EngineRocksdb {
@@ -91,6 +95,7 @@ impl EngineRocksdb {
         path: &str,
         cfs: &[CfName],
         cfs_opts: Option<Vec<CFOptions>>,
+        with_wal: bool,
     ) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
         let (path, temp_dir) = match path {
@@ -109,6 +114,7 @@ impl EngineRocksdb {
                 temp_dir: temp_dir,
                 worker: worker,
             })),
+            with_wal,
         })
     }
 
@@ -130,7 +136,7 @@ impl Debug for EngineRocksdb {
     }
 }
 
-fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
+fn write_modifies(db: &DB, modifies: Vec<Modify>, with_wal: bool) -> Result<()> {
     let wb = WriteBatch::new();
     for rev in modifies {
         let res = match rev {
@@ -165,7 +171,12 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
             return Err(Error::RocksDb(msg));
         }
     }
-    if let Err(msg) = db.write(wb) {
+    let result = if with_wal {
+        db.write(wb)
+    } else {
+        db.write_without_wal(wb)
+    };
+    if let Err(msg) = result {
         return Err(Error::RocksDb(msg));
     }
     Ok(())
@@ -173,7 +184,10 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
 
 impl Engine for EngineRocksdb {
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
-        box_try!(self.sched.schedule(Task::Write(modifies, cb)));
+        box_try!(
+            self.sched
+                .schedule(Task::Write(modifies, cb, self.with_wal))
+        );
         Ok(())
     }
 
@@ -198,6 +212,7 @@ impl Engine for EngineRocksdb {
         box EngineRocksdb {
             core: self.core.clone(),
             sched: self.sched.clone(),
+            with_wal: self.with_wal,
         }
     }
 }
