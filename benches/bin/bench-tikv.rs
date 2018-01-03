@@ -59,6 +59,8 @@ mod transport_simulate;
 
 use test::BenchSamples;
 
+use std::env;
+
 /// shortcut to bench a function.
 macro_rules! bench {
     ($($stmt:stmt);+) => ({
@@ -86,8 +88,6 @@ mod mvcc;
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));
 }
-
-use std::env;
 
 fn main() {
     if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
