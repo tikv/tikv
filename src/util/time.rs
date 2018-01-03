@@ -268,7 +268,7 @@ impl Instant {
     ///
     /// Callers need to ensure that `self` and `other` are same type of Instantants.
     pub fn checked_sub(&self, other: Instant) -> Option<Duration> {
-        if self.partial_cmp(&other).unwrap() == Ordering::Greater {
+        if *self > other {
             Some(self.duration_since(other))
         } else {
             None

@@ -319,10 +319,10 @@ fn poll_with_timer<R, T, U>(
         }
 
         if tick_time.is_some() {
-            tick_time = None;
             let now = Instant::now();
             while let Some(task) = timer.pop_task_before(now) {
                 runner.on_timeout(&mut timer, task);
+                tick_time = None;
             }
         }
         runner.on_tick();

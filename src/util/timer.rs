@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem::replace;
 use std::cmp::{Ord, Ordering};
 use std::time::Duration;
 use std::collections::BinaryHeap;
@@ -36,23 +35,6 @@ impl<T> Timer<T> {
             task: task,
         };
         self.pending.push(task);
-    }
-
-    /// Remove a task from the timer. Returns the `TimeoutTask` if found.
-    ///
-    /// If there are many tasks according with the condition, only the first
-    /// task will be removed from pending queue.
-    pub fn remove_task<F>(&mut self, f: F) -> Option<T>
-    where
-        F: Fn(&T) -> bool,
-    {
-        let mut res = None;
-        let mut vec = replace(&mut self.pending, BinaryHeap::new()).into_vec();
-        if let Some((idx, _)) = vec.iter().enumerate().find(|&(_, task)| f(&task.task)) {
-            res = Some(vec.swap_remove(idx)).map(|t| t.task);
-        }
-        self.pending = BinaryHeap::from(vec);
-        res
     }
 
     /// Get the next `timeout` from the timer.
@@ -84,10 +66,7 @@ struct TimeoutTask<T> {
 
 impl<T> PartialEq for TimeoutTask<T> {
     fn eq(&self, other: &TimeoutTask<T>) -> bool {
-        if self.next_tick == other.next_tick {
-            return true;
-        }
-        false
+        self.next_tick == other.next_tick
     }
 }
 
@@ -148,8 +127,6 @@ mod tests {
             };
             if self.counter < 2 {
                 timer.add_task(timeout, task);
-            } else {
-                timer.remove_task(|t| *t == Task::B);
             }
             self.counter += 1;
         }
@@ -205,6 +182,8 @@ mod tests {
         assert_eq!(msg, "task b");
         let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(msg, "task a");
+        let msg = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(msg, "task b");
 
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(1)),
