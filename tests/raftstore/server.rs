@@ -29,7 +29,6 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
-use tikv::util::wait_cb;
 use tikv::storage::{CfName, Engine};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
@@ -37,6 +36,7 @@ use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 use super::cluster::{Cluster, Simulator};
+use super::util::wait_cb;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport = SimulateTransport<

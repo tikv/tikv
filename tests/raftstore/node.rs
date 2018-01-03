@@ -29,13 +29,14 @@ use kvproto::eraftpb::MessageType;
 use tikv::config::TiKvConfig;
 use tikv::raftstore::Result;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::util::{wait_cb, HandyRwLock};
+use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 use tikv::util::transport::SendCh;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
+use super::util::wait_cb;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,

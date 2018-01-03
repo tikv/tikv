@@ -172,7 +172,7 @@ pub struct ConsistencyState {
 
 enum RequestPolicy {
     // Handle the no op request.
-    NoOp,
+    Nop,
     // Handle the read request directly without dispatch.
     ReadLocal,
     // Handle the read request via raft's SafeReadIndex mechanism.
@@ -1057,7 +1057,7 @@ impl Peer {
         let mut is_conf_change = false;
 
         let res = match self.get_handle_policy(&req) {
-            Ok(RequestPolicy::NoOp) => {
+            Ok(RequestPolicy::Nop) => {
                 cb.invoke_with_response(err_resp);
                 return false;
             }
@@ -1152,7 +1152,7 @@ impl Peer {
         }
 
         if req.get_requests().is_empty() {
-            return Ok(RequestPolicy::NoOp);
+            return Ok(RequestPolicy::Nop);
         }
 
         let mut is_read = false;

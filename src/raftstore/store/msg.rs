@@ -226,9 +226,8 @@ mod tests {
     use mio::{EventLoop, Handler};
 
     use super::*;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
+    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
     use raftstore::Error;
-    use util::make_cb;
     use util::transport::SendCh;
 
     fn call_command(
@@ -236,9 +235,17 @@ mod tests {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse, Error> {
-        let (cb, rx) = make_cb(&request);
-        sendch.try_send(Msg::new_raft_cmd(request, cb)).unwrap();
-        rx.recv_timeout(timeout).map_err(|_| {
+        wait_op!(
+            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
+                let callback = Callback::Write(Box::new(move |write_resp: WriteResponse| {
+                    cb(write_resp.response);
+                }));
+                sendch
+                    .try_send(Msg::new_raft_cmd(request, callback))
+                    .unwrap();
+            },
+            timeout
+        ).ok_or_else(|| {
             Error::Timeout(format!("request timeout for {:?}", timeout))
         })
     }
@@ -276,7 +283,6 @@ mod tests {
 
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());
-        request.set_status_request(StatusRequest::new());
         assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
         match call_command(sendch, request, Duration::from_millis(10)) {
             Err(Error::Timeout(_)) => {}

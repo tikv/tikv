@@ -12,7 +12,7 @@
 // limitations under the License.
 
 
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use std::thread;
 
@@ -25,8 +25,10 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, R
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
 use kvproto::eraftpb::ConfChangeType;
 
+use tikv::raftstore;
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
+use tikv::server::transport::RaftStoreRouter;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::escape;
 use tikv::util::config::*;
@@ -300,4 +302,42 @@ pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatRespo
     let mut resp = RegionHeartbeatResponse::new();
     resp.set_transfer_leader(transfer_leader);
     Some(resp)
+}
+
+pub fn wait_cb<R>(
+    router: R,
+    cmd: RaftCmdRequest,
+    timeout: Duration,
+) -> raftstore::Result<RaftCmdResponse>
+where
+    R: RaftStoreRouter,
+{
+    let (mut is_read, mut is_write) = (false, false);
+    is_read |= cmd.has_admin_request();
+    is_write |= cmd.has_status_request();
+    for req in cmd.get_requests() {
+        match req.get_cmd_type() {
+            CmdType::Get | CmdType::Snap => is_read |= true,
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write |= true,
+            CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
+        }
+    }
+    assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
+
+    let (tx, rx) = mpsc::channel();
+    let cb = if is_read {
+        Callback::Read(Box::new(move |resp: ReadResponse| {
+            // we don't care error actually.
+            let _ = tx.send(resp.response);
+        }))
+    } else {
+        Callback::Write(Box::new(move |resp: WriteResponse| {
+            // we don't care error actually.
+            let _ = tx.send(resp.response);
+        }))
+    };
+    router.send_command(cmd, cb).unwrap();
+    rx.recv_timeout(timeout).map_err(|_| {
+        raftstore::Error::Timeout(format!("request timeout for {:?}", timeout))
+    })
 }
