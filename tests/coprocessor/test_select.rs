@@ -2141,7 +2141,6 @@ fn test_output_counts() {
     end_point.stop().unwrap().join().unwrap();
 }
 
-
 #[test]
 fn test_runtime() {
     let data = vec![
