@@ -265,8 +265,10 @@ impl Instant {
 
     /// checked_sub is simiar with `duration_since`, except it won't panic if `self`
     /// is less than `other`. In this case the zero duration will be returned.
+    ///
+    /// Callers need to ensure that `self` and `other` are same type of Instantants.
     pub fn checked_sub(&self, other: Instant) -> Duration {
-        if *self > other {
+        if self.partial_cmp(&other).unwrap() == Ordering::Greater {
             self.duration_since(other)
         } else {
             Duration::default()
@@ -331,12 +333,6 @@ impl PartialOrd for Instant {
             // The Order of different types of Instants is meaningless.
             _ => None,
         }
-    }
-}
-
-impl Ord for Instant {
-    fn cmp(&self, other: &Instant) -> Ordering {
-        self.partial_cmp(other).unwrap()
     }
 }
 

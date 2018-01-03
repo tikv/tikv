@@ -120,13 +120,13 @@ impl<T> Eq for TimeoutTask<T> {}
 
 impl<T> PartialOrd for TimeoutTask<T> {
     fn partial_cmp(&self, other: &TimeoutTask<T>) -> Option<Ordering> {
-        Some(self.next_tick.cmp(&other.next_tick).reverse())
+        other.next_tick.partial_cmp(&self.next_tick)
     }
 }
 
 impl<T> Ord for TimeoutTask<T> {
     fn cmp(&self, other: &TimeoutTask<T>) -> Ordering {
-        self.partial_cmp(other).unwrap()
+        self.partial_cmp(other).unwrap_or(Ordering::Equal)
     }
 }
 
