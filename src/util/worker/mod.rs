@@ -318,7 +318,7 @@ fn poll_with_timer<R, T, U>(
             batch.clear();
         }
 
-        if let Some(_) = tick_time {
+        if tick_time.is_some() {
             tick_time = None;
             let now = Instant::now();
             while let Some(task) = timer.pop_task_before(now) {
