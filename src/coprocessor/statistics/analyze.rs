@@ -24,10 +24,11 @@ use coprocessor::dag::executor::{Executor, IndexScanExecutor, TableScanExecutor}
 use coprocessor::endpoint::ReqContext;
 use coprocessor::codec::datum;
 use coprocessor::{Error, Result};
-use storage::{Snapshot, SnapshotStore, Statistics};
+use storage::{Snapshot, SnapshotStore};
 use super::fmsketch::FMSketch;
 use super::cmsketch::CMSketch;
 use super::histogram::Histogram;
+use super::super::local_metrics::CopMetrics;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext {
@@ -56,7 +57,7 @@ impl AnalyzeContext {
         }
     }
 
-    pub fn handle_request(mut self, stats: &mut Statistics) -> Result<Response> {
+    pub fn handle_request(mut self, stats: &mut CopMetrics) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
@@ -66,7 +67,7 @@ impl AnalyzeContext {
                     self.snap.take().unwrap(),
                 );
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_statistics_into(stats);
+                scanner.collect_metrics_into(stats);
                 res
             }
 
@@ -76,7 +77,7 @@ impl AnalyzeContext {
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
                 let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_statistics_into(stats);
+                builder.data.collect_metrics_into(stats);
                 res
             }
         };

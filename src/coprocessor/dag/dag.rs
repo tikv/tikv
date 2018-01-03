@@ -24,7 +24,7 @@ use coprocessor::dag::expr::EvalContext;
 use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
 use coprocessor::endpoint::{get_pk, to_pb_error, ReqContext};
-use storage::{Snapshot, SnapshotStore, Statistics};
+use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, Row};
 
@@ -113,11 +113,7 @@ impl DAGContext {
         }
     }
 
-    pub fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.exec.collect_statistics_into(statistics);
-    }
-
-    pub fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+    pub fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
         self.exec.collect_metrics_into(metrics);
     }
 }

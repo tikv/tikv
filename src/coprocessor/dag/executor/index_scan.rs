@@ -23,7 +23,7 @@ use coprocessor::endpoint::is_point;
 use coprocessor::metrics::*;
 use coprocessor::local_metrics::*;
 use coprocessor::{Error, Result};
-use storage::{Key, SnapshotStore, Statistics};
+use storage::{Key, SnapshotStore};
 
 use super::{Executor, Row};
 use super::scanner::{ScanOn, Scanner};
@@ -31,7 +31,6 @@ use super::scanner::{ScanOn, Scanner};
 
 pub struct IndexScanExecutor {
     store: SnapshotStore,
-    statistics: Statistics,
     desc: bool,
     col_ids: Vec<i64>,
     pk_col: Option<ColumnInfo>,
@@ -39,7 +38,7 @@ pub struct IndexScanExecutor {
     scanner: Option<Scanner>,
     unique: bool,
     count: i64,
-    scan_counter: ScanCounter,
+    metrics: CopMetrics,
 }
 
 impl IndexScanExecutor {
@@ -63,7 +62,6 @@ impl IndexScanExecutor {
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
             store: store,
-            statistics: Statistics::default(),
             desc: desc,
             col_ids: col_ids,
             pk_col: pk_col,
@@ -71,7 +69,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: unique,
             count: 0,
-            scan_counter: ScanCounter::default(),
+            metrics: Default::default(),
         }
     }
 
@@ -84,7 +82,6 @@ impl IndexScanExecutor {
         COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
             store: store,
-            statistics: Statistics::default(),
             desc: false,
             col_ids: col_ids,
             pk_col: None,
@@ -92,7 +89,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: false,
             count: 0,
-            scan_counter: ScanCounter::default(),
+            metrics: CopMetrics::default(),
         }
     }
 
@@ -100,7 +97,7 @@ impl IndexScanExecutor {
         if self.scanner.is_none() {
             return Ok(None);
         }
-        self.scan_counter.inc_range();
+        self.metrics.scan_counter.inc_range();
 
         let (key, value) = {
             let scanner = self.scanner.as_mut().unwrap();
@@ -134,7 +131,8 @@ impl IndexScanExecutor {
 
     fn get_row_from_point(&mut self, range: KeyRange) -> Result<Option<Row>> {
         let key = range.get_start();
-        let value = self.store.get(&Key::from_raw(key), &mut self.statistics)?;
+        let value = self.store
+            .get(&Key::from_raw(key), &mut self.metrics.cf_stats)?;
         if let Some(value) = value {
             return self.decode_index_key_value(key.to_vec(), value);
         }
@@ -161,7 +159,7 @@ impl Executor for IndexScanExecutor {
             }
             if let Some(range) = self.key_ranges.next() {
                 if self.is_point(&range) {
-                    self.scan_counter.inc_point();
+                    self.metrics.scan_counter.inc_point();
                     if let Some(row) = self.get_row_from_point(range)? {
                         self.count += 1;
                         return Ok(Some(row));
@@ -186,16 +184,11 @@ impl Executor for IndexScanExecutor {
         self.count = 0;
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        statistics.add(&self.statistics);
-        self.statistics = Statistics::default();
+    fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
+        metrics.merge(&mut self.metrics);
         if let Some(scanner) = self.scanner.take() {
-            scanner.collect_statistics_into(statistics);
+            scanner.collect_statistics_into(&mut metrics.cf_stats);
         }
-    }
-
-    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
-        metrics.merge(&mut self.scan_counter);
     }
 }
 

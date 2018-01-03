@@ -12,9 +12,26 @@
 // limitations under the License.
 
 use coprocessor::metrics::*;
+use storage::engine::Statistics;
+
+#[derive(Default, Clone)]
+pub struct CopMetrics {
+    pub cf_stats: Statistics,
+    pub scan_counter: ScanCounter,
+}
+
+impl CopMetrics {
+    /// Merge records from `other` into `self`, and clear `other`.
+    #[inline]
+    pub fn merge(&mut self, other: &mut CopMetrics) {
+        self.cf_stats.add(&other.cf_stats);
+        self.cf_stats = Default::default();
+        self.scan_counter.merge(&mut other.scan_counter);
+    }
+}
 
 /// `ScanCounter` is for recording range query and point query.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ScanCounter {
     range: usize,
     point: usize,

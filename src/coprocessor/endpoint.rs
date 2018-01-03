@@ -237,12 +237,12 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
-                let CopStats {
-                    stats,
+                let CopMetrics {
+                    cf_stats,
                     mut scan_counter,
                 } = end_point.handle_request(req, batch_row_limit);
-                ctx.add_statistics(type_str, &stats);
-                ctx.add_statistics_by_region(region_id, &stats);
+                ctx.add_statistics(type_str, &cf_stats);
+                ctx.add_statistics_by_region(region_id, &cf_stats);
                 ctx.add_scan_count(&mut scan_counter);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
@@ -308,8 +308,7 @@ pub struct RequestTask {
     start_ts: Option<u64>,
     wait_time: Option<f64>,
     timer: Instant,
-    statistics: Statistics,
-    scan_counter: ScanCounter,
+    metrics: CopMetrics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
     ctx: Arc<ReqContext>,
@@ -367,8 +366,7 @@ impl RequestTask {
             start_ts: start_ts,
             wait_time: None,
             timer: timer,
-            statistics: Default::default(),
-            scan_counter: ScanCounter::default(),
+            metrics: Default::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
             ctx: Arc::new(req_ctx),
@@ -407,7 +405,7 @@ impl RequestTask {
 
         COPR_SCAN_KEYS
             .with_label_values(&[type_str])
-            .observe(self.statistics.total_op_count() as f64);
+            .observe(self.metrics.cf_stats.total_op_count() as f64);
 
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
@@ -418,8 +416,8 @@ impl RequestTask {
                 self.start_ts,
                 type_str,
                 handle_time,
-                self.statistics.total_op_count(),
-                self.statistics.total_processed(),
+                self.metrics.cf_stats.total_op_count(),
+                self.metrics.cf_stats.total_processed(),
                 self.req.get_ranges().len(),
                 self.req.get_ranges().get(0)
             );
@@ -596,12 +594,7 @@ fn err_resp(e: Error) -> Response {
     resp
 }
 
-struct CopStats {
-    stats: Statistics,
-    scan_counter: ScanCounter,
-}
-
-fn on_error(e: Error, req: RequestTask) -> CopStats {
+fn on_error(e: Error, req: RequestTask) -> CopMetrics {
     let resp = err_resp(e);
     respond(resp, req)
 }
@@ -614,13 +607,10 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     }
 }
 
-fn respond(resp: Response, mut t: RequestTask) -> CopStats {
+fn respond(resp: Response, mut t: RequestTask) -> CopMetrics {
     t.stop_record_handling();
     (t.on_resp)(resp);
-    CopStats {
-        stats: t.statistics,
-        scan_counter: t.scan_counter,
-    }
+    t.metrics
 }
 
 pub struct TiDbEndPoint {
@@ -634,7 +624,7 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> CopStats {
+    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> CopMetrics {
         t.stop_record_waiting();
 
         if let Err(e) = t.check_outdated() {
@@ -660,15 +650,14 @@ impl TiDbEndPoint {
         let ranges = t.req.take_ranges().into_vec();
         let mut ctx = DAGContext::new(dag, ranges, self.snap, t.ctx.clone(), batch_row_limit)?;
         let res = ctx.handle_request();
-        ctx.collect_statistics_into(&mut t.statistics);
-        ctx.collect_metrics_into(&mut t.scan_counter);
+        ctx.collect_metrics_into(&mut t.metrics);
         res
     }
 
     pub fn handle_analyze(self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
         let ranges = t.req.take_ranges().into_vec();
         let ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
-        ctx.handle_request(&mut t.statistics)
+        ctx.handle_request(&mut t.metrics)
     }
 }
 

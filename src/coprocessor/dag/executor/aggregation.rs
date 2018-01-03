@@ -25,7 +25,6 @@ use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::metrics::*;
 use coprocessor::local_metrics::*;
 use coprocessor::Result;
-use storage::Statistics;
 
 use super::aggregate::{self, AggrFunc};
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
@@ -199,11 +198,7 @@ impl Executor for AggregationExecutor {
         self.count = 0;
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.src.collect_statistics_into(statistics);
-    }
-
-    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+    fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
         self.src.collect_metrics_into(metrics);
     }
 }

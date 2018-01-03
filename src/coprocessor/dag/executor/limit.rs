@@ -20,7 +20,6 @@ use coprocessor::Result;
 use coprocessor::metrics::*;
 use coprocessor::local_metrics::*;
 use coprocessor::dag::executor::{Executor, Row};
-use storage::Statistics;
 
 pub struct LimitExecutor<'a> {
     limit: u64,
@@ -56,11 +55,7 @@ impl<'a> Executor for LimitExecutor<'a> {
         // We do not know whether `limit` has consumed all of it's source, so just ignore it.
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.src.collect_statistics_into(statistics);
-    }
-
-    fn collect_metrics_into(&mut self, metrics: &mut ScanCounter) {
+    fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
         self.src.collect_metrics_into(metrics);
     }
 }
