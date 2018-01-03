@@ -17,8 +17,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::{cmp, mem, slice};
 use std::time::{Duration, Instant};
+use rand::{self, Rng};
 
-use time::Timespec;
+use time::{Duration as TimeDuration, Timespec};
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
@@ -207,6 +208,7 @@ pub struct Peer {
     pub delete_keys_hint: u64,
     /// approximate region size.
     pub approximate_size: Option<u64>,
+    pub approximate_size_expired_time: Option<Timespec>,
 
     pub consistency_state: ConsistencyState,
 
@@ -277,6 +279,20 @@ impl Peer {
         Peer::new(store, region, peer_id)
     }
 
+    pub fn update_approximate_size_expired_time(&mut self) {
+        let now = monotonic_raw_now();
+        let secs = self.cfg.region_size_expired_time.as_secs();
+        let delta = secs + rand::thread_rng().gen_range(0, secs);
+        self.approximate_size_expired_time = Some(now + TimeDuration::seconds(delta as i64));
+    }
+
+    pub fn approximate_size_expired(&self, now: &Timespec) -> bool {
+        if let Some(expired) = self.approximate_size_expired_time {
+            return expired.sec < now.sec;
+        }
+        false
+    }
+
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after applying snapshot.
@@ -343,6 +359,7 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
+            approximate_size_expired_time: None,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
@@ -362,6 +379,7 @@ impl Peer {
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
         };
+        peer.update_approximate_size_expired_time();
 
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
