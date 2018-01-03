@@ -11,8 +11,8 @@ use tikv::util::threadpool::{DefaultContext, ThreadPoolBuilder};
 use tikv::util::config::ReadableSize;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-use super::print_result;
-use test::BenchSamples;
+//use super::print_result;
+//use test::BenchSamples;
 
 use rand::Rng;
 
@@ -80,15 +80,60 @@ fn get(engine: &Engine, key: &Key, statistics: &mut Statistics) -> Option<Vec<u8
     snapstore.get(key, statistics).unwrap()
 }
 
-fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> BenchSamples {
+fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> u64 {
     let mut fake_statistics = Statistics::default();
     let mut rng = rand::thread_rng();
-    bench!{
-        let index = rng.gen_range(0, keys.len());
-        let key = Key::from_raw(&keys[index]);
+    record_total_time(
+        || {
+            let index = rng.gen_range(0, keys.len());
+            let key = Key::from_raw(&keys[index]);
 
-        get(engine, &key, &mut fake_statistics).unwrap()
-    }
+            get(engine, &key, &mut fake_statistics).unwrap()
+        },
+        100000,
+    )
+}
+
+fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> u64 {
+    let mut rng = rand::thread_rng();
+    record_total_time(
+        || {
+            let start_ts = next_ts();
+            let commit_ts = next_ts();
+            let value = vec![0u8; value_len];
+
+            let key = &keys[rng.gen_range(0, keys.len())];
+
+            prewrite(
+                engine,
+                &[Mutation::Put((Key::from_raw(key), value))],
+                key,
+                start_ts,
+            );
+            commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
+        },
+        100000,
+    )
+}
+
+fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> u64 {
+    let mut rng = rand::thread_rng();
+    record_total_time(
+        || {
+            let start_ts = next_ts();
+            let commit_ts = next_ts();
+
+            let key = &keys[rng.gen_range(0, keys.len())];
+            prewrite(
+                engine,
+                &[Mutation::Delete(Key::from_raw(key))],
+                key,
+                start_ts,
+            );
+            commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
+        },
+        100000,
+    )
 }
 
 fn bench_batch_set_impl(
@@ -96,7 +141,7 @@ fn bench_batch_set_impl(
     keys: &[Vec<u8>],
     value_len: usize,
     batch_size: usize,
-) -> BenchSamples {
+) -> u64 {
     // Avoid writing duplicated keys in a single transaction
     let mut indices: Vec<_> = (0..keys.len()).collect();
     let mut rng = rand::thread_rng();
@@ -104,53 +149,30 @@ fn bench_batch_set_impl(
     let mut keys_to_write: Vec<Key> = Vec::with_capacity(batch_size);
     let mut mutations: Vec<Mutation> = Vec::with_capacity(batch_size);
 
-    bench!{
-        let start_ts = next_ts();
-        let commit_ts = next_ts();
+    record_total_time(
+        || {
+            let start_ts = next_ts();
+            let commit_ts = next_ts();
 
-        keys_to_write.clear();
-        mutations.clear();
-        for i in 0..batch_size {
-            let selected = rng.gen_range(i, keys.len());
-            indices.swap(selected, i);
+            keys_to_write.clear();
+            mutations.clear();
+            for i in 0..batch_size {
+                let selected = rng.gen_range(i, keys.len());
+                indices.swap(selected, i);
 
-            let key = Key::from_raw(&keys[indices[i]]);
-            let value = vec![0u8; value_len];
+                let key = Key::from_raw(&keys[indices[i]]);
+                let value = vec![0u8; value_len];
 
-            mutations.push(Mutation::Put((key.clone(), value)));
-            keys_to_write.push(key);
-        };
+                mutations.push(Mutation::Put((key.clone(), value)));
+                keys_to_write.push(key);
+            }
 
-        let primary = &keys[indices[0]];
-        prewrite(engine, &mutations, primary, start_ts);
-        commit(engine, &keys_to_write, start_ts, commit_ts)
-    }
-}
-
-fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> BenchSamples {
-    let mut rng = rand::thread_rng();
-    bench!{
-        let start_ts = next_ts();
-        let commit_ts = next_ts();
-        let value = vec![0u8; value_len];
-
-        let key = &keys[rng.gen_range(0, keys.len())];
-
-        prewrite(engine, &[Mutation::Put((Key::from_raw(key), value))], key, start_ts);
-        commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
-    }
-}
-
-fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> BenchSamples {
-    let mut rng = rand::thread_rng();
-    bench!{
-        let start_ts = next_ts();
-        let commit_ts = next_ts();
-
-        let key = &keys[rng.gen_range(0, keys.len())];
-        prewrite(engine, &[Mutation::Delete(Key::from_raw(key))], key, start_ts);
-        commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
-    }
+            let primary = &keys[indices[0]];
+            prewrite(engine, &mutations, primary, start_ts);
+            commit(engine, &keys_to_write, start_ts, commit_ts)
+        },
+        10000,
+    )
 }
 
 enum BenchType {
@@ -179,35 +201,39 @@ fn bench_single_row(
 
     let engine = prepare_test_engine(version_count, value_len, &keys);
 
-    printf!(
+    println!(
         "benching mvcctxn {} get\trows:{} versions:{} data len:{}\t...",
         log_name,
         table_size,
         version_count,
         data_len
     );
-    print_result(bench_get(&*engine, &keys));
+    let ns = bench_get(&*engine, &keys);
+    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
-    printf!(
+    println!(
         "benching mvcctxn {} set\trows:{} versions:{} data len:{}\t...",
         log_name,
         table_size,
         version_count,
         data_len
     );
-    print_result(bench_set(&*engine, &keys, value_len));
+    let ns = bench_set(&*engine, &keys, value_len);
+    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
     // Generate new engine to bench delete, for the size of content was increased when benching set
     let engine = prepare_test_engine(version_count, value_len, &keys);
 
-    printf!(
+    println!(
         "benching mvcctxn {} delete\trows:{} versions:{} data len:{}\t...",
         log_name,
         table_size,
         version_count,
         data_len
     );
-    print_result(bench_delete(&*engine, &keys));
+    let ns = bench_delete(&*engine, &keys);
+    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
+
 }
 
 fn bench_batch_set(
@@ -230,7 +256,7 @@ fn bench_batch_set(
 
     let engine = prepare_test_engine(version_count, value_len, &keys);
 
-    printf!(
+    println!(
         "benching mvcctxn {} batch write\trows:{} versions:{} data len:{} batch:{}\t...",
         log_name,
         table_size,
@@ -238,7 +264,14 @@ fn bench_batch_set(
         data_len,
         batch_size,
     );
-    print_result(bench_batch_set_impl(&*engine, &keys, value_len, batch_size));
+    let ns = bench_batch_set_impl(&*engine, &keys, value_len, batch_size);
+    println!(
+        "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
+        ns,
+        1_000_000_000 / ns,
+        ns / (batch_size as u64),
+        1_000_000_000 * (batch_size as u64) / ns
+    );
 }
 
 
@@ -314,14 +347,15 @@ fn bench_concurrent_batch_impl(
 
             start_time.elapsed().unwrap()
         },
-        1,
+        5,
     );
-    let total_time = average(&time_record);
+    let ns = average(&time_record) / (txn_count as u64);
     println!(
-        "    total:{:>10}ns, avg {:>10}ns per batch {:>10}ns per key",
-        total_time,
-        total_time / (txn_count as u64),
-        total_time / (txn_count as u64) / (batch_size as u64)
+        "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
+        ns,
+        1_000_000_000 / ns,
+        ns / (batch_size as u64),
+        1_000_000_000 * (batch_size as u64) / ns
     );
 }
 
