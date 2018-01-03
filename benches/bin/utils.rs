@@ -97,7 +97,7 @@ where
         // Avoid being optimized out by compiler
         black_box(job());
     }
-    to_total_nanos(&t.elapsed()) / (iterations as f64)
+    to_total_nanos(&t.elapsed()) as f64 / (iterations as f64)
 }
 
 

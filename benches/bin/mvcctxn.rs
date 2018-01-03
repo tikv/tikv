@@ -80,7 +80,7 @@ fn get(engine: &Engine, key: &Key, statistics: &mut Statistics) -> Option<Vec<u8
     snapstore.get(key, statistics).unwrap()
 }
 
-fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> u64 {
+fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> f64 {
     let mut fake_statistics = Statistics::default();
     let mut rng = rand::thread_rng();
     do_bench(
@@ -94,7 +94,7 @@ fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> u64 {
     )
 }
 
-fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> u64 {
+fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> f64 {
     let mut rng = rand::thread_rng();
     do_bench(
         || {
@@ -116,7 +116,7 @@ fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> u64 {
     )
 }
 
-fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> u64 {
+fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> f64 {
     let mut rng = rand::thread_rng();
     do_bench(
         || {
@@ -141,7 +141,7 @@ fn bench_batch_set_impl(
     keys: &[Vec<u8>],
     value_len: usize,
     batch_size: usize,
-) -> u64 {
+) -> f64 {
     // Avoid writing duplicated keys in a single transaction
     let mut indices: Vec<_> = (0..keys.len()).collect();
     let mut rng = rand::thread_rng();
@@ -269,8 +269,8 @@ fn bench_batch_set(
         "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
         ns,
         1_000_000_000 / ns,
-        ns / (batch_size as u64),
-        1_000_000_000 * (batch_size as u64) / ns
+        ns / (batch_size as f64),
+        1_000_000_000 * (batch_size as f64) / ns
     );
 }
 
@@ -349,13 +349,13 @@ fn bench_concurrent_batch_impl(
         },
         5,
     );
-    let ns = average(&time_record) / (txn_count as u64);
+    let ns = average(&time_record) as f64 / (txn_count as f64);
     println!(
         "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
         ns,
         1_000_000_000 / ns,
-        ns / (batch_size as u64),
-        1_000_000_000 * (batch_size as u64) / ns
+        ns / (batch_size as f64),
+        1_000_000_000 * (batch_size as f64) / ns
     );
 }
 
