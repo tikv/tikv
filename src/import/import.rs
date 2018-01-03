@@ -153,7 +153,7 @@ impl SubImportJob {
             tag: format!("[ImportJob {}:{}]", engine.uuid(), cf_name),
             cfg: cfg,
             dir: dir,
-            client: Arc::new(Client::new_with(client)),
+            client: client,
             engine: engine,
             counter: counter,
             cf_name: cf_name,
@@ -168,7 +168,7 @@ impl SubImportJob {
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                info!("{} retry #{}", self.tag, i);
+                warn!("{} start #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
@@ -291,7 +291,7 @@ impl ImportSSTJob {
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                info!("{} retry #{}", self.tag, i);
+                warn!("{} start #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 

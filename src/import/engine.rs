@@ -110,7 +110,6 @@ impl Engine {
 
     pub fn new_iter(&self, cf_name: &str, verify_checksum: bool) -> DBIterator<Arc<DB>> {
         let cf_handle = self.cf_handle(cf_name).unwrap();
-        // Don't need to cache since it is unlikely to read more than once.
         let mut ropts = ReadOptions::new();
         ropts.fill_cache(false);
         ropts.set_readahead_size(4 * MB as usize);
@@ -162,7 +161,7 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) 
     let mut db_opts = DBOptions::new();
     db_opts.create_if_missing(true);
     db_opts.enable_statistics(false);
-    db_opts.enable_pipelined_write(true);
+    db_opts.allow_concurrent_memtable_write(false);
     db_opts.set_writable_file_max_buffer_size(4 * MB as i32);
     db_opts.set_use_direct_io_for_flush_and_compaction(true);
     // NOTE: RocksDB preserves `max_background_jobs/4` for flush.
@@ -175,11 +174,10 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) 
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
     cf_opts.compression_per_level(&opts.defaultcf.compression_per_level);
-    // NOTE: Consider using a large write buffer, 1GB should be good enough.
+    // NOTE: Consider using a large write buffer.
     cf_opts.set_write_buffer_size(opts.defaultcf.write_buffer_size.0);
     cf_opts.set_target_file_size_base(opts.defaultcf.write_buffer_size.0);
     cf_opts.set_max_write_buffer_number(opts.defaultcf.max_write_buffer_number);
-    cf_opts.set_min_write_buffer_number_to_merge(opts.defaultcf.min_write_buffer_number_to_merge);
     // Disable compaction and rate limit.
     cf_opts.set_disable_auto_compactions(true);
     cf_opts.set_soft_pending_compaction_bytes_limit(0);
@@ -187,8 +185,6 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) 
     cf_opts.set_level_zero_stop_writes_trigger(DISABLED);
     cf_opts.set_level_zero_slowdown_writes_trigger(DISABLED);
     cf_opts.set_level_zero_file_num_compaction_trigger(DISABLED);
-
-    // TODO: Use VectorMemtable instead of SkipList.
 
     let cfs_opts = vec![
         CFOptions::new(CF_WRITE, cf_opts.clone()),

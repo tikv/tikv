@@ -159,7 +159,7 @@ impl PrepareRangeJob {
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                info!("{} retry #{}", self.tag, i);
+                warn!("{} start #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 

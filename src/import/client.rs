@@ -70,15 +70,6 @@ impl Client {
         }
     }
 
-    pub fn new_with<C: AsRef<Client>>(client: C) -> Client {
-        let c = client.as_ref();
-        Client {
-            rpc: c.rpc.clone(),
-            env: c.env.clone(),
-            channels: Mutex::new(HashMap::new()),
-        }
-    }
-
     fn resolve(&self, store_id: u64) -> Result<Channel> {
         let mut channels = self.channels.lock().unwrap();
         match channels.entry(store_id) {

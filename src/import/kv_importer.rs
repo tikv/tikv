@@ -139,13 +139,13 @@ impl KVImporter {
             }
         };
 
-        match engine.finish() {
+        match engine.close() {
             Ok(_) => {
-                info!("finish {}", engine);
+                info!("close {}", engine);
                 Ok(())
             }
             Err(e) => {
-                error!("finish {}: {:?}", engine, e);
+                error!("close {}: {:?}", engine, e);
                 Err(e)
             }
         }
@@ -308,7 +308,7 @@ impl EngineFile {
         self.engine.as_ref().unwrap().write(batch, options)
     }
 
-    fn finish(&mut self) -> Result<()> {
+    fn close(&mut self) -> Result<()> {
         self.engine.take().unwrap().flush()?;
         if self.path.save.exists() {
             return Err(Error::FileExists(self.path.save.clone()));
