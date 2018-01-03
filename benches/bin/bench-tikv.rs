@@ -17,6 +17,7 @@
 #![feature(test)]
 #![feature(fnbox)]
 #![feature(box_syntax)]
+#![feature(integer_atomics)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
@@ -80,12 +81,17 @@ macro_rules! printf {
     });
 }
 
+#[allow(dead_code)]
+mod utils;
+
 mod raftstore;
 mod mvcc;
 
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));
 }
+
+use std::env;
 
 fn main() {
     if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
@@ -96,6 +102,37 @@ fn main() {
         );
     }
     // TODO allow user to specify flag to just bench some cases.
-    raftstore::bench_raftstore();
-    mvcc::bench_engine();
+
+
+    let mut args: Vec<_> = env::args().skip(1).collect();
+
+    let available_options = vec!["raftstore", "tombstone-scan"];
+
+    if args.is_empty() {
+        args = available_options.iter().map(|&s| String::from(s)).collect();
+    }
+
+    if args[0] == "-h" || args[0] == "--help" {
+        eprintln!(
+            "Usage: bench-tikv [item1] [item2] [item3] ...\n\
+             where item1, item2, item3, ... are bench items.\n\n\
+             Available options are:"
+        );
+        for item in available_options {
+            eprintln!("    {}", item);
+        }
+
+        eprintln!(
+            "\nRun with no args to do all benches.\n\
+             Run with -h or --help to show this help."
+        );
+    } else {
+        for item in args {
+            match item.as_ref() {
+                "raftstore" => raftstore::bench_raftstore(),
+                "tombstone-scan" => mvcc::bench_engine(),
+                _ => eprintln!("*** Unknown bench item {}", item),
+            }
+        }
+    }
 }
