@@ -15,58 +15,98 @@ extern crate rand;
 
 use std::time::Instant;
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 
-use tikv::storage::{new_local_engine_with_config, Engine, Key, Modify, Mutation, Options,
-                    SnapshotStore, Statistics, ALL_CFS, TEMP_DIR};
-use tikv::config::DbConfig;
+use tikv::storage::{Key, Modify, Mutation, Options, Snapshot, SnapshotStore, Statistics,
+                    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::storage::mvcc::MvccTxn;
+use tikv::raftstore::store::engine::SyncSnapshot;
+use tikv::config::DbConfig;
 use tikv::util::threadpool::{DefaultContext, ThreadPoolBuilder};
 use tikv::util::config::ReadableSize;
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use tikv::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+use kvproto::kvrpcpb::IsolationLevel;
+use rocksdb::{Writable, WriteBatch, DB};
+use rocksdb::rocksdb_options::DBOptions;
 
 //use super::print_result;
 //use test::BenchSamples;
 
 use rand::Rng;
+use tempdir::TempDir;
 
 use utils::*;
 
 
 
 #[inline]
-fn do_write(engine: &Engine, modifies: Vec<Modify>) {
-    engine.write(&Context::new(), modifies).unwrap();
+fn do_write(db: &DB, modifies: Vec<Modify>) {
+    let wb = WriteBatch::new();
+    for rev in modifies {
+        match rev {
+            Modify::Delete(cf, k) => if cf == CF_DEFAULT {
+                wb.delete(k.encoded()).unwrap();
+            } else {
+                let handle = get_cf_handle(db, cf).unwrap();
+                wb.delete_cf(handle, k.encoded()).unwrap();
+            },
+            Modify::Put(cf, k, v) => if cf == CF_DEFAULT {
+                wb.put(k.encoded(), &v).unwrap();
+            } else {
+                let handle = get_cf_handle(db, cf).unwrap();
+                wb.put_cf(handle, k.encoded(), &v).unwrap();
+            },
+            Modify::DeleteRange(cf, start_key, end_key) => {
+                let handle = get_cf_handle(db, cf).unwrap();
+                wb.delete_range_cf(handle, start_key.encoded(), end_key.encoded())
+                    .unwrap();
+            }
+        }
+    }
+    db.write_without_wal(wb).unwrap();
 }
 
 #[inline]
-fn prewrite(engine: &Engine, mutations: &[Mutation], primary: &[u8], start_ts: u64) {
-    let snapshot = engine.snapshot(&Context::new()).unwrap();
+fn get_snapshot(db: Arc<DB>) -> Box<Snapshot> {
+    box SyncSnapshot::new(db) as Box<Snapshot>
+}
+
+#[inline]
+fn prewrite(db: Arc<DB>, mutations: &[Mutation], primary: &[u8], start_ts: u64) {
+    let snapshot = get_snapshot(db.clone());
     let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, false);
     for m in mutations {
         txn.prewrite(m.clone(), primary, &Options::default())
             .unwrap();
     }
-    do_write(engine, txn.into_modifies());
+    do_write(&*db, txn.into_modifies());
 }
 
 #[inline]
-fn commit(engine: &Engine, keys: &[Key], start_ts: u64, commit_ts: u64) {
-    let snapshot = engine.snapshot(&Context::new()).unwrap();
+fn commit(db: Arc<DB>, keys: &[Key], start_ts: u64, commit_ts: u64) {
+    let snapshot = get_snapshot(db.clone());
     let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, false);
     for key in keys {
         txn.commit(key, commit_ts).unwrap();
     }
-    do_write(engine, txn.into_modifies());
+    do_write(&*db, txn.into_modifies());
 }
 
-fn prepare_test_engine(versions: usize, value_len: usize, keys: &[Vec<u8>]) -> Box<Engine> {
+fn prepare_test_db(versions: usize, value_len: usize, keys: &[Vec<u8>], path: &str) -> Arc<DB> {
     let mut config = DbConfig::default();
     // Use a huge write_buffer_size to avoid flushing data to disk.
     config.defaultcf.write_buffer_size = ReadableSize::gb(1);
     config.writecf.write_buffer_size = ReadableSize::gb(1);
     config.lockcf.write_buffer_size = ReadableSize::gb(1);
 
-    let engine = new_local_engine_with_config(TEMP_DIR, ALL_CFS, &config, false).unwrap();
+    let cf_ops = vec![
+        CFOptions::new(CF_DEFAULT, config.defaultcf.build_opt()),
+        CFOptions::new(CF_LOCK, config.lockcf.build_opt()),
+        CFOptions::new(CF_WRITE, config.writecf.build_opt()),
+        CFOptions::new(CF_RAFT, config.raftcf.build_opt()),
+    ];
+
+    let db = Arc::new(new_engine_opt(path, DBOptions::new(), cf_ops).unwrap());
 
     for _ in 0..versions {
         for key in keys {
@@ -75,26 +115,26 @@ fn prepare_test_engine(versions: usize, value_len: usize, keys: &[Vec<u8>]) -> B
             let commit_ts = next_ts();
 
             prewrite(
-                &*engine,
+                db.clone(),
                 &[Mutation::Put((Key::from_raw(key), value))],
                 key,
                 start_ts,
             );
-            commit(&*engine, &[Key::from_raw(key)], start_ts, commit_ts);
+            commit(db.clone(), &[Key::from_raw(key)], start_ts, commit_ts);
         }
     }
-    engine
+    db
 }
 
 #[inline]
-fn get(engine: &Engine, key: &Key, statistics: &mut Statistics) -> Option<Vec<u8>> {
-    let snapshot = engine.snapshot(&Context::new()).unwrap();
+fn get(db: Arc<DB>, key: &Key, statistics: &mut Statistics) -> Option<Vec<u8>> {
+    let snapshot = get_snapshot(db.clone());
     let start_ts = next_ts();
-    let snapstore = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, false);
+    let snapstore = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
     snapstore.get(key, statistics).unwrap()
 }
 
-fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> f64 {
+fn bench_get(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
     let mut fake_statistics = Statistics::default();
     let mut rng = rand::thread_rng();
     do_bench(
@@ -102,13 +142,13 @@ fn bench_get(engine: &Engine, keys: &[Vec<u8>]) -> f64 {
             let index = rng.gen_range(0, keys.len());
             let key = Key::from_raw(&keys[index]);
 
-            get(engine, &key, &mut fake_statistics).unwrap()
+            get(db.clone(), &key, &mut fake_statistics).unwrap()
         },
         100000,
     )
 }
 
-fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> f64 {
+fn bench_set(db: Arc<DB>, keys: &[Vec<u8>], value_len: usize) -> f64 {
     let mut rng = rand::thread_rng();
     do_bench(
         || {
@@ -119,18 +159,18 @@ fn bench_set(engine: &Engine, keys: &[Vec<u8>], value_len: usize) -> f64 {
             let key = &keys[rng.gen_range(0, keys.len())];
 
             prewrite(
-                engine,
+                db.clone(),
                 &[Mutation::Put((Key::from_raw(key), value))],
                 key,
                 start_ts,
             );
-            commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
+            commit(db.clone(), &[Key::from_raw(key)], start_ts, commit_ts)
         },
         100000,
     )
 }
 
-fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> f64 {
+fn bench_delete(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
     let mut rng = rand::thread_rng();
     do_bench(
         || {
@@ -139,23 +179,18 @@ fn bench_delete(engine: &Engine, keys: &[Vec<u8>]) -> f64 {
 
             let key = &keys[rng.gen_range(0, keys.len())];
             prewrite(
-                engine,
+                db.clone(),
                 &[Mutation::Delete(Key::from_raw(key))],
                 key,
                 start_ts,
             );
-            commit(engine, &[Key::from_raw(key)], start_ts, commit_ts)
+            commit(db.clone(), &[Key::from_raw(key)], start_ts, commit_ts)
         },
         100000,
     )
 }
 
-fn bench_batch_set_impl(
-    engine: &Engine,
-    keys: &[Vec<u8>],
-    value_len: usize,
-    batch_size: usize,
-) -> f64 {
+fn bench_batch_set_impl(db: Arc<DB>, keys: &[Vec<u8>], value_len: usize, batch_size: usize) -> f64 {
     // Avoid writing duplicated keys in a single transaction
     let mut indices: Vec<_> = (0..keys.len()).collect();
     let mut rng = rand::thread_rng();
@@ -184,8 +219,8 @@ fn bench_batch_set_impl(
             }
 
             let primary = &keys[indices[0]];
-            prewrite(engine, &mutations, primary, start_ts);
-            commit(engine, &keys_to_write, start_ts, commit_ts)
+            prewrite(db.clone(), &mutations, primary, start_ts);
+            commit(db.clone(), &keys_to_write, start_ts, commit_ts)
         },
         10000,
     )
@@ -215,7 +250,14 @@ fn bench_single_row(
 
     shuffle(&mut keys);
 
-    let engine = prepare_test_engine(version_count, value_len, &keys);
+
+    let dir = TempDir::new("bench-mvcctxn").unwrap();
+    let db = prepare_test_db(
+        version_count,
+        value_len,
+        &keys,
+        dir.path().to_str().unwrap(),
+    );
 
     println!(
         "benching mvcctxn {} get\trows:{} versions:{} data len:{}\t...",
@@ -224,7 +266,7 @@ fn bench_single_row(
         version_count,
         data_len
     );
-    let ns = bench_get(&*engine, &keys);
+    let ns = bench_get(db.clone(), &keys);
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000_f64 / ns);
 
     println!(
@@ -234,11 +276,17 @@ fn bench_single_row(
         version_count,
         data_len
     );
-    let ns = bench_set(&*engine, &keys, value_len);
+    let ns = bench_set(db.clone(), &keys, value_len);
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000_f64 / ns);
 
-    // Generate new engine to bench delete, for the size of content was increased when benching set
-    let engine = prepare_test_engine(version_count, value_len, &keys);
+    // Generate new db to bench delete, for the size of content was increased when benching set
+    let dir = TempDir::new("bench-mvcctxn").unwrap();
+    let db = prepare_test_db(
+        version_count,
+        value_len,
+        &keys,
+        dir.path().to_str().unwrap(),
+    );
 
     println!(
         "benching mvcctxn {} delete\trows:{} versions:{} data len:{}\t...",
@@ -247,7 +295,7 @@ fn bench_single_row(
         version_count,
         data_len
     );
-    let ns = bench_delete(&*engine, &keys);
+    let ns = bench_delete(db.clone(), &keys);
     println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000_f64 / ns);
 
 }
@@ -270,7 +318,13 @@ fn bench_batch_set(
 
     shuffle(&mut keys);
 
-    let engine = prepare_test_engine(version_count, value_len, &keys);
+    let dir = TempDir::new("bench-mvcctxn").unwrap();
+    let db = prepare_test_db(
+        version_count,
+        value_len,
+        &keys,
+        dir.path().to_str().unwrap(),
+    );
 
     println!(
         "benching mvcctxn {} batch write\trows:{} versions:{} data len:{} batch:{}\t...",
@@ -280,7 +334,7 @@ fn bench_batch_set(
         data_len,
         batch_size,
     );
-    let ns = bench_batch_set_impl(&*engine, &keys, value_len, batch_size);
+    let ns = bench_batch_set_impl(db.clone(), &keys, value_len, batch_size);
     println!(
         "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
         ns,
@@ -328,7 +382,8 @@ fn bench_concurrent_batch_impl(
                 .map(|_| (&mut keys).take(batch_size).collect())
                 .collect();
 
-            let engine = prepare_test_engine(0, 0, &[]);
+            let dir = TempDir::new("bench-mvcctxn").unwrap();
+            let db = prepare_test_db(0, 0, &[], dir.path().to_str().unwrap());
 
             let pool = ThreadPoolBuilder::<DefaultContext, _>::with_default_factory(
                 String::from("bench-concurrent-mvcctxn"),
@@ -342,7 +397,7 @@ fn bench_concurrent_batch_impl(
             let actual_count = txns.len();
 
             for mut txn in txns.drain(..) {
-                let engine = engine.clone();
+                let db = db.clone();
                 let tx = tx.clone();
                 pool.execute(move |_| {
                     let mutations: Vec<_> = txn.iter()
@@ -353,8 +408,8 @@ fn bench_concurrent_batch_impl(
                     let primary = txn[0].clone();
                     let keys: Vec<_> = txn.drain(..).map(|item| Key::from_raw(&item)).collect();
                     let start_ts = next_ts();
-                    prewrite(&*engine, &mutations, &primary, start_ts);
-                    commit(&*engine, &keys, start_ts, next_ts());
+                    prewrite(db.clone(), &mutations, &primary, start_ts);
+                    commit(db.clone(), &keys, start_ts, next_ts());
                     // Signal that this task has been finished
                     tx.send(()).unwrap();
                 })
