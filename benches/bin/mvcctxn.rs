@@ -383,29 +383,29 @@ fn bench_concurrent_batch_impl(
 
 pub fn bench_mvcctxn() {
     for bench_type in &[BenchType::Row, BenchType::UniqueIndex] {
-        for table_size in &[1_000, 10_000, 100_000] {
-            bench_single_row(*table_size, 5, 128, bench_type);
-        }
+        // for table_size in &[1_000, 10_000, 100_000] {
+        //     bench_single_row(*table_size, 5, 128, bench_type);
+        // }
 
-        for version_count in &[1, 16, 32, 64] {
+        for version_count in &[1, 16, 64] {
             bench_single_row(10_000, *version_count, 128, bench_type);
         }
 
         for value_len in &[32, 128, 1024] {
             bench_single_row(10_000, 5, *value_len, bench_type);
         }
-    }
 
-    for batch_size in &[1, 8, 32, 64, 128, 256, 512] {
-        bench_batch_set(10_000, *batch_size, 5, 128, &BenchType::Row);
+        for batch_size in &[8, 64, 128, 256] {
+            bench_batch_set(10_000, *batch_size, 5, 128, bench_type);
+        }
     }
 }
 
 
 pub fn bench_concurrent_batch() {
     let table_size = 100_000;
-    for batch_size in &[1, 8, 32, 64, 128, 256] {
-        for threads in &[1, 2, 4, 8, 16] {
+    for batch_size in &[1, 8, 64, 128] {
+        for threads in &[1, 2, 4, 8] {
             bench_concurrent_batch_impl(
                 table_size / *batch_size,
                 128,
