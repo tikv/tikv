@@ -89,9 +89,8 @@ impl DAGContext {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-                    let mut counts = Vec::with_capacity(4);
-                    self.exec.collect_output_counts(&mut counts);
-                    sel_resp.set_output_counts(counts);
+                    self.exec
+                        .collect_output_counts(sel_resp.mut_output_counts());
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
@@ -136,9 +135,9 @@ impl DAGContext {
                 Ok(None) => break,
                 Err(e) => if let Error::Other(_) = e {
                     let mut resp = Response::new();
-                    let mut stream_resp = StreamResponse::new();
-                    stream_resp.set_error(to_pb_error(&e));
-                    resp.set_data(box_try!(stream_resp.write_to_bytes()));
+                    let mut s_resp = StreamResponse::new();
+                    s_resp.set_error(to_pb_error(&e));
+                    resp.set_data(box_try!(s_resp.write_to_bytes()));
                     resp.set_other_error(format!("{}", e));
                     return Ok((Some(resp), false));
                 } else {
@@ -148,21 +147,24 @@ impl DAGContext {
         }
         start_key = start_key.and_then(|k| if k.is_empty() { None } else { Some(k) });
         let end_key = self.exec.take_last_key();
-        DAGContext::make_stream_response(chunk, start_key, end_key).map(|r| (Some(r), false))
+        self.make_stream_response(chunk, start_key, end_key)
+            .map(|r| (Some(r), false))
     }
 
     fn make_stream_response(
+        &mut self,
         chunk: Chunk,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
     ) -> Result<Response> {
         // TODO: set `output_counts` later.
-        let mut stream_resp = StreamResponse::new();
-        stream_resp.set_encode_type(EncodeType::TypeDefault);
-        stream_resp.set_data(box_try!(chunk.write_to_bytes()));
+        let mut s_resp = StreamResponse::new();
+        s_resp.set_encode_type(EncodeType::TypeDefault);
+        s_resp.set_data(box_try!(chunk.write_to_bytes()));
+        self.exec.collect_output_counts(s_resp.mut_output_counts());
 
         let mut resp = Response::new();
-        resp.set_data(box_try!(stream_resp.write_to_bytes()));
+        resp.set_data(box_try!(s_resp.write_to_bytes()));
 
         let (start, end) = match (start_key, end_key) {
             (Some(start_key), Some(end_key)) => if start_key > end_key {
