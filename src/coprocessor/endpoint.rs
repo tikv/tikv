@@ -648,6 +648,7 @@ fn on_error(e: Error, req: RequestTask) -> CopStats {
 }
 
 fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
+    debug!("failed to handle batch request: {:?}", e);
     let resp = err_resp(e.into());
     for t in reqs {
         respond(resp.clone(), t);
