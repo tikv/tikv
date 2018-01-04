@@ -19,8 +19,9 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
-              ReadOptions, SequentialFile, SstFileWriter, Writable, WriteBatch as RawBatch, DB};
+use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, DBCompressionType, DBIterator, DBOptions,
+              Env, EnvOptions, ReadOptions, SequentialFile, SstFileWriter, Writable,
+              WriteBatch as RawBatch, DB};
 use kvproto::importpb::*;
 
 use config::DbConfig;
@@ -28,7 +29,7 @@ use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use storage::types::Key;
 use storage::mvcc::{Write, WriteType};
 use util::config::MB;
-use util::rocksdb::{new_engine_opt, CFOptions};
+use util::rocksdb::{get_fastest_supported_compression_type, new_engine_opt, CFOptions};
 
 use super::{Error, Result};
 
@@ -124,6 +125,9 @@ impl Engine {
             _ => unreachable!(),
         };
         cf_opts.set_env(self.env.clone());
+        cf_opts.compression_per_level(&[]);
+        cf_opts.bottommost_compression(DBCompressionType::Disable);
+        cf_opts.compression(get_fastest_supported_compression_type());
         let mut writer = SstFileWriter::new(EnvOptions::new(), cf_opts);
         writer.open(path.as_ref().to_str().unwrap())?;
         Ok(writer)
