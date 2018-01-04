@@ -54,6 +54,8 @@ impl ImportJob {
     }
 
     pub fn run(&self) -> Result<()> {
+        let mut handles = Vec::new();
+
         for cf_name in self.engine.cf_names() {
             let cfg = self.cfg.clone();
             let client = self.client.clone();
@@ -63,12 +65,17 @@ impl ImportJob {
             let job = PrepareJob::new(cfg, client, engine, cf_name.clone());
             let cf_ranges = job.run();
 
-            let handles = self.run_import_threads(cf_name, cf_ranges);
-            for h in handles {
-                h.join().unwrap()?;
+            let cf_handles = self.run_import_threads(cf_name, cf_ranges);
+            handles.extend(cf_handles);
+        }
+
+        let mut res = Ok(());
+        for h in handles {
+            if let Err(e) = h.join().unwrap() {
+                res = Err(e)
             }
         }
-        Ok(())
+        res
     }
 
     fn new_import_thread(&self, cf_name: String, cf_range: RangeInfo) -> JoinHandle<Result<()>> {
