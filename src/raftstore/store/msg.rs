@@ -44,7 +44,7 @@ pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
-///  - `BatchRead`: cllbacks for a batch read request.
+///  - `BatchRead`: callbacks for a batch read request.
 pub enum Callback {
     /// No callback.
     None,
@@ -52,7 +52,7 @@ pub enum Callback {
     Read(ReadCallback),
     /// Write callback.
     Write(WriteCallback),
-    // Batch read callbacks.
+    /// Batch read callbacks.
     BatchRead(BatchReadCallback),
 }
 

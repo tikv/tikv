@@ -1635,23 +1635,17 @@ impl Peer {
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<ReadResponse> {
         check_epoch(self.region(), req)?;
-        let mut snapshot = None;
+        let mut need_snapshot = false;
+        let snapshot = Snapshot::new(self.kv_engine.clone());
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => {
-                    if snapshot.is_none() {
-                        snapshot = Some(Snapshot::new(self.kv_engine.clone()));
-                    }
-                    apply::do_get(&self.tag, self.region(), snapshot.as_ref().unwrap(), req)?
-                }
+                CmdType::Get => apply::do_get(&self.tag, self.region(), &snapshot, req)?,
                 CmdType::Snap => {
-                    if snapshot.is_none() {
-                        snapshot = Some(Snapshot::new(self.kv_engine.clone()));
-                    }
+                    need_snapshot = true;
                     apply::do_snap(self.region().to_owned())?
                 }
                 CmdType::Prewrite |
@@ -1660,14 +1654,13 @@ impl Peer {
                 CmdType::DeleteRange |
                 CmdType::Invalid => unreachable!(),
             };
-
             resp.set_cmd_type(cmd_type);
-
             responses.push(resp);
         }
 
         let mut response = RaftCmdResponse::new();
         response.set_responses(protobuf::RepeatedField::from_vec(responses));
+        let snapshot = if need_snapshot { Some(snapshot) } else { None };
         Ok(ReadResponse { response, snapshot })
     }
 }

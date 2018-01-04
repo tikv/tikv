@@ -151,6 +151,7 @@ macro_rules! defer {
 
 /// `wait_op!` waits for async operation. It returns `Option<Res>`
 /// after the expression get executed.
+/// It only accepts an `Result` expression.
 #[macro_export]
 macro_rules! wait_op {
     ($expr:expr) => {
