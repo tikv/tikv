@@ -404,11 +404,15 @@ impl RequestTask {
         COPR_REQ_HANDLE_TIME
             .with_label_values(&[type_str])
             .observe(handle_time);
-
         COPR_SCAN_KEYS
             .with_label_values(&[type_str])
             .observe(self.statistics.total_op_count() as f64);
 
+        let mut handle = HandleTime::new();
+        handle.set_process_ms((handle_time * 1000.0) as i64);
+        handle.set_wait_ms((wait_time * 1000.0) as i64);
+
+        let mut runtime_details = RunTimeDetails::new();
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
                 "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
@@ -422,28 +426,24 @@ impl RequestTask {
                 self.req.get_ranges().len(),
                 self.req.get_ranges().get(0)
             );
+            runtime_details.set_scan_detail(self.statistics.scan_detail());
+            runtime_details.set_handle_time(handle);
+            return Some(runtime_details);
         }
 
-        let mut handle = HandleTime::new();
-        handle.set_process_ms((handle_time * 1000.0) as i64);
-        handle.set_wait_ms((wait_time * 1000.0) as i64);
-
-        let mut runtime = RunTimeDetails::new();
         let ctx = self.req.get_context();
-        match (
-            ctx.get_handle_time(),
-            ctx.get_scan_detail(),
-            handle_time > SLOW_QUERY_LOWER_BOUND,
-        ) {
-            (true, true, _) | (_, _, true) => {
-                runtime.set_scan_detail(self.statistics.scan_detail());
-                runtime.set_handle_time(handle);
-            }
-            (true, false, false) => runtime.set_handle_time(handle),
-            (false, true, false) => runtime.set_scan_detail(self.statistics.scan_detail()),
-            (false, false, false) => return None,
-        };
-        Some(runtime)
+        if !ctx.get_handle_time() && !ctx.get_scan_detail() {
+            return None;
+        }
+
+        if ctx.get_handle_time() {
+            runtime_details.set_handle_time(handle);
+        }
+
+        if ctx.get_scan_detail() {
+            runtime_details.set_scan_detail(self.statistics.scan_detail());
+        }
+        Some(runtime_details)
     }
 
     pub fn priority(&self) -> CommandPri {
@@ -635,8 +635,8 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
 }
 
 fn respond(mut resp: Response, mut t: RequestTask) -> CopStats {
-    if let Some(runtime) = t.stop_record_handling() {
-        resp.set_runtime_details(runtime);
+    if let Some(runtime_details) = t.stop_record_handling() {
+        resp.set_runtime_details(runtime_details);
     }
 
     (t.on_resp)(resp);
@@ -762,6 +762,7 @@ mod tests {
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
+    use std::ops::Sub;
 
     use kvproto::coprocessor::Request;
     use tipb::select::DAGRequest;
@@ -811,6 +812,42 @@ mod tests {
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
     }
+
+    #[test]
+    fn test_runtime_details_with_long_query() {
+        let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_concurrency = 1;
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let end_point = Host::new(engine, worker.scheduler(), &cfg, pd_worker.scheduler());
+        worker.start(end_point).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut task = RequestTask::new(
+            Request::new(),
+            box move |msg| { tx.send(msg).unwrap(); },
+            1000,
+        );
+        let ctx = ReqContext {
+            deadline: task.ctx.deadline - Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS),
+            isolation_level: task.ctx.isolation_level,
+            fill_cache: task.ctx.fill_cache,
+            table_scan: task.ctx.table_scan,
+        };
+        task.ctx = Arc::new(ctx);
+        task.stop_record_waiting();
+        task.timer = task.timer.sub(Duration::from_secs(
+            (super::SLOW_QUERY_LOWER_BOUND * 2.0) as u64,
+        ));
+        worker.schedule(Task::Request(task)).unwrap();
+        let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+        // check runtime details
+        let runtime_details = resp.get_runtime_details();
+        assert!(runtime_details.has_handle_time());
+        assert!(runtime_details.has_scan_detail());
+    }
+
     #[test]
     fn test_too_many_reqs() {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
