@@ -34,7 +34,7 @@ use kvproto::errorpb::{self, ServerIsBusy};
 use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
 
 use util::time::{duration_to_sec, Instant};
-use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
+use util::worker::{FutureScheduler, Runnable, Scheduler};
 use util::collections::HashMap;
 use server::{Config, OnResponse, ResponseStream};
 use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
@@ -580,7 +580,13 @@ impl Display for RequestTask {
     }
 }
 
-impl BatchRunnable<Task> for Host {
+impl Runnable<Task> for Host {
+    // TODO: limit pending reqs
+    fn run(&mut self, _: Task) {
+        panic!("Shouldn't call Host::run directly");
+    }
+
+    #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
         for task in tasks.drain(..) {
