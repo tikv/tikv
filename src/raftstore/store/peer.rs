@@ -1402,7 +1402,7 @@ impl Peer {
         mut req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Result<u64> {
-        if self.read_only {
+        if self.read_only && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackPreMerge {
             return Err(box_err!("peer in read only mode, can't do proposal."));
         }
 

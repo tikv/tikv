@@ -1552,13 +1552,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_pre_merge(&mut self, region: metapb::Region, state: MergeState) {
+        fail_point!("on_ready_pre_merge");
         self.region_peers
             .get_mut(&region.get_id())
             .unwrap()
             .become_readonly();
 
         if let Err(e) = self.schedule_merge(&region, &state) {
-            info!(
+            warn!(
                 "[region {}] failed to schedule merge, rollback: {:?}",
                 region.get_id(),
                 e
