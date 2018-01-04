@@ -355,7 +355,7 @@ mod tests {
         value
     }
 
-    fn maybe_write(engine: &Engine, ctx: &Context, modifies: Vec<Modify>) {
+    fn write_unless_empty_modify(engine: &Engine, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {
             engine.write(ctx, modifies).unwrap();
         }
@@ -863,7 +863,7 @@ mod tests {
             pk,
             &Options::default(),
         ).unwrap();
-        maybe_write(engine, &ctx, txn.into_modifies());
+        write_unless_empty_modify(engine, &ctx, txn.into_modifies());
     }
 
     fn must_prewrite_delete(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
@@ -899,7 +899,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         txn.commit(&make_key(key), commit_ts).unwrap();
-        maybe_write(engine, &ctx, txn.into_modifies());
+        write_unless_empty_modify(engine, &ctx, txn.into_modifies());
     }
 
     fn must_commit_err(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -914,7 +914,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         txn.rollback(&make_key(key)).unwrap();
-        maybe_write(engine, &ctx, txn.into_modifies());
+        write_unless_empty_modify(engine, &ctx, txn.into_modifies());
     }
 
     fn must_rollback_err(engine: &Engine, key: &[u8], start_ts: u64) {
@@ -929,7 +929,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 0, None, IsolationLevel::SI, true);
         txn.gc(&make_key(key), safe_point).unwrap();
-        maybe_write(engine, &ctx, txn.into_modifies());
+        write_unless_empty_modify(engine, &ctx, txn.into_modifies());
     }
 
     fn must_locked(engine: &Engine, key: &[u8], start_ts: u64) {
