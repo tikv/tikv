@@ -643,6 +643,7 @@ struct CopStats {
 }
 
 fn on_error(e: Error, req: RequestTask) -> CopStats {
+    info!("endpoint::on_error e = {}", e);
     let resp = err_resp(e);
     respond(resp, req)
 }
@@ -656,6 +657,7 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
 }
 
 fn respond(resp: Response, mut t: RequestTask) -> CopStats {
+    info!("endpoint::respond resp = {:?}", resp);
     t.stop_record_handling();
     (t.on_resp)(resp);
     CopStats {

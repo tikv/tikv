@@ -111,6 +111,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             RequestTask::new(cop_req, cb, self.recursion_limit),
         ));
         if let Err(e) = cop_res {
+            info!("[!!] kv::kv_get cop_res err, e = {}", e);
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
@@ -120,6 +121,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = future
             .map_err(Error::from)
             .map(move |cop_res| {
+                info!("[!!] kv::kv_get cop_res = {:?}", cop_res);
+
                 // map cop_res into get_res
                 let mut is = CodedInputStream::from_bytes(cop_res.get_data());
                 is.set_recursion_limit(recursion_limit);
