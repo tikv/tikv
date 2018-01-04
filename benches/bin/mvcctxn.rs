@@ -209,7 +209,7 @@ fn bench_single_row(
         data_len
     );
     let ns = bench_get(&*engine, &keys);
-    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
+    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000_f64 / ns);
 
     println!(
         "benching mvcctxn {} set\trows:{} versions:{} data len:{}\t...",
@@ -219,7 +219,7 @@ fn bench_single_row(
         data_len
     );
     let ns = bench_set(&*engine, &keys, value_len);
-    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
+    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000_f64 / ns);
 
     // Generate new engine to bench delete, for the size of content was increased when benching set
     let engine = prepare_test_engine(version_count, value_len, &keys);
@@ -232,7 +232,7 @@ fn bench_single_row(
         data_len
     );
     let ns = bench_delete(&*engine, &keys);
-    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
+    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000_f64 / ns);
 
 }
 
@@ -268,9 +268,9 @@ fn bench_batch_set(
     println!(
         "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
         ns,
-        1_000_000_000 / ns,
+        1_000_000_000_f64 / ns,
         ns / (batch_size as f64),
-        1_000_000_000 * (batch_size as f64) / ns
+        1_000_000_000_f64 * (batch_size as f64) / ns
     );
 }
 
@@ -353,9 +353,9 @@ fn bench_concurrent_batch_impl(
     println!(
         "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
         ns,
-        1_000_000_000 / ns,
+        1_000_000_000_f64 / ns,
         ns / (batch_size as f64),
-        1_000_000_000 * (batch_size as f64) / ns
+        1_000_000_000_f64 * (batch_size as f64) / ns
     );
 }
 
