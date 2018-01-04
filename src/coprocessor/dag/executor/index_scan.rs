@@ -20,8 +20,7 @@ use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::{datum, mysql, table};
 use coprocessor::endpoint::is_point;
-use coprocessor::metrics::*;
-use coprocessor::local_metrics::*;
+use coprocessor::local_metrics::CopMetrics;
 use coprocessor::{Error, Result};
 use storage::{Key, SnapshotStore};
 
@@ -39,6 +38,7 @@ pub struct IndexScanExecutor {
     unique: bool,
     count: i64,
     metrics: CopMetrics,
+    first_collect: bool,
 }
 
 impl IndexScanExecutor {
@@ -59,7 +59,6 @@ impl IndexScanExecutor {
         }
         let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
 
-        COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
             store: store,
             desc: desc,
@@ -70,6 +69,7 @@ impl IndexScanExecutor {
             unique: unique,
             count: 0,
             metrics: Default::default(),
+            first_collect: true,
         }
     }
 
@@ -79,7 +79,6 @@ impl IndexScanExecutor {
         store: SnapshotStore,
     ) -> IndexScanExecutor {
         let col_ids: Vec<i64> = (0..cols).collect();
-        COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExecutor {
             store: store,
             desc: false,
@@ -90,6 +89,7 @@ impl IndexScanExecutor {
             unique: false,
             count: 0,
             metrics: CopMetrics::default(),
+            first_collect: true,
         }
     }
 
@@ -188,6 +188,11 @@ impl Executor for IndexScanExecutor {
         metrics.merge(&mut self.metrics);
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(&mut metrics.cf_stats);
+        }
+        if self.first_collect {
+            let mut count = metrics.executor_count.entry("idxscan").or_insert(0);
+            *count += 1;
+            self.first_collect = false;
         }
     }
 }

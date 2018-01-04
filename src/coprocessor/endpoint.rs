@@ -40,7 +40,7 @@ use super::codec::datum::Datum;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
-use super::local_metrics::{CopMetrics, ScanCounter};
+use super::local_metrics::{CopMetrics, ExecCounter, LocalMetrics, ScanCounter};
 use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -114,6 +114,8 @@ struct CopContext {
     select_stats: StatisticsSummary,
     index_stats: StatisticsSummary,
     scan_counter: ScanCounter,
+    exec_counter: ExecCounter,
+    local_metrics: LocalMetrics,
 }
 
 impl CopContext {
@@ -123,6 +125,8 @@ impl CopContext {
             select_stats: Default::default(),
             index_stats: Default::default(),
             scan_counter: Default::default(),
+            exec_counter: Default::default(),
+            local_metrics: Default::default(),
         }
     }
 
@@ -139,6 +143,8 @@ impl CopContext {
         flow_stats.add(&stats.data.flow_stats);
         // scan count
         self.scan_counter.merge(&mut metrics.scan_counter);
+        // executor count
+        self.exec_counter.merge(&mut metrics.executor_count);
     }
 
     fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
@@ -150,10 +156,6 @@ impl CopContext {
                 &mut self.select_stats
             }
         }
-    }
-
-    fn flush_scan_count(&mut self) {
-        self.scan_counter.flush();
     }
 }
 
@@ -175,16 +177,9 @@ impl Context for CopContext {
             *this_statistics = Default::default();
         }
         self.flow_stats.flush();
-        // if !self.request_stats.is_empty() {
-        //     let mut to_send_stats = HashMap::default();
-        //     mem::swap(&mut to_send_stats, &mut self.request_stats);
-        //     if let Err(e) = self.sender.schedule(PdTask::ReadStats {
-        //         read_stats: to_send_stats,
-        //     }) {
-        //         error!("send coprocessor statistics: {:?}", e);
-        //     };
-        // }
-        self.flush_scan_count();
+        self.scan_counter.flush();
+        self.exec_counter.flush();
+        self.local_metrics.flush();
     }
 }
 
@@ -230,16 +225,22 @@ impl Host {
 
     fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
         let reqs = self.reqs.remove(&id).unwrap();
+        let mut local_metrics = LocalMetrics::default();
         let snap = match snapshot {
             Ok(s) => s,
             Err(e) => {
-                notify_batch_failed(e, reqs);
+                notify_batch_failed(e, reqs, &mut local_metrics);
+                //TODO:
                 return;
             }
         };
 
         if self.running_task_count() >= self.max_running_task_count {
-            notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
+            notify_batch_failed(
+                Error::Full(self.max_running_task_count),
+                reqs,
+                &mut local_metrics,
+            );
             return;
         }
 
@@ -248,9 +249,7 @@ impl Host {
             let pri = req.priority();
             let pri_str = get_req_pri_str(pri);
             let type_str = req.ctx.get_scan_tag();
-            COPR_PENDING_REQS
-                .with_label_values(&[type_str, pri_str])
-                .add(1.0);
+            local_metrics.add_pending_reqs(type_str, pri_str, 1);
             let end_point = TiDbEndPoint::new(snap.clone());
 
             let pool = match pri {
@@ -259,12 +258,11 @@ impl Host {
                 CommandPri::Normal => &mut self.pool,
             };
             pool.execute(move |ctx: &mut CopContext| {
+                // decrease pending task
+                ctx.local_metrics.add_pending_reqs(type_str, pri_str, -1);
                 let region_id = req.req.get_context().get_region_id();
-                let stats = end_point.handle_request(req, batch_row_limit);
+                let stats = end_point.handle_request(req, batch_row_limit, &mut ctx.local_metrics);
                 ctx.finish_task(type_str, region_id, stats);
-                COPR_PENDING_REQS
-                    .with_label_values(&[type_str, pri_str])
-                    .dec();
             });
         }
     }
@@ -396,32 +394,36 @@ impl RequestTask {
         self.ctx.check_if_outdated()
     }
 
-    fn stop_record_waiting(&mut self) {
+    fn stop_record_waiting(&mut self, metrics: &mut LocalMetrics) {
         if self.wait_time.is_some() {
             return;
         }
         let wait_time = duration_to_sec(self.timer.elapsed());
-        COPR_REQ_WAIT_TIME
+        metrics
+            .wait_time
             .with_label_values(&[self.ctx.get_scan_tag()])
             .observe(wait_time);
         self.wait_time = Some(wait_time);
     }
 
-    fn stop_record_handling(&mut self) {
-        self.stop_record_waiting();
+    fn stop_record_handling(&mut self, metrics: &mut LocalMetrics) {
+        self.stop_record_waiting(metrics);
 
         let query_time = duration_to_sec(self.timer.elapsed());
         let type_str = self.ctx.get_scan_tag();
-        COPR_REQ_HISTOGRAM_VEC
+        metrics
+            .req_time
             .with_label_values(&[type_str])
             .observe(query_time);
         let wait_time = self.wait_time.unwrap();
         let handle_time = query_time - wait_time;
-        COPR_REQ_HANDLE_TIME
+        metrics
+            .handle_time
             .with_label_values(&[type_str])
             .observe(handle_time);
 
-        COPR_SCAN_KEYS
+        metrics
+            .scan_keys
             .with_label_values(&[type_str])
             .observe(self.metrics.cf_stats.total_op_count() as f64);
 
@@ -465,11 +467,12 @@ impl BatchRunnable<Task> for Host {
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
+        let mut local_metrics = LocalMetrics::default();
         for task in tasks.drain(..) {
             match task {
                 Task::Request(req) => {
                     if let Err(e) = req.check_outdated() {
-                        on_error(e, req);
+                        on_error(e, req, &mut local_metrics);
                         continue;
                     }
                     let key = {
@@ -496,7 +499,7 @@ impl BatchRunnable<Task> for Host {
                         reqs[0].req.get_context(),
                         box move |(_, res)| sched.schedule(Task::SnapRes(id, res)).unwrap(),
                     ) {
-                        notify_batch_failed(e, reqs);
+                        notify_batch_failed(e, reqs, &mut local_metrics);
                     } else {
                         self.reqs.insert(id, reqs);
                     }
@@ -555,7 +558,7 @@ impl BatchRunnable<Task> for Host {
                     error!("async snapshot batch failed error {:?}", e);
                     EngineError::Other(box_err!("{:?}", e))
                 });
-                notify_batch_failed(err, reqs);
+                notify_batch_failed(err, reqs, &mut local_metrics);
             }
         }
     }
@@ -573,60 +576,67 @@ impl BatchRunnable<Task> for Host {
     }
 }
 
-fn err_resp(e: Error) -> Response {
+fn err_resp(e: Error, metrics: &mut LocalMetrics) -> Response {
     let mut resp = Response::new();
-    match e {
+    let tag = match e {
         Error::Region(e) => {
             let tag = storage::get_tag_from_header(&e);
-            COPR_REQ_ERROR.with_label_values(&[tag]).inc();
             resp.set_region_error(e);
+            tag
         }
         Error::Locked(info) => {
             resp.set_locked(info);
-            COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
+            "lock"
         }
         Error::Outdated(deadline, now, scan_tag) => {
             let elapsed =
                 now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
-            COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
-            OUTDATED_REQ_WAIT_TIME
+            metrics
+                .outdate_time
                 .with_label_values(&[scan_tag])
                 .observe(elapsed.as_secs() as f64);
-
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
+            "outdated"
         }
         Error::Full(allow) => {
-            COPR_REQ_ERROR.with_label_values(&["full"]).inc();
             let mut errorpb = errorpb::Error::new();
             errorpb.set_message(format!("running batches reach limit {}", allow));
             let mut server_is_busy_err = ServerIsBusy::new();
             server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
+            "full"
         }
         Error::Other(_) => {
             resp.set_other_error(format!("{}", e));
-            COPR_REQ_ERROR.with_label_values(&["other"]).inc();
+            "other"
         }
-    }
+    };
+
+    let mut count = metrics.error_cnt.entry(tag).or_insert(0);
+    *count += 1;
     resp
 }
 
-fn on_error(e: Error, req: RequestTask) -> CopMetrics {
-    let resp = err_resp(e);
-    respond(resp, req)
+fn on_error(e: Error, req: RequestTask, metrics: &mut LocalMetrics) -> CopMetrics {
+    let resp = err_resp(e, metrics);
+    respond(resp, req, metrics)
 }
 
-fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
+fn notify_batch_failed<E: Into<Error> + Debug>(
+    e: E,
+    reqs: Vec<RequestTask>,
+    metrics: &mut LocalMetrics,
+) {
     debug!("failed to handle batch request: {:?}", e);
-    let resp = err_resp(e.into());
+    let resp = err_resp(e.into(), metrics);
     for t in reqs {
-        respond(resp.clone(), t);
+        respond(resp.clone(), t, metrics);
     }
 }
 
-fn respond(resp: Response, mut t: RequestTask) -> CopMetrics {
-    t.stop_record_handling();
+fn respond(resp: Response, mut t: RequestTask, metrics: &mut LocalMetrics) -> CopMetrics {
+    t.stop_record_handling(metrics);
     (t.on_resp)(resp);
     t.metrics
 }
@@ -642,11 +652,16 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(self, mut t: RequestTask, batch_row_limit: usize) -> CopMetrics {
-        t.stop_record_waiting();
+    fn handle_request(
+        self,
+        mut t: RequestTask,
+        batch_row_limit: usize,
+        metrics: &mut LocalMetrics,
+    ) -> CopMetrics {
+        t.stop_record_waiting(metrics);
 
         if let Err(e) = t.check_outdated() {
-            return on_error(e, t);
+            return on_error(e, t, metrics);
         }
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
@@ -654,8 +669,8 @@ impl TiDbEndPoint {
             Err(err) => Err(err),
         };
         match resp {
-            Ok(r) => respond(r, t),
-            Err(e) => on_error(e, t),
+            Ok(r) => respond(r, t, metrics),
+            Err(e) => on_error(e, t, metrics),
         }
     }
 

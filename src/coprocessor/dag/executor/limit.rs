@@ -17,23 +17,23 @@
 use tipb::executor::Limit;
 
 use coprocessor::Result;
-use coprocessor::metrics::*;
-use coprocessor::local_metrics::*;
+use coprocessor::local_metrics::CopMetrics;
 use coprocessor::dag::executor::{Executor, Row};
 
 pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
     src: Box<Executor + 'a>,
+    first_collect: bool,
 }
 
 impl<'a> LimitExecutor<'a> {
     pub fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
-        COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
             src: src,
+            first_collect: true,
         }
     }
 }
@@ -57,6 +57,11 @@ impl<'a> Executor for LimitExecutor<'a> {
 
     fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
         self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            let mut count = metrics.executor_count.entry("limit").or_insert(0);
+            *count += 1;
+            self.first_collect = false;
+        }
     }
 }
 

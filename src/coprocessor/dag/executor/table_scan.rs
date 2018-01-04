@@ -19,7 +19,6 @@ use tipb::executor::TableScan;
 use coprocessor::codec::table;
 use coprocessor::endpoint::is_point;
 use coprocessor::{Error, Result};
-use coprocessor::metrics::*;
 use coprocessor::local_metrics::*;
 use storage::{Key, SnapshotStore};
 use util::collections::HashSet;
@@ -36,6 +35,7 @@ pub struct TableScanExecutor {
     scanner: Option<Scanner>,
     count: i64,
     metrics: CopMetrics,
+    first_collect: bool,
 }
 
 impl TableScanExecutor {
@@ -44,8 +44,6 @@ impl TableScanExecutor {
         mut key_ranges: Vec<KeyRange>,
         store: SnapshotStore,
     ) -> TableScanExecutor {
-        COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
-
         let col_ids = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
@@ -65,6 +63,7 @@ impl TableScanExecutor {
             scanner: None,
             count: 0,
             metrics: Default::default(),
+            first_collect: true,
         }
     }
 
@@ -144,6 +143,12 @@ impl Executor for TableScanExecutor {
         metrics.merge(&mut self.metrics);
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(&mut metrics.cf_stats);
+        }
+
+        if self.first_collect {
+            let mut count = metrics.executor_count.entry("tblscan").or_insert(0);
+            *count += 1;
+            self.first_collect = false;
         }
     }
 }

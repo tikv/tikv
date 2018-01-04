@@ -16,7 +16,6 @@ use std::sync::Arc;
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::metrics::*;
 use coprocessor::local_metrics::*;
 use coprocessor::dag::expr::{EvalContext, Expression};
 use coprocessor::Result;
@@ -30,6 +29,7 @@ pub struct SelectionExecutor {
     ctx: Arc<EvalContext>,
     src: Box<Executor>,
     count: i64,
+    first_collect: bool,
 }
 
 impl SelectionExecutor {
@@ -42,7 +42,6 @@ impl SelectionExecutor {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
         visitor.batch_visit(&conditions)?;
-        COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
         Ok(SelectionExecutor {
             conditions: box_try!(Expression::batch_build(ctx.as_ref(), conditions)),
             cols: columns_info,
@@ -50,6 +49,7 @@ impl SelectionExecutor {
             ctx: ctx,
             src: src,
             count: 0,
+            first_collect: true,
         })
     }
 }
@@ -85,6 +85,11 @@ impl Executor for SelectionExecutor {
 
     fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
         self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            let mut count = metrics.executor_count.entry("selection").or_insert(0);
+            *count += 1;
+            self.first_collect = false;
+        }
     }
 }
 

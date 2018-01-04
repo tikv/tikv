@@ -22,8 +22,7 @@ use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
 use coprocessor::dag::expr::{EvalContext, Expression};
-use coprocessor::metrics::*;
-use coprocessor::local_metrics::*;
+use coprocessor::local_metrics::CopMetrics;
 use coprocessor::Result;
 
 use super::aggregate::{self, AggrFunc};
@@ -80,6 +79,7 @@ pub struct AggregationExecutor {
     related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor>,
     count: i64,
+    first_collect: bool,
 }
 
 impl AggregationExecutor {
@@ -95,9 +95,6 @@ impl AggregationExecutor {
         visitor.batch_visit(&group_by)?;
         let aggr_func = meta.take_agg_func().into_vec();
         visitor.batch_visit(&aggr_func)?;
-        COPR_EXECUTOR_COUNT
-            .with_label_values(&["aggregation"])
-            .inc();
         Ok(AggregationExecutor {
             group_by: box_try!(Expression::batch_build(&ctx, group_by)),
             aggr_func: AggrFuncExpr::batch_build(&ctx, aggr_func)?,
@@ -109,6 +106,7 @@ impl AggregationExecutor {
             related_cols_offset: visitor.column_offsets(),
             src: src,
             count: 0,
+            first_collect: true,
         })
     }
 
@@ -200,6 +198,11 @@ impl Executor for AggregationExecutor {
 
     fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
         self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            let mut count = metrics.executor_count.entry("aggregation").or_insert(0);
+            *count += 1;
+            self.first_collect = false;
+        }
     }
 }
 

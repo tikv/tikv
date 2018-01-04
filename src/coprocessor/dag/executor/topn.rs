@@ -22,7 +22,6 @@ use tipb::expression::ByItem;
 use coprocessor::codec::datum::Datum;
 use coprocessor::Result;
 use coprocessor::dag::expr::{EvalContext, Expression};
-use coprocessor::metrics::*;
 use coprocessor::local_metrics::*;
 
 use super::topn_heap::{SortRow, TopNHeap};
@@ -62,6 +61,7 @@ pub struct TopNExecutor {
     ctx: Arc<EvalContext>,
     src: Box<Executor>,
     count: i64,
+    first_collect: bool,
 }
 
 impl TopNExecutor {
@@ -77,8 +77,6 @@ impl TopNExecutor {
         for by_item in &order_by {
             visitor.visit(by_item.get_expr())?;
         }
-
-        COPR_EXECUTOR_COUNT.with_label_values(&["topn"]).inc();
         Ok(TopNExecutor {
             order_by: OrderBy::new(&ctx, order_by)?,
             heap: Some(TopNHeap::new(meta.get_limit() as usize)?),
@@ -88,6 +86,7 @@ impl TopNExecutor {
             ctx: ctx,
             src: src,
             count: 0,
+            first_collect: true,
         })
     }
 
@@ -140,6 +139,11 @@ impl Executor for TopNExecutor {
 
     fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
         self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            let mut count = metrics.executor_count.entry("topn").or_insert(0);
+            *count += 1;
+            self.first_collect = false;
+        }
     }
 }
 
