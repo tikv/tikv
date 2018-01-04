@@ -1,0 +1,61 @@
+// Copyright 2016 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+use tikv::util::config::*;
+
+use super::cluster::{Cluster, Simulator};
+use super::server::new_server_cluster;
+use std::{thread, time};
+
+fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
+    for engines in cluster.engines.values() {
+        engines.kv_engine.flush(true).unwrap();
+    }
+}
+
+fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_size_expired_time = ReadableDuration::millis(100);
+    // Big enough, so no split check triggered by putting data.
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::mb(128);
+    cluster.run();
+
+    for i in 0..100 {
+        let (k, v) = (format!("k{}", i), format!("value{}", i));
+        cluster.must_put(k.as_bytes(), v.as_bytes());
+    }
+    flush(cluster);
+    thread::sleep(time::Duration::from_millis(300));
+
+    let region_id = cluster.get_region_id(b"");
+    let old_region_size = cluster.pd_client.get_region_size(region_id).unwrap();
+
+    for i in 100..200 {
+        let (k, v) = (format!("k{}", i), format!("value{}", i));
+        cluster.must_put(k.as_bytes(), v.as_bytes());
+    }
+    flush(cluster);
+    thread::sleep(time::Duration::from_millis(300));
+    let new_region_size = cluster.pd_client.get_region_size(region_id).unwrap();
+
+    assert_ne!(old_region_size, new_region_size);
+}
+
+#[test]
+fn test_server_update_region_size() {
+    let count = 1;
+    let mut cluster = new_server_cluster(0, count);
+    test_update_regoin_size(&mut cluster);
+}

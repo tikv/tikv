@@ -19,7 +19,7 @@ use std::{cmp, mem, slice};
 use std::time::{Duration, Instant};
 use rand::{self, Rng};
 
-use time::{Duration as TimeDuration, Timespec};
+use time::{self, Duration as TimeDuration, Timespec};
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
@@ -280,15 +280,15 @@ impl Peer {
     }
 
     pub fn update_approximate_size_expired_time(&mut self) {
-        let now = monotonic_raw_now();
-        let secs = self.cfg.region_size_expired_time.as_secs();
-        let delta = secs + rand::thread_rng().gen_range(0, secs);
-        self.approximate_size_expired_time = Some(now + TimeDuration::seconds(delta as i64));
+        let now = time::get_time();
+        let base = self.cfg.region_size_expired_time.as_millis();
+        let timeout = base + rand::thread_rng().gen_range(0, base);
+        self.approximate_size_expired_time = Some(now + TimeDuration::milliseconds(timeout as i64));
     }
 
     pub fn approximate_size_expired(&self, now: &Timespec) -> bool {
         if let Some(expired) = self.approximate_size_expired_time {
-            return expired.sec < now.sec;
+            return expired.sec < now.sec || (expired.sec == now.sec && expired.nsec < now.nsec);
         }
         false
     }

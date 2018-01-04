@@ -44,7 +44,6 @@ use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
-use util::time::monotonic_raw_now;
 use util::sys as util_sys;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
@@ -1798,7 +1797,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.register_split_region_check_tick(event_loop);
             return;
         }
-        let now = monotonic_raw_now();
+        let now = time::get_time();
         for peer in self.region_peers.values_mut() {
             if !peer.is_leader() {
                 continue;
@@ -1809,9 +1808,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // work even if we change the region max size.
             // When the approximate size expired, recalculate the region
             // size and check whether the region should split.
-            if peer.approximate_size.is_some() &&
-                peer.size_diff_hint < self.cfg.region_split_check_diff.0 &&
-                !peer.approximate_size_expired(&now)
+            if peer.approximate_size.is_some() && !peer.approximate_size_expired(&now) &&
+                peer.size_diff_hint < self.cfg.region_split_check_diff.0
             {
                 continue;
             }

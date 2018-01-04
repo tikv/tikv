@@ -32,7 +32,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
-use tikv::storage::{CfName, Engine};
+use tikv::storage::Engine;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
@@ -269,15 +269,7 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    new_server_cluster_with_cfs(id, count, &[])
-}
-
-pub fn new_server_cluster_with_cfs(
-    id: u64,
-    count: usize,
-    cfs: &[CfName],
-) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
-    Cluster::new(id, count, cfs, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client)
 }

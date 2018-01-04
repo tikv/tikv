@@ -25,7 +25,7 @@ use futures::Future;
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::*;
 use tikv::config::TiKvConfig;
-use tikv::storage::{ALL_CFS, CF_DEFAULT};
+use tikv::storage::CF_DEFAULT;
 use super::util::*;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -90,7 +90,6 @@ impl<T: Simulator> Cluster<T> {
     pub fn new(
         id: u64,
         count: usize,
-        cfs: &[&str],
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
     ) -> Cluster<T> {
@@ -104,7 +103,7 @@ impl<T: Simulator> Cluster<T> {
             pd_client: pd_client,
         };
 
-        c.create_engines(count, cfs);
+        c.create_engines(count);
 
         c
     }
@@ -113,17 +112,17 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
-    fn create_engines(&mut self, count: usize, cfs: &[&str]) {
+    fn create_engines(&mut self, count: usize) {
         for _ in 0..count {
             self.paths.push(TempDir::new("test_cluster").unwrap());
         }
 
-        let mut kv_cfs = vec![];
-        kv_cfs.extend_from_slice(ALL_CFS);
-        kv_cfs.extend_from_slice(cfs);
         for item in &self.paths {
+            let kv_db_opt = self.cfg.rocksdb.build_opt();
+            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb::new_engine(item.path().to_str().unwrap(), &kv_cfs, None).unwrap(),
+                rocksdb::new_engine_opt(item.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                    .unwrap(),
             );
             let raft_path = item.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
