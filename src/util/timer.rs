@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp::{Ord, Ordering};
+use std::cmp::{Ord, Ordering, Reverse};
 use std::time::Duration;
 use std::collections::BinaryHeap;
 
 use util::time::Instant;
 
 pub struct Timer<T> {
-    pending: BinaryHeap<TimeoutTask<T>>,
+    pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
 }
 
 impl<T> Timer<T> {
@@ -34,12 +34,12 @@ impl<T> Timer<T> {
             next_tick: Instant::now() + timeout,
             task: task,
         };
-        self.pending.push(task);
+        self.pending.push(Reverse(task));
     }
 
     /// Get the next `timeout` from the timer.
     pub fn next_timeout(&mut self) -> Option<Instant> {
-        self.pending.peek().map(|task| task.next_tick)
+        self.pending.peek().map(|task| task.0.next_tick)
     }
 
     /// Pop a `TimeoutTask` from the `Timer`, which should be tick before `instant`.
@@ -50,9 +50,9 @@ impl<T> Timer<T> {
     pub fn pop_task_before(&mut self, instant: Instant) -> Option<T> {
         if self.pending
             .peek()
-            .map_or(false, |t| t.next_tick <= instant)
+            .map_or(false, |t| t.0.next_tick <= instant)
         {
-            return self.pending.pop().map(|t| t.task);
+            return self.pending.pop().map(|t| t.0.task);
         }
         None
     }
@@ -74,8 +74,7 @@ impl<T> Eq for TimeoutTask<T> {}
 
 impl<T> PartialOrd for TimeoutTask<T> {
     fn partial_cmp(&self, other: &TimeoutTask<T>) -> Option<Ordering> {
-        // We need a mininum heap instead of a maximum heap, so reverse the `partial_cmp` here.
-        other.next_tick.partial_cmp(&self.next_tick)
+        self.next_tick.partial_cmp(&other.next_tick)
     }
 }
 
