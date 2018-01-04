@@ -31,7 +31,7 @@ use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
+use storage::{self, engine, Engine, FlowStatistics, Snapshot, StatisticsSummary};
 use storage::engine::Error as EngineError;
 use pd::PdTask;
 
@@ -40,7 +40,7 @@ use super::codec::datum::Datum;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
-use super::local_metrics::*;
+use super::local_metrics::{CopMetrics, ScanCounter};
 use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -72,39 +72,73 @@ pub struct Host {
     batch_row_limit: usize,
 }
 
-pub type CopRequestStatistics = HashMap<u64, FlowStatistics>;
-
-pub trait CopSender: Send + Clone {
-    fn send(&self, CopRequestStatistics) -> Result<()>;
-}
-
 struct CopContextFactory {
     sender: FutureScheduler<PdTask>,
 }
 
 impl ContextFactory<CopContext> for CopContextFactory {
     fn create(&self) -> CopContext {
-        CopContext {
-            sender: self.sender.clone(),
-            select_stats: Default::default(),
-            index_stats: Default::default(),
-            request_stats: HashMap::default(),
-            scan_counter: ScanCounter::default(),
+        CopContext::new(self.sender.clone())
+    }
+}
+
+pub struct CopFlowStatistics {
+    data: HashMap<u64, FlowStatistics>,
+    sender: FutureScheduler<PdTask>,
+}
+
+impl CopFlowStatistics {
+    fn new(sender: FutureScheduler<PdTask>) -> CopFlowStatistics {
+        CopFlowStatistics {
+            sender: sender,
+            data: Default::default(),
         }
+    }
+
+    pub fn flush(&mut self) {
+        if self.data.is_empty() {
+            return;
+        }
+        let mut to_send_stats = HashMap::default();
+        mem::swap(&mut to_send_stats, &mut self.data);
+        if let Err(e) = self.sender.schedule(PdTask::ReadStats {
+            read_stats: to_send_stats,
+        }) {
+            error!("send coprocessor statistics: {:?}", e);
+        };
     }
 }
 
 struct CopContext {
+    flow_stats: CopFlowStatistics,
     select_stats: StatisticsSummary,
     index_stats: StatisticsSummary,
-    request_stats: CopRequestStatistics,
-    sender: FutureScheduler<PdTask>,
     scan_counter: ScanCounter,
 }
 
 impl CopContext {
-    fn add_statistics(&mut self, type_str: &str, stats: &Statistics) {
+    fn new(sender: FutureScheduler<PdTask>) -> CopContext {
+        CopContext {
+            flow_stats: CopFlowStatistics::new(sender),
+            select_stats: Default::default(),
+            index_stats: Default::default(),
+            scan_counter: Default::default(),
+        }
+    }
+
+    fn finish_task(&mut self, type_str: &str, region_id: u64, mut metrics: CopMetrics) {
+        let stats = &metrics.cf_stats;
+        // cf statistics group by type
         self.get_statistics(type_str).add_statistics(stats);
+        // flow statistics group by region
+        let flow_stats = self.flow_stats
+            .data
+            .entry(region_id)
+            .or_insert_with(FlowStatistics::default);
+        flow_stats.add(&stats.write.flow_stats);
+        flow_stats.add(&stats.data.flow_stats);
+        // scan count
+        self.scan_counter.merge(&mut metrics.scan_counter);
     }
 
     fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
@@ -116,18 +150,6 @@ impl CopContext {
                 &mut self.select_stats
             }
         }
-    }
-
-    fn add_statistics_by_region(&mut self, region_id: u64, stats: &Statistics) {
-        let flow_stats = self.request_stats
-            .entry(region_id)
-            .or_insert_with(FlowStatistics::default);
-        flow_stats.add(&stats.write.flow_stats);
-        flow_stats.add(&stats.data.flow_stats);
-    }
-
-    fn add_scan_count(&mut self, scan_counter: &mut ScanCounter) {
-        self.scan_counter.merge(scan_counter);
     }
 
     fn flush_scan_count(&mut self) {
@@ -152,15 +174,16 @@ impl Context for CopContext {
             }
             *this_statistics = Default::default();
         }
-        if !self.request_stats.is_empty() {
-            let mut to_send_stats = HashMap::default();
-            mem::swap(&mut to_send_stats, &mut self.request_stats);
-            if let Err(e) = self.sender.schedule(PdTask::ReadStats {
-                read_stats: to_send_stats,
-            }) {
-                error!("send coprocessor statistics: {:?}", e);
-            };
-        }
+        self.flow_stats.flush();
+        // if !self.request_stats.is_empty() {
+        //     let mut to_send_stats = HashMap::default();
+        //     mem::swap(&mut to_send_stats, &mut self.request_stats);
+        //     if let Err(e) = self.sender.schedule(PdTask::ReadStats {
+        //         read_stats: to_send_stats,
+        //     }) {
+        //         error!("send coprocessor statistics: {:?}", e);
+        //     };
+        // }
         self.flush_scan_count();
     }
 }
@@ -237,13 +260,8 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 let region_id = req.req.get_context().get_region_id();
-                let CopMetrics {
-                    cf_stats,
-                    mut scan_counter,
-                } = end_point.handle_request(req, batch_row_limit);
-                ctx.add_statistics(type_str, &cf_stats);
-                ctx.add_statistics_by_region(region_id, &cf_stats);
-                ctx.add_scan_count(&mut scan_counter);
+                let stats = end_point.handle_request(req, batch_row_limit);
+                ctx.finish_task(type_str, region_id, stats);
                 COPR_PENDING_REQS
                     .with_label_values(&[type_str, pri_str])
                     .dec();
