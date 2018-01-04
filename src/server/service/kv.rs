@@ -97,6 +97,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
+        info!("[!!] kv::kv_get get_req = {:?}", get_req);
+
         // build cop_req
         let req_data = get_req.write_to_bytes().unwrap();
         let mut cop_req = Request::new();
@@ -123,11 +125,16 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 is.set_recursion_limit(recursion_limit);
                 let mut get_res = GetResponse::new();
                 get_res.merge_from(&mut is).unwrap();
+
+                info!("[!!] kv::kv_get get_res = {:?}", get_res);
+
                 get_res
             })
             .and_then(|get_res| sink.success(get_res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
+                info!("[!!] kv::kv_get response err {}", e);
+
                 debug!("{} failed: {:?}", label, e);
                 GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
             });

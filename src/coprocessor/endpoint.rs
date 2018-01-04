@@ -716,6 +716,7 @@ impl TiDbEndPoint {
     }
 
     pub fn handle_get(self, req: GetRequest, t: &mut RequestTask) -> Result<Response> {
+        info!("[!!] handle_get req = {:?}", req);
         let snap_store = SnapshotStore::new(
             self.snap,
             req.get_version(),
@@ -729,18 +730,31 @@ impl TiDbEndPoint {
 
         let mut res = GetResponse::new();
         if let Some(err) = service_util::extract_region_error(&result) {
+            info!("[!!] handle_get response: region error {:?}", err);
             res.set_region_error(err);
         } else {
             match result {
-                Ok(Some(val)) => res.set_value(val),
-                Ok(None) => res.set_value(vec![]),
-                Err(e) => res.set_error(service_util::extract_key_error(&e)),
+                Ok(Some(val)) => {
+                    res.set_value(val);
+                    info!("[!!] handle_get response: got value");
+                }
+                Ok(None) => {
+                    res.set_value(vec![]);
+                    info!("[!!] handle_get response: got None");
+                }
+                Err(e) => {
+                    res.set_error(service_util::extract_key_error(&e));
+                    info!("[!!] handle_get response: key error {:?}", e);
+                }
             }
         }
 
         let data = box_try!(res.write_to_bytes());
         let mut res = Response::new();
         res.set_data(data);
+
+        info!("[!!] handle_get res = {:?}", res);
+
         Ok(res)
     }
 
