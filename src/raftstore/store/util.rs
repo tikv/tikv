@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::option::Option;
+use std::{fmt, u64};
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
@@ -19,11 +20,14 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use storage::LARGE_CFS;
-use util::properties::SizeProperties;
-use util::rocksdb as rocksdb_util;
-use super::engine::{IterOption, Iterable};
+use time::{Duration, Timespec};
 
+use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use util::properties::SizeProperties;
+use util::{rocksdb as rocksdb_util, Either};
+use util::time::monotonic_raw_now;
+
+use super::engine::{IterOption, Iterable};
 use super::peer_storage;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -91,37 +95,59 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
     }
 }
 
-const MAX_DELETE_KEYS_COUNT: usize = 10000;
+const MAX_WRITE_BATCH_SIZE: usize = 4 * 1024 * 1024;
 
-pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+pub fn delete_all_in_range(
+    db: &DB,
+    start_key: &[u8],
+    end_key: &[u8],
+    use_delete_range: bool,
+) -> Result<()> {
     if start_key >= end_key {
         return Ok(());
     }
 
     for cf in db.cf_names() {
-        delete_all_in_range_cf(db, cf, start_key, end_key)?;
+        delete_all_in_range_cf(db, cf, start_key, end_key, use_delete_range)?;
     }
 
     Ok(())
 }
 
-pub fn delete_all_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+pub fn delete_all_in_range_cf(
+    db: &DB,
+    cf: &str,
+    start_key: &[u8],
+    end_key: &[u8],
+    use_delete_range: bool,
+) -> Result<()> {
     let handle = rocksdb_util::get_cf_handle(db, cf)?;
-    let iter_opt = IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), false);
-    let mut it = db.new_iterator_cf(cf, iter_opt)?;
     let mut wb = WriteBatch::new();
-    it.seek(start_key.into());
-    while it.valid() {
-        wb.delete_cf(handle, it.key())?;
-        if wb.count() == MAX_DELETE_KEYS_COUNT {
-            // Can't use write_without_wal here.
-            // Otherwise it may cause dirty data when applying snapshot.
-            db.write(wb)?;
-            wb = WriteBatch::new();
+    // Since CF_RAFT and CF_LOCK is usually small, so using
+    // traditional way to cleanup.
+    if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
+        if cf == CF_WRITE {
+            let start = Key::from_encoded(start_key.to_vec()).append_ts(u64::MAX);
+            wb.delete_range_cf(handle, start.encoded(), end_key)?;
+        } else {
+            wb.delete_range_cf(handle, start_key, end_key)?;
         }
+    } else {
+        let iter_opt = IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), false);
+        let mut it = db.new_iterator_cf(cf, iter_opt)?;
+        it.seek(start_key.into());
+        while it.valid() {
+            wb.delete_cf(handle, it.key())?;
+            if wb.data_size() >= MAX_WRITE_BATCH_SIZE {
+                // Can't use write_without_wal here.
+                // Otherwise it may cause dirty data when applying snapshot.
+                db.write(wb)?;
+                wb = WriteBatch::new();
+            }
 
-        if !it.next() {
-            break;
+            if !it.next() {
+                break;
+            }
         }
     }
 
@@ -177,22 +203,195 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
     Ok(size)
 }
 
+/// Lease records an expired time, for examining the current moment is in lease or not.
+/// It's dedicated to the Raft leader lease mechanism, contains either state of
+///   1. Suspect Timestamp
+///      A suspicious leader lease timestamp, which marks the leader may still hold or lose
+///      its lease until the clock time goes over this timestamp.
+///   2. Valid Timestamp
+///      A valid leader lease timestamp, which marks the leader holds the lease for now.
+///      The lease is valid until the clock time goes over this timestamp.
+///
+/// ```text
+/// Time
+/// |---------------------------------->
+///         ^               ^
+///        Now           Suspect TS
+/// State:  |    Suspect    |   Suspect
+///
+/// |---------------------------------->
+///         ^               ^
+///        Now           Valid TS
+/// State:  |     Valid     |   Expired
+/// ```
+///
+/// Note:
+///   - Valid timestamp would increase when raft log entries are applied in current term.
+///   - Suspect timestamp would be set after the message `MsgTimeoutNow` is sent by current peer.
+///     The message `MsgTimeoutNow` starts a leader transfer procedure. During this procedure,
+///     current peer as an old leader may still hold its lease or lose it.
+///     It's possible there is a new leader elected and current peer as an old leader
+///     doesn't step down due to network partition from the new leader. In that case,
+///     current peer lose its leader lease.
+///     Within this suspect leader lease expire time, read requests could not be performed
+///     locally.
+///   - The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
+///     And the expired timestamp for that leader lease is `commit_ts + lease`,
+///     which is `send_ts + max_lease` in short.
+// TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
+//       to the local read thread, so name it remote. If Lease expires, the remote must
+//       expire too.
+pub struct Lease {
+    // A suspect timestamp is in the Either::Left(_),
+    // a valid timestamp is in the Either::Right(_).
+    bound: Option<Either<Timespec, Timespec>>,
+    max_lease: Duration,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum LeaseState {
+    /// The lease is suspicious, may be invalid.
+    Suspect,
+    /// The lease is valid.
+    Valid,
+    /// The lease is expired.
+    Expired,
+}
+
+impl Lease {
+    pub fn new(max_lease: Duration) -> Lease {
+        Lease {
+            bound: None,
+            max_lease: max_lease,
+        }
+    }
+
+    /// The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
+    /// And the expired timestamp for that leader lease is `commit_ts + lease`,
+    /// which is `send_ts + max_lease` in short.
+    fn next_expired_time(&self, send_ts: Timespec) -> Timespec {
+        send_ts + self.max_lease
+    }
+
+    /// Renew the lease to the bound.
+    pub fn renew(&mut self, send_ts: Timespec) {
+        let bound = self.next_expired_time(send_ts);
+        match self.bound {
+            // Longer than suspect ts or longer than valid ts.
+            Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts <= bound {
+                self.bound = Some(Either::Right(bound));
+            },
+            // Or an empty lease
+            None => {
+                self.bound = Some(Either::Right(bound));
+            }
+        }
+    }
+
+    /// Suspect the lease to the bound.
+    pub fn suspect(&mut self, send_ts: Timespec) {
+        let bound = self.next_expired_time(send_ts);
+        self.bound = Some(Either::Left(bound));
+    }
+
+    /// Inspect the lease state for the ts or now.
+    pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
+        match self.bound {
+            Some(Either::Left(_)) => LeaseState::Suspect,
+            Some(Either::Right(bound)) => if ts.unwrap_or_else(monotonic_raw_now) < bound {
+                LeaseState::Valid
+            } else {
+                LeaseState::Expired
+            },
+            None => LeaseState::Expired,
+        }
+    }
+
+    pub fn expire(&mut self) {
+        self.bound = None;
+    }
+}
+
+impl fmt::Debug for Lease {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let mut fmter = fmt.debug_struct("Lease");
+        match self.bound {
+            Some(Either::Left(ts)) => fmter.field("suspect", &ts).finish(),
+            Some(Either::Right(ts)) => fmter.field("valid", &ts).finish(),
+            None => fmter.finish(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::process;
+    use std::thread;
 
     use kvproto::metapb;
     use kvproto::raft_serverpb::RaftMessage;
     use kvproto::eraftpb::{ConfChangeType, Message, MessageType};
+    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
+    use tempdir::TempDir;
+    use time::Duration as TimeDuration;
 
-    use super::*;
     use raftstore::store::peer_storage;
     use util::properties::SizePropertiesCollectorFactory;
-
-    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
-    use storage::ALL_CFS;
-    use tempdir::TempDir;
+    use util::time::monotonic_raw_now;
+    use storage::{Key, ALL_CFS};
+    use super::*;
+
+    #[test]
+    fn test_lease() {
+        let duration = TimeDuration::milliseconds(1500);
+
+        // Empty lease.
+        let mut lease = Lease::new(duration);
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+
+        let now = monotonic_raw_now();
+        let next_expired_time = lease.next_expired_time(now);
+        assert_eq!(next_expired_time, now + duration);
+
+        // Transit to the Valid state.
+        lease.renew(now);
+        assert_eq!(lease.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
+        assert_eq!(lease.inspect(None), LeaseState::Valid);
+
+        // After lease expired time.
+        thread::sleep(duration.to_std().unwrap());
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+        assert_eq!(lease.inspect(None), LeaseState::Expired);
+
+        // Transit to the Suspect state.
+        lease.suspect(monotonic_raw_now());
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Suspect
+        );
+        assert_eq!(lease.inspect(None), LeaseState::Suspect);
+
+        // After lease expired time. Always suspect.
+        thread::sleep(duration.to_std().unwrap());
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Suspect
+        );
+
+        // Clear lease.
+        lease.expire();
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+    }
 
     // Tests the util function `check_key_in_region`.
     #[test]
@@ -364,8 +563,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_delete_all_in_range() {
+    fn test_delete_all_in_range(use_delete_range: bool) {
         let path = TempDir::new("_raftstore_util_delete_all_in_range").expect("");
         let path_str = path.path().to_str().unwrap();
 
@@ -376,14 +574,19 @@ mod tests {
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
         let wb = WriteBatch::new();
-        let kvs: Vec<(&[u8], &[u8])> = vec![
-            (b"k1", b"v1"),
-            (b"k2", b"v2"),
-            (b"k3", b"v3"),
-            (b"k4", b"v4"),
+        let ts: u64 = 12345;
+        let keys = vec![
+            Key::from_raw(b"k1").append_ts(ts),
+            Key::from_raw(b"k2").append_ts(ts),
+            Key::from_raw(b"k3").append_ts(ts),
+            Key::from_raw(b"k4").append_ts(ts),
         ];
-        let kvs_left: Vec<(&[u8], &[u8])> = vec![(b"k1", b"v1"), (b"k4", b"v4")];
 
+        let mut kvs: Vec<(&[u8], &[u8])> = vec![];
+        for (_, key) in keys.iter().enumerate() {
+            kvs.push((key.encoded().as_slice(), b"value"));
+        }
+        let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
         for &(k, v) in kvs.as_slice() {
             for cf in ALL_CFS {
                 let handle = get_cf_handle(&db, cf).unwrap();
@@ -394,8 +597,25 @@ mod tests {
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         // Delete all in ["k2", "k4").
-        delete_all_in_range(&db, b"k2", b"k4").unwrap();
+        let start = Key::from_raw(b"k2");
+        let end = Key::from_raw(b"k4");
+        delete_all_in_range(
+            &db,
+            start.encoded().as_slice(),
+            end.encoded().as_slice(),
+            use_delete_range,
+        ).unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
+    }
+
+    #[test]
+    fn test_delete_all_in_range_use_delete_range() {
+        test_delete_all_in_range(true);
+    }
+
+    #[test]
+    fn test_delete_all_in_range_not_use_delete_range() {
+        test_delete_all_in_range(false);
     }
 
     fn exit_with_err(msg: String) -> ! {
@@ -440,7 +660,7 @@ mod tests {
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").
-        delete_all_in_range(&db, b"kabcdefg2", b"kabcdefg4").unwrap();
+        delete_all_in_range(&db, b"kabcdefg2", b"kabcdefg4", true).unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
     }
 }

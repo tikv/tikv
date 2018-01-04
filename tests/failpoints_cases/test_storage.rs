@@ -26,8 +26,8 @@ use storage::util::new_raft_engine;
 #[test]
 fn test_storage_1gc() {
     let _guard = ::setup();
-    let snapshot_fp = "tikv::storage::engine::raftkv::raftkv_async_snapshot_finish";
-    let batch_snapshot_fp = "tikv::storage::engine::raftkv::raftkv_async_batch_snapshot_finish";
+    let snapshot_fp = "raftkv_async_snapshot_finish";
+    let batch_snapshot_fp = "raftkv_async_batch_snapshot_finish";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
@@ -64,7 +64,7 @@ fn test_storage_1gc() {
 #[test]
 fn test_scheduler_leader_change_twice() {
     let _guard = ::setup();
-    let snapshot_fp = "tikv::storage::engine::raftkv::raftkv_async_snapshot_finish";
+    let snapshot_fp = "raftkv_async_snapshot_finish";
     let mut cluster = new_server_cluster(0, 2);
     cluster.run();
     let region0 = cluster.get_region(b"");
@@ -91,7 +91,7 @@ fn test_scheduler_leader_change_twice() {
             match res {
                 Err(storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e)))) |
                 Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
-                    assert!(e.has_stale_command());
+                    assert!(e.has_stale_command(), "{:?}", e);
                     prewrite_tx.send(false).unwrap();
                 }
                 Ok(_) => {
