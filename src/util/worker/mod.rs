@@ -113,6 +113,12 @@ impl<T: Display, R: Runnable<T>> Runnable<T> for DefaultRunnerWithTimer<T, R> {
     fn run_batch(&mut self, ts: &mut Vec<T>) {
         self.runner.run_batch(ts)
     }
+    fn on_tick(&mut self) {
+        self.runner.on_tick()
+    }
+    fn shutdown(&mut self) {
+        self.runner.shutdown()
+    }
 }
 
 impl<T: Display, R: Runnable<T>> RunnableWithTimer<T, ()> for DefaultRunnerWithTimer<T, R> {
