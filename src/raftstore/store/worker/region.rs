@@ -113,7 +113,7 @@ impl SnapContext {
                     Err(_) => break,
                 };
                 let mut key_and_snaps = Vec::with_capacity(snaps.len());
-                for (key, is_sending) in snaps.into_iter() {
+                for (key, is_sending) in snaps {
                     if !is_sending {
                         continue;
                     }
