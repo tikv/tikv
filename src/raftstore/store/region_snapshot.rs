@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ use raftstore::Result;
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
+#[derive(Debug)]
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
     region: Arc<Region>,

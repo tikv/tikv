@@ -32,7 +32,7 @@ use kvproto::pdpb::PeerStats;
 use raft::{self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX};
 use raftstore::{Error, Result};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{Callback, Config, ReadResponse};
+use raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use raftstore::store::worker::{apply, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 use raftstore::store::worker::{Apply, ApplyRes, ApplyTask};
@@ -1660,7 +1660,14 @@ impl Peer {
 
         let mut response = RaftCmdResponse::new();
         response.set_responses(protobuf::RepeatedField::from_vec(responses));
-        let snapshot = if need_snapshot { Some(snapshot) } else { None };
+        let snapshot = if need_snapshot {
+            Some(RegionSnapshot::from_snapshot(
+                snapshot.into_sync(),
+                self.region().to_owned(),
+            ))
+        } else {
+            None
+        };
         Ok(ReadResponse { response, snapshot })
     }
 }

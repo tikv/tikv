@@ -25,7 +25,7 @@ use protobuf::RepeatedField;
 use server::transport::RaftStoreRouter;
 use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::errors::Error as RaftServerError;
-use raftstore::coprocessor::{RegionIterator, RegionSnapshot};
+use raftstore::store::{RegionIterator, RegionSnapshot};
 use raftstore::store::engine::Peekable;
 use raftstore::store::engine::IterOption;
 use rocksdb::TablePropertiesCollection;
@@ -153,12 +153,7 @@ fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Re
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
-    let mut resps = read_resp.response.take_responses();
-    let snap = RegionSnapshot::from_snapshot(
-        read_resp.snapshot.unwrap().into_sync(),
-        resps[0].take_snap().take_region(),
-    );
-    (cb_ctx, Ok(CmdRes::Snap(snap)))
+    (cb_ctx, Ok(CmdRes::Snap(read_resp.snapshot.unwrap())))
 }
 
 impl<S: RaftStoreRouter> RaftKv<S> {
@@ -179,7 +174,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             ls.push(l);
         }
         let on_finished: store::BatchReadCallback =
-            box move |resps: Vec<Option<store::ReadResponse>>| {
+            Box::new(move |resps: Vec<Option<store::ReadResponse>>| {
                 assert_eq!(batch_size, resps.len());
                 let mut cmd_resps = Vec::with_capacity(resps.len());
                 for (l, resp) in ls.into_iter().zip(resps) {
@@ -191,19 +186,16 @@ impl<S: RaftStoreRouter> RaftKv<S> {
                                 continue;
                             }
 
-                            let mut rs = resp.response.take_responses();
+                            let rs = resp.response.take_responses();
                             assert_eq!(rs[0].get_cmd_type(), CmdType::Snap);
-                            let res = RegionSnapshot::from_snapshot(
-                                resp.snapshot.unwrap().into_sync(),
-                                rs[0].take_snap().take_region(),
-                            );
-                            cmd_resps.push(Some((cb_ctx, Ok(CmdRes::Snap(res)))));
+                            cmd_resps
+                                .push(Some((cb_ctx, Ok(CmdRes::Snap(resp.snapshot.unwrap())))));
                         }
                         None => cmd_resps.push(None),
                     }
                 }
                 on_finished(cmd_resps);
-            };
+            });
 
         self.router.send_batch_commands(batch, on_finished)?;
         Ok(())

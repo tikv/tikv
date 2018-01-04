@@ -22,12 +22,12 @@ use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
 use util::escape;
 
-use super::engine::Snapshot;
+use super::RegionSnapshot;
 
 #[derive(Debug)]
 pub struct ReadResponse {
     pub response: RaftCmdResponse,
-    pub snapshot: Option<Snapshot>,
+    pub snapshot: Option<RegionSnapshot>,
 }
 
 #[derive(Debug)]
