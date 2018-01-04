@@ -102,7 +102,6 @@ fn main() {
             e
         );
     }
-    // TODO allow user to specify flag to just bench some cases.
 
 
     let mut args: Vec<_> = env::args().skip(1).collect();

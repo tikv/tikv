@@ -1,6 +1,19 @@
+// Copyright 2017 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 extern crate rand;
 
-use std::time::SystemTime;
+use std::time::Instant;
 use std::sync::mpsc::channel;
 
 use tikv::storage::{new_local_engine_with_config, Engine, Key, Modify, Mutation, Options,
@@ -48,6 +61,7 @@ fn commit(engine: &Engine, keys: &[Key], start_ts: u64, commit_ts: u64) {
 
 fn prepare_test_engine(versions: usize, value_len: usize, keys: &[Vec<u8>]) -> Box<Engine> {
     let mut config = DbConfig::default();
+    // Use a huge write_buffer_size to avoid flushing data to disk.
     config.defaultcf.write_buffer_size = ReadableSize::gb(1);
     config.writecf.write_buffer_size = ReadableSize::gb(1);
     config.lockcf.write_buffer_size = ReadableSize::gb(1);
@@ -156,6 +170,8 @@ fn bench_batch_set_impl(
 
             keys_to_write.clear();
             mutations.clear();
+
+            // Randomly select non-duplicated keys
             for i in 0..batch_size {
                 let selected = rng.gen_range(i, keys.len());
                 indices.swap(selected, i);
@@ -306,6 +322,8 @@ fn bench_concurrent_batch_impl(
             shuffle(&mut keys);
 
             let mut keys = keys.drain(..);
+
+            // Divide keys into many tasks.
             let mut txns: Vec<Vec<_>> = (0..txn_count)
                 .map(|_| (&mut keys).take(batch_size).collect())
                 .collect();
@@ -319,7 +337,7 @@ fn bench_concurrent_batch_impl(
 
             let (tx, rx) = channel::<()>();
 
-            let start_time = SystemTime::now();
+            let start_time = Instant::now();
 
             let actual_count = txns.len();
 
@@ -337,15 +355,17 @@ fn bench_concurrent_batch_impl(
                     let start_ts = next_ts();
                     prewrite(&*engine, &mutations, &primary, start_ts);
                     commit(&*engine, &keys, start_ts, next_ts());
+                    // Signal that this task has been finished
                     tx.send(()).unwrap();
                 })
             }
 
+            // Wait until all tasks are finished
             for _ in 0..actual_count {
                 rx.recv().unwrap();
             }
 
-            start_time.elapsed().unwrap()
+            start_time.elapsed()
         },
         5,
     );
