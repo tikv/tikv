@@ -18,7 +18,6 @@ mod metrics;
 mod future;
 
 use std::{io, usize};
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -101,27 +100,24 @@ pub trait RunnableWithTimer<T: Display, U>: Runnable<T> {
     fn on_timeout(&mut self, &mut Timer<U>, U);
 }
 
-struct DefaultRunnerWithTimer<T: Display, R: Runnable<T>> {
-    runner: R,
-    _t: PhantomData<T>,
-}
+struct DefaultRunnerWithTimer<R>(R);
 
-impl<T: Display, R: Runnable<T>> Runnable<T> for DefaultRunnerWithTimer<T, R> {
+impl<T: Display, R: Runnable<T>> Runnable<T> for DefaultRunnerWithTimer<R> {
     fn run(&mut self, t: T) {
-        self.runner.run(t)
+        self.0.run(t)
     }
     fn run_batch(&mut self, ts: &mut Vec<T>) {
-        self.runner.run_batch(ts)
+        self.0.run_batch(ts)
     }
     fn on_tick(&mut self) {
-        self.runner.on_tick()
+        self.0.on_tick()
     }
     fn shutdown(&mut self) {
-        self.runner.shutdown()
+        self.0.shutdown()
     }
 }
 
-impl<T: Display, R: Runnable<T>> RunnableWithTimer<T, ()> for DefaultRunnerWithTimer<T, R> {
+impl<T: Display, R: Runnable<T>> RunnableWithTimer<T, ()> for DefaultRunnerWithTimer<R> {
     fn on_timeout(&mut self, _: &mut Timer<()>, _: ()) {}
 }
 
@@ -278,10 +274,9 @@ fn poll<R, T, U>(
     let mut batch = Vec::with_capacity(batch_size);
     let mut keep_going = true;
     let mut tick_time = None;
-    let zero_dur = Duration::default();
     while keep_going {
         tick_time = tick_time.or_else(|| timer.next_timeout());
-        let timeout = tick_time.map(|t| t.checked_sub(Instant::now()).unwrap_or(zero_dur));
+        let timeout = tick_time.map(|t| t.checked_sub(Instant::now()).unwrap_or_default());
 
         keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
         if !batch.is_empty() {
@@ -346,10 +341,7 @@ impl<T: Display + Send + 'static> Worker<T> {
 
     /// Start the worker.
     pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<(), io::Error> {
-        let runner = DefaultRunnerWithTimer {
-            runner: runner,
-            _t: PhantomData::default(),
-        };
+        let runner = DefaultRunnerWithTimer(runner);
         let timer: Timer<()> = Timer::new(0);
         self.start_with_timer(runner, timer)
     }

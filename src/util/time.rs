@@ -268,7 +268,7 @@ impl Instant {
     ///
     /// Callers need to ensure that `self` and `other` are same type of Instantants.
     pub fn checked_sub(&self, other: Instant) -> Option<Duration> {
-        if *self > other {
+        if *self >= other {
             Some(self.duration_since(other))
         } else {
             None
@@ -320,8 +320,6 @@ impl PartialEq for Instant {
         }
     }
 }
-
-impl Eq for Instant {}
 
 impl PartialOrd for Instant {
     fn partial_cmp(&self, other: &Instant) -> Option<Ordering> {
