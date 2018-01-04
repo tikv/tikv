@@ -120,8 +120,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(move |cop_res| {
                 // when there are region errors in getting snapshot, it is in cop_res.region_error.
                 if cop_res.has_region_error() {
-                    let get_res = GetResponse::new();
-                    get_res.set_region_error(*cop_res.get_region_error());
+                    let mut get_res = GetResponse::new();
+                    get_res.set_region_error(cop_res.get_region_error().clone());
                     return get_res;
                 }
 
@@ -171,8 +171,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(move |cop_res| {
                 // when there are region errors in getting snapshot, it is in cop_res.region_error.
                 if cop_res.has_region_error() {
-                    let scan_res = ScanResponse::new();
-                    scan_res.set_region_error(*cop_res.get_region_error());
+                    let mut scan_res = ScanResponse::new();
+                    scan_res.set_region_error(cop_res.get_region_error().clone());
                     return scan_res;
                 }
 
@@ -380,8 +380,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(move |cop_res| {
                 // when there are region errors in getting snapshot, it is in cop_res.region_error.
                 if cop_res.has_region_error() {
-                    let batch_get_res = BatchGetResponse::new();
-                    batch_get_res.set_region_error(*cop_res.get_region_error());
+                    let mut batch_get_res = BatchGetResponse::new();
+                    batch_get_res.set_region_error(cop_res.get_region_error().clone());
                     return batch_get_res;
                 }
 
