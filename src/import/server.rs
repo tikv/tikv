@@ -40,7 +40,7 @@ impl Server {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(cfg.grpc_concurrency)
-                .name_prefix(thd_name!("grpc-server"))
+                .name_prefix(thd_name!("import-server"))
                 .build(),
         );
 

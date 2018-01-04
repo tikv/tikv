@@ -144,7 +144,7 @@ impl<'a> UploadStream<'a> {
     }
 }
 
-const UPLOAD_CHUNK_SIZE: usize = 4 * 1024 * 1024;
+const UPLOAD_CHUNK_SIZE: usize = 1024 * 1024;
 
 impl<'a> Stream for UploadStream<'a> {
     type Item = (UploadRequest, WriteFlags);
@@ -175,6 +175,7 @@ impl<'a> Stream for UploadStream<'a> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use rand::{self, Rng};
     use kvproto::metapb::*;
     use pd::Error as PdError;
     use import::{Error, Result};
@@ -209,5 +210,32 @@ pub mod tests {
             }
             Err(Error::PdRPC(PdError::RegionNotFound(key.to_owned())))
         }
+    }
+
+    #[test]
+    fn test_upload_stream() {
+        let mut meta = SSTMeta::new();
+        meta.set_crc32(123);
+        meta.set_length(321);
+
+        let mut data = vec![0u8; UPLOAD_CHUNK_SIZE * 4];
+        rand::thread_rng().fill_bytes(&mut data);
+
+        let mut stream = UploadStream::new(meta.clone(), &data);
+
+        // Check meta.
+        if let Async::Ready(Some((upload, _))) = stream.poll().unwrap() {
+            assert_eq!(upload.get_meta().get_crc32(), meta.get_crc32());
+            assert_eq!(upload.get_meta().get_length(), meta.get_length());
+        } else {
+            panic!("can not poll upload meta");
+        }
+
+        // Check data.
+        let mut buf: Vec<u8> = Vec::with_capacity(UPLOAD_CHUNK_SIZE * 4);
+        while let Async::Ready(Some((upload, _))) = stream.poll().unwrap() {
+            buf.extend(upload.get_data());
+        }
+        assert_eq!(buf, data);
     }
 }
