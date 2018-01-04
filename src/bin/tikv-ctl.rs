@@ -351,6 +351,8 @@ trait DebugExecutor {
         self.do_compact(db, cf, from, to);
     }
 
+    fn print_bad_regions(&self);
+
     fn set_region_tombstone_after_remove_peer(
         &self,
         mgr: Arc<SecurityManager>,
@@ -488,7 +490,11 @@ impl DebugExecutor for DebugClient {
     }
 
     fn set_region_tombstone(&self, _: u64, _: Region) {
-        unimplemented!();
+        unimplemented!("only avaliable for local mode");
+    }
+
+    fn print_bad_regions(&self) {
+        unimplemented!("only avaliable for local mode");
     }
 }
 
@@ -545,6 +551,18 @@ impl DebugExecutor for Debugger {
     fn set_region_tombstone(&self, region_id: u64, region: Region) {
         self.set_region_tombstone(region_id, region)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e))
+    }
+
+    fn print_bad_regions(&self) {
+        let bad_regions = self.bad_regions()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::bad_regions", e));
+        if !bad_regions.is_empty() {
+            for (region_id, error) in bad_regions {
+                println!("{}: {}", region_id, error);
+            }
+            return;
+        }
+        println!("all regions are healthy")
     }
 }
 
@@ -868,6 +886,9 @@ fn main() {
                         .value_delimiter(",")
                         .help("PD endpoints"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"),
         );
     let matches = app.clone().get_matches();
 
@@ -960,6 +981,8 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, region);
+    } else if matches.subcommand_matches("bad-regions").is_some() {
+        debug_executor.print_bad_regions();
     } else {
         let _ = app.print_help();
     }

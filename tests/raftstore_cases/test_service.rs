@@ -709,7 +709,7 @@ fn test_debug_region_size() {
 fn test_debug_fail_point() {
     let (_cluster, debug_client, _) = must_new_cluster_and_debug_client();
 
-    let (fp, act) = ("tikv::raftstore::store::store::raft_between_save", "off");
+    let (fp, act) = ("raft_between_save", "off");
 
     let mut inject_req = debugpb::InjectFailPointRequest::new();
     inject_req.set_name(fp.to_owned());
