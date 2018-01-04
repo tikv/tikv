@@ -18,10 +18,7 @@ use std::fs::{self, Metadata};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::path::Path;
-use std::result;
-use std::str;
-use std::time;
-use std::thread;
+use std::{result, str, thread, time, u64};
 
 use protobuf::Message;
 use rocksdb::{CFHandle, Writable, WriteBatch, DB};
@@ -1115,6 +1112,11 @@ impl SnapManager {
         } else {
             None
         };
+        let max_total_size = if option.max_total_size > 0 {
+            option.max_total_size
+        } else {
+            u64::MAX
+        };
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
                 base: path.into(),
@@ -1123,7 +1125,7 @@ impl SnapManager {
             })),
             ch: ch,
             limiter: limiter,
-            max_total_size: option.max_total_size,
+            max_total_size: max_total_size,
         }
     }
 

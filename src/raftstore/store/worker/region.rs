@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+use std::cmp::Reverse;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -111,24 +112,22 @@ impl SnapContext {
                     Ok(snaps) => snaps,
                     Err(_) => break,
                 };
-                let mut key_and_snaps = snaps
-                    .into_iter()
-                    .filter_map(|(key, is_sending)| {
-                        if !is_sending {
-                            return None;
-                        }
-                        self.mgr
-                            .get_snapshot_for_sending(&key)
-                            .ok()
-                            .and_then(move |s| s.meta().ok().map(move |_| (key, s)))
-                    })
-                    .collect::<Vec<_>>();
-                key_and_snaps.sort_by(|lhs, rhs| {
-                    let lhs_modified = lhs.1.meta().unwrap().modified().unwrap();
-                    let rhs_modified = rhs.1.meta().unwrap().modified().unwrap();
-                    // sort it by decrease.
-                    rhs_modified.cmp(&lhs_modified)
-                });
+                let mut key_and_snaps = Vec::with_capacity(snaps.len());
+                for (key, is_sending) in snaps.into_iter() {
+                    if !is_sending {
+                        continue;
+                    }
+                    let snap = match self.mgr.get_snapshot_for_sending(&key) {
+                        Ok(snap) => snap,
+                        Err(_) => continue,
+                    };
+                    if !snap.meta().is_ok() {
+                        continue;
+                    }
+                    key_and_snaps.push((key, snap));
+                }
+                key_and_snaps
+                    .sort_by_key(|item| Reverse(item.1.meta().unwrap().modified().unwrap()));
                 old_snaps = Some(key_and_snaps);
             }
             match old_snaps.as_mut().unwrap().pop() {
