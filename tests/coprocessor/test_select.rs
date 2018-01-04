@@ -2142,7 +2142,7 @@ fn test_output_counts() {
 }
 
 #[test]
-fn test_runtime_details() {
+fn test_exec_details() {
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
@@ -2156,7 +2156,7 @@ fn test_runtime_details() {
     // get none
     let req = DAGSelect::from(&product.table).build();
     let resp = handle_request(&end_point, req);
-    assert!(!resp.has_runtime_details());
+    assert!(!resp.has_exec_details());
 
     let flags = &[0];
 
@@ -2165,20 +2165,20 @@ fn test_runtime_details() {
     ctx.set_handle_time(true);
     let req = DAGSelect::from(&product.table).build_with(ctx, flags);
     let resp = handle_request(&end_point, req);
-    assert!(resp.has_runtime_details());
-    let runtime_details = resp.get_runtime_details();
-    assert!(runtime_details.has_handle_time());
-    assert!(!runtime_details.has_scan_detail());
+    assert!(resp.has_exec_details());
+    let exec_details = resp.get_exec_details();
+    assert!(exec_details.has_handle_time());
+    assert!(!exec_details.has_scan_detail());
 
     // get scan detail
     let mut ctx = Context::new();
     ctx.set_scan_detail(true);
     let req = DAGSelect::from(&product.table).build_with(ctx, flags);
     let resp = handle_request(&end_point, req);
-    assert!(resp.has_runtime_details());
-    let runtime_details = resp.get_runtime_details();
-    assert!(!runtime_details.has_handle_time());
-    assert!(runtime_details.has_scan_detail());
+    assert!(resp.has_exec_details());
+    let exec_details = resp.get_exec_details();
+    assert!(!exec_details.has_handle_time());
+    assert!(exec_details.has_scan_detail());
 
     // get both
     let mut ctx = Context::new();
@@ -2186,10 +2186,10 @@ fn test_runtime_details() {
     ctx.set_handle_time(true);
     let req = DAGSelect::from(&product.table).build_with(ctx, flags);
     let resp = handle_request(&end_point, req);
-    assert!(resp.has_runtime_details());
-    let runtime_details = resp.get_runtime_details();
-    assert!(runtime_details.has_handle_time());
-    assert!(runtime_details.has_scan_detail());
+    assert!(resp.has_exec_details());
+    let exec_details = resp.get_exec_details();
+    assert!(exec_details.has_handle_time());
+    assert!(exec_details.has_scan_detail());
 
     end_point.stop().unwrap().join().unwrap();
 }

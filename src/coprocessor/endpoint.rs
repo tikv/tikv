@@ -24,7 +24,7 @@ use tipb::schema::ColumnInfo;
 use protobuf::{CodedInputStream, Message as PbMsg};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel, RunTimeDetails};
+use kvproto::kvrpcpb::{CommandPri, ExecDetails, HandleTime, IsolationLevel};
 
 use util::time::{duration_to_sec, Instant};
 use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
@@ -391,7 +391,7 @@ impl RequestTask {
         self.wait_time = Some(wait_time);
     }
 
-    fn stop_record_handling(&mut self) -> Option<RunTimeDetails> {
+    fn stop_record_handling(&mut self) -> Option<ExecDetails> {
         self.stop_record_waiting();
 
         let query_time = duration_to_sec(self.timer.elapsed());
@@ -412,7 +412,7 @@ impl RequestTask {
         handle.set_process_ms((handle_time * 1000.0) as i64);
         handle.set_wait_ms((wait_time * 1000.0) as i64);
 
-        let mut runtime_details = RunTimeDetails::new();
+        let mut exec_details = ExecDetails::new();
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
                 "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
@@ -426,9 +426,9 @@ impl RequestTask {
                 self.req.get_ranges().len(),
                 self.req.get_ranges().get(0)
             );
-            runtime_details.set_scan_detail(self.statistics.scan_detail());
-            runtime_details.set_handle_time(handle);
-            return Some(runtime_details);
+            exec_details.set_scan_detail(self.statistics.scan_detail());
+            exec_details.set_handle_time(handle);
+            return Some(exec_details);
         }
 
         let ctx = self.req.get_context();
@@ -437,13 +437,13 @@ impl RequestTask {
         }
 
         if ctx.get_handle_time() {
-            runtime_details.set_handle_time(handle);
+            exec_details.set_handle_time(handle);
         }
 
         if ctx.get_scan_detail() {
-            runtime_details.set_scan_detail(self.statistics.scan_detail());
+            exec_details.set_scan_detail(self.statistics.scan_detail());
         }
-        Some(runtime_details)
+        Some(exec_details)
     }
 
     pub fn priority(&self) -> CommandPri {
@@ -635,8 +635,8 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
 }
 
 fn respond(mut resp: Response, mut t: RequestTask) -> CopStats {
-    if let Some(runtime_details) = t.stop_record_handling() {
-        resp.set_runtime_details(runtime_details);
+    if let Some(exec_details) = t.stop_record_handling() {
+        resp.set_exec_details(exec_details);
     }
 
     (t.on_resp)(resp);
@@ -814,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_details_with_long_query() {
+    fn test_exec_details_with_long_query() {
         let mut worker = WorkerBuilder::new("test-endpoint").batch_size(30).create();
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
         let mut cfg = Config::default();
@@ -842,10 +842,10 @@ mod tests {
         worker.schedule(Task::Request(task)).unwrap();
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
-        // check runtime details
-        let runtime_details = resp.get_runtime_details();
-        assert!(runtime_details.has_handle_time());
-        assert!(runtime_details.has_scan_detail());
+        // check exec details
+        let exec_details = resp.get_exec_details();
+        assert!(exec_details.has_handle_time());
+        assert!(exec_details.has_scan_detail());
     }
 
     #[test]
