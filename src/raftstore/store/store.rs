@@ -1960,8 +1960,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return;
             }
         };
-        peer.approximate_size = Some(region_size);
-        peer.update_approximate_size_expired_time();
+        let timeout = peer.gen_expired_time();
+        peer.approximate_size = Some((region_size, timeout));
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {

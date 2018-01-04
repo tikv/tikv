@@ -206,9 +206,8 @@ pub struct Peer {
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
-    /// approximate region size.
-    pub approximate_size: Option<u64>,
-    pub approximate_size_expired_time: Option<Timespec>,
+    /// approximate region size and timeout.
+    pub approximate_size: Option<(u64, Timespec)>,
 
     pub consistency_state: ConsistencyState,
 
@@ -279,15 +278,15 @@ impl Peer {
         Peer::new(store, region, peer_id)
     }
 
-    pub fn update_approximate_size_expired_time(&mut self) {
+    pub fn gen_expired_time(&mut self) -> Timespec {
         let now = time::get_time();
         let base = self.cfg.region_size_expired_time.as_millis();
         let timeout = base + rand::thread_rng().gen_range(0, base);
-        self.approximate_size_expired_time = Some(now + TimeDuration::milliseconds(timeout as i64));
+        now + TimeDuration::milliseconds(timeout as i64)
     }
 
     pub fn approximate_size_expired(&self, now: &Timespec) -> bool {
-        if let Some(expired) = self.approximate_size_expired_time {
+        if let Some((_, expired)) = self.approximate_size {
             return expired.sec < now.sec || (expired.sec == now.sec && expired.nsec < now.nsec);
         }
         false
@@ -359,7 +358,6 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
-            approximate_size_expired_time: None,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
@@ -379,7 +377,6 @@ impl Peer {
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
         };
-        peer.update_approximate_size_expired_time();
 
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
@@ -1629,7 +1626,7 @@ impl Peer {
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            region_size: self.approximate_size,
+            region_size: self.approximate_size.map(|x| x.0),
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
