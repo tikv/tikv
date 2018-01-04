@@ -81,7 +81,7 @@ impl<T> PartialOrd for TimeoutTask<T> {
 impl<T> Ord for TimeoutTask<T> {
     fn cmp(&self, other: &TimeoutTask<T>) -> Ordering {
         // TimeoutTask.next_tick must have same type of instants.
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+        self.partial_cmp(other).unwrap()
     }
 }
 
