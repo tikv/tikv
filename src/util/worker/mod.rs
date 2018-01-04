@@ -18,6 +18,7 @@ mod metrics;
 mod future;
 
 use std::{io, usize};
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -77,25 +78,12 @@ impl<T> From<ScheduleError<T>> for Box<Error + Sync + Send + 'static> {
 }
 
 pub trait Runnable<T: Display> {
+    /// Run a task.
     fn run(&mut self, t: T);
-    fn on_tick(&mut self) {}
-    fn shutdown(&mut self) {}
-}
 
-pub trait BatchRunnable<T: Display> {
     /// Run a batch of tasks.
     ///
     /// Please note that ts will be clear after invoking this method.
-    fn run_batch(&mut self, ts: &mut Vec<T>);
-    fn on_tick(&mut self) {}
-    fn shutdown(&mut self) {}
-}
-
-pub trait BatchRunnableWithTimer<T: Display, U>: BatchRunnable<T> {
-    fn on_timeout(&mut self, &mut Timer<U>, U);
-}
-
-impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
     fn run_batch(&mut self, ts: &mut Vec<T>) {
         for t in ts.drain(..) {
             let task_str = format!("{}", t);
@@ -105,13 +93,30 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
         }
     }
 
-    fn on_tick(&mut self) {
-        Runnable::on_tick(self)
-    }
+    fn on_tick(&mut self) {}
+    fn shutdown(&mut self) {}
+}
 
-    fn shutdown(&mut self) {
-        Runnable::shutdown(self)
+pub trait RunnableWithTimer<T: Display, U>: Runnable<T> {
+    fn on_timeout(&mut self, &mut Timer<U>, U);
+}
+
+struct DefaultRunnerWithTimer<T: Display, R: Runnable<T>> {
+    runner: R,
+    _t: PhantomData<T>,
+}
+
+impl<T: Display, R: Runnable<T>> Runnable<T> for DefaultRunnerWithTimer<T, R> {
+    fn run(&mut self, t: T) {
+        self.runner.run(t)
     }
+    fn run_batch(&mut self, ts: &mut Vec<T>) {
+        self.runner.run_batch(ts)
+    }
+}
+
+impl<T: Display, R: Runnable<T>> RunnableWithTimer<T, ()> for DefaultRunnerWithTimer<T, R> {
+    fn on_timeout(&mut self, _: &mut Timer<()>, _: ()) {}
 }
 
 enum TaskSender<T> {
@@ -252,45 +257,14 @@ pub struct Worker<T: Display> {
     batch_size: usize,
 }
 
-fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
-where
-    R: BatchRunnable<T> + Send + 'static,
-    T: Display + Send + 'static,
-{
-    let name = thread::current().name().unwrap().to_owned();
-    let mut batch = Vec::with_capacity(batch_size);
-    let mut keep_going = true;
-    while keep_going {
-        keep_going = fill_task_batch(&rx, &mut batch, batch_size, None);
-        let should_tick = !batch.is_empty();
-
-        if !batch.is_empty() {
-            counter.fetch_sub(batch.len(), Ordering::SeqCst);
-            WORKER_PENDING_TASK_VEC
-                .with_label_values(&[&name])
-                .sub(batch.len() as f64);
-            WORKER_HANDLED_TASK_VEC
-                .with_label_values(&[&name])
-                .inc_by(batch.len() as f64)
-                .unwrap();
-            runner.run_batch(&mut batch);
-            batch.clear();
-        }
-        if should_tick {
-            runner.on_tick();
-        }
-    }
-    runner.shutdown();
-}
-
-fn poll_with_timer<R, T, U>(
+fn poll<R, T, U>(
     mut runner: R,
     rx: Receiver<Option<T>>,
     counter: Arc<AtomicUsize>,
     batch_size: usize,
     mut timer: Timer<U>,
 ) where
-    R: BatchRunnableWithTimer<T, U> + Send + 'static,
+    R: RunnableWithTimer<T, U> + Send + 'static,
     T: Display + Send + 'static,
     U: Send + 'static,
 {
@@ -304,7 +278,6 @@ fn poll_with_timer<R, T, U>(
         let timeout = tick_time.map(|t| t.checked_sub(Instant::now()).unwrap_or(zero_dur));
 
         keep_going = fill_task_batch(&rx, &mut batch, batch_size, timeout);
-
         if !batch.is_empty() {
             counter.fetch_sub(batch.len(), Ordering::SeqCst);
             WORKER_PENDING_TASK_VEC
@@ -366,30 +339,18 @@ impl<T: Display + Send + 'static> Worker<T> {
     }
 
     /// Start the worker.
-    pub fn start<R>(&mut self, runner: R) -> Result<(), io::Error>
-    where
-        R: BatchRunnable<T> + Send + 'static,
-    {
-        let mut receiver = self.receiver.lock().unwrap();
-        info!("starting working thread: {}", self.scheduler.name);
-        if receiver.is_none() {
-            warn!("worker {} has been started.", self.scheduler.name);
-            return Ok(());
-        }
-
-        let rx = receiver.take().unwrap();
-        let counter = self.scheduler.counter.clone();
-        let batch_size = self.batch_size;
-        let h = ThreadBuilder::new()
-            .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size))?;
-        self.handle = Some(h);
-        Ok(())
+    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<(), io::Error> {
+        let runner = DefaultRunnerWithTimer {
+            runner: runner,
+            _t: PhantomData::default(),
+        };
+        let timer: Timer<()> = Timer::new(0);
+        self.start_with_timer(runner, timer)
     }
 
     pub fn start_with_timer<R, U>(&mut self, runner: R, timer: Timer<U>) -> Result<(), io::Error>
     where
-        R: BatchRunnableWithTimer<T, U> + Send + 'static,
+        R: RunnableWithTimer<T, U> + Send + 'static,
         U: Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
@@ -404,9 +365,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         let batch_size = self.batch_size;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || {
-                poll_with_timer(runner, rx, counter, batch_size, timer)
-            })?;
+            .spawn(move || poll(runner, rx, counter, batch_size, timer))?;
         self.handle = Some(h);
         Ok(())
     }
@@ -478,7 +437,11 @@ mod test {
         ch: Sender<Vec<u64>>,
     }
 
-    impl BatchRunnable<u64> for BatchRunner {
+    impl Runnable<u64> for BatchRunner {
+        fn run(&mut self, _: u64) {
+            panic!("should call run_batch");
+        }
+
         fn run_batch(&mut self, ms: &mut Vec<u64>) {
             self.ch.send(ms.to_vec()).unwrap();
         }

@@ -90,7 +90,7 @@ mod tests {
     use super::*;
     use std::sync::mpsc::{self, Sender};
     use std::sync::mpsc::RecvTimeoutError;
-    use util::worker::{BatchRunnableWithTimer, Builder as WorkerBuilder, Runnable};
+    use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     enum Task {
@@ -113,7 +113,7 @@ mod tests {
         }
     }
 
-    impl BatchRunnableWithTimer<&'static str, Task> for Runner {
+    impl RunnableWithTimer<&'static str, Task> for Runner {
         fn on_timeout(&mut self, timer: &mut Timer<Task>, task: Task) {
             let timeout = match task {
                 Task::A => {
