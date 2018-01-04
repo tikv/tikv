@@ -97,8 +97,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        info!("[!!] kv::kv_get get_req = {:?}", get_req);
-
         // build cop_req
         let req_data = get_req.write_to_bytes().unwrap();
         let mut cop_req = Request::new();
@@ -111,7 +109,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             RequestTask::new(cop_req, cb, self.recursion_limit),
         ));
         if let Err(e) = cop_res {
-            info!("[!!] kv::kv_get cop_res err, e = {}", e);
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
@@ -121,23 +118,23 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = future
             .map_err(Error::from)
             .map(move |cop_res| {
-                info!("[!!] kv::kv_get cop_res = {:?}", cop_res);
+                // when there are region errors in getting snapshot, it is in cop_res.region_error.
+                if cop_res.has_region_error() {
+                    let get_res = GetResponse::new();
+                    get_res.set_region_error(cop_res.get_region_error());
+                    return get_res;
+                }
 
                 // map cop_res into get_res
                 let mut is = CodedInputStream::from_bytes(cop_res.get_data());
                 is.set_recursion_limit(recursion_limit);
                 let mut get_res = GetResponse::new();
                 get_res.merge_from(&mut is).unwrap();
-
-                info!("[!!] kv::kv_get get_res = {:?}", get_res);
-
                 get_res
             })
             .and_then(|get_res| sink.success(get_res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                info!("[!!] kv::kv_get response err {}", e);
-
                 debug!("{} failed: {:?}", label, e);
                 GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
             });
@@ -172,6 +169,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = future
             .map_err(Error::from)
             .map(move |cop_res| {
+                // when there are region errors in getting snapshot, it is in cop_res.region_error.
+                if cop_res.has_region_error() {
+                    let scan_res = ScanResponse::new();
+                    scan_res.set_region_error(cop_res.get_region_error());
+                    return scan_res;
+                }
+
                 // map cop_res into scan_res
                 let mut is = CodedInputStream::from_bytes(cop_res.get_data());
                 is.set_recursion_limit(recursion_limit);
@@ -374,6 +378,13 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let future = future
             .map_err(Error::from)
             .map(move |cop_res| {
+                // when there are region errors in getting snapshot, it is in cop_res.region_error.
+                if cop_res.has_region_error() {
+                    let batch_get_res = GetResponse::new();
+                    batch_get_res.set_region_error(cop_res.get_region_error());
+                    return batch_get_res;
+                }
+
                 // map cop_res into batch_get_res
                 let mut is = CodedInputStream::from_bytes(cop_res.get_data());
                 is.set_recursion_limit(recursion_limit);

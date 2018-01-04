@@ -643,13 +643,11 @@ struct CopStats {
 }
 
 fn on_error(e: Error, req: RequestTask) -> CopStats {
-    info!("endpoint::on_error e = {}", e);
     let resp = err_resp(e);
     respond(resp, req)
 }
 
 fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
-    debug!("failed to handle batch request: {:?}", e);
     let resp = err_resp(e.into());
     for t in reqs {
         respond(resp.clone(), t);
@@ -657,7 +655,6 @@ fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
 }
 
 fn respond(resp: Response, mut t: RequestTask) -> CopStats {
-    info!("endpoint::respond resp = {:?}", resp);
     t.stop_record_handling();
     (t.on_resp)(resp);
     CopStats {
@@ -718,7 +715,6 @@ impl TiDbEndPoint {
     }
 
     pub fn handle_get(self, req: GetRequest, t: &mut RequestTask) -> Result<Response> {
-        info!("[!!] handle_get req = {:?}", req);
         let snap_store = SnapshotStore::new(
             self.snap,
             req.get_version(),
@@ -732,31 +728,18 @@ impl TiDbEndPoint {
 
         let mut res = GetResponse::new();
         if let Some(err) = service_util::extract_region_error(&result) {
-            info!("[!!] handle_get response: region error {:?}", err);
             res.set_region_error(err);
         } else {
             match result {
-                Ok(Some(val)) => {
-                    res.set_value(val);
-                    info!("[!!] handle_get response: got value");
-                }
-                Ok(None) => {
-                    res.set_value(vec![]);
-                    info!("[!!] handle_get response: got None");
-                }
-                Err(e) => {
-                    res.set_error(service_util::extract_key_error(&e));
-                    info!("[!!] handle_get response: key error {:?}", e);
-                }
+                Ok(Some(val)) => res.set_value(val),
+                Ok(None) => res.set_value(vec![]),
+                Err(e) => res.set_error(service_util::extract_key_error(&e)),
             }
         }
 
         let data = box_try!(res.write_to_bytes());
         let mut res = Response::new();
         res.set_data(data);
-
-        info!("[!!] handle_get res = {:?}", res);
-
         Ok(res)
     }
 
