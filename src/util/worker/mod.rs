@@ -74,21 +74,12 @@ impl<T> From<ScheduleError<T>> for Box<Error + Sync + Send + 'static> {
 }
 
 pub trait Runnable<T: Display> {
+    /// Run a task.
     fn run(&mut self, t: T);
-    fn on_tick(&mut self) {}
-    fn shutdown(&mut self) {}
-}
 
-pub trait BatchRunnable<T: Display> {
     /// Run a batch of tasks.
     ///
     /// Please note that ts will be clear after invoking this method.
-    fn run_batch(&mut self, ts: &mut Vec<T>);
-    fn on_tick(&mut self) {}
-    fn shutdown(&mut self) {}
-}
-
-impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
     fn run_batch(&mut self, ts: &mut Vec<T>) {
         for t in ts.drain(..) {
             let task_str = format!("{}", t);
@@ -98,13 +89,8 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
         }
     }
 
-    fn on_tick(&mut self) {
-        Runnable::on_tick(self)
-    }
-
-    fn shutdown(&mut self) {
-        Runnable::shutdown(self)
-    }
+    fn on_tick(&mut self) {}
+    fn shutdown(&mut self) {}
 }
 
 enum TaskSender<T> {
@@ -247,7 +233,7 @@ pub struct Worker<T: Display> {
 
 fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
 where
-    R: BatchRunnable<T> + Send + 'static,
+    R: Runnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
     let name = thread::current().name().unwrap().to_owned();
@@ -302,7 +288,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// Start the worker.
     pub fn start<R>(&mut self, runner: R) -> Result<(), io::Error>
     where
-        R: BatchRunnable<T> + Send + 'static,
+        R: Runnable<T> + Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.scheduler.name);
@@ -388,7 +374,11 @@ mod test {
         ch: Sender<Vec<u64>>,
     }
 
-    impl BatchRunnable<u64> for BatchRunner {
+    impl Runnable<u64> for BatchRunner {
+        fn run(&mut self, _: u64) {
+            panic!("should call run_batch");
+        }
+
         fn run_batch(&mut self, ms: &mut Vec<u64>) {
             self.ch.send(ms.to_vec()).unwrap();
         }
