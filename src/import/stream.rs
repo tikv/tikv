@@ -13,6 +13,7 @@
 
 use std::fmt;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crc::crc32::{self, Hasher32};
@@ -28,10 +29,46 @@ use kvproto::importpb::*;
 use super::{Client, Config, Engine, Result};
 use super::region::*;
 
+pub struct SSTInfo {
+    path: PathBuf,
+    range: Range,
+    next: Vec<u8>,
+}
+
+impl SSTInfo {
+    pub fn gen_sst(&self, engine: &Engine, cf_name: &str) -> Result<SSTFile> {
+        let mut data = Vec::new();
+        let mut f = engine.new_sst_reader(&self.path)?;
+        f.read_to_end(&mut data)?;
+        let _ = engine.delete_sst_file(&self.path);
+
+        let mut digest = crc32::Digest::new(crc32::IEEE);
+        digest.write(&data);
+
+        // This range doesn't contain the data prefix, like region range.
+        let mut range = Range::new();
+        range.set_start(keys::origin_key(self.range.get_start()).to_owned());
+        range.set_end(keys::origin_key(self.range.get_end()).to_owned());
+
+        let mut meta = SSTMeta::new();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta.set_range(range);
+        meta.set_crc32(digest.sum32());
+        meta.set_length(data.len() as u64);
+        meta.set_cf_name(cf_name.to_owned());
+
+        Ok(SSTFile {
+            meta: meta,
+            data: data,
+            next: self.next.clone(),
+        })
+    }
+}
+
 pub struct SSTFile {
     pub meta: SSTMeta,
     pub data: Vec<u8>,
-    next_start: Vec<u8>,
+    next: Vec<u8>,
 }
 
 impl SSTFile {
@@ -42,7 +79,7 @@ impl SSTFile {
     }
 
     pub fn extended_range(&self) -> Range {
-        new_range(self.meta.get_range().get_start(), &self.next_start)
+        new_range(self.meta.get_range().get_start(), &self.next)
     }
 }
 
@@ -92,7 +129,7 @@ impl SSTFileStream {
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<SSTFile>> {
+    pub fn next(&mut self) -> Result<Option<SSTInfo>> {
         if !self.range_iter.valid() {
             return Ok(None);
         }
@@ -110,15 +147,14 @@ impl SSTFileStream {
             }
         }
 
-        let next_start = if self.range_iter.valid() {
+        let next = if self.range_iter.valid() {
             self.range_iter.key().to_owned()
         } else {
             RANGE_MAX.to_owned()
         };
 
         let info = writer.finish()?;
-        let sst = self.new_sst_file(info, next_start)?;
-        Ok(Some(sst))
+        Ok(Some(self.new_sst_info(info, next)))
     }
 
     fn new_sst_writer(&mut self) -> Result<SstFileWriter> {
@@ -129,32 +165,12 @@ impl SSTFileStream {
         self.engine.new_sst_writer(&self.cf_name, path)
     }
 
-    fn new_sst_file(&self, info: ExternalSstFileInfo, next_start: Vec<u8>) -> Result<SSTFile> {
-        let mut data = Vec::new();
-        let mut f = self.engine.new_sst_reader(info.file_path())?;
-        f.read_to_end(&mut data)?;
-        let _ = self.engine.delete_sst_file(info.file_path());
-
-        let mut digest = crc32::Digest::new(crc32::IEEE);
-        digest.write(&data);
-
-        // This range doesn't contain the data prefix, like region range.
-        let mut range = Range::new();
-        range.set_start(keys::origin_key(info.smallest_key()).to_owned());
-        range.set_end(keys::origin_key(info.largest_key()).to_owned());
-
-        let mut meta = SSTMeta::new();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        meta.set_range(range);
-        meta.set_crc32(digest.sum32());
-        meta.set_length(data.len() as u64);
-        meta.set_cf_name(self.cf_name.clone());
-
-        Ok(SSTFile {
-            meta: meta,
-            data: data,
-            next_start: next_start,
-        })
+    fn new_sst_info(&self, info: ExternalSstFileInfo, next: Vec<u8>) -> SSTInfo {
+        SSTInfo {
+            path: info.file_path(),
+            range: new_range(info.smallest_key(), info.largest_key()),
+            next: next,
+        }
     }
 }
 

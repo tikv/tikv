@@ -23,14 +23,13 @@ use uuid::Uuid;
 use pd::RegionInfo;
 
 use kvproto::importpb::*;
-use kvproto::errorpb::NotLeader;
 
 use super::{Client, Config, Engine, Error, ImportClient, Result, UploadStream};
 use super::region::*;
 use super::stream::*;
 use super::prepare::*;
 
-const MAX_RETRY_TIMES: u64 = 3;
+const MAX_RETRY_TIMES: u64 = 5;
 const RETRY_INTERVAL_SECS: u64 = 3;
 
 pub struct ImportJob {
@@ -175,7 +174,7 @@ impl SubImportJob {
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                warn!("{} start #{}", self.tag, i);
+                warn!("{} retry #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
@@ -197,7 +196,7 @@ impl SubImportJob {
             return Ok(());
         }
 
-        Err(Error::Timeout)
+        Err(Error::SubImportJobFailed(self.tag.clone()))
     }
 
     fn import(&self) -> bool {
@@ -229,15 +228,15 @@ impl SubImportJob {
         ))
     }
 
-    fn run_import_stream(&self, tx: mpsc::SyncSender<SSTFile>) -> Result<()> {
+    fn run_import_stream(&self, tx: mpsc::SyncSender<SSTInfo>) -> Result<()> {
         let mut stream = self.new_import_stream()?;
-        while let Some(sst) = stream.next()? {
-            tx.send(sst).unwrap();
+        while let Some(info) = stream.next()? {
+            tx.send(info).unwrap();
         }
         Ok(())
     }
 
-    fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<SSTFile>>>) -> JoinHandle<bool> {
+    fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<SSTInfo>>>) -> JoinHandle<bool> {
         let client = self.client.clone();
         let engine = self.engine.clone();
         let counter = self.counter.clone();
@@ -249,9 +248,18 @@ impl SubImportJob {
             .spawn(move || {
                 // Done if no error occurs.
                 let mut done = true;
-                while let Ok(sst) = rx.lock().unwrap().recv() {
+                while let Ok(info) = rx.lock().unwrap().recv() {
                     let id = counter.fetch_add(1, Ordering::SeqCst);
-                    let tag = format!("[ImportJob {}:{}:{}]", engine.uuid(), cf_name, id);
+                    let tag = format!("[ImportSST {}:{}:{}]", engine.uuid(), cf_name, id);
+
+                    let sst = match info.gen_sst(&engine, &cf_name) {
+                        Ok(v) => v,
+                        Err(_) => {
+                            done = false;
+                            continue;
+                        }
+                    };
+
                     let mut job = ImportSSTJob::new(tag, sst, client.clone());
                     match job.run() {
                         Ok(v) => finished_ranges.lock().unwrap().push(v),
@@ -266,7 +274,7 @@ impl SubImportJob {
             .unwrap()
     }
 
-    fn run_import_threads(&self, rx: mpsc::Receiver<SSTFile>) -> Vec<JoinHandle<bool>> {
+    fn run_import_threads(&self, rx: mpsc::Receiver<SSTInfo>) -> Vec<JoinHandle<bool>> {
         let mut handles = Vec::new();
         let rx = Arc::new(Mutex::new(rx));
         for _ in 0..self.cfg.max_import_sst_jobs {
@@ -298,7 +306,7 @@ impl ImportSSTJob {
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                warn!("{} start #{}", self.tag, i);
+                warn!("{} retry #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
@@ -321,7 +329,7 @@ impl ImportSSTJob {
             }
         }
 
-        Err(Error::Timeout)
+        Err(Error::ImportSSTJobFailed(self.tag.clone()))
     }
 
     fn import(&mut self, mut region: RegionInfo) -> Result<()> {
@@ -338,19 +346,19 @@ impl ImportSSTJob {
 
         self.upload(&region)?;
 
-        // It's more lightweight to retry here as long as the region epoch has
-        // not changed.
-        for _ in 0..10 {
-            match self.ingest(&region)? {
-                None => return Ok(()),
-                Some(mut error) => if error.has_leader() {
-                    region.leader = Some(error.take_leader());
+        for _ in 0..MAX_RETRY_TIMES {
+            match self.ingest(&region) {
+                Ok(_) => return Ok(()),
+                Err(Error::NotLeader(mut e)) => if e.has_leader() {
+                    region.leader = Some(e.take_leader());
                 },
+                Err(e) => return Err(e),
             }
             thread::sleep(Duration::from_millis(300));
         }
 
-        Err(Error::Timeout)
+        // Last chance.
+        self.ingest(&region)
     }
 
     fn upload(&self, region: &RegionInfo) -> Result<()> {
@@ -368,7 +376,7 @@ impl ImportSSTJob {
         Ok(())
     }
 
-    fn ingest(&self, region: &RegionInfo) -> Result<Option<NotLeader>> {
+    fn ingest(&self, region: &RegionInfo) -> Result<()> {
         let ctx = new_context(region);
         let store_id = ctx.get_peer().get_store_id();
 
@@ -380,7 +388,7 @@ impl ImportSSTJob {
             Ok(mut resp) => if resp.has_error() {
                 let mut error = resp.take_error();
                 if error.has_not_leader() {
-                    return Ok(Some(error.take_not_leader()));
+                    return Err(Error::NotLeader(error.take_not_leader()));
                 }
                 Err(Error::TikvRPC(error))
             } else {
@@ -390,9 +398,9 @@ impl ImportSSTJob {
         };
 
         match res {
-            Ok(_) => {
+            Ok(v) => {
                 info!("{} ingest to store {}", self.tag, store_id);
-                Ok(None)
+                Ok(v)
             }
             Err(e) => {
                 error!("{} ingest to store {}: {:?}", self.tag, store_id, e);

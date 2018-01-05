@@ -75,6 +75,9 @@ quick_error! {
         TikvRPC(err: errorpb::Error) {
             display("TikvRPC {:?}", err)
         }
+        NotLeader(err: errorpb::NotLeader) {
+            display("TikvRPC {:?}", err)
+        }
         SplitRegion(err: errorpb::Error) {
             display("SplitRegion {:?}", err)
         }
@@ -99,7 +102,15 @@ quick_error! {
         EngineNotFound(uuid: Uuid) {
             display("Engine {} not found", uuid)
         }
-        Timeout {}
+        SubImportJobFailed(tag: String) {
+            display("{}", tag)
+        }
+        ImportSSTJobFailed(tag: String) {
+            display("{}", tag)
+        }
+        PrepareRangeJobFailed(tag: String) {
+            display("{}", tag)
+        }
         SSTFileOutOfRange {}
     }
 }

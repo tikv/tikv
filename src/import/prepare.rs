@@ -159,7 +159,7 @@ impl PrepareRangeJob {
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                warn!("{} start #{}", self.tag, i);
+                warn!("{} retry #{}", self.tag, i);
                 thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
             }
 
@@ -169,7 +169,7 @@ impl PrepareRangeJob {
             }
         }
 
-        Err(Error::Timeout)
+        Err(Error::PrepareRangeJobFailed(self.tag.clone()))
     }
 
     fn prepare(&self) -> Result<()> {
