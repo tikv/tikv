@@ -105,9 +105,9 @@ fn test_analyze_column_with_lock() {
                 let hist = analyze_resp.get_pk_hist();
                 assert!(hist.get_buckets().is_empty());
                 assert_eq!(hist.get_ndv(), 0);
-                end_point.stop().unwrap().join().unwrap();
             }
         }
+        end_point.stop().unwrap().join().unwrap();
     }
 }
 
@@ -157,7 +157,7 @@ fn test_analyze_index_with_lock() {
 
     let product = ProductTable::new();
     for &iso_level in &[IsolationLevel::SI, IsolationLevel::RC] {
-        let (_, end_point) = init_data_with_commit(&product, &data, false);
+        let (_, mut end_point) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_index_req(&product.table, 3, product.name.index, 4, 32);
         let mut ctx = Context::new();
@@ -178,6 +178,7 @@ fn test_analyze_index_with_lock() {
                 assert_eq!(hist.get_ndv(), 0);
             }
         }
+        end_point.stop().unwrap().join().unwrap();
     }
 }
 

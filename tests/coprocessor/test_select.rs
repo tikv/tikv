@@ -1082,7 +1082,7 @@ fn test_aggr_avg() {
     }
     assert_eq!(row_count, exp_len);
 
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1122,7 +1122,7 @@ fn test_aggr_sum() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1265,7 +1265,7 @@ fn test_aggr_bit_ops() {
     }
     assert_eq!(row_count, exp_len);
 
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1752,7 +1752,7 @@ fn test_index_aggr_avg() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1792,7 +1792,7 @@ fn test_index_aggr_sum() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -1857,7 +1857,7 @@ fn test_index_aggr_extre() {
         row_count += 1;
     }
     assert_eq!(row_count, exp_len);
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]

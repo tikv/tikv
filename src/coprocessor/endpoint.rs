@@ -791,6 +791,7 @@ mod tests {
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
+        worker.stop().unwrap().join().unwrap();
     }
     #[test]
     fn test_too_many_reqs() {
@@ -823,6 +824,7 @@ mod tests {
             );
             worker.schedule(Task::Request(task)).unwrap();
         }
+        defer!(worker.stop().unwrap().join().unwrap());
         for _ in 0..120 {
             let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
             if !resp.has_region_error() {

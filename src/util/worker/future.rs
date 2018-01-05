@@ -12,14 +12,13 @@
 // limitations under the License.
 
 use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder, JoinHandle};
 use std::io;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 
 use futures::Stream;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use tokio_core::reactor::{Core, Handle};
+use futures_cpupool::{Builder as CpuPoolBuilder, CpuFuture, CpuPool};
 
 use super::metrics::*;
 
@@ -44,8 +43,7 @@ impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
 }
 
 pub trait Runnable<T: Display> {
-    fn run(&mut self, t: T, handle: &Handle);
-    fn shutdown(&mut self) {}
+    fn run(&mut self, t: T, pool: &CpuPool);
 }
 
 /// Scheduler provides interface to schedule task to underlying workers.
@@ -90,29 +88,28 @@ impl<T: Display> Clone for Scheduler<T> {
 pub struct Worker<T: Display> {
     scheduler: Scheduler<T>,
     receiver: Mutex<Option<UnboundedReceiver<Option<T>>>>,
-    handle: Option<JoinHandle<()>>,
+    handle: Option<CpuFuture<(), ()>>,
 }
 
 // TODO: add metrics.
-fn poll<R, T>(mut runner: R, rx: UnboundedReceiver<Option<T>>)
+fn poll<R, T>(name: &str, mut runner: R, rx: UnboundedReceiver<Option<T>>) -> CpuFuture<(), ()>
 where
     R: Runnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
-    let name = thread::current().name().unwrap().to_owned();
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
-    {
-        let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
-            runner.run(t.unwrap(), &handle);
-            WORKER_PENDING_TASK_VEC.with_label_values(&[&name]).sub(1.0);
-            WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]).inc();
-            Ok(())
-        });
-        // `UnboundedReceiver` never returns an error.
-        core.run(f).unwrap();
-    }
-    runner.shutdown();
+    let pool = CpuPoolBuilder::new()
+        .name_prefix(thd_name!(name))
+        .pool_size(1)
+        .create();
+    let pool1 = pool.clone();
+    let name = name.to_owned();
+    let f = rx.take_while(|t| Ok(t.is_some())).for_each(move |t| {
+        runner.run(t.unwrap(), &pool1);
+        WORKER_PENDING_TASK_VEC.with_label_values(&[&name]).sub(1.0);
+        WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]).inc();
+        Ok(())
+    });
+    pool.spawn(f)
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
@@ -139,10 +136,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
 
         let rx = receiver.take().unwrap();
-        let h = Builder::new()
-            .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx))?;
-
+        let h = poll(self.scheduler.name.as_ref(), runner, rx);
         self.handle = Some(h);
         Ok(())
     }
@@ -169,7 +163,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     }
 
     /// Stop the worker thread.
-    pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
+    pub fn stop(&mut self) -> Option<CpuFuture<(), ()>> {
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.scheduler.name);
         if self.handle.is_none() {
@@ -191,7 +185,7 @@ mod test {
 
     use futures::Future;
     use tokio_timer::Timer;
-    use tokio_core::reactor::Handle;
+    use futures_cpupool::CpuPool;
 
     use super::*;
 
@@ -201,16 +195,12 @@ mod test {
     }
 
     impl Runnable<u64> for StepRunner {
-        fn run(&mut self, step: u64, handle: &Handle) {
+        fn run(&mut self, step: u64, handle: &CpuPool) {
             self.ch.send(step).unwrap();
             let f = self.timer
                 .sleep(Duration::from_millis(step))
                 .map_err(|_| ());
-            handle.spawn(f);
-        }
-
-        fn shutdown(&mut self) {
-            self.ch.send(0).unwrap();
+            handle.spawn(f).forget();
         }
     }
 
@@ -235,10 +225,8 @@ mod test {
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1500);
         // above three tasks are executed concurrently, should be less then 2s.
         assert!(start.elapsed() < Duration::from_secs(2));
-        worker.stop().unwrap().join().unwrap();
+        worker.stop().unwrap().wait().unwrap();
         // now worker can't handle any task
         assert!(worker.is_busy());
-        // when shutdown, StepRunner should send back a 0.
-        assert_eq!(0, rx.recv().unwrap());
     }
 }
