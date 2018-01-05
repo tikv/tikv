@@ -144,7 +144,7 @@ fn bench_get(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
 
             get(db.clone(), &key, &mut fake_statistics).unwrap()
         },
-        100000,
+        500000,
     )
 }
 
@@ -166,7 +166,7 @@ fn bench_set(db: Arc<DB>, keys: &[Vec<u8>], value_len: usize) -> f64 {
             );
             commit(db.clone(), &[Key::from_raw(key)], start_ts, commit_ts)
         },
-        100000,
+        500000,
     )
 }
 
@@ -186,7 +186,7 @@ fn bench_delete(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
             );
             commit(db.clone(), &[Key::from_raw(key)], start_ts, commit_ts)
         },
-        100000,
+        500000,
     )
 }
 
@@ -222,7 +222,7 @@ fn bench_batch_set_impl(db: Arc<DB>, keys: &[Vec<u8>], value_len: usize, batch_s
             prewrite(db.clone(), &mutations, primary, start_ts);
             commit(db.clone(), &keys_to_write, start_ts, commit_ts)
         },
-        10000,
+        640000 / (batch_size as u32),
     )
 }
 
