@@ -403,7 +403,7 @@ pub fn recover_from_applying_state(
     Ok(())
 }
 
-fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> {
+pub fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
     Ok(match raft_engine.get_msg(&state_key)? {
         Some(s) => s,
@@ -421,7 +421,7 @@ fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> 
     })
 }
 
-fn init_apply_state(kv_engine: &DB, region: &Region) -> Result<RaftApplyState> {
+pub fn init_apply_state(kv_engine: &DB, region: &Region) -> Result<RaftApplyState> {
     Ok(match try!(
         kv_engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))
     ) {
