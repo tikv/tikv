@@ -15,7 +15,6 @@ use std::usize;
 use std::time::Duration;
 use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::mem;
 
 use tipb::select::{self, DAGRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
@@ -31,7 +30,7 @@ use util::worker::{BatchRunnable, FutureScheduler, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, FlowStatistics, Snapshot, StatisticsSummary};
+use storage::{self, engine, Engine, Snapshot};
 use storage::engine::Error as EngineError;
 use pd::PdTask;
 
@@ -40,7 +39,8 @@ use super::codec::datum::Datum;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
-use super::local_metrics::{CopMetrics, ExecCounter, LocalMetrics, ScanCounter};
+use super::local_metrics::{CopFlowStatistics, CopMetrics, ExecCounter, LocalMetrics, ScanCounter,
+                           ScanDetails};
 use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -82,37 +82,9 @@ impl ContextFactory<CopContext> for CopContextFactory {
     }
 }
 
-pub struct CopFlowStatistics {
-    data: HashMap<u64, FlowStatistics>,
-    sender: FutureScheduler<PdTask>,
-}
-
-impl CopFlowStatistics {
-    fn new(sender: FutureScheduler<PdTask>) -> CopFlowStatistics {
-        CopFlowStatistics {
-            sender: sender,
-            data: Default::default(),
-        }
-    }
-
-    pub fn flush(&mut self) {
-        if self.data.is_empty() {
-            return;
-        }
-        let mut to_send_stats = HashMap::default();
-        mem::swap(&mut to_send_stats, &mut self.data);
-        if let Err(e) = self.sender.schedule(PdTask::ReadStats {
-            read_stats: to_send_stats,
-        }) {
-            error!("send coprocessor statistics: {:?}", e);
-        };
-    }
-}
-
 struct CopContext {
     flow_stats: CopFlowStatistics,
-    select_stats: StatisticsSummary,
-    index_stats: StatisticsSummary,
+    scan_details: ScanDetails,
     scan_counter: ScanCounter,
     exec_counter: ExecCounter,
     local_metrics: LocalMetrics,
@@ -122,60 +94,29 @@ impl CopContext {
     fn new(sender: FutureScheduler<PdTask>) -> CopContext {
         CopContext {
             flow_stats: CopFlowStatistics::new(sender),
-            select_stats: Default::default(),
-            index_stats: Default::default(),
+            scan_details: Default::default(),
             scan_counter: Default::default(),
             exec_counter: Default::default(),
             local_metrics: Default::default(),
         }
     }
 
-    fn finish_task(&mut self, type_str: &str, region_id: u64, mut metrics: CopMetrics) {
+    fn finish_task(&mut self, type_str: &'static str, region_id: u64, mut metrics: CopMetrics) {
         let stats = &metrics.cf_stats;
         // cf statistics group by type
-        self.get_statistics(type_str).add_statistics(stats);
+        self.scan_details.add(type_str, stats);
         // flow statistics group by region
-        let flow_stats = self.flow_stats
-            .data
-            .entry(region_id)
-            .or_insert_with(FlowStatistics::default);
-        flow_stats.add(&stats.write.flow_stats);
-        flow_stats.add(&stats.data.flow_stats);
+        self.flow_stats.add(region_id, stats);
         // scan count
         self.scan_counter.merge(&mut metrics.scan_counter);
         // executor count
         self.exec_counter.merge(&mut metrics.executor_count);
     }
-
-    fn get_statistics(&mut self, type_str: &str) -> &mut StatisticsSummary {
-        match type_str {
-            STR_REQ_TYPE_SELECT => &mut self.select_stats,
-            STR_REQ_TYPE_INDEX => &mut self.index_stats,
-            _ => {
-                warn!("unknown STR_REQ_TYPE: {}", type_str);
-                &mut self.select_stats
-            }
-        }
-    }
 }
 
 impl Context for CopContext {
     fn on_tick(&mut self) {
-        for type_str in &[STR_REQ_TYPE_SELECT, STR_REQ_TYPE_INDEX] {
-            let this_statistics = self.get_statistics(type_str);
-            if this_statistics.count == 0 {
-                continue;
-            }
-            for (cf, details) in this_statistics.stat.details() {
-                for (tag, count) in details {
-                    COPR_SCAN_DETAILS
-                        .with_label_values(&[type_str, cf, tag])
-                        .inc_by(count as f64)
-                        .unwrap();
-                }
-            }
-            *this_statistics = Default::default();
-        }
+        self.scan_details.flush();
         self.flow_stats.flush();
         self.scan_counter.flush();
         self.exec_counter.flush();

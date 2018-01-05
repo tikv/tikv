@@ -199,8 +199,7 @@ impl Executor for AggregationExecutor {
     fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
         self.src.collect_metrics_into(metrics);
         if self.first_collect {
-            let mut count = metrics.executor_count.entry("aggregation").or_insert(0);
-            *count += 1;
+            metrics.executor_count.increase("aggregation");
             self.first_collect = false;
         }
     }

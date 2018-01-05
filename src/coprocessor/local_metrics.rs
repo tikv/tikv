@@ -11,16 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
+
 use coprocessor::metrics::*;
-use storage::engine::Statistics;
+use storage::engine::{FlowStatistics, Statistics, StatisticsSummary};
 use prometheus::local::LocalHistogramVec;
 use util::collections::HashMap;
-#[derive(Default, Clone)]
+use util::worker::FutureScheduler;
+use pd::PdTask;
+
+#[derive(Default)]
 pub struct CopMetrics {
     pub cf_stats: Statistics,
     pub scan_counter: ScanCounter,
-    //TODO:
-    pub executor_count: HashMap<&'static str, i64>,
+    pub executor_count: ExecCounter,
 }
 
 impl CopMetrics {
@@ -30,6 +34,7 @@ impl CopMetrics {
         self.cf_stats.add(&other.cf_stats);
         self.cf_stats = Default::default();
         self.scan_counter.merge(&mut other.scan_counter);
+        self.executor_count.merge(&mut other.executor_count);
     }
 }
 
@@ -75,14 +80,19 @@ impl ScanCounter {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct ExecCounter {
     data: HashMap<&'static str, i64>,
 }
 
 impl ExecCounter {
-    pub fn merge(&mut self, data: &mut HashMap<&'static str, i64>) {
-        for (k, v) in data.drain() {
+    pub fn increase(&mut self, tag: &'static str) {
+        let count = self.data.entry(tag).or_insert(0);
+        *count += 1;
+    }
+
+    pub fn merge(&mut self, other: &mut ExecCounter) {
+        for (k, v) in other.data.drain() {
             let mut va = self.data.entry(k).or_insert(0);
             *va += v;
         }
@@ -95,6 +105,66 @@ impl ExecCounter {
                 .inc_by(v as f64)
                 .unwrap();
         }
+    }
+}
+
+#[derive(Default)]
+pub struct ScanDetails {
+    data: HashMap<&'static str, StatisticsSummary>,
+}
+
+impl ScanDetails {
+    pub fn add(&mut self, type_str: &'static str, other: &Statistics) {
+        let mut statics = self.data.entry(type_str).or_insert_with(Default::default);
+        statics.add_statistics(other);
+    }
+
+    pub fn flush(&mut self) {
+        for (type_str, v) in self.data.drain() {
+            for (cf, details) in v.stat.details() {
+                for (tag, count) in details {
+                    COPR_SCAN_DETAILS
+                        .with_label_values(&[type_str, cf, tag])
+                        .inc_by(count as f64)
+                        .unwrap();
+                }
+            }
+        }
+    }
+}
+
+pub struct CopFlowStatistics {
+    data: HashMap<u64, FlowStatistics>,
+    sender: FutureScheduler<PdTask>,
+}
+
+impl CopFlowStatistics {
+    pub fn new(sender: FutureScheduler<PdTask>) -> CopFlowStatistics {
+        CopFlowStatistics {
+            sender: sender,
+            data: Default::default(),
+        }
+    }
+
+    pub fn add(&mut self, region_id: u64, stats: &Statistics) {
+        let flow_stats = self.data
+            .entry(region_id)
+            .or_insert_with(FlowStatistics::default);
+        flow_stats.add(&stats.write.flow_stats);
+        flow_stats.add(&stats.data.flow_stats);
+    }
+
+    pub fn flush(&mut self) {
+        if self.data.is_empty() {
+            return;
+        }
+        let mut to_send_stats = HashMap::default();
+        mem::swap(&mut to_send_stats, &mut self.data);
+        if let Err(e) = self.sender.schedule(PdTask::ReadStats {
+            read_stats: to_send_stats,
+        }) {
+            error!("send coprocessor statistics: {:?}", e);
+        };
     }
 }
 

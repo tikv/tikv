@@ -190,8 +190,7 @@ impl Executor for IndexScanExecutor {
             scanner.collect_statistics_into(&mut metrics.cf_stats);
         }
         if self.first_collect {
-            let mut count = metrics.executor_count.entry("idxscan").or_insert(0);
-            *count += 1;
+            metrics.executor_count.increase("idxscan");
             self.first_collect = false;
         }
     }

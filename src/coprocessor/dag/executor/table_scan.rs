@@ -146,8 +146,7 @@ impl Executor for TableScanExecutor {
         }
 
         if self.first_collect {
-            let mut count = metrics.executor_count.entry("tblscan").or_insert(0);
-            *count += 1;
+            metrics.executor_count.increase("tblscan");
             self.first_collect = false;
         }
     }
