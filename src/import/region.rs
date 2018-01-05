@@ -126,21 +126,23 @@ impl<C: ImportClient> RegionContext<C> {
         }
     }
 
+    pub fn end_key(&self) -> &[u8] {
+        match self.region {
+            Some(ref region) => region.get_end_key(),
+            None => RANGE_MAX,
+        }
+    }
+
     pub fn raw_size(&self) -> usize {
         self.raw_size
     }
 
     /// Check size and region range to see if we should stop before this key.
     pub fn should_stop_before(&self, key: &[u8]) -> bool {
-        if self.raw_size >= self.limit_size {
+        if !belongs_in_end(key, self.end_key()) {
             return true;
         }
-        if let Some(ref region) = self.region {
-            if !belongs_in_end(key, region.get_end_key()) {
-                return true;
-            }
-        }
-        false
+        self.raw_size >= self.limit_size
     }
 }
 

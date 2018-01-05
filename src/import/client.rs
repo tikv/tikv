@@ -175,33 +175,57 @@ impl<'a> Stream for UploadStream<'a> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use rand::{self, Rng};
     use kvproto::metapb::*;
+
     use pd::Error as PdError;
+    use storage::types::Key;
     use import::{Error, Result};
 
     pub struct MockClient {
-        regions: Vec<Region>,
+        counter: AtomicUsize,
+        regions: Mutex<HashMap<u64, Region>>,
+        scatter_regions: Mutex<HashMap<u64, Region>>,
     }
 
     impl MockClient {
         pub fn new() -> MockClient {
             MockClient {
-                regions: Vec::new(),
+                counter: AtomicUsize::new(1),
+                regions: Mutex::new(HashMap::new()),
+                scatter_regions: Mutex::new(HashMap::new()),
             }
+        }
+
+        fn alloc_id(&self) -> u64 {
+            self.counter.fetch_add(1, Ordering::SeqCst) as u64
         }
 
         pub fn add_region_range(&mut self, start: &[u8], end: &[u8]) {
             let mut r = Region::new();
+            r.set_id(self.alloc_id());
             r.set_start_key(start.to_owned());
             r.set_end_key(end.to_owned());
-            self.regions.push(r);
+            let mut peer = Peer::new();
+            peer.set_id(self.alloc_id());
+            peer.set_store_id(self.alloc_id());
+            r.mut_peers().push(peer);
+            let mut regions = self.regions.lock().unwrap();
+            regions.insert(r.get_id(), r);
+        }
+
+        pub fn get_scatter_region(&self, id: u64) -> Option<RegionInfo> {
+            let regions = self.scatter_regions.lock().unwrap();
+            regions.get(&id).map(|r| RegionInfo::new(r.clone(), None))
         }
     }
 
     impl ImportClient for MockClient {
         fn get_region(&self, key: &[u8]) -> Result<RegionInfo> {
-            for r in &self.regions {
+            for r in self.regions.lock().unwrap().values() {
                 if key >= r.get_start_key() &&
                     (r.get_end_key().is_empty() || key < r.get_end_key())
                 {
@@ -209,6 +233,34 @@ pub mod tests {
                 }
             }
             Err(Error::PdRPC(PdError::RegionNotFound(key.to_owned())))
+        }
+
+        fn scatter_region(&self, region: RegionInfo) -> Result<()> {
+            let mut regions = self.scatter_regions.lock().unwrap();
+            regions.insert(region.get_id(), region.region);
+            Ok(())
+        }
+
+        fn split_region(&self, _: u64, req: SplitRegionRequest) -> Result<SplitRegionResponse> {
+            let mut regions = self.regions.lock().unwrap();
+
+            let split_key = Key::from_raw(req.get_split_key());
+            let region_id = req.get_context().get_region_id();
+            let region = regions.remove(&region_id).unwrap();
+
+            let mut left = region.clone();
+            left.set_id(self.alloc_id());
+            left.set_end_key(split_key.encoded().clone());
+            regions.insert(left.get_id(), left.clone());
+
+            let mut right = region.clone();
+            right.set_start_key(split_key.encoded().clone());
+            regions.insert(right.get_id(), right.clone());
+
+            let mut resp = SplitRegionResponse::new();
+            resp.set_left(left);
+            resp.set_right(right);
+            Ok(resp)
         }
     }
 

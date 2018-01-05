@@ -150,7 +150,7 @@ impl SSTFileStream {
         let next = if self.range_iter.valid() {
             self.range_iter.key().to_owned()
         } else {
-            RANGE_MAX.to_owned()
+            self.region_ctx.end_key().to_owned()
         };
 
         let info = writer.finish()?;
