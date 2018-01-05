@@ -1898,9 +1898,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .range((Included(last_checked_key), Unbounded::<Key>));
             for (count, (key, _)) in left_ranges.enumerate() {
                 ranges_need_check.insert(key.to_vec());
-
-                // We check about 10GB data every time.
-                if count > 100 {
+                if count > self.cfg.region_compact_check_step as usize {
                     self.last_checked_key = Some(key.to_vec());
                     break;
                 }
