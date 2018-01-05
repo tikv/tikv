@@ -47,6 +47,7 @@ mod raftstore;
 mod raftstore_cases;
 mod coprocessor;
 mod storage;
+mod storage_cases;
 mod util;
 mod pd;
 mod config;
