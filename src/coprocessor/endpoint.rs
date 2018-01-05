@@ -815,6 +815,7 @@ mod tests {
         let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_other_error().is_empty());
         assert_eq!(resp.get_other_error(), super::OUTDATED_ERROR_MSG);
+        worker.stop();
     }
 
     #[test]
@@ -850,6 +851,7 @@ mod tests {
         let exec_details = resp.get_exec_details();
         assert!(exec_details.has_handle_time());
         assert!(exec_details.has_scan_detail());
+        worker.stop();
     }
 
     #[test]
@@ -889,6 +891,7 @@ mod tests {
                 continue;
             }
             assert!(resp.get_region_error().has_server_is_busy());
+            worker.stop();
             return;
         }
         panic!("suppose to get ServerIsBusy error.");
