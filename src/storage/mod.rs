@@ -32,9 +32,9 @@ pub mod types;
 mod metrics;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::engine::{new_local_engine, new_local_engine_with_config, CFStatistics, Cursor,
-                       Engine, Error as EngineError, FlowStatistics, Iterator, Modify, ScanMode,
-                       Snapshot, Statistics, StatisticsSummary, TEMP_DIR};
+pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError,
+                       FlowStatistics, Iterator, Modify, ScanMode, Snapshot, Statistics,
+                       StatisticsSummary, TEMP_DIR};
 pub use self::engine::raftkv::RaftKv;
 use self::mvcc::Lock;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
