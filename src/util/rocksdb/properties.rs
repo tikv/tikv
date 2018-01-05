@@ -150,7 +150,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.props.max_row_versions = self.row_versions;
         }
 
-        let v = match Write::parse(value) {
+        let write_type = match Write::parse_type(value) {
             Ok(v) => v,
             Err(_) => {
                 self.num_errors += 1;
@@ -158,7 +158,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             }
         };
 
-        if v.write_type == WriteType::Put {
+        if write_type == WriteType::Put {
             self.props.num_puts += 1;
         }
 
