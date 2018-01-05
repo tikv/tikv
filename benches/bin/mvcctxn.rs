@@ -266,8 +266,8 @@ fn bench_single_row(
         version_count,
         data_len
     );
-    let ns = bench_get(db.clone(), &keys);
-    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000_f64 / ns);
+    let ns = bench_get(db.clone(), &keys) as u64;
+    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
     println!(
         "benching mvcctxn {} set\trows:{} versions:{} data len:{}\t...",
@@ -276,8 +276,8 @@ fn bench_single_row(
         version_count,
         data_len
     );
-    let ns = bench_set(db.clone(), &keys, value_len);
-    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000_f64 / ns);
+    let ns = bench_set(db.clone(), &keys, value_len) as u64;
+    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
     // Generate new db to bench delete, for the size of content was increased when benching set
     let dir = TempDir::new("bench-mvcctxn").unwrap();
@@ -295,8 +295,8 @@ fn bench_single_row(
         version_count,
         data_len
     );
-    let ns = bench_delete(db.clone(), &keys);
-    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000_f64 / ns);
+    let ns = bench_delete(db.clone(), &keys) as u64;
+    println!("\t{:>11} ns per op  {:>11} ops", ns, 1_000_000_000 / ns);
 
 }
 
@@ -337,10 +337,10 @@ fn bench_batch_set(
     let ns = bench_batch_set_impl(db.clone(), &keys, value_len, batch_size);
     println!(
         "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
-        ns,
-        1_000_000_000_f64 / ns,
-        ns / (batch_size as f64),
-        1_000_000_000_f64 * (batch_size as f64) / ns
+        ns as u64,
+        (1_000_000_000_f64 / ns) as u64,
+        (ns / (batch_size as f64)) as u64,
+        (1_000_000_000_f64 * (batch_size as f64) / ns) as u64
     );
 }
 
@@ -427,10 +427,10 @@ fn bench_concurrent_batch_impl(
     let ns = average(&time_record) as f64 / (txn_count as f64);
     println!(
         "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
-        ns,
-        1_000_000_000_f64 / ns,
-        ns / (batch_size as f64),
-        1_000_000_000_f64 * (batch_size as f64) / ns
+        ns as u64,
+        (1_000_000_000_f64 / ns) as u64,
+        (ns / (batch_size as f64)) as u64,
+        (1_000_000_000_f64 * (batch_size as f64) / ns) as u64
     );
 }
 
