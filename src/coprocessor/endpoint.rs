@@ -21,18 +21,20 @@ use tipb::select::{self, DAGRequest};
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
-use protobuf::{CodedInputStream, Message as PbMsg};
+use protobuf::{CodedInputStream, Message as PbMsg, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
+use kvproto::kvrpcpb::*;
 
 use util::time::{duration_to_sec, Instant};
 use util::worker::{FutureScheduler, Runnable, Scheduler};
 use util::collections::HashMap;
 use util::threadpool::{Context, ContextFactory, ThreadPool, ThreadPoolBuilder};
 use server::{Config, OnResponse};
-use storage::{self, engine, Engine, FlowStatistics, Snapshot, Statistics, StatisticsSummary};
+use storage::{self, engine, Engine, Error as StorageError, FlowStatistics, Key, ScanMode,
+              Snapshot, SnapshotStore, Statistics, StatisticsSummary};
 use storage::engine::Error as EngineError;
+use server::service::util as service_util;
 use pd::PdTask;
 
 use super::codec::mysql;
@@ -45,6 +47,9 @@ use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
+pub const REQ_TYPE_GET: i64 = 105;
+pub const REQ_TYPE_BATCH_GET: i64 = 106;
+pub const REQ_TYPE_SCAN: i64 = 107;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
@@ -273,6 +278,9 @@ impl Display for Task {
 enum CopRequest {
     DAG(DAGRequest),
     Analyze(AnalyzeReq),
+    Get(GetRequest),
+    BatchGet(BatchGetRequest),
+    Scan(ScanRequest),
 }
 
 pub struct ReqContext {
@@ -351,6 +359,39 @@ impl RequestTask {
                         table_scan = true;
                     }
                     Ok(CopRequest::Analyze(analyze))
+                }
+            }
+            REQ_TYPE_GET => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut req = GetRequest::new();
+                if let Err(e) = req.merge_from(&mut is) {
+                    Err(box_err!(e))
+                } else {
+                    start_ts = None;
+                    Ok(CopRequest::Get(req))
+                }
+            }
+            REQ_TYPE_BATCH_GET => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut req = BatchGetRequest::new();
+                if let Err(e) = req.merge_from(&mut is) {
+                    Err(box_err!(e))
+                } else {
+                    start_ts = None;
+                    Ok(CopRequest::BatchGet(req))
+                }
+            }
+            REQ_TYPE_SCAN => {
+                let mut is = CodedInputStream::from_bytes(req.get_data());
+                is.set_recursion_limit(recursion_limit);
+                let mut req = ScanRequest::new();
+                if let Err(e) = req.merge_from(&mut is) {
+                    Err(box_err!(e))
+                } else {
+                    start_ts = None;
+                    Ok(CopRequest::Scan(req))
                 }
             }
 
@@ -647,6 +688,9 @@ impl TiDbEndPoint {
         let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t, batch_row_limit),
             Ok(CopRequest::Analyze(analyze)) => self.handle_analyze(analyze, &mut t),
+            Ok(CopRequest::Get(req)) => self.handle_get(req, &mut t),
+            Ok(CopRequest::BatchGet(req)) => self.handle_batch_get(req, &mut t),
+            Ok(CopRequest::Scan(req)) => self.handle_scan(req, &mut t),
             Err(err) => Err(err),
         };
         match resp {
@@ -673,6 +717,125 @@ impl TiDbEndPoint {
         let ranges = t.req.take_ranges().into_vec();
         let ctx = AnalyzeContext::new(analyze, ranges, self.snap, t.ctx.as_ref());
         ctx.handle_request(&mut t.statistics)
+    }
+
+    pub fn handle_get(self, req: GetRequest, t: &mut RequestTask) -> Result<Response> {
+        let snap_store = SnapshotStore::new(
+            self.snap,
+            req.get_version(),
+            t.ctx.isolation_level,
+            t.ctx.fill_cache,
+        );
+        let result = match snap_store.get(&Key::from_raw(req.get_key()), &mut t.statistics) {
+            Ok(val) => Ok(val),
+            Err(e) => Err(StorageError::from(e)),
+        };
+
+        let mut res = GetResponse::new();
+        if let Some(err) = service_util::extract_region_error(&result) {
+            res.set_region_error(err);
+        } else {
+            match result {
+                Ok(Some(val)) => res.set_value(val),
+                Ok(None) => res.set_value(vec![]),
+                Err(e) => res.set_error(service_util::extract_key_error(&e)),
+            }
+        }
+
+        let data = box_try!(res.write_to_bytes());
+        let mut res = Response::new();
+        res.set_data(data);
+        Ok(res)
+    }
+
+    pub fn handle_batch_get(self, req: BatchGetRequest, t: &mut RequestTask) -> Result<Response> {
+        let snap_store = SnapshotStore::new(
+            self.snap,
+            req.get_version(),
+            t.ctx.isolation_level,
+            t.ctx.fill_cache,
+        );
+
+        let keys: Vec<Key> = req.get_keys()
+            .into_iter()
+            .map(|x| Key::from_raw(x))
+            .collect();
+
+        let result = match snap_store.batch_get(&keys, &mut t.statistics) {
+            Ok(results) => {
+                let mut res = vec![];
+                for (k, v) in keys.into_iter().zip(results) {
+                    match v {
+                        Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
+                        Ok(None) => {}
+                        Err(e) => res.push(Err(StorageError::from(e))),
+                    }
+                }
+                Ok(res)
+            }
+            Err(e) => Err(StorageError::from(e)),
+        };
+
+        let mut res = BatchGetResponse::new();
+        if let Some(err) = service_util::extract_region_error(&result) {
+            res.set_region_error(err);
+        } else {
+            res.set_pairs(RepeatedField::from_vec(
+                service_util::extract_kv_pairs(result),
+            ))
+        }
+
+        let data = box_try!(res.write_to_bytes());
+        let mut res = Response::new();
+        res.set_data(data);
+        Ok(res)
+    }
+
+    pub fn handle_scan(self, req: ScanRequest, t: &mut RequestTask) -> Result<Response> {
+        let snap_store = SnapshotStore::new(
+            self.snap,
+            req.get_version(),
+            t.ctx.isolation_level,
+            t.ctx.fill_cache,
+        );
+
+        let start_key = Key::from_raw(req.get_start_key());
+        let limit = req.get_limit() as usize;
+
+        let result = snap_store
+            .scanner(ScanMode::Forward, req.get_key_only(), None, None)
+            .and_then(|mut scanner| {
+                let res = scanner.scan(start_key.clone(), limit);
+                t.statistics.add(scanner.get_statistics());
+                res
+            })
+            .and_then(|mut results| {
+                Ok(
+                    results
+                        .drain(..)
+                        .map(|x| x.map_err(StorageError::from))
+                        .collect(),
+                )
+            });
+
+        let result = match result {
+            Ok(pairs) => Ok(pairs),
+            Err(e) => Err(e.into()),
+        };
+
+        let mut res = ScanResponse::new();
+        if let Some(err) = service_util::extract_region_error(&result) {
+            res.set_region_error(err);
+        } else {
+            res.set_pairs(RepeatedField::from_vec(
+                service_util::extract_kv_pairs(result),
+            ));
+        }
+
+        let data = box_try!(res.write_to_bytes());
+        let mut res = Response::new();
+        res.set_data(data);
+        Ok(res)
     }
 }
 

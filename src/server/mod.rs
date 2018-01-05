@@ -14,9 +14,9 @@
 use std::boxed::FnBox;
 use kvproto::coprocessor::Response;
 mod metrics;
-mod service;
 mod raft_client;
 
+pub mod service;
 pub mod config;
 pub mod errors;
 pub mod server;
