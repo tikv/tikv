@@ -46,8 +46,6 @@ use raftstore::store::metrics::{SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_CO
                                 SNAPSHOT_CF_SIZE};
 use raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 
-use server::config::Config as ServerConfig;
-
 // Data in CF_RAFT should be excluded for a snapshot.
 pub const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
@@ -1394,10 +1392,10 @@ pub struct SnapManagerOption {
 }
 
 impl SnapManagerOption {
-    pub fn from_server_config(config: &ServerConfig) -> SnapManagerOption {
+    pub fn new(max_write_bytes_per_sec: u64, max_total_size: u64) -> SnapManagerOption {
         SnapManagerOption {
-            max_write_bytes_per_sec: config.snap_max_write_bytes_per_sec.0,
-            max_total_size: config.snap_max_total_size.0,
+            max_write_bytes_per_sec: max_write_bytes_per_sec,
+            max_total_size: max_total_size,
         }
     }
 }

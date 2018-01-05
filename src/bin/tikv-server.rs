@@ -197,7 +197,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let (mut worker, resolver) = resolve::new_resolver(pd_client.clone())
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
 
-    let snap_mgr_option = SnapManagerOption::from_server_config(&cfg.server);
+    let snap_mgr_option = SnapManagerOption::new(
+        cfg.server.snap_max_write_bytes_per_sec.0,
+        cfg.server.snap_max_total_size.0,
+    );
+
     let snap_mgr = SnapManager::new(
         snap_path.as_path().to_str().unwrap().to_owned(),
         Some(store_sendch),
