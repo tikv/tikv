@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate rand;
-
 use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::ops::Div;
@@ -21,13 +19,12 @@ use tikv::coprocessor::codec::table::{encode_index_seek_key, encode_row_key};
 use tikv::util::codec::number::NumberEncoder;
 use test::black_box;
 
-use rand::Rng;
-
 #[inline]
 pub fn next_ts() -> u64 {
     static CURRENT: AtomicU64 = ATOMIC_U64_INIT;
     CURRENT.fetch_add(1, Ordering::SeqCst)
 }
+
 
 /// Generate `count` row keys that all with the specified `table_id`.
 ///
@@ -63,14 +60,6 @@ pub fn generate_unique_index_keys(
         result.push(encode_index_seek_key(table_id, index_id, &value));
     }
     result
-}
-
-pub fn shuffle<T>(data: &mut [T]) {
-    let mut rng = rand::thread_rng();
-    for i in 0..(data.len()) {
-        let j = rng.gen_range(i, data.len());
-        data.swap(i, j);
-    }
 }
 
 

@@ -248,7 +248,8 @@ fn bench_single_row(
         ),
     };
 
-    shuffle(&mut keys);
+    let mut rng = rand::thread_rng();
+    rng.shuffle(&mut keys);
 
 
     let dir = TempDir::new("bench-mvcctxn").unwrap();
@@ -316,7 +317,8 @@ fn bench_batch_set(
         ),
     };
 
-    shuffle(&mut keys);
+    let mut rng = rand::thread_rng();
+    rng.shuffle(&mut keys);
 
     let dir = TempDir::new("bench-mvcctxn").unwrap();
     let db = prepare_test_db(
@@ -373,7 +375,8 @@ fn bench_concurrent_batch_impl(
                 }
             };
 
-            shuffle(&mut keys);
+            let mut rng = rand::thread_rng();
+            rng.shuffle(&mut keys);
 
             let mut keys = keys.drain(..);
 
