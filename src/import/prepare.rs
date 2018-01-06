@@ -22,6 +22,7 @@ use kvproto::kvrpcpb::*;
 
 use pd::RegionInfo;
 use storage::types::Key;
+use util::escape;
 
 use super::{Config, Engine, Error, ImportClient, Result};
 use super::region::*;
@@ -77,6 +78,12 @@ impl<C: ImportClient + Send + Sync + 'static> PrepareJob<C> {
         let mut iter = self.engine.new_iter(&self.cf_name, false);
         iter.seek(SeekKey::Start);
 
+        if iter.valid() {
+            // Make a start range for split.
+            let range = RangeInfo::new(iter.key(), iter.key(), 0);
+            tx.send(range).unwrap();
+        }
+
         while iter.valid() {
             let start = iter.key().to_owned();
 
@@ -103,7 +110,6 @@ impl<C: ImportClient + Send + Sync + 'static> PrepareJob<C> {
     }
 
     fn new_prepare_thread(&self, rx: Arc<Mutex<mpsc::Receiver<RangeInfo>>>) -> JoinHandle<()> {
-        let cfg = self.cfg.clone();
         let client = self.client.clone();
         let engine = self.engine.clone();
         let cf_name = self.cf_name.clone();
@@ -114,7 +120,7 @@ impl<C: ImportClient + Send + Sync + 'static> PrepareJob<C> {
             .spawn(move || while let Ok(range) = rx.lock().unwrap().recv() {
                 let id = counter.fetch_add(1, Ordering::SeqCst);
                 let tag = format!("[PrepareJob {}:{}:{}]", engine.uuid(), cf_name, id);
-                let job = PrepareRangeJob::new(tag, cfg.clone(), range, client.clone());
+                let job = PrepareRangeJob::new(tag, range, client.clone());
                 let _ = job.run(); // Don't care about error here.
             })
             .unwrap()
@@ -132,16 +138,14 @@ impl<C: ImportClient + Send + Sync + 'static> PrepareJob<C> {
 
 struct PrepareRangeJob<C> {
     tag: String,
-    cfg: Config,
     range: RangeInfo,
     client: Arc<C>,
 }
 
 impl<C: ImportClient> PrepareRangeJob<C> {
-    fn new(tag: String, cfg: Config, range: RangeInfo, client: Arc<C>) -> PrepareRangeJob<C> {
+    fn new(tag: String, range: RangeInfo, client: Arc<C>) -> PrepareRangeJob<C> {
         PrepareRangeJob {
             tag: tag,
-            cfg: cfg,
             range: range,
             client: client,
         }
@@ -150,11 +154,6 @@ impl<C: ImportClient> PrepareRangeJob<C> {
     fn run(&self) -> Result<()> {
         let start = Instant::now();
         info!("{} start {:?}", self.tag, self.range);
-
-        if self.range.size < self.cfg.region_split_size / 2 {
-            // No need to prepare a small range.
-            return Ok(());
-        }
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -173,28 +172,17 @@ impl<C: ImportClient> PrepareRangeJob<C> {
 
     fn prepare(&self) -> Result<()> {
         let mut region = self.client.get_region(self.range.get_start())?;
-
-        if self.range.get_start() != region.get_start_key() {
-            let (_, right) = self.split_region(region, self.range.get_start().to_owned())?;
-            region = right;
-        }
         if is_before_end(self.range.get_end(), region.get_end_key()) {
-            let (left, _) = self.split_region(region, self.range.get_end().to_owned())?;
-            region = left;
+            region = self.split_region(region, self.range.get_end())?;
         }
-
         self.scatter_region(region)
     }
 
-    fn split_region(
-        &self,
-        region: RegionInfo,
-        split_key: Vec<u8>,
-    ) -> Result<(RegionInfo, RegionInfo)> {
+    fn split_region(&self, region: RegionInfo, split_key: &[u8]) -> Result<RegionInfo> {
         let ctx = new_context(&region);
         let store_id = ctx.get_peer().get_store_id();
         // The SplitRegion API accepts a raw key.
-        let raw_key = Key::from_encoded(split_key.clone()).raw()?;
+        let raw_key = Key::from_encoded(split_key.to_owned()).raw()?;
 
         let mut split = SplitRegionRequest::new();
         split.set_context(ctx);
@@ -214,27 +202,18 @@ impl<C: ImportClient> PrepareRangeJob<C> {
                 info!(
                     "{} split at {:?} to left {{{:?}}} and right {{{:?}}}",
                     self.tag,
-                    split_key,
+                    escape(split_key),
                     resp.get_left(),
                     resp.get_right(),
                 );
                 // Just assume that the leader will be at the same store.
-                let region1 = resp.take_left();
-                let leader1 = region1
+                let region = resp.take_left();
+                let leader = region
                     .get_peers()
                     .iter()
                     .find(|p| p.get_store_id() == store_id)
                     .cloned();
-                let region2 = resp.take_right();
-                let leader2 = region2
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_store_id() == store_id)
-                    .cloned();
-                Ok((
-                    RegionInfo::new(region1, leader1),
-                    RegionInfo::new(region2, leader2),
-                ))
+                Ok(RegionInfo::new(region, leader))
             }
             Err(e) => {
                 error!("{} split {:?}: {:?}", self.tag, region, e);
@@ -280,7 +259,7 @@ mod tests {
 
         // Generate entries to prepare.
         // Entry size is 16 + 27 = 43.
-        for i in 0..17 {
+        for i in 0..16 {
             let s = format!("{:016}", i);
             let k = Key::from_raw(s.as_bytes());
             assert_eq!(k.encoded().len(), 27); // This size is pre-calculated.
