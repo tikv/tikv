@@ -14,6 +14,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
+use kvproto::metapb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::importpb::*;
 
@@ -84,6 +85,14 @@ pub fn new_context(region: &RegionInfo) -> Context {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(peer.clone());
     ctx
+}
+
+pub fn find_peer_in_store(region: &Region, store_id: u64) -> Option<Peer> {
+    region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+        .cloned()
 }
 
 /// A helper to decide how to cut ranges according to the size and region ranges.

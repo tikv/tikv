@@ -349,12 +349,9 @@ impl ImportSSTJob {
         for _ in 0..MAX_RETRY_TIMES {
             match self.ingest(&region) {
                 Ok(_) => return Ok(()),
-                Err(Error::NotLeader(mut e)) => if e.has_leader() {
-                    region.leader = Some(e.take_leader());
-                },
+                Err(Error::NotLeader(new_leader)) => region.leader = new_leader,
                 Err(e) => return Err(e),
             }
-            thread::sleep(Duration::from_millis(300));
         }
 
         // Last chance.
@@ -385,14 +382,13 @@ impl ImportSSTJob {
         ingest.set_sst(self.sst.meta.clone());
 
         let res = match self.client.ingest_sst(store_id, ingest) {
-            Ok(mut resp) => if resp.has_error() {
-                let mut error = resp.take_error();
-                if error.has_not_leader() {
-                    return Err(Error::NotLeader(error.take_not_leader()));
-                }
-                Err(Error::TikvRPC(error))
-            } else {
+            Ok(mut resp) => if !resp.has_error() {
                 Ok(())
+            } else {
+                match Error::from(resp.take_error()) {
+                    e @ Error::NotLeader(_) => return Err(e),
+                    e => Err(e),
+                }
             },
             Err(e) => Err(e),
         };

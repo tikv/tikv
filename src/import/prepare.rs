@@ -172,14 +172,32 @@ impl<C: ImportClient> PrepareRangeJob<C> {
 
     fn prepare(&self) -> Result<()> {
         let mut region = self.client.get_region(self.range.get_start())?;
-        if is_before_end(self.range.get_end(), region.get_end_key()) {
-            region = self.split_region(region, self.range.get_end())?;
+
+        for _ in 0..MAX_RETRY_TIMES {
+            if !is_before_end(self.range.get_end(), region.get_end_key()) {
+                break;
+            }
+            match self.split_region(&region, self.range.get_end()) {
+                Ok(new_region) => region = new_region,
+                Err(Error::NotLeader(new_leader)) => region.leader = new_leader,
+                Err(Error::StaleEpoch(new_regions)) => for new_region in new_regions {
+                    if is_before_end(self.range.get_end(), new_region.get_end_key()) {
+                        let new_leader = region
+                            .leader
+                            .and_then(|p| find_peer_in_store(&new_region, p.get_store_id()));
+                        region = RegionInfo::new(new_region, new_leader);
+                        break;
+                    }
+                },
+                Err(e) => return Err(e),
+            }
         }
-        self.scatter_region(region)
+
+        self.scatter_region(&region)
     }
 
-    fn split_region(&self, region: RegionInfo, split_key: &[u8]) -> Result<RegionInfo> {
-        let ctx = new_context(&region);
+    fn split_region(&self, region: &RegionInfo, split_key: &[u8]) -> Result<RegionInfo> {
+        let ctx = new_context(region);
         let store_id = ctx.get_peer().get_store_id();
         // The SplitRegion API accepts a raw key.
         let raw_key = Key::from_encoded(split_key.to_owned()).raw()?;
@@ -192,7 +210,10 @@ impl<C: ImportClient> PrepareRangeJob<C> {
             Ok(mut resp) => if !resp.has_region_error() {
                 Ok(resp)
             } else {
-                Err(Error::SplitRegion(resp.take_region_error()))
+                match Error::from(resp.take_region_error()) {
+                    e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
+                    e => Err(e),
+                }
             },
             Err(e) => Err(e),
         };
@@ -207,30 +228,25 @@ impl<C: ImportClient> PrepareRangeJob<C> {
                     resp.get_right(),
                 );
                 // Just assume that the leader will be at the same store.
-                let region = resp.take_left();
-                let leader = region
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_store_id() == store_id)
-                    .cloned();
-                Ok(RegionInfo::new(region, leader))
+                let new_region = resp.take_left();
+                let new_leader = find_peer_in_store(&new_region, store_id);
+                Ok(RegionInfo::new(new_region, new_leader))
             }
             Err(e) => {
-                error!("{} split {:?}: {:?}", self.tag, region, e);
+                warn!("{} split {:?}: {:?}", self.tag, region, e);
                 Err(e)
             }
         }
     }
 
-    fn scatter_region(&self, region: RegionInfo) -> Result<()> {
-        let region_id = region.get_id();
-        match self.client.scatter_region(region) {
+    fn scatter_region(&self, region: &RegionInfo) -> Result<()> {
+        match self.client.scatter_region(region.clone()) {
             Ok(_) => {
-                info!("{} scatter region {}", self.tag, region_id);
+                info!("{} scatter region {}", self.tag, region.get_id());
                 Ok(())
             }
             Err(e) => {
-                error!("{} scatter region {}: {:?}", self.tag, region_id, e);
+                warn!("{} scatter region {}: {:?}", self.tag, region.get_id(), e);
                 Err(e)
             }
         }

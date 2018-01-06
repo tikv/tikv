@@ -21,6 +21,7 @@ use uuid::{ParseError, Uuid};
 use futures::sync::oneshot::Canceled;
 
 use kvproto::errorpb;
+use kvproto::metapb::*;
 
 use pd;
 use storage;
@@ -75,12 +76,8 @@ quick_error! {
         TikvRPC(err: errorpb::Error) {
             display("TikvRPC {:?}", err)
         }
-        NotLeader(err: errorpb::NotLeader) {
-            display("TikvRPC {:?}", err)
-        }
-        SplitRegion(err: errorpb::Error) {
-            display("SplitRegion {:?}", err)
-        }
+        NotLeader(new_leader: Option<Peer>) {}
+        StaleEpoch(new_regions: Vec<Region>) {}
         FileExists(path: PathBuf) {
             display("File {} exists", path.to_str().unwrap())
         }
@@ -112,6 +109,24 @@ quick_error! {
             display("{}", tag)
         }
         SSTFileOutOfRange {}
+    }
+}
+
+impl From<errorpb::Error> for Error {
+    fn from(mut err: errorpb::Error) -> Self {
+        if err.has_not_leader() {
+            let mut error = err.take_not_leader();
+            if error.has_leader() {
+                Error::NotLeader(Some(error.take_leader()))
+            } else {
+                Error::NotLeader(None)
+            }
+        } else if err.has_stale_epoch() {
+            let mut error = err.take_stale_epoch();
+            Error::StaleEpoch(error.take_new_regions().to_vec())
+        } else {
+            Error::TikvRPC(err)
+        }
     }
 }
 
