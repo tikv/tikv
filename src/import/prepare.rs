@@ -200,12 +200,21 @@ impl<C: ImportClient> PrepareRangeJob<C> {
         split.set_context(ctx);
         split.set_split_key(raw_key);
 
-        match self.client.split_region(store_id, split) {
+        let res = match self.client.split_region(store_id, split) {
+            Ok(mut resp) => if !resp.has_region_error() {
+                Ok(resp)
+            } else {
+                Err(Error::SplitRegion(resp.take_region_error()))
+            },
+            Err(e) => Err(e),
+        };
+
+        match res {
             Ok(mut resp) => {
                 info!(
-                    "{} split {:?} to left {{{:?}}} and right {{{:?}}}",
+                    "{} split at {:?} to left {{{:?}}} and right {{{:?}}}",
                     self.tag,
-                    region,
+                    split_key,
                     resp.get_left(),
                     resp.get_right(),
                 );
