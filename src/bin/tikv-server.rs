@@ -494,6 +494,11 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
+    // Set gRPC event engine to epollsig.
+    // See more: https://github.com/grpc/grpc/blob/486761d04e03a9183d8013eddd86c3134d52d459\
+    //           /src/core/lib/iomgr/ev_posix.cc#L149
+    env::set_var("GRPC_POLL_STRATEGY", "epollsig");
+
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)
             .unwrap_or_else(|e| fatal!("failed to create security manager: {:?}", e)),
