@@ -1392,11 +1392,13 @@ pub struct SnapManagerOption {
 }
 
 impl SnapManagerOption {
-    pub fn new(max_write_bytes_per_sec: u64, max_total_size: u64) -> SnapManagerOption {
-        SnapManagerOption {
-            max_write_bytes_per_sec: max_write_bytes_per_sec,
-            max_total_size: max_total_size,
-        }
+    pub fn max_write_bytes_per_sec(mut self, bytes: u64) -> Self {
+        self.max_write_bytes_per_sec = bytes;
+        self
+    }
+    pub fn max_total_size(mut self, bytes: u64) -> Self {
+        self.max_total_size = bytes;
+        self
     }
 }
 
