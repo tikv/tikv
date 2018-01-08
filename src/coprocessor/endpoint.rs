@@ -39,8 +39,7 @@ use super::codec::datum::Datum;
 use super::dag::DAGContext;
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
-use super::local_metrics::{CopFlowStatistics, CopMetrics, ExecCounter, LocalMetrics, ScanCounter,
-                           ScanDetails};
+use super::local_metrics::{ComLocalMetrics, ExecLocalMetrics, ExecutorMetrics};
 use super::{Error, Result};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -83,44 +82,23 @@ impl ContextFactory<CopContext> for CopContextFactory {
 }
 
 struct CopContext {
-    flow_stats: CopFlowStatistics,
-    scan_details: ScanDetails,
-    scan_counter: ScanCounter,
-    exec_counter: ExecCounter,
-    local_metrics: LocalMetrics,
+    exec_local_metrics: ExecLocalMetrics,
+    common_local_metrics: ComLocalMetrics,
 }
 
 impl CopContext {
     fn new(sender: FutureScheduler<PdTask>) -> CopContext {
         CopContext {
-            flow_stats: CopFlowStatistics::new(sender),
-            scan_details: Default::default(),
-            scan_counter: Default::default(),
-            exec_counter: Default::default(),
-            local_metrics: Default::default(),
+            exec_local_metrics: ExecLocalMetrics::new(sender),
+            common_local_metrics: Default::default(),
         }
-    }
-
-    fn finish_task(&mut self, type_str: &'static str, region_id: u64, mut metrics: CopMetrics) {
-        let stats = &metrics.cf_stats;
-        // cf statistics group by type
-        self.scan_details.add(type_str, stats);
-        // flow statistics group by region
-        self.flow_stats.add(region_id, stats);
-        // scan count
-        self.scan_counter.merge(&mut metrics.scan_counter);
-        // executor count
-        self.exec_counter.merge(&mut metrics.executor_count);
     }
 }
 
 impl Context for CopContext {
     fn on_tick(&mut self) {
-        self.scan_details.flush();
-        self.flow_stats.flush();
-        self.scan_counter.flush();
-        self.exec_counter.flush();
-        self.local_metrics.flush();
+        self.exec_local_metrics.flush();
+        self.common_local_metrics.flush();
     }
 }
 
@@ -166,7 +144,7 @@ impl Host {
 
     fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
         let reqs = self.reqs.remove(&id).unwrap();
-        let mut local_metrics = LocalMetrics::default();
+        let mut local_metrics = ComLocalMetrics::default();
         let snap = match snapshot {
             Ok(s) => s,
             Err(e) => {
@@ -200,10 +178,13 @@ impl Host {
             };
             pool.execute(move |ctx: &mut CopContext| {
                 // decrease pending task
-                ctx.local_metrics.add_pending_reqs(type_str, pri_str, -1);
+                ctx.common_local_metrics
+                    .add_pending_reqs(type_str, pri_str, -1);
                 let region_id = req.req.get_context().get_region_id();
-                let stats = end_point.handle_request(req, batch_row_limit, &mut ctx.local_metrics);
-                ctx.finish_task(type_str, region_id, stats);
+                let stats =
+                    end_point.handle_request(req, batch_row_limit, &mut ctx.common_local_metrics);
+                ctx.exec_local_metrics
+                    .finish_task(type_str, region_id, stats);
             });
         }
     }
@@ -265,7 +246,7 @@ pub struct RequestTask {
     start_ts: Option<u64>,
     wait_time: Option<f64>,
     timer: Instant,
-    metrics: CopMetrics,
+    metrics: ExecutorMetrics,
     on_resp: OnResponse,
     cop_req: Option<Result<CopRequest>>,
     ctx: Arc<ReqContext>,
@@ -335,7 +316,7 @@ impl RequestTask {
         self.ctx.check_if_outdated()
     }
 
-    fn stop_record_waiting(&mut self, metrics: &mut LocalMetrics) {
+    fn stop_record_waiting(&mut self, metrics: &mut ComLocalMetrics) {
         if self.wait_time.is_some() {
             return;
         }
@@ -347,7 +328,7 @@ impl RequestTask {
         self.wait_time = Some(wait_time);
     }
 
-    fn stop_record_handling(&mut self, metrics: &mut LocalMetrics) -> Option<ExecDetails> {
+    fn stop_record_handling(&mut self, metrics: &mut ComLocalMetrics) -> Option<ExecDetails> {
         self.stop_record_waiting(metrics);
         let query_time = duration_to_sec(self.timer.elapsed());
         let type_str = self.ctx.get_scan_tag();
@@ -432,7 +413,7 @@ impl Runnable<Task> for Host {
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
-        let mut local_metrics = LocalMetrics::default();
+        let mut local_metrics = ComLocalMetrics::default();
         for task in tasks.drain(..) {
             match task {
                 Task::Request(req) => {
@@ -541,7 +522,7 @@ impl Runnable<Task> for Host {
     }
 }
 
-fn err_resp(e: Error, metrics: &mut LocalMetrics) -> Response {
+fn err_resp(e: Error, metrics: &mut ComLocalMetrics) -> Response {
     let mut resp = Response::new();
     let tag = match e {
         Error::Region(e) => {
@@ -583,7 +564,7 @@ fn err_resp(e: Error, metrics: &mut LocalMetrics) -> Response {
     resp
 }
 
-fn on_error(e: Error, req: RequestTask, metrics: &mut LocalMetrics) -> CopMetrics {
+fn on_error(e: Error, req: RequestTask, metrics: &mut ComLocalMetrics) -> ExecutorMetrics {
     let resp = err_resp(e, metrics);
     respond(resp, req, metrics)
 }
@@ -591,7 +572,7 @@ fn on_error(e: Error, req: RequestTask, metrics: &mut LocalMetrics) -> CopMetric
 fn notify_batch_failed<E: Into<Error> + Debug>(
     e: E,
     reqs: Vec<RequestTask>,
-    metrics: &mut LocalMetrics,
+    metrics: &mut ComLocalMetrics,
 ) {
     debug!("failed to handle batch request: {:?}", e);
     let resp = err_resp(e.into(), metrics);
@@ -600,7 +581,11 @@ fn notify_batch_failed<E: Into<Error> + Debug>(
     }
 }
 
-fn respond(mut resp: Response, mut t: RequestTask, metrics: &mut LocalMetrics) -> CopMetrics {
+fn respond(
+    mut resp: Response,
+    mut t: RequestTask,
+    metrics: &mut ComLocalMetrics,
+) -> ExecutorMetrics {
     if let Some(exec_details) = t.stop_record_handling(metrics) {
         resp.set_exec_details(exec_details);
     }
@@ -623,8 +608,8 @@ impl TiDbEndPoint {
         self,
         mut t: RequestTask,
         batch_row_limit: usize,
-        metrics: &mut LocalMetrics,
-    ) -> CopMetrics {
+        metrics: &mut ComLocalMetrics,
+    ) -> ExecutorMetrics {
         t.stop_record_waiting(metrics);
 
         if let Err(e) = t.check_outdated() {
@@ -802,7 +787,7 @@ mod tests {
             table_scan: task.ctx.table_scan,
         };
         task.ctx = Arc::new(ctx);
-        let mut metrics = LocalMetrics::default();
+        let mut metrics = ComLocalMetrics::default();
         task.stop_record_waiting(&mut metrics);
         task.timer = task.timer.sub(Duration::from_secs(
             (super::SLOW_QUERY_LOWER_BOUND * 2.0) as u64,

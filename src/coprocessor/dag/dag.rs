@@ -113,7 +113,7 @@ impl DAGContext {
         }
     }
 
-    pub fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
+    pub fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.exec.collect_metrics_into(metrics);
     }
 }

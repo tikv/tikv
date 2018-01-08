@@ -28,7 +28,7 @@ use storage::{Snapshot, SnapshotStore};
 use super::fmsketch::FMSketch;
 use super::cmsketch::CMSketch;
 use super::histogram::Histogram;
-use super::super::local_metrics::CopMetrics;
+use super::super::local_metrics::ExecutorMetrics;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext {
@@ -57,7 +57,7 @@ impl AnalyzeContext {
         }
     }
 
-    pub fn handle_request(mut self, stats: &mut CopMetrics) -> Result<Response> {
+    pub fn handle_request(mut self, stats: &mut ExecutorMetrics) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();

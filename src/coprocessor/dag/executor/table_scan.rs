@@ -34,7 +34,7 @@ pub struct TableScanExecutor {
     key_ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner>,
     count: i64,
-    metrics: CopMetrics,
+    metrics: ExecutorMetrics,
     first_collect: bool,
 }
 
@@ -139,7 +139,7 @@ impl Executor for TableScanExecutor {
         self.count = 0;
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         metrics.merge(&mut self.metrics);
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(&mut metrics.cf_stats);

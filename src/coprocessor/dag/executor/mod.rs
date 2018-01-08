@@ -133,7 +133,7 @@ impl Row {
 pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
-    fn collect_metrics_into(&mut self, metrics: &mut CopMetrics);
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
 }
 
 pub struct DAGExecutor {

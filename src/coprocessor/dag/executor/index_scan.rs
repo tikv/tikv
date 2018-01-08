@@ -20,7 +20,7 @@ use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::{datum, mysql, table};
 use coprocessor::endpoint::is_point;
-use coprocessor::local_metrics::CopMetrics;
+use coprocessor::local_metrics::ExecutorMetrics;
 use coprocessor::{Error, Result};
 use storage::{Key, SnapshotStore};
 
@@ -37,7 +37,7 @@ pub struct IndexScanExecutor {
     scanner: Option<Scanner>,
     unique: bool,
     count: i64,
-    metrics: CopMetrics,
+    metrics: ExecutorMetrics,
     first_collect: bool,
 }
 
@@ -88,7 +88,7 @@ impl IndexScanExecutor {
             scanner: None,
             unique: false,
             count: 0,
-            metrics: CopMetrics::default(),
+            metrics: ExecutorMetrics::default(),
             first_collect: true,
         }
     }
@@ -184,7 +184,7 @@ impl Executor for IndexScanExecutor {
         self.count = 0;
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         metrics.merge(&mut self.metrics);
         if let Some(scanner) = self.scanner.take() {
             scanner.collect_statistics_into(&mut metrics.cf_stats);

@@ -20,17 +20,18 @@ use util::collections::HashMap;
 use util::worker::FutureScheduler;
 use pd::PdTask;
 
+/// `ExecutorMetrics` is metrics collected from executors group by request.
 #[derive(Default)]
-pub struct CopMetrics {
+pub struct ExecutorMetrics {
     pub cf_stats: Statistics,
     pub scan_counter: ScanCounter,
     pub executor_count: ExecCounter,
 }
 
-impl CopMetrics {
+impl ExecutorMetrics {
     /// Merge records from `other` into `self`, and clear `other`.
     #[inline]
-    pub fn merge(&mut self, other: &mut CopMetrics) {
+    pub fn merge(&mut self, other: &mut ExecutorMetrics) {
         self.cf_stats.add(&other.cf_stats);
         other.cf_stats = Default::default();
         self.scan_counter.merge(&mut other.scan_counter);
@@ -80,6 +81,7 @@ impl ScanCounter {
     }
 }
 
+/// `ExecCounter` is for recording number of each executor.
 #[derive(Default)]
 pub struct ExecCounter {
     data: HashMap<&'static str, i64>,
@@ -108,6 +110,7 @@ impl ExecCounter {
     }
 }
 
+/// `ScanDetails` is for scan details for each cf.
 #[derive(Default)]
 pub struct ScanDetails {
     data: HashMap<&'static str, StatisticsSummary>,
@@ -133,6 +136,7 @@ impl ScanDetails {
     }
 }
 
+/// `CopFlowStatistics` is for flow statistics, it would been reported to Pd by flush.
 pub struct CopFlowStatistics {
     data: HashMap<u64, FlowStatistics>,
     sender: FutureScheduler<PdTask>,
@@ -168,7 +172,51 @@ impl CopFlowStatistics {
     }
 }
 
-pub struct LocalMetrics {
+/// `ExecLocalMetrics` collects metrics from `ExectorMetrics`
+pub struct ExecLocalMetrics {
+    flow_stats: CopFlowStatistics,
+    scan_details: ScanDetails,
+    scan_counter: ScanCounter,
+    exec_counter: ExecCounter,
+}
+
+impl ExecLocalMetrics {
+    pub fn new(sender: FutureScheduler<PdTask>) -> ExecLocalMetrics {
+        ExecLocalMetrics {
+            flow_stats: CopFlowStatistics::new(sender),
+            scan_details: Default::default(),
+            scan_counter: Default::default(),
+            exec_counter: Default::default(),
+        }
+    }
+
+    pub fn finish_task(
+        &mut self,
+        type_str: &'static str,
+        region_id: u64,
+        mut metrics: ExecutorMetrics,
+    ) {
+        let stats = &metrics.cf_stats;
+        // cf statistics group by type
+        self.scan_details.add(type_str, stats);
+        // flow statistics group by region
+        self.flow_stats.add(region_id, stats);
+        // scan count
+        self.scan_counter.merge(&mut metrics.scan_counter);
+        // executor count
+        self.exec_counter.merge(&mut metrics.executor_count);
+    }
+
+    pub fn flush(&mut self) {
+        self.flow_stats.flush();
+        self.scan_details.flush();
+        self.scan_counter.flush();
+        self.exec_counter.flush();
+    }
+}
+
+/// `ComLocalMetrics` is for the common metrics for coprocessor requests.
+pub struct ComLocalMetrics {
     pub req_time: LocalHistogramVec,
     pub outdate_time: LocalHistogramVec,
     pub handle_time: LocalHistogramVec,
@@ -178,9 +226,9 @@ pub struct LocalMetrics {
     pub scan_keys: LocalHistogramVec,
 }
 
-impl Default for LocalMetrics {
-    fn default() -> LocalMetrics {
-        LocalMetrics {
+impl Default for ComLocalMetrics {
+    fn default() -> ComLocalMetrics {
+        ComLocalMetrics {
             req_time: COPR_REQ_HISTOGRAM_VEC.local(),
             outdate_time: OUTDATED_REQ_WAIT_TIME.local(),
             handle_time: COPR_REQ_HANDLE_TIME.local(),
@@ -192,7 +240,7 @@ impl Default for LocalMetrics {
     }
 }
 
-impl LocalMetrics {
+impl ComLocalMetrics {
     pub fn flush(&mut self) {
         self.req_time.flush();
         self.outdate_time.flush();
@@ -227,7 +275,7 @@ impl LocalMetrics {
     }
 }
 
-impl Drop for LocalMetrics {
+impl Drop for ComLocalMetrics {
     fn drop(&mut self) {
         self.flush();
     }

@@ -22,7 +22,7 @@ use coprocessor::codec::table::RowColsDict;
 use coprocessor::codec::datum::{self, approximate_size, Datum, DatumEncoder};
 use coprocessor::endpoint::SINGLE_GROUP;
 use coprocessor::dag::expr::{EvalContext, Expression};
-use coprocessor::local_metrics::CopMetrics;
+use coprocessor::local_metrics::ExecutorMetrics;
 use coprocessor::Result;
 
 use super::aggregate::{self, AggrFunc};
@@ -196,7 +196,7 @@ impl Executor for AggregationExecutor {
         self.count = 0;
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
         if self.first_collect {
             metrics.executor_count.increase("aggregation");

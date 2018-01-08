@@ -17,7 +17,7 @@
 use tipb::executor::Limit;
 
 use coprocessor::Result;
-use coprocessor::local_metrics::CopMetrics;
+use coprocessor::local_metrics::ExecutorMetrics;
 use coprocessor::dag::executor::{Executor, Row};
 
 pub struct LimitExecutor<'a> {
@@ -55,7 +55,7 @@ impl<'a> Executor for LimitExecutor<'a> {
         // We do not know whether `limit` has consumed all of it's source, so just ignore it.
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut CopMetrics) {
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
         if self.first_collect {
             metrics.executor_count.increase("limit");
