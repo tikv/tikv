@@ -32,7 +32,7 @@ impl CopMetrics {
     #[inline]
     pub fn merge(&mut self, other: &mut CopMetrics) {
         self.cf_stats.add(&other.cf_stats);
-        self.cf_stats = Default::default();
+        other.cf_stats = Default::default();
         self.scan_counter.merge(&mut other.scan_counter);
         self.executor_count.merge(&mut other.executor_count);
     }
