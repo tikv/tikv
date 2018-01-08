@@ -197,3 +197,85 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) 
 
     (db_opts, cfs_opts)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempdir::TempDir;
+    use kvproto::kvrpcpb::IsolationLevel;
+    use storage::CF_LOCK;
+    use storage::mvcc::MvccReader;
+    use raftstore::store::engine::SyncSnapshot;
+
+    fn new_engine() -> (TempDir, Engine) {
+        let dir = TempDir::new("_test_import_engine").unwrap();
+        let uuid = Uuid::new_v4();
+        let opts = DbConfig::default();
+        let engine = Engine::new(uuid, dir.path(), opts).unwrap();
+        (dir, engine)
+    }
+
+    fn new_write_batch(n: usize, ts: Option<u64>) -> WriteBatch {
+        let mut wb = WriteBatch::new();
+        for i in 0..n {
+            let s = format!("{:016}", i);
+            let mut m = Mutation::new();
+            m.set_op(Mutation_OP::Put);
+            m.set_key(s.as_bytes().to_owned());
+            m.set_value(s.as_bytes().to_owned());
+            wb.mut_mutations().push(m);
+        }
+        if let Some(ts) = ts {
+            wb.set_commit_ts(ts);
+        }
+        wb
+    }
+
+    #[test]
+    fn test_raw_write() {
+        let (_dir, engine) = new_engine();
+
+        let n = 10;
+        let wb = new_write_batch(n, None);
+        engine.write(wb, WriteOptions::new()).unwrap();
+
+        for i in 0..n {
+            let s = format!("{:016}", i);
+            assert_eq!(engine.get(s.as_bytes()).unwrap().unwrap(), s.as_bytes());
+        }
+    }
+
+    #[test]
+    fn test_txn_write() {
+        let (_dir, mut engine) = new_engine();
+        // We need to create CF_LOCK manually because MvccReader needs it.
+        Arc::get_mut(&mut engine.db)
+            .unwrap()
+            .create_cf(CF_LOCK)
+            .unwrap();
+
+        let n = 10;
+        let commit_ts = 10;
+        let wb = new_write_batch(n, Some(commit_ts));
+        engine.write(wb, WriteOptions::new()).unwrap();
+
+        let snap = Box::new(SyncSnapshot::new(engine.db));
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+
+        for i in 0..n {
+            let s = format!("{:016}", i);
+            let k = Key::from_raw(s.as_bytes());
+            let v = s.as_bytes().to_owned();
+            assert_eq!(reader.get(&k, commit_ts - 1).unwrap(), None);
+            assert_eq!(reader.get(&k, commit_ts).unwrap().unwrap(), v);
+        }
+
+        let (keys, _) = reader.scan_keys(None, n + 1).unwrap();
+        assert_eq!(keys.len(), n);
+        for (i, expected) in keys.iter().enumerate() {
+            let s = format!("{:016}", i);
+            let k = Key::from_raw(s.as_bytes());
+            assert_eq!(k.encoded(), expected.encoded());
+        }
+    }
+}
