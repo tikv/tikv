@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_import_dir() {
-        let temp_dir = TempDir::new("tikv_test_import_dir").unwrap();
+        let temp_dir = TempDir::new("test_import_import_dir").unwrap();
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
         let db_path = temp_dir.path().join("db");

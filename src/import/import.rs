@@ -215,7 +215,7 @@ impl SubImportJob {
         done
     }
 
-    fn new_import_stream(&self) -> Result<SSTFileStream> {
+    fn new_import_stream(&self) -> Result<SSTFileStream<Client>> {
         let temp_dir = TempDir::new_in(self.dir.path(), &self.cf_name)?;
         Ok(SSTFileStream::new(
             self.cfg.clone(),

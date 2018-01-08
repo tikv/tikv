@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_prepare_job() {
-        let dir = TempDir::new("_test_prepare_job").unwrap();
+        let dir = TempDir::new("test_import_prepare_job").unwrap();
         let uuid = Uuid::new_v4();
         let opts = DbConfig::default();
         let engine = Arc::new(Engine::new(uuid, dir.path(), opts).unwrap());
@@ -305,14 +305,14 @@ mod tests {
                 // [7, 10), [10, 13), [13, 15)
                 15,
             ];
-            let mut last_key = Vec::new();
+            let mut last = Vec::new();
             for i in keys {
-                let key = Key::from_raw(format!("{:016}", i).as_bytes());
-                client.add_region_range(&last_key, key.encoded());
-                last_key = key.encoded().clone();
+                let k = Key::from_raw(format!("{:016}", i).as_bytes());
+                client.add_region_range(&last, k.encoded());
+                last = k.encoded().clone();
             }
             // Add an unrelated range.
-            client.add_region_range(&last_key, b"abc");
+            client.add_region_range(&last, b"abc");
             client.add_region_range(b"abc", b"");
 
             let client = Arc::new(client);

@@ -26,7 +26,7 @@ use rocksdb::{DBIterator, ExternalSstFileInfo, SeekKey, SstFileWriter, DB};
 use kvproto::metapb::*;
 use kvproto::importpb::*;
 
-use super::{Client, Config, Engine, Result};
+use super::{Config, Engine, ImportClient, Result};
 use super::region::*;
 
 pub struct SSTInfo {
@@ -96,25 +96,25 @@ impl fmt::Display for SSTFile {
     }
 }
 
-pub struct SSTFileStream {
+pub struct SSTFileStream<C> {
     dir: TempDir,
     fileno: u64,
     engine: Arc<Engine>,
     cf_name: String,
     range_iter: RangeIterator,
-    region_ctx: RegionContext<Client>,
+    region_ctx: RegionContext<C>,
 }
 
-impl SSTFileStream {
+impl<C: ImportClient> SSTFileStream<C> {
     pub fn new(
         cfg: Config,
         dir: TempDir,
-        client: Arc<Client>,
+        client: Arc<C>,
         engine: Arc<Engine>,
         cf_name: String,
         sst_range: Range,
         finished_ranges: Vec<Range>,
-    ) -> SSTFileStream {
+    ) -> SSTFileStream<C> {
         let iter = engine.new_iter(&cf_name, true);
         let range_iter = RangeIterator::new(iter, sst_range, finished_ranges);
         let region_ctx = RegionContext::new(client, cfg.region_split_size);
@@ -138,8 +138,12 @@ impl SSTFileStream {
         self.region_ctx.reset(self.range_iter.key());
 
         loop {
-            let data_key = keys::data_key(self.range_iter.key());
-            writer.put(&data_key, self.range_iter.value())?;
+            {
+                let k = self.range_iter.key();
+                let v = self.range_iter.value();
+                self.region_ctx.add(k, v);
+                writer.put(&keys::data_key(k), v)?;
+            }
             if !self.range_iter.next() ||
                 self.region_ctx.should_stop_before(self.range_iter.key())
             {
@@ -219,7 +223,7 @@ impl RangeIterator {
     }
 
     pub fn next(&mut self) -> bool {
-        if !self.valid() || !self.iter.next() {
+        if !self.iter.next() {
             return false;
         }
         {
@@ -268,12 +272,15 @@ impl RangeIterator {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use std::path::Path;
     use std::sync::Arc;
 
+    use config::DbConfig;
     use rocksdb::{DBIterator, DBOptions, ReadOptions, Writable, DB};
 
-    use super::*;
+    use import::client::tests::MockClient;
 
     fn open_db<P: AsRef<Path>>(path: P) -> Arc<DB> {
         let path = path.as_ref().to_str().unwrap();
@@ -328,7 +335,6 @@ mod tests {
         for &(start, end) in unfinished_ranges {
             check_range_iter(&mut iter, start, end);
         }
-        assert!(!iter.next());
         assert!(!iter.valid());
     }
 
@@ -426,5 +432,104 @@ mod tests {
             ],
             &[(25, 30), (45, 50)],
         );
+    }
+
+    #[test]
+    fn test_sst_file_stream() {
+        let dir = TempDir::new("test_import_sst_file_stream").unwrap();
+        let uuid = Uuid::new_v4();
+        let opts = DbConfig::default();
+        let engine = Arc::new(Engine::new(uuid, dir.path(), opts).unwrap());
+
+        for i in 0..16 {
+            let b = &[i];
+            engine.put(b, b).unwrap();
+        }
+
+        let mut cfg = Config::default();
+        cfg.region_split_size = 8; // A region contains at most 4 entries.
+
+        let mut client = MockClient::new();
+        let keys = vec![
+            // [0, 4), [4, 7)
+            7,
+            // [7, 10)
+            10,
+            // [10, 14), [14, 16)
+            16,
+        ];
+        let mut last = vec![];
+        for k in keys {
+            client.add_region_range(&last, &[k]);
+            last = vec![k];
+        }
+        // Add an unrelated range.
+        client.add_region_range(&last, b"abc");
+        client.add_region_range(b"abc", b"");
+
+        let client = Arc::new(client);
+
+        // Test all ranges.
+        {
+            let sst_range = new_range(RANGE_MIN, RANGE_MAX);
+            let finished_ranges = Vec::new();
+            let expected_ranges =
+                vec![(0, 3, 4), (4, 6, 7), (7, 9, 10), (10, 13, 14), (14, 15, 16)];
+            run_and_check_stream(
+                cfg.clone(),
+                client.clone(),
+                engine.clone(),
+                sst_range,
+                finished_ranges,
+                expected_ranges,
+            );
+        }
+
+        // Test sst range [1, 15) with finished ranges [3, 5), [7, 10).
+        {
+            let sst_range = new_range(&[1], &[15]);
+            let mut finished_ranges = Vec::new();
+            finished_ranges.push(new_range(&[3], &[5]));
+            finished_ranges.push(new_range(&[7], &[11]));
+            let expected_ranges = vec![(1, 6, 11), (11, 14, 16)];
+            run_and_check_stream(
+                cfg.clone(),
+                client.clone(),
+                engine.clone(),
+                sst_range,
+                finished_ranges,
+                expected_ranges,
+            );
+        }
+    }
+
+    fn run_and_check_stream(
+        cfg: Config,
+        client: Arc<MockClient>,
+        engine: Arc<Engine>,
+        sst_range: Range,
+        finished_ranges: Vec<Range>,
+        expected_ranges: Vec<(u8, u8, u8)>,
+    ) {
+        let dir = TempDir::new("test_run_and_check_stream").unwrap();
+        let cf_name = "default";
+        let mut stream = SSTFileStream::new(
+            cfg,
+            dir,
+            client,
+            engine.clone(),
+            cf_name.to_owned(),
+            sst_range,
+            finished_ranges,
+        );
+        for expected_range in expected_ranges {
+            let info = stream.next().unwrap().unwrap();
+            let sst = info.gen_sst(&engine, cf_name).unwrap();
+            let range = sst.meta.get_range();
+            assert_eq!(range.get_start(), &[expected_range.0]);
+            assert_eq!(range.get_end(), &[expected_range.1]);
+            assert_eq!(&sst.next, &[expected_range.2]);
+        }
+        assert!(stream.next().unwrap().is_none());
     }
 }
