@@ -137,7 +137,7 @@ lazy_static! {
 
     pub static ref COMPACTION_RELATED_REGION_COUNT: HistogramVec =
         register_histogram_vec!(
-            "each compaction job related region count",
+            "compaction_related_region_count",
             "Associated number of regions for each compaction job",
             &["output_level"],
             exponential_buckets(1.0, 2.0, 20).unwrap()
