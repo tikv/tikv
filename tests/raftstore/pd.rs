@@ -361,10 +361,8 @@ impl Cluster {
             self.pending_peers.insert(p.get_id(), p);
         }
 
-        {
-            let region_size = self.region_sizes.entry(region.get_id()).or_insert(0);
-            *region_size = region_stat.approximate_size;
-        }
+        self.region_sizes
+            .insert(region.get_id(), region_stat.approximate_size);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
