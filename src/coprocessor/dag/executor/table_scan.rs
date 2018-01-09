@@ -40,7 +40,7 @@ impl<'a> TableScanExecutor<'a> {
         store: SnapshotStore<'a>,
         statistics: &'a mut Statistics,
     ) -> TableScanExecutor<'a> {
-        let col_ids = meta.get_columns()
+        let col_ids: HashSet<i64> = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
@@ -49,7 +49,7 @@ impl<'a> TableScanExecutor<'a> {
         if desc {
             key_ranges.reverse();
         }
-        let scanner = Scanner::new(store, desc, false, statistics);
+        let scanner = Scanner::new(store, desc, col_ids.is_empty(), statistics);
         COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
         TableScanExecutor {
             desc: desc,
@@ -229,6 +229,24 @@ mod test {
                 let v = row.data.get(cid).unwrap();
                 assert_eq!(expect_row[&cid], v.to_vec());
             }
+        }
+        assert!(table_scanner.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_with_key_only() {
+        let mut statistics = Statistics::default();
+        let mut wrapper = TableScanTestWrapper::default();
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let table_scan = TableScan::new();
+        let mut table_scanner =
+            TableScanExecutor::new(&table_scan, wrapper.ranges, store, &mut statistics);
+
+        for handle in 0..KEY_NUMBER {
+            let row = table_scanner.next().unwrap().unwrap();
+            assert_eq!(row.handle, handle as i64);
+            assert!(row.data.is_empty());
         }
         assert!(table_scanner.next().unwrap().is_none());
     }
