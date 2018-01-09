@@ -40,7 +40,7 @@ pub use self::peer_storage::{do_snapshot, init_apply_state, init_raft_state, wri
                              CacheQueryStats, PeerStorage, SnapState, RAFT_INIT_LOG_INDEX,
                              RAFT_INIT_LOG_TERM};
 pub use self::snap::{check_abort, copy_snapshot, ApplyOptions, SnapEntry, SnapKey, SnapManager,
-                     SnapManagerOption, Snapshot, SnapshotDeleter, SnapshotStatistics};
+                     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics};
 
 // Only used in tests
 #[cfg(test)]

@@ -1100,31 +1100,8 @@ pub struct SnapManager {
 }
 
 impl SnapManager {
-    pub fn new<T: Into<String>>(
-        path: T,
-        ch: Option<SendCh<Msg>>,
-        option: SnapManagerOption,
-    ) -> SnapManager {
-        let limiter = if option.max_write_bytes_per_sec > 0 {
-            Some(Arc::new(IOLimiter::new(option.max_write_bytes_per_sec)))
-        } else {
-            None
-        };
-        let max_total_size = if option.max_total_size > 0 {
-            option.max_total_size
-        } else {
-            u64::MAX
-        };
-        SnapManager {
-            core: Arc::new(RwLock::new(SnapManagerCore {
-                base: path.into(),
-                registry: map![],
-                snap_size: Arc::new(RwLock::new(0)),
-            })),
-            ch: ch,
-            limiter: limiter,
-            max_total_size: max_total_size,
-        }
+    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+        SnapManagerBuilder::default().build(path, ch)
     }
 
     pub fn init(&self) -> io::Result<()> {
@@ -1386,19 +1363,41 @@ impl SnapshotDeleter for SnapManager {
 }
 
 #[derive(Debug, Default)]
-pub struct SnapManagerOption {
+pub struct SnapManagerBuilder {
     max_write_bytes_per_sec: u64,
     max_total_size: u64,
 }
 
-impl SnapManagerOption {
-    pub fn max_write_bytes_per_sec(mut self, bytes: u64) -> Self {
+impl SnapManagerBuilder {
+    pub fn max_write_bytes_per_sec(&mut self, bytes: u64) -> &mut SnapManagerBuilder {
         self.max_write_bytes_per_sec = bytes;
         self
     }
-    pub fn max_total_size(mut self, bytes: u64) -> Self {
+    pub fn max_total_size(&mut self, bytes: u64) -> &mut SnapManagerBuilder {
         self.max_total_size = bytes;
         self
+    }
+    pub fn build<T: Into<String>>(&self, path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+        let limiter = if self.max_write_bytes_per_sec > 0 {
+            Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
+        } else {
+            None
+        };
+        let max_total_size = if self.max_total_size > 0 {
+            self.max_total_size
+        } else {
+            u64::MAX
+        };
+        SnapManager {
+            core: Arc::new(RwLock::new(SnapManagerCore {
+                base: path.into(),
+                registry: map![],
+                snap_size: Arc::new(RwLock::new(0)),
+            })),
+            ch: ch,
+            limiter: limiter,
+            max_total_size: max_total_size,
+        }
     }
 }
 
@@ -1412,9 +1411,8 @@ mod test {
     use tempdir::TempDir;
     use protobuf::Message;
 
-    use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerOption, Snapshot,
-                SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
-                SNAP_GEN_PREFIX};
+    use super::{ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, Snapshot, SnapshotDeleter,
+                SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX};
 
     use std::path::PathBuf;
     use kvproto::metapb::{Peer, Region};
@@ -2071,7 +2069,7 @@ mod test {
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
-        let mut mgr = SnapManager::new(path, None, SnapManagerOption::default());
+        let mut mgr = SnapManager::new(path, None);
         mgr.init().unwrap();
         assert!(temp_path.exists());
 
@@ -2079,7 +2077,7 @@ mod test {
         let temp_path2 = temp_dir.path().join("snap2");
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
-        mgr = SnapManager::new(path2, None, SnapManagerOption::default());
+        mgr = SnapManager::new(path2, None);
         assert!(mgr.init().is_err());
     }
 
@@ -2087,7 +2085,7 @@ mod test {
     fn test_snap_mgr_v2() {
         let temp_dir = TempDir::new("test-snap-mgr-v2").unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let mgr = SnapManager::new(path.clone(), None, SnapManagerOption::default());
+        let mgr = SnapManager::new(path.clone(), None);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
@@ -2155,7 +2153,7 @@ mod test {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        let mgr = SnapManager::new(path, None, SnapManagerOption::default());
+        let mgr = SnapManager::new(path, None);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
 
@@ -2186,7 +2184,7 @@ mod test {
     fn test_snap_deletion_on_registry() {
         let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(src_path.clone(), None, SnapManagerOption::default());
+        let src_mgr = SnapManager::new(src_path.clone(), None);
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
@@ -2221,7 +2219,7 @@ mod test {
 
         let dst_temp_dir = TempDir::new("test-snap-deletion-on-registry-dst").unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(dst_path.clone(), None, SnapManagerOption::default());
+        let dst_mgr = SnapManager::new(dst_path.clone(), None);
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.
