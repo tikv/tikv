@@ -1472,6 +1472,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn schedule_merge(&mut self, region: &metapb::Region, state: &MergeState) -> Result<()> {
+        fail_point!("on_schedule_merge", |_| Ok(()));
         let req = {
             let direction = state.get_direction();
             let slibing_peer = match self.get_slibing_peer(region, direction) {
@@ -1552,11 +1553,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_pre_merge(&mut self, region: metapb::Region, state: MergeState) {
-        fail_point!("on_ready_pre_merge");
-        self.region_peers
-            .get_mut(&region.get_id())
-            .unwrap()
-            .become_readonly();
+        {
+            let peer = self.region_peers.get_mut(&region.get_id()).unwrap();
+            peer.become_readonly();
+            peer.mut_store().region = region.clone();
+        }
 
         if let Err(e) = self.schedule_merge(&region, &state) {
             warn!(

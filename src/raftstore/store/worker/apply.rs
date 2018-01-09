@@ -1200,7 +1200,7 @@ impl ApplyDelegate {
         assert_eq!(state.get_merge_state().get_commit(), rollback.get_commit());
         // Epoch doesn't need to be touched here. All effective proposals should be
         // dropped by readonly state.
-        write_peer_state(&self.engine, &ctx.wb, &self.region, PeerState::Tombstone)
+        write_peer_state(&self.engine, &ctx.wb, &self.region, PeerState::Normal)
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to rollback pre merge {:?}: {:?}",
