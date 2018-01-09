@@ -330,6 +330,19 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
     }
 }
 
+// Set gRPC event engine to epollsig.
+// See more: https://github.com/grpc/grpc/blob/486761d04e03a9183d8013eddd86c3134d52d459\
+//           /src/core/lib/iomgr/ev_posix.cc#L149
+fn specify_grpc_event_engine() {
+    const GRPC_POLL_STRATEGY: &str = "GRPC_POLL_STRATEGY";
+    let mut engines = "epollsig".to_owned();
+    if let Ok(env_engines) = env::var(GRPC_POLL_STRATEGY) {
+        engines.push(',');
+        engines.push_str(&env_engines);
+    }
+    env::set_var(GRPC_POLL_STRATEGY, engines);
+}
+
 fn main() {
     let long_version: String = {
         let (hash, branch, time, rust_ver) = util::build_info();
@@ -494,10 +507,7 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    // Set gRPC event engine to epollsig.
-    // See more: https://github.com/grpc/grpc/blob/486761d04e03a9183d8013eddd86c3134d52d459\
-    //           /src/core/lib/iomgr/ev_posix.cc#L149
-    env::set_var("GRPC_POLL_STRATEGY", "epollsig");
+    specify_grpc_event_engine();
 
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)
