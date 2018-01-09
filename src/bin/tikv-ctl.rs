@@ -175,7 +175,6 @@ trait DebugExecutor {
         println!("msg len: {}", data.len());
 
         if data.is_empty() {
-            println!("this is a empty entry, it should be sent when a peer become leader");
             return;
         }
 
