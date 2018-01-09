@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::boxed::FnBox;
+use std::fmt::Debug;
 use std::io::Write;
 use std::iter::{self, FromIterator};
 use std::sync::Arc;
@@ -99,9 +100,9 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
     }
 }
 
-fn make_callback<T: Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot::Receiver<T>) {
+fn make_callback<T: Send + Debug + 'static>() -> (Box<FnBox(T) + Send>, oneshot::Receiver<T>) {
     let (tx, rx) = oneshot::channel();
-    let callback = move |resp| tx.send(resp).map_err(|_| ()).unwrap();
+    let callback = move |resp| tx.send(resp).unwrap();
     (box callback, rx)
 }
 

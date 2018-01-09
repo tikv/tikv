@@ -42,6 +42,7 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::raft_client::RaftClient;
 
+#[derive(Debug)]
 pub struct ResponseStream {
     head: Option<Response>,
     remain: Option<SpawnHandle<Response, GrpcError>>,

@@ -809,7 +809,7 @@ fn test_batch_row_limit() {
         (5, Some("name:1"), 4),
     ];
     let batch_row_limit = 3;
-    let chunk_datum_limit = batch_row_limit * 3;
+    let chunk_datum_limit = batch_row_limit * 3; // we have 3 fields.
     let product = ProductTable::new();
     let (_, mut end_point) = {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
@@ -863,7 +863,7 @@ fn test_stream_batch_row_limit() {
         chunk.merge_from_bytes(resp.get_data()).unwrap();
 
         let chunks = vec![chunk];
-        let chunk_data_limit = stream_row_limit * 3;
+        let chunk_data_limit = stream_row_limit * 3; // we have 3 fields.
         check_chunk_datum_count(&chunks, chunk_data_limit);
 
         let spliter = DAGChunkSpliter::new(chunks, 3);

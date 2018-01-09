@@ -31,7 +31,7 @@ use tipb::executor::ExecType;
 use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
+use kvproto::kvrpcpb::{CommandPri, HandleTime, IsolationLevel};
 
 use util::time::{duration_to_sec, Instant};
 use util::worker::{FutureScheduler, Runnable, Scheduler};
@@ -177,7 +177,13 @@ impl FromIterator<(thread::ThreadId, CopContext)> for CopContextPool {
     }
 }
 
-#[derive(Default)]
+impl Debug for CopContextPool {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "CopContextPool")
+    }
+}
+
+#[derive(Debug, Default)]
 struct CopStats {
     stats: Statistics,
     scan_counter: ScanCounter,
@@ -264,48 +270,41 @@ impl Host {
         }
     }
 
+    #[inline]
     fn running_task_count(&self) -> usize {
         self.running_task_count.load(Ordering::Acquire)
     }
 
-    fn notify_batch_failed<E: Into<Error> + Debug>(&mut self, e: E, batch_id: u64) {
+    fn notify_failed<E: Into<Error> + Debug>(&mut self, e: E, reqs: Vec<RequestTask>) {
         debug!("failed to handle batch request: {:?}", e);
         let resp = err_resp(e.into());
-        for t in self.reqs.remove(&batch_id).unwrap() {
+        for t in reqs {
             t.on_resp.respond(resp.clone());
         }
     }
 
-    fn handle_request(&mut self, snap: Box<Snapshot>, mut t: RequestTask) {
-        t.metrics.stop_record_waiting();
+    #[inline]
+    fn notify_batch_failed<E: Into<Error> + Debug>(&mut self, e: E, batch_id: u64) {
+        let reqs = self.reqs.remove(&batch_id).unwrap();
+        self.notify_failed(e, reqs);
+    }
+
+    fn handle_request(&mut self, snap: Box<Snapshot>, t: RequestTask) {
         if let Err(e) = t.check_outdated() {
             return t.on_resp.respond(err_resp(e));
         }
 
-        let pool_and_ctx_pool = match t.req.get_context().get_priority() {
+        let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
+        let mut tracker = t.tracker;
+        let ranges = req.take_ranges().into_vec();
+
+        let pool_and_ctx_pool = match req.get_context().get_priority() {
             CommandPri::Low => &mut self.low_priority_pool,
             CommandPri::High => &mut self.high_priority_pool,
             CommandPri::Normal => &mut self.pool,
         };
         let pool = &mut pool_and_ctx_pool.pool;
-        let mut ctx_pool = pool_and_ctx_pool.contexts.clone();
-        let task_count = self.running_task_count.clone();
-
-        let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
-        let mut metrics = t.metrics;
-        let ranges = req.take_ranges().into_vec();
-        let mut cop_stats = CopStats::default();
-
-        fn on_finish(
-            running_task_count: &AtomicUsize,
-            stats: CopStats,
-            metrics: &mut ReqMetrics,
-            ctxs: &mut CopContextPool,
-        ) {
-            metrics.stop_record_handling(&stats.stats);
-            ctxs.collect(metrics.region_id, metrics.scan_tag, stats);
-            running_task_count.fetch_sub(1, Ordering::Release);
-        }
+        tracker.attach_ctx_pool(pool_and_ctx_pool.contexts.clone());
 
         match cop_req {
             CopRequest::DAG(dag) => {
@@ -316,11 +315,11 @@ impl Host {
                 if !on_resp.is_streaming() {
                     let batch_row_limit = self.batch_row_limit;
                     let do_request = move || {
-                        let res = ctx.handle_request(batch_row_limit);
-                        let resp = res.unwrap_or_else(err_resp);
+                        let mut resp = ctx.handle_request(batch_row_limit).unwrap_or_else(err_resp);
+                        let mut cop_stats = CopStats::default();
                         ctx.collect_statistics_into(&mut cop_stats.stats);
                         ctx.collect_metrics_into(&mut cop_stats.scan_counter);
-                        on_finish(&task_count, cop_stats, &mut metrics, &mut ctx_pool);
+                        tracker.record_handle(&mut resp, cop_stats);
                         future::ok::<_, ()>(on_resp.respond(resp))
                     };
                     return pool.spawn_fn(do_request).forget();
@@ -331,15 +330,17 @@ impl Host {
                 let f = move || {
                     let s = stream::unfold((ctx, false), move |(mut ctx, finished)| {
                         if finished {
-                            let mut cop_stats = CopStats::default();
-                            ctx.collect_statistics_into(&mut cop_stats.stats);
-                            ctx.collect_metrics_into(&mut cop_stats.scan_counter);
-                            on_finish(&task_count, cop_stats, &mut metrics, &mut ctx_pool);
                             return None;
                         }
                         let (item, finished) = ctx.handle_streaming_request(batch_row_limit)
                             .unwrap_or_else(|e| (Some(err_resp(e)), true));
-                        item.map(|resp| future::ok::<_, GrpcError>((resp, (ctx, finished))))
+                        item.map(|mut resp| {
+                            let mut cop_stats = CopStats::default();
+                            ctx.collect_statistics_into(&mut cop_stats.stats);
+                            ctx.collect_metrics_into(&mut cop_stats.scan_counter);
+                            tracker.record_handle(&mut resp, cop_stats);
+                            future::ok::<_, GrpcError>((resp, (ctx, finished)))
+                        })
                     });
                     let resp_stream = ResponseStream::spawn(s, &pool_1);
                     future::ok::<_, ()>(on_resp.respond_stream(resp_stream))
@@ -348,10 +349,11 @@ impl Host {
             }
             CopRequest::Analyze(analyze) => {
                 let ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx);
+                let mut cop_stats = CopStats::default();
                 let do_request = move || {
-                    let resp = ctx.handle_request(&mut cop_stats.stats)
+                    let mut resp = ctx.handle_request(&mut cop_stats.stats)
                         .unwrap_or_else(err_resp);
-                    on_finish(&task_count, cop_stats, &mut metrics, &mut ctx_pool);
+                    tracker.record_handle(&mut resp, cop_stats);
                     future::ok::<_, ()>(on_resp.respond(resp))
                 };
                 pool.spawn_fn(do_request).forget();
@@ -364,7 +366,8 @@ impl Host {
             Ok(s) => s,
             Err(e) => return self.notify_batch_failed(e, id),
         };
-        for req in self.reqs.remove(&id).unwrap() {
+        for mut req in self.reqs.remove(&id).unwrap() {
+            req.tracker.record_wait();
             self.handle_request(snap.clone(), req);
         }
     }
@@ -424,65 +427,115 @@ impl ReqContext {
 }
 
 #[derive(Debug)]
-struct ReqMetrics {
+struct RequestTracker {
+    running_task_count: Option<Arc<AtomicUsize>>,
+    ctx_pool: Option<CopContextPool>,
+    record_handle_time: bool,
+    record_scan_detail: bool,
+
+    start: Instant,
+    wait_time: f64,
+    handle_time: f64,
+    cop_stats: CopStats,
+
     region_id: u64,
+    txn_start_ts: u64,
     ranges_len: usize,
     first_range: Option<KeyRange>,
     scan_tag: &'static str,
     pri_str: &'static str,
-    timer: Instant,
-    wait_time: f64,
-    start_ts: u64,
 }
 
-impl ReqMetrics {
-    fn stop_record_waiting(&mut self) {
+impl RequestTracker {
+    fn attach_task_count(&mut self, running_task_count: Arc<AtomicUsize>) {
+        running_task_count.fetch_add(1, Ordering::Release);
+        self.running_task_count = Some(running_task_count);
+    }
+
+    fn attach_ctx_pool(&mut self, ctx_pool: CopContextPool) {
+        self.ctx_pool = Some(ctx_pool);
+    }
+
+    fn record_wait(&mut self) {
         if self.wait_time > 0f64 {
             return;
         }
-        self.wait_time = duration_to_sec(self.timer.elapsed());
+        self.wait_time = duration_to_sec(self.start.elapsed());
         COPR_REQ_WAIT_TIME
             .with_label_values(&[self.scan_tag])
             .observe(self.wait_time);
-
         COPR_PENDING_REQS
             .with_label_values(&[self.scan_tag, self.pri_str])
             .add(1.0);
     }
 
-    fn stop_record_handling(&mut self, stats: &Statistics) {
-        self.stop_record_waiting();
-        let query_time = duration_to_sec(self.timer.elapsed());
-        COPR_REQ_HISTOGRAM_VEC
-            .with_label_values(&[self.scan_tag])
-            .observe(query_time);
+    #[allow(useless_let_if_seq)]
+    fn record_handle(&mut self, resp: &mut Response, cop_stats: CopStats) {
+        self.record_wait();
+        let query_time = duration_to_sec(self.start.elapsed());
+        self.handle_time = query_time - self.wait_time;
 
-        let handle_time = query_time - self.wait_time;
-        COPR_REQ_HANDLE_TIME
-            .with_label_values(&[self.scan_tag])
-            .observe(handle_time);
+        let (stats, mut scan_counter) = (cop_stats.stats, cop_stats.scan_counter);
+        self.cop_stats.stats.add(&stats);
+        self.cop_stats.scan_counter.merge(&mut scan_counter);
 
-        COPR_SCAN_KEYS
-            .with_label_values(&[self.scan_tag])
-            .observe(stats.total_op_count() as f64);
+        let mut record_handle_time = self.record_handle_time;
+        let mut record_scan_detail = self.record_scan_detail;
+        if self.handle_time > SLOW_QUERY_LOWER_BOUND {
+            record_handle_time = true;
+            record_scan_detail = true;
+        }
+        if record_handle_time {
+            let mut handle = HandleTime::new();
+            handle.set_process_ms((self.handle_time * 1000f64) as i64);
+            handle.set_wait_ms((self.wait_time * 1000f64) as i64);
+            resp.mut_exec_details().set_handle_time(handle);
+        }
+        if record_scan_detail {
+            let detail = stats.scan_detail();
+            resp.mut_exec_details().set_scan_detail(detail);
+        }
+    }
+}
 
+impl Drop for RequestTracker {
+    fn drop(&mut self) {
+        self.record_wait();
+        let query_time = self.wait_time + self.handle_time;
         COPR_PENDING_REQS
             .with_label_values(&[self.scan_tag, self.pri_str])
             .dec();
+        COPR_REQ_HISTOGRAM_VEC
+            .with_label_values(&[self.scan_tag])
+            .observe(query_time);
+        COPR_REQ_HANDLE_TIME
+            .with_label_values(&[self.scan_tag])
+            .observe(self.handle_time);
+        COPR_SCAN_KEYS
+            .with_label_values(&[self.scan_tag])
+            .observe(self.cop_stats.stats.total_op_count() as f64);
 
-        if handle_time > SLOW_QUERY_LOWER_BOUND {
+        if self.handle_time > SLOW_QUERY_LOWER_BOUND {
             info!(
                 "[region {}] handle {:?} [{}] takes {:?} [keys: {}, hit: {}, \
                  ranges: {} ({:?})]",
                 self.region_id,
-                self.start_ts,
+                self.txn_start_ts,
                 self.scan_tag,
-                handle_time,
-                stats.total_op_count(),
-                stats.total_processed(),
+                self.handle_time,
+                self.cop_stats.stats.total_op_count(),
+                self.cop_stats.stats.total_processed(),
                 self.ranges_len,
                 self.first_range,
             );
+        }
+
+        if let Some(task_count) = self.running_task_count.take() {
+            task_count.fetch_sub(1, Ordering::Release);
+        }
+        if let Some(ctx_pool) = self.ctx_pool.take() {
+            let cop_stats = mem::replace(&mut self.cop_stats, CopStats::default());
+            ctx_pool.collect(self.region_id, self.scan_tag, cop_stats);
         }
     }
 }
@@ -493,7 +546,7 @@ pub struct RequestTask {
     cop_req: CopRequest,
     ctx: ReqContext,
     on_resp: OnResponse,
-    metrics: ReqMetrics,
+    tracker: RequestTracker,
 }
 
 impl RequestTask {
@@ -521,23 +574,33 @@ impl RequestTask {
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
 
-        let timer = Instant::now_coarse();
-        let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+        let start = Instant::now_coarse();
+        let deadline = start + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+
         let req_ctx = ReqContext {
             deadline: deadline,
             isolation_level: req.get_context().get_isolation_level(),
             fill_cache: !req.get_context().get_not_fill_cache(),
             table_scan: table_scan,
         };
-        let metrics = ReqMetrics {
+
+        let request_tracker = RequestTracker {
+            running_task_count: None,
+            ctx_pool: None,
+            record_handle_time: req.get_context().get_handle_time(),
+            record_scan_detail: req.get_context().get_scan_detail(),
+
+            start: start,
+            wait_time: 0f64,
+            handle_time: 0f64,
+            cop_stats: CopStats::default(),
+
             region_id: req.get_context().get_region_id(),
+            txn_start_ts: start_ts,
             ranges_len: req.get_ranges().len(),
             first_range: req.get_ranges().get(0).cloned(),
             scan_tag: req_ctx.get_scan_tag(),
             pri_str: get_req_pri_str(req.get_context().get_priority()),
-            timer: timer,
-            wait_time: 0f64,
-            start_ts: start_ts,
         };
 
         Ok(RequestTask {
@@ -545,7 +608,7 @@ impl RequestTask {
             cop_req: cop_req,
             ctx: req_ctx,
             on_resp: on_resp,
-            metrics: metrics,
+            tracker: request_tracker,
         })
     }
 
@@ -625,18 +688,16 @@ impl Runnable<Task> for Host {
 
         let mut batch = Vec::with_capacity(grouped_reqs.len());
         let start_id = self.last_req_id + 1;
-        for (_, reqs) in grouped_reqs {
+        for (_, mut reqs) in grouped_reqs {
             let max_running_task_count = self.max_running_task_count;
             if self.running_task_count() >= max_running_task_count {
-                for req in reqs {
-                    let resp = err_resp(Error::Full(max_running_task_count));
-                    req.on_resp.respond(resp);
-                }
+                self.notify_failed(Error::Full(max_running_task_count), reqs);
                 continue;
             }
 
-            for _ in &reqs {
-                self.running_task_count.fetch_add(1, Ordering::Release);
+            for req in &mut reqs {
+                let task_count = self.running_task_count.clone();
+                req.tracker.attach_task_count(task_count);
             }
             self.last_req_id += 1;
             batch.push(reqs[0].req.get_context().clone());

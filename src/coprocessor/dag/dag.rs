@@ -139,7 +139,7 @@ impl DAGContext {
                     s_resp.set_error(to_pb_error(&e));
                     resp.set_data(box_try!(s_resp.write_to_bytes()));
                     resp.set_other_error(format!("{}", e));
-                    return Ok((Some(resp), false));
+                    return Ok((Some(resp), true));
                 } else {
                     return Err(e);
                 },
@@ -157,7 +157,6 @@ impl DAGContext {
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
     ) -> Result<Response> {
-        // TODO: set `output_counts` later.
         let mut s_resp = StreamResponse::new();
         s_resp.set_encode_type(EncodeType::TypeDefault);
         s_resp.set_data(box_try!(chunk.write_to_bytes()));

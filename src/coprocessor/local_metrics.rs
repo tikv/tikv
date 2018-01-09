@@ -14,7 +14,7 @@
 use coprocessor::metrics::*;
 
 /// `ScanCounter` is for recording range query and point query.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ScanCounter {
     range: usize,
     point: usize,
