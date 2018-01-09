@@ -335,12 +335,11 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
 //           /src/core/lib/iomgr/ev_posix.cc#L149
 fn specify_grpc_event_engine() {
     const GRPC_POLL_STRATEGY: &str = "GRPC_POLL_STRATEGY";
-    let mut engines = "epollsig".to_owned();
-    if let Ok(env_engines) = env::var(GRPC_POLL_STRATEGY) {
-        engines.push(',');
-        engines.push_str(&env_engines);
+    const DEFAULT_ENGINE: &str = "epollsig";
+    if env::var(GRPC_POLL_STRATEGY).is_err() {
+        // Set to epollsig if it is not specified.
+        env::set_var(GRPC_POLL_STRATEGY, DEFAULT_ENGINE);
     }
-    env::set_var(GRPC_POLL_STRATEGY, engines);
 }
 
 fn main() {
