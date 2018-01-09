@@ -111,6 +111,7 @@ fn test_node_bootstrap_with_prepared_data() {
         snapshot_status_receiver,
         pd_worker,
         coprocessor_host,
+        None,
     ).unwrap();
     assert!(
         engine

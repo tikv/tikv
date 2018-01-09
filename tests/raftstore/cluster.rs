@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{self, Arc, RwLock};
+use std::sync::mpsc::{self, Receiver};
 use std::time::*;
 use std::{result, thread};
 use std::path::Path;
@@ -26,6 +27,7 @@ use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::*;
 use tikv::config::TiKvConfig;
 use tikv::storage::CF_DEFAULT;
+use tikv::util::rocksdb::{CompactedEvent, CompactionListener};
 use super::util::*;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -49,7 +51,13 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engines: Engines) -> u64;
+    fn run_node(
+        &mut self,
+        node_id: u64,
+        cfg: TiKvConfig,
+        engines: Engines,
+        cl: Option<Receiver<CompactedEvent>>,
+    ) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command_on_node(
@@ -77,6 +85,7 @@ pub struct Cluster<T: Simulator> {
     leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
     dbs: Vec<Engines>,
+    dbs_compaction_listener: Vec<Option<Receiver<CompactedEvent>>>,
 
     // node id -> {db, raft_db} engine.
     pub engines: HashMap<u64, Engines>,
@@ -98,6 +107,7 @@ impl<T: Simulator> Cluster<T> {
             leaders: HashMap::new(),
             paths: vec![],
             dbs: vec![],
+            dbs_compaction_listener: vec![],
             engines: HashMap::new(),
             sim: sim,
             pd_client: pd_client,
@@ -118,7 +128,9 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for item in &self.paths {
-            let kv_db_opt = self.cfg.rocksdb.build_opt();
+            let mut kv_db_opt = self.cfg.rocksdb.build_opt();
+            let (compaction_tx, compaction_rx) = mpsc::channel();
+            kv_db_opt.add_event_listener(CompactionListener::new(compaction_tx));
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
                 rocksdb::new_engine_opt(item.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
@@ -129,14 +141,16 @@ impl<T: Simulator> Cluster<T> {
                 rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             );
             self.dbs.push(Engines::new(engine, raft_engine));
+            self.dbs_compaction_listener.push(Some(compaction_rx));
         }
     }
 
     pub fn start(&mut self) {
         if self.engines.is_empty() {
             let mut sim = self.sim.wl();
-            for engines in &self.dbs {
-                let node_id = sim.run_node(0, self.cfg.clone(), engines.clone());
+            for (i, engines) in self.dbs.iter().enumerate() {
+                let cl = self.dbs_compaction_listener[i].take();
+                let node_id = sim.run_node(0, self.cfg.clone(), engines.clone(), cl);
                 self.engines.insert(node_id, engines.clone());
             }
         } else {
@@ -145,6 +159,13 @@ impl<T: Simulator> Cluster<T> {
             for node_id in node_ids {
                 self.run_node(node_id);
             }
+        }
+    }
+
+    pub fn compact_data(&mut self) {
+        for engine in self.engines.values_mut() {
+            let handle = rocksdb::get_cf_handle(&engine.kv_engine, "default").unwrap();
+            rocksdb::compact_range(&engine.kv_engine, handle, None, None, true);
         }
     }
 
@@ -165,9 +186,12 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn run_node(&mut self, node_id: u64) {
         debug!("starting node {}", node_id);
-        self.sim
-            .wl()
-            .run_node(node_id, self.cfg.clone(), self.engines[&node_id].clone());
+        self.sim.wl().run_node(
+            node_id,
+            self.cfg.clone(),
+            self.engines[&node_id].clone(),
+            None,
+        );
         debug!("node {} started", node_id);
     }
 

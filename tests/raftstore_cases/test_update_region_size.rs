@@ -27,26 +27,42 @@ fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.region_size_expired_time = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(8);
+    // Promoting data in level 0 flow to level 1.
+    cluster
+        .cfg
+        .rocksdb
+        .defaultcf
+        .level0_file_num_compaction_trigger = 1;
+    // Promoting data in level 1 flow to level 2.
+    cluster.cfg.rocksdb.defaultcf.max_bytes_for_level_base = ReadableSize::kb(16);
     // Big enough, so no split check triggered by putting data.
     cluster.cfg.raft_store.region_split_check_diff = ReadableSize::mb(128);
     cluster.run();
 
-    for i in 0..100 {
-        let (k, v) = (format!("k{}", i), format!("value{}", i));
-        cluster.must_put(k.as_bytes(), v.as_bytes());
+    for _ in 0..2 {
+        for i in 0..1000 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+        flush(cluster);
+        for i in 1000..2000 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+        flush(cluster);
+        for i in 2000..3000 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+        flush(cluster);
     }
-    flush(cluster);
-    thread::sleep(time::Duration::from_millis(300));
 
+    thread::sleep(time::Duration::from_millis(300));
     let region_id = cluster.get_region_id(b"");
     let old_region_size = cluster.pd_client.get_region_size(region_id).unwrap();
 
-    for i in 100..200 {
-        let (k, v) = (format!("k{}", i), format!("value{}", i));
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-    flush(cluster);
+    cluster.compact_data();
     thread::sleep(time::Duration::from_millis(300));
     let new_region_size = cluster.pd_client.get_region_size(region_id).unwrap();
 

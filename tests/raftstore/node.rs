@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
@@ -33,6 +34,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::HandyRwLock;
 use tikv::util::worker::FutureWorker;
 use tikv::util::transport::SendCh;
+use tikv::util::rocksdb::CompactedEvent;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raft::SnapshotStatus;
 use super::pd::TestPdClient;
@@ -152,7 +154,13 @@ impl NodeCluster {
 }
 
 impl Simulator for NodeCluster {
-    fn run_node(&mut self, node_id: u64, cfg: TiKvConfig, engines: Engines) -> u64 {
+    fn run_node(
+        &mut self,
+        node_id: u64,
+        cfg: TiKvConfig,
+        engines: Engines,
+        cl: Option<Receiver<CompactedEvent>>,
+    ) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
@@ -190,6 +198,7 @@ impl Simulator for NodeCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
+            cl,
         ).unwrap();
         assert!(
             engines

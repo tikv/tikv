@@ -17,9 +17,8 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::{cmp, mem, slice};
 use std::time::{Duration, Instant};
-use rand::{self, Rng};
 
-use time::{self, Duration as TimeDuration, Timespec};
+use time::Timespec;
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
@@ -206,8 +205,9 @@ pub struct Peer {
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
-    /// approximate region size and timeout.
-    pub approximate_size: Option<(u64, Timespec)>,
+    /// approximate region size.
+    pub approximate_size: Option<u64>,
+    pub approximate_size_unhealth: usize,
 
     pub consistency_state: ConsistencyState,
 
@@ -278,20 +278,6 @@ impl Peer {
         Peer::new(store, region, peer_id)
     }
 
-    pub fn gen_expired_time(&mut self) -> Timespec {
-        let now = time::get_time();
-        let base = self.cfg.region_size_expired_time.as_millis();
-        let timeout = base + rand::thread_rng().gen_range(0, base);
-        now + TimeDuration::milliseconds(timeout as i64)
-    }
-
-    pub fn approximate_size_expired(&self, now: &Timespec) -> bool {
-        if let Some((_, expired)) = self.approximate_size {
-            return expired.sec < now.sec || (expired.sec == now.sec && expired.nsec < now.nsec);
-        }
-        false
-    }
-
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after applying snapshot.
@@ -358,6 +344,7 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
+            approximate_size_unhealth: 0,
             apply_scheduler: store.apply_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
@@ -396,6 +383,14 @@ impl Peer {
             self.marked_to_be_checked = true;
             pending_raft_groups.insert(self.region_id);
         }
+    }
+
+    pub fn should_update_approximate_size(&self) -> bool {
+        self.approximate_size_unhealth >= 4
+    }
+
+    pub fn reset_approximate_size_unhealth(&mut self) {
+        self.approximate_size_unhealth = 0;
     }
 
     pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
@@ -1626,7 +1621,7 @@ impl Peer {
             pending_peers: self.collect_pending_peers(),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            region_size: self.approximate_size.map(|x| x.0),
+            region_size: self.approximate_size,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

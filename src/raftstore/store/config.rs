@@ -77,9 +77,6 @@ pub struct Config {
     /// If the peer is stale and is not valid in any region, it will destroy itself.
     pub max_leader_missing_duration: ReadableDuration,
 
-    /// Update region size periodically.
-    pub region_size_expired_time: ReadableDuration,
-
     pub snap_apply_batch_size: ReadableSize,
 
     // Interval (ms) to check region whether the data is consistent.
@@ -138,7 +135,6 @@ impl Default for Config {
             messages_per_tick: 4096,
             max_peer_down_duration: ReadableDuration::minutes(5),
             max_leader_missing_duration: ReadableDuration::hours(2),
-            region_size_expired_time: ReadableDuration::hours(1),
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),

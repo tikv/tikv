@@ -26,6 +26,7 @@ use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
 use util::worker::FutureWorker;
+use util::rocksdb::CompactedEvent;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg,
                        SnapManager, Store, StoreChannel, Transport};
@@ -129,6 +130,7 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
+        compaction_listener: Option<Receiver<CompactedEvent>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -168,6 +170,7 @@ where
             significant_msg_receiver,
             pd_worker,
             coprocessor_host,
+            compaction_listener,
         )?;
         Ok(())
     }
@@ -322,6 +325,7 @@ where
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
+        compaction_listener: Option<Receiver<CompactedEvent>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -354,6 +358,7 @@ where
                 snap_mgr,
                 pd_worker,
                 coprocessor_host,
+                compaction_listener,
             ) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,

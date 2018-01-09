@@ -20,6 +20,7 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
+use std::cmp;
 
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -44,6 +45,7 @@ use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::transport::SendCh;
 use util::RingQueue;
 use util::collections::{HashMap, HashSet};
+use util::rocksdb::CompactedEvent;
 use util::sys as util_sys;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
@@ -155,6 +157,8 @@ pub struct Store<T, C: 'static> {
 
     pub coprocessor_host: Arc<CoprocessorHost>,
 
+    compaction_listener: Option<StdReceiver<CompactedEvent>>,
+
     snap_mgr: SnapManager,
 
     raft_metrics: RaftMetrics,
@@ -196,6 +200,7 @@ impl<T, C> Store<T, C> {
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         mut coprocessor_host: CoprocessorHost,
+        compaction_listener: Option<StdReceiver<CompactedEvent>>,
     ) -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         cfg.validate()?;
@@ -230,6 +235,7 @@ impl<T, C> Store<T, C> {
             trans: trans,
             pd_client: pd_client,
             coprocessor_host: Arc::new(coprocessor_host),
+            compaction_listener: compaction_listener,
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
@@ -1789,7 +1795,57 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    fn poll_compaction_event(&mut self) {
+        if self.compaction_listener.is_none() {
+            return;
+        }
+
+        let mut events = vec![];
+        loop {
+            match self.compaction_listener.as_ref().unwrap().try_recv() {
+                Ok(event) => events.push(event),
+                Err(TryRecvError::Empty) => break,
+                Err(e) => panic!("unexpected error {:?}", e),
+            }
+        }
+
+        for event in events.drain(..) {
+            // When calculating region size, we only consider write and default
+            // column families.
+            if event.cf != CF_WRITE && event.cf != CF_DEFAULT {
+                continue;
+            }
+            // Compactions in level 0 and level 1 are very frequently.
+            if event.output_level < 2 {
+                continue;
+            }
+
+            let mut influenced_regions = vec![];
+            for (_, region_id) in self.region_ranges
+                .range((Included(event.start_key), Included(event.end_key)))
+            {
+                influenced_regions.push(region_id);
+            }
+            if influenced_regions.is_empty() {
+                continue;
+            }
+            let region_estimated_change = event.total_size / influenced_regions.len();
+            let score = cmp::max(
+                1,
+                region_estimated_change / self.cfg.region_split_check_diff.0 as usize,
+            );
+            for region_id in influenced_regions.drain(..) {
+                if let Some(peer) = self.region_peers.get_mut(region_id) {
+                    peer.approximate_size_unhealth += score;
+                }
+            }
+        }
+    }
+
     fn on_split_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        // Poll all compaction finished event.
+        self.poll_compaction_event();
+
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         // TODO: check whether a gc progress has been started.
@@ -1797,7 +1853,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.register_split_region_check_tick(event_loop);
             return;
         }
-        let now = time::get_time();
         for peer in self.region_peers.values_mut() {
             if !peer.is_leader() {
                 continue;
@@ -1806,9 +1861,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // split check will first check the region size, and then
             // check whether the region should split.  This should
             // work even if we change the region max size.
-            // When the approximate size expired, recalculate the region
+            // If peer says should update approximate size, update region
             // size and check whether the region should split.
-            if peer.approximate_size.is_some() && !peer.approximate_size_expired(&now) &&
+            if peer.approximate_size.is_some() && !peer.should_update_approximate_size() &&
                 peer.size_diff_hint < self.cfg.region_split_check_diff.0
             {
                 continue;
@@ -1818,6 +1873,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
             peer.size_diff_hint = 0;
+            peer.reset_approximate_size_unhealth();
         }
 
         self.register_split_region_check_tick(event_loop);
@@ -1960,8 +2016,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return;
             }
         };
-        let timeout = peer.gen_expired_time();
-        peer.approximate_size = Some((region_size, timeout));
+        peer.approximate_size = Some(region_size);
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {

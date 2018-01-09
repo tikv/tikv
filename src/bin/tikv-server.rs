@@ -74,6 +74,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use tikv::util::rocksdb::CompactionListener;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -171,7 +172,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
 
     // Create kv engine, storage.
-    let kv_db_opts = cfg.rocksdb.build_opt();
+    let mut kv_db_opts = cfg.rocksdb.build_opt();
+    let (compaction_tx, compaction_rx) = mpsc::channel();
+    kv_db_opts.add_event_listener(CompactionListener::new(compaction_tx));
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
     let kv_engine = Arc::new(
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
@@ -239,6 +242,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         significant_msg_receiver,
         pd_worker,
         coprocessor_host,
+        Some(compaction_rx),
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 

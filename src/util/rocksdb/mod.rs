@@ -16,7 +16,7 @@ pub mod event_listener;
 pub mod engine_metrics;
 pub mod metrics_flusher;
 
-pub use self::event_listener::EventListener;
+pub use self::event_listener::{CompactedEvent, CompactionListener, EventListener};
 pub use self::metrics_flusher::MetricsFlusher;
 
 use std::fs::{self, File};

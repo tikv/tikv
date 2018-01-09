@@ -11,8 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp;
+use std::sync::mpsc::Sender;
+use std::sync::Mutex;
+
 use rocksdb::{self, CompactionJobInfo, FlushJobInfo, IngestionInfo};
 use util::rocksdb::engine_metrics::*;
+
+use super::properties::SizeProperties;
 
 pub struct EventListener {
     db_name: String,
@@ -50,5 +56,102 @@ impl rocksdb::EventListener for EventListener {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "ingestion"])
             .inc();
+    }
+}
+
+pub struct CompactedEvent {
+    pub cf: String,
+    pub start_key: Vec<u8>,
+    pub end_key: Vec<u8>,
+    pub total_size: usize,
+    pub input_file_count: usize,
+    pub output_file_count: usize,
+    pub output_level: i32,
+}
+
+impl CompactedEvent {
+    pub fn new(
+        cf: String,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        total_size: usize,
+        input_file_count: usize,
+        output_file_count: usize,
+        output_level: i32,
+    ) -> CompactedEvent {
+        CompactedEvent {
+            cf: cf,
+            start_key: start_key,
+            end_key: end_key,
+            total_size: total_size,
+            input_file_count: input_file_count,
+            output_file_count: output_file_count,
+            output_level: output_level,
+        }
+    }
+}
+
+pub struct CompactionListener {
+    notifier: Mutex<Sender<CompactedEvent>>,
+}
+
+impl CompactionListener {
+    pub fn new(notifier: Sender<CompactedEvent>) -> CompactionListener {
+        CompactionListener {
+            notifier: Mutex::new(notifier),
+        }
+    }
+}
+
+impl rocksdb::EventListener for CompactionListener {
+    fn on_compaction_completed(&self, info: &CompactionJobInfo) {
+        let cf = info.cf_name().to_owned();
+        let output_level = info.output_level();
+        let input_file_count = info.input_file_count();
+        let output_file_count = info.output_file_count();
+
+        let mut smallest_key = None;
+        let mut largest_key = None;
+        let mut total_size: usize = 0;
+        let iter = info.table_properties().into_iter();
+        for (_, properties) in iter {
+            if let Ok(props) = SizeProperties::decode(properties.user_collected_properties()) {
+                total_size += props.total_size as usize;
+
+                if let Some(smallest) = props.smallest_key() {
+                    if let Some(s) = smallest_key {
+                        smallest_key = Some(cmp::min(s, smallest));
+                    } else {
+                        smallest_key = Some(smallest);
+                    }
+                }
+                if let Some(largest) = props.largest_key() {
+                    if let Some(l) = largest_key {
+                        largest_key = Some(cmp::max(l, largest));
+                    } else {
+                        largest_key = Some(largest);
+                    }
+                }
+            } else {
+                return;
+            }
+        }
+
+        if smallest_key.is_none() || largest_key.is_none() {
+            return;
+        }
+        self.notifier
+            .lock()
+            .unwrap()
+            .send(CompactedEvent::new(
+                cf,
+                smallest_key.unwrap(),
+                largest_key.unwrap(),
+                total_size,
+                input_file_count,
+                output_file_count,
+                output_level,
+            ))
+            .unwrap();
     }
 }

@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, RwLock};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::boxed::FnBox;
 
@@ -32,6 +33,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::util::transport::SendCh;
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
+use tikv::util::rocksdb::CompactedEvent;
 use tikv::storage::Engine;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
@@ -89,7 +91,13 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, mut cfg: TiKvConfig, engines: Engines) -> u64 {
+    fn run_node(
+        &mut self,
+        node_id: u64,
+        mut cfg: TiKvConfig,
+        engines: Engines,
+        cl: Option<Receiver<CompactedEvent>>,
+    ) -> u64 {
         assert!(node_id == 0 || !self.metas.contains_key(&node_id));
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -162,6 +170,7 @@ impl Simulator for ServerCluster {
             snap_status_receiver,
             pd_worker,
             coprocessor_host,
+            cl,
         ).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
