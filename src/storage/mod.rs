@@ -130,7 +130,11 @@ pub enum Command {
         keys: Vec<Key>,
         start_ts: u64,
     },
-    ScanLock { ctx: Context, max_ts: u64 },
+    ScanLock {
+        ctx: Context,
+        max_ts: u64,
+        limit: Option<usize>,
+    },
     ResolveLock {
         ctx: Context,
         txn_status: HashMap<u64, u64>,
@@ -762,11 +766,13 @@ impl Storage {
         &self,
         ctx: Context,
         max_ts: u64,
+        limit: Option<usize>,
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
         let cmd = Command::ScanLock {
             ctx: ctx,
             max_ts: max_ts,
+            limit: limit,
         };
         let tag = cmd.tag();
         self.send(cmd, StorageCb::Locks(callback))?;

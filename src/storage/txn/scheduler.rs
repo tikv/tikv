@@ -566,7 +566,7 @@ fn process_read(
         }
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock {
-            ref ctx, max_ts, ..
+            ref ctx, max_ts, limit, ..
         } => {
             let mut reader = MvccReader::new(
                 snapshot,
@@ -577,7 +577,7 @@ fn process_read(
                 ctx.get_isolation_level(),
             );
             let res = reader
-                .scan_lock(None, |lock| lock.ts <= max_ts, None)
+                .scan_lock(None, |lock| lock.ts <= max_ts, limit)
                 .map_err(Error::from)
                 .and_then(|(v, _)| {
                     let mut locks = vec![];
