@@ -19,7 +19,7 @@ use std::thread;
 use rocksdb::DB;
 use protobuf;
 
-use kvproto::metapb::{self, RegionEpoch};
+use kvproto::metapb::{self, RegionEpoch, MergeDirection};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, TransferLeader};
@@ -230,6 +230,14 @@ pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
     let mut cmd = AdminRequest::new();
     cmd.set_cmd_type(AdminCmdType::TransferLeader);
     cmd.mut_transfer_leader().set_peer(peer);
+    cmd
+}
+
+#[allow(dead_code)]
+pub fn new_pre_merge(direction: MergeDirection) -> AdminRequest {
+    let mut cmd = AdminRequest::new();
+    cmd.set_cmd_type(AdminCmdType::PreMerge);
+    cmd.mut_pre_merge().set_direction(direction);
     cmd
 }
 

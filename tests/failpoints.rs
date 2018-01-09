@@ -54,6 +54,8 @@ mod raftstore;
 mod storage;
 #[cfg(not(feature = "no-fail"))]
 mod failpoints_cases;
+#[allow(dead_code)]
+mod util;
 
 use std::sync::*;
 use std::thread;

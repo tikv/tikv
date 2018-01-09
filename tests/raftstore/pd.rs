@@ -258,20 +258,25 @@ impl Cluster {
             // 3) pd is (1, 2), TiKV is (3)
             // 4) pd id (1), TiKV is (2, 3)
 
-            assert_ne!(region_peer_len, cur_region_peer_len);
-
             if cur_region_peer_len > region_peer_len {
                 // must pd is (1, 2), TiKV is (1)
                 assert_eq!(cur_region_peer_len - region_peer_len, 1);
                 let peers = setdiff_peers(&cur_region, &region);
                 assert_eq!(peers.len(), 1);
                 assert!(setdiff_peers(&region, &cur_region).is_empty());
-            } else {
+            } else if cur_region_peer_len < region_peer_len {
                 // must pd is (1), TiKV is (1, 2)
                 assert_eq!(region_peer_len - cur_region_peer_len, 1);
                 let peers = setdiff_peers(&region, &cur_region);
                 assert_eq!(peers.len(), 1);
                 assert!(setdiff_peers(&cur_region, &region).is_empty());
+            } else {
+                must_same_peers(&cur_region, &region);
+                assert_eq!(cur_conf_ver + 1, conf_ver);
+                assert_eq!(
+                    cur_region.get_region_epoch().get_version() + 1,
+                    region.get_region_epoch().get_version()
+                );
             }
 
             // update the region.
