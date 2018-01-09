@@ -13,7 +13,6 @@
 
 use std::collections::HashMap;
 use std::option::Option;
-use std::boxed::Box;
 use std::sync::{Arc, Mutex};
 use linked_hash_map::LinkedHashMap;
 use super::metrics::*;
@@ -39,20 +38,42 @@ impl DistSQLCacheEntry {
             size: size,
         }
     }
+
+    pub fn update(&mut self, region_id: u64, version: u64, key_size: usize, res: Vec<u8>) -> usize {
+        let old_size = self.size;
+        self.size = res.len() + (key_size * 2) + DISTSQL_CACHE_ENTRY_ADDITION_SIZE;
+        self.version = version;
+        self.result = res;
+        self.region_id = region_id;
+        self.size - old_size
+    }
 }
 
+// RegionDistSQLCacheEntry track Region's cache items key.
+// So we can quickly get a cache entry list by given a region id.
+// That can make evict_region operation more faster than scan whole
+// cache items and get the remove item list.
 pub struct RegionDistSQLCacheEntry {
     version: u64,
     enable: bool,
     cached_items: HashMap<DistSQLCacheKey, u8>,
 }
 
+impl Default for RegionDistSQLCacheEntry {
+    fn default() -> RegionDistSQLCacheEntry {
+        RegionDistSQLCacheEntry {
+            version: 0,
+            enable: true,
+            cached_items: HashMap::default(),
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct DistSQLCache {
     regions: HashMap<u64, RegionDistSQLCacheEntry>,
     max_size: usize,
-    map: LinkedHashMap<DistSQLCacheKey, Box<DistSQLCacheEntry>>,
+    map: LinkedHashMap<DistSQLCacheKey, DistSQLCacheEntry>,
     size: usize,
 }
 
@@ -73,14 +94,10 @@ impl DistSQLCache {
         let key_size = k.len();
         if self.map.contains_key(&k) {
             let mut entry = self.map.get_mut(&k).unwrap();
-            let old_size = entry.size;
-            entry.size = res.len() + (key_size * 2) + DISTSQL_CACHE_ENTRY_ADDITION_SIZE;
-            entry.version = version;
-            entry.result = res;
-            entry.region_id = region_id;
-            self.size = self.size - old_size + entry.size;
+            let size_diff = entry.update(region_id, version, key_size, res);
+            self.size += size_diff;
         } else {
-            let entry = box DistSQLCacheEntry::new(region_id, version, key_size, res);
+            let entry = DistSQLCacheEntry::new(region_id, version, key_size, res);
             self.size += entry.size;
             self.map.insert(k.clone(), entry);
             self.update_regions(region_id, k);
@@ -101,23 +118,16 @@ impl DistSQLCache {
     }
 
     fn check_evict_key(&mut self, region_id: u64, k: &str) {
-        let opt = match self.map.get(k) {
-            None => None,
-            Some(entry) => {
-                match self.regions.get(&region_id) {
-                    None => None,
-                    Some(rentry) => {
-                        // Region's version is not same as cached evict it
-                        if rentry.version != entry.version {
-                            Some(())
-                        } else {
-                            None
-                        }
-                    }
+        let mut need_remove = false;
+        if let Some(entry) = self.map.get(k) {
+            if let Some(rentry) = self.regions.get(&region_id) {
+                // Region's version is not same as cached evict it
+                if entry.version != rentry.version {
+                    need_remove = true;
                 }
             }
-        };
-        if opt.is_some() {
+        }
+        if need_remove {
             self.remove(k);
         }
     }
@@ -152,29 +162,21 @@ impl DistSQLCache {
 
     pub fn remove(&mut self, k: &str) {
         let regions = &mut self.regions;
-        let option = self.map.remove(k);
-        match option {
-            None => (),
-            Some(entry) => {
-                let region_id: u64 = entry.region_id;
-                let opt = match regions.get_mut(&region_id) {
-                    None => None,
-                    Some(node) => {
-                        // Delete from region cache entry list
-                        node.cached_items.remove(k);
-                        if !node.cached_items.is_empty() && node.version != 1 {
-                            Some(())
-                        } else {
-                            None
-                        }
-                    }
-                };
-                if opt.is_some() {
-                    regions.remove(&region_id);
-                };
-                self.size -= entry.size;
+        if let Some(entry) = self.map.remove(k) {
+            let region_id: u64 = entry.region_id;
+            let mut need_remove_region = false;
+            if let Some(node) = regions.get_mut(&region_id) {
+                // Delete from region cache entry list
+                node.cached_items.remove(k);
+                if !node.cached_items.is_empty() && node.version != 1 {
+                    need_remove_region = true;
+                }
             }
-        };
+            if need_remove_region {
+                regions.remove(&region_id);
+            };
+            self.size -= entry.size;
+        }
     }
 
     fn evict_region_with_exist_region(&mut self, region_id: u64) {
@@ -197,8 +199,7 @@ impl DistSQLCache {
     fn evict_region_with_new_region(&mut self, region_id: u64) {
         let entry = RegionDistSQLCacheEntry {
             version: 1,
-            enable: true,
-            cached_items: HashMap::new(),
+            ..Default::default()
         };
         self.regions.insert(region_id, entry);
     }
@@ -284,35 +285,17 @@ impl DistSQLCache {
     }
 
     fn update_regions(&mut self, region_id: u64, k: DistSQLCacheKey) {
-        let opt = match self.regions.get_mut(&region_id) {
-            Some(entry) => {
-                entry.cached_items.insert(k, 1);
-                None
-            }
-            None => {
-                let mut rmap = HashMap::new();
-                rmap.insert(k, 1);
-                Some(rmap)
-            }
-        };
-        if let Some(rmap) = opt {
-            let entry = RegionDistSQLCacheEntry {
-                version: 0,
-                enable: true,
-                cached_items: rmap,
-            };
-            self.regions.insert(region_id, entry);
-        }
+        let mut opt = self.regions
+            .entry(region_id)
+            .or_insert_with(Default::default);
+        opt.cached_items.insert(k, 1);
     }
 
     #[inline]
     fn remove_lru(&mut self) {
-        match self.map.pop_front() {
-            None => (),
-            Some((_, entry)) => {
-                self.size -= entry.size;
-            }
-        };
+        if let Some((_, entry)) = self.map.pop_front() {
+            self.size -= entry.size;
+        }
     }
 }
 
@@ -368,6 +351,24 @@ mod tests {
                 assert!(false);
             }
         }
+    }
+
+    #[test]
+    fn test_distsql_cache_put_after_evict_region() {
+        let mut cache: DistSQLCache = DistSQLCache::new(200);
+        let key: DistSQLCacheKey = "test1".to_string();
+        let result: Vec<u8> = vec![100, 101, 102];
+        let version = cache.get_region_version(10);
+        cache.evict_region(10);
+        cache.put(10, key.clone(), version, result.clone());
+        assert_eq!(1, cache.len());
+        match cache.get(10, &key) {
+            None => (),
+            Some(_) => {
+                assert!(false);
+            }
+        }
+        assert_eq!(0, cache.len());
     }
 
     #[test]
