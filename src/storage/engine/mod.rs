@@ -554,7 +554,7 @@ quick_error! {
             description("request timeout")
             display("timeout after {:?}", d)
         }
-        Empty {
+        EmptyRequest {
             description("an empty request")
             display("an empty request")
         }
@@ -573,7 +573,7 @@ impl Error {
             Error::Request(ref e) => Some(Error::Request(e.clone())),
             Error::RocksDb(ref msg) => Some(Error::RocksDb(msg.clone())),
             Error::Timeout(d) => Some(Error::Timeout(d)),
-            Error::Empty => Some(Error::Empty),
+            Error::EmptyRequest => Some(Error::EmptyRequest),
             Error::Other(_) => None,
         }
     }

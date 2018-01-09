@@ -174,7 +174,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
 impl Engine for EngineRocksdb {
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
         if modifies.is_empty() {
-            return Err(Error::Empty);
+            return Err(Error::EmptyRequest);
         }
         box_try!(self.sched.schedule(Task::Write(modifies, cb)));
         Ok(())
@@ -191,7 +191,7 @@ impl Engine for EngineRocksdb {
         on_finished: BatchCallback<Box<Snapshot>>,
     ) -> Result<()> {
         if batch.is_empty() {
-            return Err(Error::Empty);
+            return Err(Error::EmptyRequest);
         }
         box_try!(
             self.sched

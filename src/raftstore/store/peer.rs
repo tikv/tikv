@@ -1042,10 +1042,10 @@ impl Peer {
         req: RaftCmdRequest,
         metrics: &mut RaftProposeMetrics,
     ) -> Option<ReadResponse> {
+        let snapshot = None;
         if self.pending_remove {
             let mut response = RaftCmdResponse::new();
             cmd_resp::bind_error(&mut response, box_err!("peer is pending remove"));
-            let snapshot = None;
             return Some(ReadResponse { response, snapshot });
         }
         metrics.all += 1;
@@ -1063,7 +1063,6 @@ impl Peer {
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
                 cmd_resp::bind_term(&mut response, self.term());
-                let snapshot = None;
                 Some(ReadResponse { response, snapshot })
             }
         }

@@ -312,13 +312,14 @@ pub fn wait_cb<R>(
 where
     R: RaftStoreRouter,
 {
-    let (mut is_read, mut is_write) = (false, false);
-    is_read |= cmd.has_admin_request();
-    is_write |= cmd.has_status_request();
+    let mut is_read;
+    let mut is_write;
+    is_read = cmd.has_status_request();
+    is_write = cmd.has_admin_request();
     for req in cmd.get_requests() {
         match req.get_cmd_type() {
-            CmdType::Get | CmdType::Snap => is_read |= true,
-            CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write |= true,
+            CmdType::Get | CmdType::Snap => is_read = true,
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange => is_write = true,
             CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
         }
     }

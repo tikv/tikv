@@ -84,7 +84,7 @@ fn get_tag_from_engine_error(e: &engine::Error) -> &'static str {
         engine::Error::Request(ref header) => storage::get_tag_from_header(header),
         engine::Error::RocksDb(_) => "rocksdb",
         engine::Error::Timeout(_) => "timeout",
-        engine::Error::Empty => "empty",
+        engine::Error::EmptyRequest => "empty request",
         engine::Error::Other(_) => "other",
     }
 }
@@ -153,7 +153,12 @@ fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Re
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
-    (cb_ctx, Ok(CmdRes::Snap(read_resp.snapshot.unwrap())))
+    let resps = read_resp.response.take_responses();
+    if resps.len() >= 1 || resps[0].get_cmd_type() == CmdType::Snap {
+        (cb_ctx, Ok(CmdRes::Snap(read_resp.snapshot.unwrap())))
+    } else {
+        (cb_ctx, Ok(CmdRes::Resp(resps.into_vec())))
+    }
 }
 
 impl<S: RaftStoreRouter> RaftKv<S> {
@@ -168,28 +173,20 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         on_finished: BatchCallback<CmdRes>,
     ) -> Result<()> {
         let batch_size = batch.len();
-        let mut ls = Vec::with_capacity(batch_size);
+        let mut counts = Vec::with_capacity(batch_size);
         for req in &batch {
-            let l = req.get_requests().len();
-            ls.push(l);
+            let count = req.get_requests().len();
+            counts.push(count);
         }
         let on_finished: store::BatchReadCallback =
             Box::new(move |resps: Vec<Option<store::ReadResponse>>| {
                 assert_eq!(batch_size, resps.len());
                 let mut cmd_resps = Vec::with_capacity(resps.len());
-                for (l, resp) in ls.into_iter().zip(resps) {
+                for (count, resp) in counts.into_iter().zip(resps) {
                     match resp {
-                        Some(mut resp) => {
-                            let cb_ctx = new_ctx(&resp.response);
-                            if let Err(e) = check_raft_cmd_response(&mut resp.response, l) {
-                                cmd_resps.push(Some((cb_ctx, Err(Error::into(e)))));
-                                continue;
-                            }
-
-                            let rs = resp.response.take_responses();
-                            assert_eq!(rs[0].get_cmd_type(), CmdType::Snap);
-                            cmd_resps
-                                .push(Some((cb_ctx, Ok(CmdRes::Snap(resp.snapshot.unwrap())))));
+                        Some(resp) => {
+                            let (cb_ctx, cmd_res) = on_read_result(resp, count);
+                            cmd_resps.push(Some((cb_ctx, cmd_res.map_err(Error::into))));
                         }
                         None => cmd_resps.push(None),
                     }
@@ -300,7 +297,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     ) -> engine::Result<()> {
         fail_point!("raftkv_async_write");
         if modifies.is_empty() {
-            return Err(engine::Error::Empty);
+            return Err(engine::Error::EmptyRequest);
         }
 
         let mut reqs = Vec::with_capacity(modifies.len());
@@ -422,7 +419,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     ) -> engine::Result<()> {
         fail_point!("raftkv_async_batch_snapshot");
         if batch.is_empty() {
-            return Err(engine::Error::Empty);
+            return Err(engine::Error::EmptyRequest);
         }
 
         let batch_size = batch.len();
