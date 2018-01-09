@@ -20,7 +20,7 @@ use std::time::Duration;
 pub use self::rocksdb::EngineRocksdb;
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 use kvproto::errorpb::Error as ErrorHeader;
 
 use config;
@@ -231,6 +231,13 @@ impl CFStatistics {
         self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
         self.flow_stats.add(&other.flow_stats);
     }
+
+    pub fn scan_info(&self) -> ScanInfo {
+        let mut info = ScanInfo::new();
+        info.set_processed(self.processed as i64);
+        info.set_total(self.total_op_count() as i64);
+        info
+    }
 }
 
 #[derive(Default, Copy, Clone)]
@@ -261,6 +268,14 @@ impl Statistics {
         self.lock.add(&other.lock);
         self.write.add(&other.write);
         self.data.add(&other.data);
+    }
+
+    pub fn scan_detail(&self) -> ScanDetail {
+        let mut detail = ScanDetail::new();
+        detail.set_data(self.data.scan_info());
+        detail.set_lock(self.lock.scan_info());
+        detail.set_write(self.write.scan_info());
+        detail
     }
 }
 
