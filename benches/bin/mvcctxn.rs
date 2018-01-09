@@ -17,14 +17,13 @@ use std::time::Instant;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 
-use tikv::storage::{Key, Modify, Mutation, Options, Snapshot, SnapshotStore, Statistics,
-                    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use tikv::storage::{Key, Modify, Mutation, Options, Snapshot, SnapshotStore, Statistics};
 use tikv::storage::mvcc::MvccTxn;
 use tikv::raftstore::store::engine::SyncSnapshot;
 use tikv::config::DbConfig;
 use tikv::util::threadpool::{DefaultContext, ThreadPoolBuilder};
 use tikv::util::config::ReadableSize;
-use tikv::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+use tikv::util::rocksdb::{get_cf_handle, new_engine_opt};
 use kvproto::kvrpcpb::IsolationLevel;
 use rocksdb::{Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::DBOptions;
@@ -44,18 +43,14 @@ fn do_write(db: &DB, modifies: Vec<Modify>) {
     let wb = WriteBatch::new();
     for rev in modifies {
         match rev {
-            Modify::Delete(cf, k) => if cf == CF_DEFAULT {
-                wb.delete(k.encoded()).unwrap();
-            } else {
+            Modify::Delete(cf, k) => {
                 let handle = get_cf_handle(db, cf).unwrap();
                 wb.delete_cf(handle, k.encoded()).unwrap();
-            },
-            Modify::Put(cf, k, v) => if cf == CF_DEFAULT {
-                wb.put(k.encoded(), &v).unwrap();
-            } else {
+            }
+            Modify::Put(cf, k, v) => {
                 let handle = get_cf_handle(db, cf).unwrap();
                 wb.put_cf(handle, k.encoded(), &v).unwrap();
-            },
+            }
             Modify::DeleteRange(cf, start_key, end_key) => {
                 let handle = get_cf_handle(db, cf).unwrap();
                 wb.delete_range_cf(handle, start_key.encoded(), end_key.encoded())
@@ -99,12 +94,7 @@ fn prepare_test_db(versions: usize, value_len: usize, keys: &[Vec<u8>], path: &s
     config.writecf.write_buffer_size = ReadableSize::gb(1);
     config.lockcf.write_buffer_size = ReadableSize::gb(1);
 
-    let cf_ops = vec![
-        CFOptions::new(CF_DEFAULT, config.defaultcf.build_opt()),
-        CFOptions::new(CF_LOCK, config.lockcf.build_opt()),
-        CFOptions::new(CF_WRITE, config.writecf.build_opt()),
-        CFOptions::new(CF_RAFT, config.raftcf.build_opt()),
-    ];
+    let cf_ops = config.build_cf_opts();
 
     let db = Arc::new(new_engine_opt(path, DBOptions::new(), cf_ops).unwrap());
 
@@ -139,8 +129,8 @@ fn bench_get(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
     let mut rng = rand::thread_rng();
     do_bench(
         || {
-            let index = rng.gen_range(0, keys.len());
-            let key = Key::from_raw(&keys[index]);
+            let key = rng.choose(keys).unwrap();
+            let key = Key::from_raw(key);
 
             get(db.clone(), &key, &mut fake_statistics).unwrap()
         },
@@ -156,7 +146,7 @@ fn bench_set(db: Arc<DB>, keys: &[Vec<u8>], value_len: usize) -> f64 {
             let commit_ts = next_ts();
             let value = vec![0u8; value_len];
 
-            let key = &keys[rng.gen_range(0, keys.len())];
+            let key = rng.choose(keys).unwrap();
 
             prewrite(
                 db.clone(),
@@ -177,7 +167,7 @@ fn bench_delete(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
             let start_ts = next_ts();
             let commit_ts = next_ts();
 
-            let key = &keys[rng.gen_range(0, keys.len())];
+            let key = rng.choose(keys).unwrap();
             prewrite(
                 db.clone(),
                 &[Mutation::Delete(Key::from_raw(key))],
