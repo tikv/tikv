@@ -28,9 +28,6 @@ use kvproto::kvrpcpb::IsolationLevel;
 use rocksdb::{Writable, WriteBatch, DB};
 use rocksdb::rocksdb_options::DBOptions;
 
-//use super::print_result;
-//use test::BenchSamples;
-
 use rand::Rng;
 use tempdir::TempDir;
 
@@ -180,35 +177,35 @@ fn bench_delete(db: Arc<DB>, keys: &[Vec<u8>]) -> f64 {
     )
 }
 
-fn bench_batch_set_impl(db: Arc<DB>, keys: &[Vec<u8>], value_len: usize, batch_size: usize) -> f64 {
-    // Avoid writing duplicated keys in a single transaction
-    let mut indices: Vec<_> = (0..keys.len()).collect();
+fn bench_batch_set_impl(
+    db: Arc<DB>,
+    keys: &mut [Vec<u8>],
+    value_len: usize,
+    batch_size: usize,
+) -> f64 {
     let mut rng = rand::thread_rng();
 
-    let mut keys_to_write: Vec<Key> = Vec::with_capacity(batch_size);
-    let mut mutations: Vec<Mutation> = Vec::with_capacity(batch_size);
+    rng.shuffle(keys);
+
+    let all_batch_count = keys.len() / batch_size;
+    let value = vec![0u8; value_len];
 
     do_bench(
         || {
             let start_ts = next_ts();
             let commit_ts = next_ts();
 
-            keys_to_write.clear();
-            mutations.clear();
+            let index = rng.gen_range(0, all_batch_count);
+            let keys_to_write: Vec<_> = keys[index..index + batch_size]
+                .iter()
+                .map(|key| Key::from_raw(key))
+                .collect();
+            let mutations: Vec<_> = keys_to_write
+                .iter()
+                .map(|key| Mutation::Put((key.clone(), value.clone())))
+                .collect();
 
-            // Randomly select non-duplicated keys
-            for i in 0..batch_size {
-                let selected = rng.gen_range(i, keys.len());
-                indices.swap(selected, i);
-
-                let key = Key::from_raw(&keys[indices[i]]);
-                let value = vec![0u8; value_len];
-
-                mutations.push(Mutation::Put((key.clone(), value)));
-                keys_to_write.push(key);
-            }
-
-            let primary = &keys[indices[0]];
+            let primary = &keys[index];
             prewrite(db.clone(), &mutations, primary, start_ts);
             commit(db.clone(), &keys_to_write, start_ts, commit_ts)
         },
@@ -326,7 +323,7 @@ fn bench_batch_set(
         data_len,
         batch_size,
     );
-    let ns = bench_batch_set_impl(db.clone(), &keys, value_len, batch_size);
+    let ns = bench_batch_set_impl(db.clone(), &mut keys, value_len, batch_size);
     println!(
         "\t{:>11} ns per op  {:>11} ops  {:>11} ns per key  {:>11} key per sec",
         ns as u64,
