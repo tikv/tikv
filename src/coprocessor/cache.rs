@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 use std::option::Option;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use linked_hash_map::LinkedHashMap;
 use super::metrics::*;
 
@@ -305,8 +305,8 @@ pub const DEFAULT_DISTSQL_CACHE_SIZE: usize = 256 * 1024 * 1024;
 pub const DEFAULT_DISTSQL_CACHE_ENTRY_MAX_SIZE: usize = 5 * 1204 * 1024;
 
 lazy_static! {
-    pub static ref DISTSQL_CACHE: Arc<Mutex<DistSQLCache>> =
-        Arc::new(Mutex::new(DistSQLCache::new(DEFAULT_DISTSQL_CACHE_SIZE)));
+    pub static ref DISTSQL_CACHE: Mutex<DistSQLCache> =
+        Mutex::new(DistSQLCache::new(DEFAULT_DISTSQL_CACHE_SIZE));
 }
 
 #[cfg(test)]
