@@ -150,7 +150,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.props.max_row_versions = self.row_versions;
         }
 
-        let v = match Write::parse(value) {
+        let write_type = match Write::parse_type(value) {
             Ok(v) => v,
             Err(_) => {
                 self.num_errors += 1;
@@ -158,7 +158,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             }
         };
 
-        if v.write_type == WriteType::Put {
+        if write_type == WriteType::Put {
             self.props.num_puts += 1;
         }
 
@@ -452,6 +452,7 @@ impl DecodeProperties for UserCollectedProperties {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use test::Bencher;
     use rocksdb::{DBEntryType, TablePropertiesCollector};
     use storage::Key;
     use storage::mvcc::{Write, WriteType};
@@ -486,6 +487,25 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 7);
         assert_eq!(props.max_row_versions, 3);
+    }
+
+    #[bench]
+    fn bench_mvcc_properties(b: &mut Bencher) {
+        let ts = 1;
+        let num_entries = 100;
+        let mut entries = Vec::new();
+        for i in 0..num_entries {
+            let s = format!("{:032}", i);
+            let k = Key::from_raw(s.as_bytes()).append_ts(ts);
+            let k = keys::data_key(k.encoded());
+            let w = Write::new(WriteType::Put, ts, Some(s.as_bytes().to_owned()));
+            entries.push((k, w.to_bytes()));
+        }
+
+        let mut collector = MvccPropertiesCollector::new();
+        b.iter(|| for &(ref k, ref v) in &entries {
+            collector.add(k, v, DBEntryType::Put, 0, 0);
+        });
     }
 
     #[test]
