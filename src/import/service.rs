@@ -11,12 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use grpc::{RpcStatus, RpcStatusCode};
+use grpc::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
+use futures::Future;
 
 use super::Error;
 
 pub fn make_rpc_error(err: Error) -> RpcStatus {
     RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", err)))
+}
+
+pub fn send_rpc_error<M, E>(ctx: RpcContext, sink: UnarySink<M>, error: E)
+where
+    Error: From<E>,
+{
+    let err = make_rpc_error(Error::from(error));
+    ctx.spawn(sink.fail(err).map_err(|e| {
+        warn!("send rpc error: {:?}", e);
+    }));
 }
 
 macro_rules! send_rpc_response {
