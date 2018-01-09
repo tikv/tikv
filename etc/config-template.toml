@@ -421,3 +421,9 @@
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
+
+[import]
+# number of threads to handle RPC requests.
+# num-threads = 4
+# stream channel buffer size, stream will be blocked on channel full.
+# stream-channel-size = 128

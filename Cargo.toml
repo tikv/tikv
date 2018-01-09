@@ -69,6 +69,7 @@ futures-cpupool = "0.1"
 zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
+uuid = { version = "0.4", features = [ "serde", "v4" ] }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -77,7 +78,8 @@ signal = "0.4"
 git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
+git = "https://github.com/huachaohuang/kvproto.git"
+branch = "import-sst"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
