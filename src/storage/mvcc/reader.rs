@@ -68,6 +68,11 @@ impl MvccReader {
         &self.statistics
     }
 
+    pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
+        stats.add(&self.statistics);
+        self.statistics = Statistics::default();
+    }
+
     pub fn set_key_only(&mut self, key_only: bool) {
         self.key_only = key_only;
     }

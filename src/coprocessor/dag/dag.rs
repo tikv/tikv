@@ -113,7 +113,7 @@ impl DAGContext {
         &mut self,
         batch_row_limit: usize,
     ) -> Result<(Option<Response>, bool)> {
-        let mut record_cnt = 0;
+        let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::new();
         let mut start_key = None;
         while record_cnt < batch_row_limit {
@@ -131,8 +131,10 @@ impl DAGContext {
                         chunk.mut_rows_data().extend_from_slice(&value);
                     }
                 }
-                Ok(None) if record_cnt == 0 => return Ok((None, true)),
-                Ok(None) => break,
+                Ok(None) => {
+                    finished = true;
+                    break;
+                }
                 Err(e) => if let Error::Other(_) = e {
                     let mut resp = Response::new();
                     let mut s_resp = StreamResponse::new();
@@ -145,10 +147,13 @@ impl DAGContext {
                 },
             }
         }
-        start_key = start_key.and_then(|k| if k.is_empty() { None } else { Some(k) });
-        let end_key = self.exec.take_last_key();
-        self.make_stream_response(chunk, start_key, end_key)
-            .map(|r| (Some(r), false))
+        if record_cnt > 0 {
+            start_key = start_key.and_then(|k| if k.is_empty() { None } else { Some(k) });
+            let end_key = self.exec.take_last_key();
+            return self.make_stream_response(chunk, start_key, end_key)
+                .map(|r| (Some(r), finished));
+        }
+        Ok((None, true))
     }
 
     fn make_stream_response(

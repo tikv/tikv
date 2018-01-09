@@ -165,6 +165,10 @@ impl StoreScanner {
     pub fn get_statistics(&self) -> &Statistics {
         self.reader.get_statistics()
     }
+
+    pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
+        self.reader.collect_statistics_into(stats);
+    }
 }
 
 #[cfg(test)]
