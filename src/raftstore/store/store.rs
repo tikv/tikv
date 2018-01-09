@@ -1826,6 +1826,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 influenced_regions.push(region_id);
             }
+
+            let output_level_str = event.output_level.to_string();
+            COMPACTION_RELATED_REGION_COUNT
+                .with_label_values(&[&output_level_str])
+                .observe(influenced_regions.len() as f64);
+
             if influenced_regions.is_empty() {
                 continue;
             }
