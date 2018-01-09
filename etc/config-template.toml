@@ -443,7 +443,16 @@
 # key-path = ""
 
 [import]
+# import-dir = "/tmp/tikv/import"
 # number of threads to handle RPC requests.
 # num-threads = 8
+# maximum concurrent import jobs.
+# max-import-jobs = 8
+# maximum concurrent import sst jobs.
+# max-import-sst-jobs = 2
+# maximum duration to prepare regions.
+# max-prepare-duration = "5m"
+# derive from coprocessor.region-split-size when it is 0.
+# region-split-size = 0
 # stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128

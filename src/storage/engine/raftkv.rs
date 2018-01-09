@@ -16,10 +16,10 @@ use std::io::Error as IoError;
 use std::time::Duration;
 use std::result;
 
-use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
-                          RaftCmdResponse, RaftRequestHeader, Request, Response};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
+use kvproto::raft_cmdpb::{CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest,
+                          RaftCmdResponse, RaftRequestHeader, Request, Response};
 use protobuf::RepeatedField;
 
 use server::transport::RaftStoreRouter;

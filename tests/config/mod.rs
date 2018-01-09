@@ -139,6 +139,7 @@ fn test_serde_custom_tikv_config() {
         endpoints: vec!["example.com:443".to_owned()],
     };
     value.rocksdb = DbConfig {
+        import_mode: false,
         wal_recovery_mode: DBRecoveryMode::AbsoluteConsistency,
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
@@ -378,7 +379,12 @@ fn test_serde_custom_tikv_config() {
         override_ssl_target: "".to_owned(),
     };
     value.import = ImportConfig {
+        import_dir: "/tmp/test/import".to_owned(),
         num_threads: 123,
+        max_import_jobs: 123,
+        max_import_sst_jobs: 123,
+        max_prepare_duration: ReadableDuration::minutes(12),
+        region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
     };
 

@@ -15,6 +15,7 @@ mod endpoint;
 mod metrics;
 mod dag;
 mod statistics;
+mod checksum;
 pub mod local_metrics;
 pub mod codec;
 
@@ -87,4 +88,5 @@ impl From<txn::Error> for Error {
 }
 
 pub use self::endpoint::{Host as EndPointHost, RequestTask, Task as EndPointTask,
-                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_DAG, SINGLE_GROUP};
+                         DEFAULT_REQUEST_MAX_HANDLE_SECS, REQ_TYPE_CHECKSUM, REQ_TYPE_DAG,
+                         SINGLE_GROUP};

@@ -320,5 +320,10 @@ cert-path = "invalid path"
 key-path = "invalid path"
 
 [import]
+import-dir = "/tmp/test/import"
 num-threads = 123
+max-import-jobs = 123
+max-import-sst-jobs = 123
+max-prepare-duration = "12m"
+region-split-size = "123MB"
 stream-channel-window = 123

@@ -24,6 +24,7 @@ use std::fs::{self, File};
 use std::path::Path;
 use std::sync::Arc;
 use std::str::FromStr;
+use std::ops::{Deref, DerefMut};
 
 use storage::{ALL_CFS, CF_DEFAULT};
 use rocksdb::{ColumnFamilyOptions, CompactOptions, DBCompressionType, DBOptions, Range,
@@ -79,6 +80,20 @@ impl<'a> CFOptions<'a> {
             cf: cf,
             options: options,
         }
+    }
+}
+
+impl<'a> Deref for CFOptions<'a> {
+    type Target = ColumnFamilyOptions;
+
+    fn deref(&self) -> &Self::Target {
+        &self.options
+    }
+}
+
+impl<'a> DerefMut for CFOptions<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.options
     }
 }
 

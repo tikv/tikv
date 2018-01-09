@@ -20,10 +20,12 @@ use std::io::{Read, Write};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::fmt;
+use std::cmp;
+use std::i32;
 
 use log::LogLevelFilter;
-use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompressionType,
-              DBOptions, DBRecoveryMode};
+use rocksdb::{BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+              DBCompressionType, DBOptions, DBRecoveryMode};
 use sys_info;
 
 use import::Config as ImportConfig;
@@ -365,6 +367,7 @@ pub struct DbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
+    pub import_mode: bool,
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
@@ -396,6 +399,7 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            import_mode: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -444,16 +448,39 @@ impl DbConfig {
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.add_event_listener(EventListener::new("kv"));
+
+        if self.import_mode {
+            let cpu_num = sys_info::cpu_num().unwrap();
+            let max_jobs = cpu_num / 2;
+            opts.set_max_subcompactions(max_jobs);
+            opts.set_max_background_jobs(max_jobs as i32);
+        }
+
         opts
     }
 
     pub fn build_cf_opts(&self) -> Vec<CFOptions> {
-        vec![
+        let mut opts = vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
             CFOptions::new(CF_WRITE, self.writecf.build_opt()),
             CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
-        ]
+        ];
+
+        if self.import_mode {
+            const DISABLED: i32 = i32::MAX;
+            for opt in &mut opts {
+                // Disable compaction and rate limit.
+                opt.set_disable_auto_compactions(true);
+                opt.set_compaction_style(DBCompactionStyle::Universal);
+                opt.set_soft_pending_compaction_bytes_limit(0);
+                opt.set_hard_pending_compaction_bytes_limit(0);
+                opt.set_level_zero_stop_writes_trigger(DISABLED);
+                opt.set_level_zero_slowdown_writes_trigger(DISABLED);
+            }
+        }
+
+        opts
     }
 
     fn validate(&mut self) -> Result<(), Box<Error>> {
@@ -729,6 +756,10 @@ impl TiKvConfig {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
+        if self.import.region_split_size.0 == 0 {
+            self.import.region_split_size = self.coprocessor.region_split_size;
+        }
+
         self.rocksdb.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;
@@ -770,6 +801,15 @@ impl TiKvConfig {
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
+    }
+
+    pub fn tune_for_import_mode(&mut self) {
+        self.rocksdb.import_mode = true;
+        // Increate the number of threads.
+        let cpu_num = sys_info::cpu_num().unwrap() as usize;
+        self.import.num_threads = cmp::max(self.import.num_threads, cpu_num / 2);
+        self.import.max_import_jobs = cmp::min(cpu_num, 16);
+        self.server.grpc_concurrency = cmp::max(self.server.grpc_concurrency, cpu_num / 2);
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
