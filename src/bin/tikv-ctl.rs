@@ -44,7 +44,7 @@ use protobuf::RepeatedField;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::PeerState;
 use kvproto::metapb::Region;
-use kvproto::eraftpb::Entry;
+use kvproto::eraftpb::{ConfChange, Entry, EntryType};
 use kvproto::kvrpcpb::MvccInfo;
 use kvproto::debugpb::*;
 use kvproto::debugpb::DB as DBType;
@@ -174,9 +174,27 @@ trait DebugExecutor {
         println!("entry {:?}", entry);
         println!("msg len: {}", data.len());
 
-        let mut msg = RaftCmdRequest::new();
-        msg.merge_from_bytes(&data).unwrap();
-        println!("{:?}", msg);
+        if data.len() == 0 {
+            println!("this is a empty entry, it should be sent when a peer become leader");
+            return;
+        }
+
+        match entry.get_entry_type() {
+            EntryType::EntryNormal => {
+                let mut msg = RaftCmdRequest::new();
+                msg.merge_from_bytes(&data).unwrap();
+                println!("{:?}", msg);
+            }
+            EntryType::EntryConfChange => {
+                let mut msg = ConfChange::new();
+                msg.merge_from_bytes(&data).unwrap();
+                let ctx = msg.take_context();
+                println!("{:?}", msg);
+                let mut cmd = RaftCmdRequest::new();
+                cmd.merge_from_bytes(&ctx).unwrap();
+                println!("{:?}", cmd);
+            }
+        }
     }
 
     fn dump_mvccs_infos(
