@@ -56,6 +56,9 @@ impl DistSQLCacheEntry {
 pub struct RegionDistSQLCacheEntry {
     version: u64,
     enable: bool,
+    // cached_items track cached DistSQL keys. So we can iterate keys
+    // for evict a region. And if we delete a cache entry we can use
+    // HashMap's remove function to fast remove a cached DistSQL key.
     cached_items: HashMap<DistSQLCacheKey, u8>,
 }
 
@@ -118,18 +121,19 @@ impl DistSQLCache {
     }
 
     fn check_evict_key(&mut self, region_id: u64, k: &str) {
-        let mut need_remove = false;
-        if let Some(entry) = self.map.get(k) {
-            if let Some(rentry) = self.regions.get(&region_id) {
-                // Region's version is not same as cached evict it
-                if entry.version != rentry.version {
-                    need_remove = true;
+        self.map
+            .get(k)
+            .and_then(|entry| {
+                self.regions
+                    .get(&region_id)
+                    .and_then(|rentry| Some(entry.version != rentry.version))
+            })
+            .and_then(|need_remove| {
+                if need_remove {
+                    self.remove(k);
                 }
-            }
-        }
-        if need_remove {
-            self.remove(k);
-        }
+                Some(())
+            });
     }
 
     pub fn get_region_version_and_cache_entry(
@@ -149,10 +153,7 @@ impl DistSQLCache {
     }
 
     pub fn get_region_version(&self, region_id: u64) -> u64 {
-        match self.regions.get(&region_id) {
-            None => 0,
-            Some(item) => item.version,
-        }
+        self.regions.get(&region_id).map_or(0, |item| item.version)
     }
 
     pub fn get(&mut self, region_id: u64, k: &str) -> Option<&Vec<u8>> {
@@ -168,39 +169,36 @@ impl DistSQLCache {
         let regions = &mut self.regions;
         if let Some(entry) = self.map.remove(k) {
             let region_id: u64 = entry.region_id;
-            let mut need_remove_region = false;
             if let Some(node) = regions.get_mut(&region_id) {
                 // Delete from region cache entry list
+                // We should not delete self.regions item.
+                // In some coner case delete self.regions item may cause
+                // cache no need data and then cause an error result.
                 node.cached_items.remove(k);
-                if !node.cached_items.is_empty() && node.version != 1 {
-                    need_remove_region = true;
-                }
             }
-            if need_remove_region {
-                regions.remove(&region_id);
-            };
             self.size -= entry.size;
         }
     }
 
     fn evict_region_with_exist_region(&mut self, region_id: u64) {
-        let items = match self.regions.get_mut(&region_id) {
-            Some(region) => {
+        self.regions
+            .get_mut(&region_id)
+            .map_or(None, |region| {
                 region.version += 1;
                 Some(region.cached_items.clone())
-            }
-            None => {
-                return;
-            }
-        };
-        if let Some(cached_items) = items {
-            for (key, _) in (&cached_items).iter() {
-                self.remove(key);
-            }
-        }
+            })
+            .map_or(None, |cached_items| {
+                for (key, _) in (&cached_items).iter() {
+                    self.remove(key);
+                }
+                Some(())
+            });
     }
 
     fn evict_region_with_new_region(&mut self, region_id: u64) {
+        // If there's no region version data in cache, get_version will
+        // return 0 and after that some thread call evict_region, we should set
+        // version to 1 to prevent cache unused data.
         let entry = RegionDistSQLCacheEntry {
             version: 1,
             ..Default::default()
@@ -255,37 +253,21 @@ impl DistSQLCache {
     }
 
     pub fn disable_region_cache(&mut self, region_id: u64) {
-        let opt = match self.regions.get_mut(&region_id) {
-            Some(entry) => {
-                entry.enable = false;
-                return;
-            }
-            None => {
-                let rmap = HashMap::new();
-                Some(rmap)
-            }
-        };
-        if let Some(rmap) = opt {
-            let entry = RegionDistSQLCacheEntry {
-                version: 0,
-                enable: false,
-                cached_items: rmap,
-            };
-            self.regions.insert(region_id, entry);
-        }
+        let mut entry = self.regions
+            .entry(region_id)
+            .or_insert_with(Default::default);
+        entry.enable = false;
     }
 
     pub fn enable_region_cache(&mut self, region_id: u64) {
-        if let Some(entry) = self.regions.get_mut(&region_id) {
-            entry.enable = true;
-        }
+        self.regions.get_mut(&region_id).and_then(|e| {
+            e.enable = true;
+            Some(())
+        });
     }
 
     fn is_region_cache_enabled(&self, region_id: u64) -> bool {
-        match self.regions.get(&region_id) {
-            None => true,
-            Some(entry) => entry.enable,
-        }
+        self.regions.get(&region_id).map_or(true, |e| e.enable)
     }
 
     fn update_regions(&mut self, region_id: u64, k: DistSQLCacheKey) {
