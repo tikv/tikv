@@ -182,16 +182,16 @@ trait DebugExecutor {
             EntryType::EntryNormal => {
                 let mut msg = RaftCmdRequest::new();
                 msg.merge_from_bytes(&data).unwrap();
-                println!("{:?}", msg);
+                println!("Normal: {:#?}", msg);
             }
             EntryType::EntryConfChange => {
                 let mut msg = ConfChange::new();
                 msg.merge_from_bytes(&data).unwrap();
                 let ctx = msg.take_context();
-                println!("{:?}", msg);
+                println!("ConfChange: {:?}", msg);
                 let mut cmd = RaftCmdRequest::new();
                 cmd.merge_from_bytes(&ctx).unwrap();
-                println!("{:?}", cmd);
+                println!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
         }
     }
