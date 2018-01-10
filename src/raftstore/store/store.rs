@@ -185,7 +185,7 @@ where
     Ok(event_loop)
 }
 
-impl<T, C> Store<T, C> {
+impl<T: Transport, C: PdClient> Store<T, C> {
     #[allow(too_many_arguments)]
     pub fn new(
         ch: StoreChannel,
@@ -261,6 +261,7 @@ impl<T, C> Store<T, C> {
         let mut kv_wb = WriteBatch::new();
         let mut raft_wb = WriteBatch::new();
         let mut applying_regions = vec![];
+        let mut pre_merge = vec![];
         kv_engine.scan_cf(
             CF_RAFT,
             start_key,
@@ -299,6 +300,9 @@ impl<T, C> Store<T, C> {
                     applying_regions.push(region.clone());
                     return Ok(true);
                 }
+                if local_state.get_state() == PeerState::Merging {
+                    pre_merge.push((local_state.get_region().to_owned(), local_state.get_merge_state().to_owned()));
+                }
 
                 let peer = Peer::create(self, region)?;
                 self.region_ranges.insert(enc_end_key(region), region_id);
@@ -332,13 +336,21 @@ impl<T, C> Store<T, C> {
             self.region_peers.insert(region.get_id(), peer);
         }
 
+        // recover pre-merge
+        let merging_count = pre_merge.len();
+        for (region, state) in pre_merge {
+            info!("region {:?} is merging in store {}", region, self.store_id());
+            self.on_ready_pre_merge(region, state);
+        }
+
         info!(
-            "{} starts with {} regions, including {} tombstones and {} applying \
-             regions, takes {:?}",
+            "{} starts with {} regions, including {} tombstones, {} applying \
+             regions and {} merging regions, takes {:?}",
             self.tag,
             total_count,
             tomebstone_count,
             applying_count,
+            merging_count,
             t.elapsed()
         );
 
@@ -346,7 +358,9 @@ impl<T, C> Store<T, C> {
 
         Ok(())
     }
+}
 
+impl<T, C> Store<T, C> {
     fn clear_stale_meta(
         &mut self,
         kv_wb: &mut WriteBatch,
