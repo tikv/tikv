@@ -63,7 +63,7 @@ impl SSTImporter {
     pub fn create(&self, token: Token, meta: &SSTMeta) -> Result<()> {
         match self.dir.create(meta) {
             Ok(f) => {
-                info!("create {}", f);
+                info!("create {:?}", f);
                 self.insert(token, f);
                 Ok(())
             }
@@ -82,7 +82,7 @@ impl SSTImporter {
                     Ok(())
                 }
                 Err(e) => {
-                    error!("append {}: {:?}", f, e);
+                    error!("append {:?}: {:?}", f, e);
                     Err(e)
                 }
             },
@@ -94,11 +94,11 @@ impl SSTImporter {
         match self.remove(token) {
             Some(mut f) => match f.finish() {
                 Ok(_) => {
-                    info!("finish {}", f);
+                    info!("finish {:?}", f);
                     Ok(())
                 }
                 Err(e) => {
-                    error!("finish {}: {:?}", f, e);
+                    error!("finish {:?}: {:?}", f, e);
                     Err(e)
                 }
             },
@@ -194,15 +194,13 @@ pub struct ImportPath {
     clone: PathBuf,
 }
 
-impl fmt::Display for ImportPath {
+impl fmt::Debug for ImportPath {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "ImportPath {{save: {}, temp: {}, clone: {}}}",
-            self.save.to_str().unwrap(),
-            self.temp.to_str().unwrap(),
-            self.clone.to_str().unwrap(),
-        )
+        f.debug_struct("ImportPath")
+            .field("save", &self.save)
+            .field("temp", &self.temp)
+            .field("clone", &self.clone)
+            .finish()
     }
 }
 
@@ -266,19 +264,17 @@ impl ImportFile {
 impl Drop for ImportFile {
     fn drop(&mut self) {
         if let Err(e) = self.cleanup() {
-            warn!("cleanup {}: {:?}", self, e);
+            warn!("cleanup {:?}: {:?}", self, e);
         }
     }
 }
 
-impl fmt::Display for ImportFile {
+impl fmt::Debug for ImportFile {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "ImportFile {{meta: {{{:?}}}, path: {}}}",
-            self.meta,
-            self.path,
-        )
+        f.debug_struct("ImportFile")
+            .field("meta", &self.meta)
+            .field("path", &self.path)
+            .finish()
     }
 }
 

@@ -59,16 +59,16 @@ quick_error! {
             description(err.description())
         }
         FileExists(path: PathBuf) {
-            display("File {} exists", path.to_str().unwrap())
+            display("File {:?} exists", path)
         }
         FileCorrupted(path: PathBuf) {
-            display("File {} corrupted", path.to_str().unwrap())
+            display("File {:?} corrupted", path)
         }
         FileNotExists(path: PathBuf) {
-            display("File {} not exists", path.to_str().unwrap())
+            display("File {:?} not exists", path)
         }
         InvalidSSTPath(path: PathBuf) {
-            display("Invalid SST path {}", path.to_str().unwrap())
+            display("Invalid SST path {:?}", path)
         }
         TokenNotFound(token: usize) {
             display("Token {} not found", token)

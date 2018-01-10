@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::{Future, Stream};
@@ -23,7 +22,7 @@ use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
 
 use storage::Storage;
-use util::time::duration_to_sec;
+use util::time::{duration_to_sec, Instant};
 
 use super::service::*;
 use super::metrics::*;
@@ -60,7 +59,7 @@ impl ImportSst for ImportSSTService {
         sink: ClientStreamingSink<UploadResponse>,
     ) {
         let label = "upload";
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let token = self.importer.token();
         let import1 = self.importer.clone();
@@ -83,7 +82,7 @@ impl ImportSst for ImportSSTService {
                     Ok(_) => import2.finish(token),
                     Err(e) => {
                         if let Some(f) = import2.remove(token) {
-                            error!("remove {}: {:?}", f, e);
+                            error!("remove {:?}: {:?}", f, e);
                         }
                         Err(e)
                     }
