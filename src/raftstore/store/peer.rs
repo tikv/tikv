@@ -207,7 +207,7 @@ pub struct Peer {
     pub delete_keys_hint: u64,
     /// approximate region size.
     pub approximate_size: Option<u64>,
-    pub approximate_size_unhealth: usize,
+    pub approximate_size_unhealth: u64,
 
     pub consistency_state: ConsistencyState,
 
@@ -370,7 +370,7 @@ impl Peer {
     }
 
     pub fn should_update_approximate_size(&self) -> bool {
-        self.approximate_size_unhealth >= 4
+        self.approximate_size_unhealth >= 2
     }
 
     pub fn reset_approximate_size_unhealth(&mut self) {

@@ -143,6 +143,14 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
+    pub static ref COMPACTION_DECLINED_BYTES: HistogramVec =
+        register_histogram_vec!(
+            "compaction_declined_bytes",
+            "total bytes declined for each compaction job",
+            &["output_level"],
+            exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
+
     pub static ref SNAPSHOT_CF_KV_COUNT: HistogramVec =
         register_histogram_vec!(
             "tikv_snapshot_cf_kv_count",

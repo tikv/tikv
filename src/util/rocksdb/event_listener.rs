@@ -63,9 +63,8 @@ pub struct CompactedEvent {
     pub cf: String,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
-    pub total_size: usize,
-    pub input_file_count: usize,
-    pub output_file_count: usize,
+    pub total_input_bytes: u64,
+    pub total_output_bytes: u64,
     pub output_level: i32,
 }
 
@@ -74,18 +73,16 @@ impl CompactedEvent {
         cf: String,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-        total_size: usize,
-        input_file_count: usize,
-        output_file_count: usize,
+        total_input_bytes: u64,
+        total_output_bytes: u64,
         output_level: i32,
     ) -> CompactedEvent {
         CompactedEvent {
             cf: cf,
             start_key: start_key,
             end_key: end_key,
-            total_size: total_size,
-            input_file_count: input_file_count,
-            output_file_count: output_file_count,
+            total_input_bytes: total_input_bytes,
+            total_output_bytes: total_output_bytes,
             output_level: output_level,
         }
     }
@@ -107,17 +104,14 @@ impl rocksdb::EventListener for CompactionListener {
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
         let cf = info.cf_name().to_owned();
         let output_level = info.output_level();
-        let input_file_count = info.input_file_count();
-        let output_file_count = info.output_file_count();
+        let total_input_bytes = info.total_input_bytes();
+        let total_output_bytes = info.total_output_bytes();
 
         let mut smallest_key = None;
         let mut largest_key = None;
-        let mut total_size: usize = 0;
         let iter = info.table_properties().into_iter();
         for (_, properties) in iter {
             if let Ok(props) = SizeProperties::decode(properties.user_collected_properties()) {
-                total_size += props.total_size as usize;
-
                 if let Some(smallest) = props.smallest_key() {
                     if let Some(s) = smallest_key {
                         smallest_key = Some(cmp::min(s, smallest));
@@ -147,9 +141,8 @@ impl rocksdb::EventListener for CompactionListener {
                 cf,
                 smallest_key.unwrap(),
                 largest_key.unwrap(),
-                total_size,
-                input_file_count,
-                output_file_count,
+                total_input_bytes,
+                total_output_bytes,
                 output_level,
             ))
             .unwrap();

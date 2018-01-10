@@ -20,7 +20,6 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
-use std::cmp;
 
 use rocksdb::{WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -1819,30 +1818,36 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if event.output_level < 2 {
                 continue;
             }
+            // If size declining is trivial, skip.
+            let total_bytes_declined = event.total_input_bytes - event.total_output_bytes;
+            if total_bytes_declined * 10 < event.total_input_bytes {
+                continue;
+            }
 
+            let output_level_str = event.output_level.to_string();
+            COMPACTION_DECLINED_BYTES
+                .with_label_values(&[&output_level_str])
+                .observe(total_bytes_declined as f64);
+
+            // Calculate influenced regions.
             let mut influenced_regions = vec![];
             for (_, region_id) in self.region_ranges
                 .range((Included(event.start_key), Included(event.end_key)))
             {
                 influenced_regions.push(region_id);
             }
-
-            let output_level_str = event.output_level.to_string();
             COMPACTION_RELATED_REGION_COUNT
                 .with_label_values(&[&output_level_str])
                 .observe(influenced_regions.len() as f64);
 
-            if influenced_regions.is_empty() {
-                continue;
-            }
-            let region_estimated_change = event.total_size / influenced_regions.len();
-            let score = cmp::max(
-                1,
-                region_estimated_change / self.cfg.region_split_check_diff.0 as usize,
-            );
-            for region_id in influenced_regions.drain(..) {
-                if let Some(peer) = self.region_peers.get_mut(region_id) {
-                    peer.approximate_size_unhealth += score;
+            // Calculate unhealthy score and update it when necessary.
+            let region_declined = total_bytes_declined / influenced_regions.len() as u64;
+            let score = region_declined / self.cfg.region_split_check_diff.0;
+            if score > 0 {
+                for region_id in influenced_regions.drain(..) {
+                    if let Some(peer) = self.region_peers.get_mut(region_id) {
+                        peer.approximate_size_unhealth += score;
+                    }
                 }
             }
         }
