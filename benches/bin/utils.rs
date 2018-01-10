@@ -1,19 +1,30 @@
-extern crate rand;
+// Copyright 2017 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::{ATOMIC_U64_INIT, AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::ops::Div;
 use std::iter::Sum;
 use tikv::coprocessor::codec::table::{encode_index_seek_key, encode_row_key};
 use tikv::util::codec::number::NumberEncoder;
-
-use rand::Rng;
+use test::black_box;
 
 #[inline]
 pub fn next_ts() -> u64 {
     static CURRENT: AtomicU64 = ATOMIC_U64_INIT;
     CURRENT.fetch_add(1, Ordering::SeqCst)
 }
+
 
 /// Generate `count` row keys that all with the specified `table_id`.
 ///
@@ -51,19 +62,19 @@ pub fn generate_unique_index_keys(
     result
 }
 
-pub fn shuffle<T>(data: &mut [T]) {
-    let mut rng = rand::thread_rng();
-    for i in 0..(data.len()) {
-        let j = rng.gen_range(i, data.len());
-        data.swap(i, j);
-    }
+
+/// Convert duration to nanoseconds
+pub fn to_total_nanos(duration: &Duration) -> u64 {
+    duration.as_secs() * 1_000_000_000 + (duration.subsec_nanos() as u64)
 }
 
 /// Run `job` for `iterations` times, and return a Vec containing nanoseconds of each turn `job`
 /// returns.
 ///
 /// `job` must return a `Duration` type. Please calculate time cost of what you want to bench
-/// manually ant return it.
+/// manually and return it.
+///
+/// Attention that too short job may cause great inaccuracy. Don't use this on too tiny tasks.
 pub fn record_time<F>(mut job: F, iterations: u32) -> Vec<u64>
 where
     F: FnMut() -> Duration,
@@ -71,10 +82,26 @@ where
     (0..iterations)
         .map(|_| {
             let time = job();
-            time.as_secs() * 1_000_000_000 + (time.subsec_nanos() as u64)
+            to_total_nanos(&time)
         })
         .collect()
 }
+
+
+/// Run `job` for `iterations` times, and return the average time cost as nanoseconds.
+/// Attention that if `job` returns no value, it will be optimized out by the compiler.
+pub fn do_bench<F, T>(mut job: F, iterations: u32) -> f64
+where
+    F: FnMut() -> T,
+{
+    let t = Instant::now();
+    for _ in 0..iterations {
+        // Avoid being optimized out by compiler
+        black_box(job());
+    }
+    to_total_nanos(&t.elapsed()) as f64 / (iterations as f64)
+}
+
 
 pub fn average<'a, T: 'a>(data: &'a [T]) -> <T as Div<u64>>::Output
 where
