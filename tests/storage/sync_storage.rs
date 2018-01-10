@@ -147,7 +147,9 @@ impl SyncStorage {
     }
 
     pub fn scan_lock(&self, ctx: Context, max_ts: u64) -> Result<Vec<LockInfo>> {
-        wait_op!(|cb| self.store.async_scan_lock(ctx, max_ts, None, cb).unwrap()).unwrap()
+        wait_op!(|cb| {
+            self.store.async_scan_lock(ctx, max_ts, None, cb).unwrap()
+        }).unwrap()
     }
 
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {

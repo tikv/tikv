@@ -406,6 +406,8 @@ impl MvccReader {
         }
     }
 
+    // TODO: for scan lock request, we can return one lock for each transaction, but for resolve
+    // lock request, we must return all locks.
     #[allow(type_complexity)]
     pub fn scan_lock<F>(
         &mut self,
@@ -432,7 +434,7 @@ impl MvccReader {
             if filter(&lock) {
                 locks.push((key.clone(), lock));
                 if let Some(limit) = limit {
-                    if locks.len() >= limit {
+                    if limit > 0 && locks.len() >= limit {
                         return Ok((locks, Some(key)));
                     }
                 }
