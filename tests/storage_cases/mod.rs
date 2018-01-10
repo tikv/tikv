@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod sync_storage;
-pub mod assert_storage;
-pub mod util;
+mod test_raft_storage;
+mod test_raftkv;
+mod test_storage;
+
+use storage::*;

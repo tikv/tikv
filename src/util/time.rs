@@ -263,6 +263,18 @@ impl Instant {
         }
     }
 
+    /// checked_sub is simiar with `duration_since`, except it won't panic
+    /// if `self` is less than `other`. In this case None will be returned.
+    ///
+    /// Callers need to ensure that `self` and `other` are same type of Instantants.
+    pub fn checked_sub(&self, other: Instant) -> Option<Duration> {
+        if *self >= other {
+            Some(self.duration_since(other))
+        } else {
+            None
+        }
+    }
+
     fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
             (later - earlier).to_std().unwrap()
@@ -468,6 +480,10 @@ mod tests {
         let mut tmp_late_row = late_raw;
         tmp_late_row -= zero;
         assert_eq!(tmp_late_row, late_raw);
+
+        // checked_sub Duration.
+        assert_eq!(early_raw.checked_sub(late_raw), None);
+        assert!(late_raw.checked_sub(early_raw).unwrap() > zero);
 
         let mut tmp_late_coarse = late_coarse;
         tmp_late_coarse -= zero;

@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::option::Option;
-use std::u64;
+use std::{fmt, u64};
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
@@ -20,11 +20,14 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Error, Result};
 use raftstore::store::keys;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
+use time::{Duration, Timespec};
+
 use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use util::properties::SizeProperties;
-use util::rocksdb as rocksdb_util;
-use super::engine::{IterOption, Iterable};
+use util::{rocksdb as rocksdb_util, Either};
+use util::time::monotonic_raw_now;
 
+use super::engine::{IterOption, Iterable};
 use super::peer_storage;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -200,22 +203,195 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
     Ok(size)
 }
 
+/// Lease records an expired time, for examining the current moment is in lease or not.
+/// It's dedicated to the Raft leader lease mechanism, contains either state of
+///   1. Suspect Timestamp
+///      A suspicious leader lease timestamp, which marks the leader may still hold or lose
+///      its lease until the clock time goes over this timestamp.
+///   2. Valid Timestamp
+///      A valid leader lease timestamp, which marks the leader holds the lease for now.
+///      The lease is valid until the clock time goes over this timestamp.
+///
+/// ```text
+/// Time
+/// |---------------------------------->
+///         ^               ^
+///        Now           Suspect TS
+/// State:  |    Suspect    |   Suspect
+///
+/// |---------------------------------->
+///         ^               ^
+///        Now           Valid TS
+/// State:  |     Valid     |   Expired
+/// ```
+///
+/// Note:
+///   - Valid timestamp would increase when raft log entries are applied in current term.
+///   - Suspect timestamp would be set after the message `MsgTimeoutNow` is sent by current peer.
+///     The message `MsgTimeoutNow` starts a leader transfer procedure. During this procedure,
+///     current peer as an old leader may still hold its lease or lose it.
+///     It's possible there is a new leader elected and current peer as an old leader
+///     doesn't step down due to network partition from the new leader. In that case,
+///     current peer lose its leader lease.
+///     Within this suspect leader lease expire time, read requests could not be performed
+///     locally.
+///   - The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
+///     And the expired timestamp for that leader lease is `commit_ts + lease`,
+///     which is `send_ts + max_lease` in short.
+// TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
+//       to the local read thread, so name it remote. If Lease expires, the remote must
+//       expire too.
+pub struct Lease {
+    // A suspect timestamp is in the Either::Left(_),
+    // a valid timestamp is in the Either::Right(_).
+    bound: Option<Either<Timespec, Timespec>>,
+    max_lease: Duration,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum LeaseState {
+    /// The lease is suspicious, may be invalid.
+    Suspect,
+    /// The lease is valid.
+    Valid,
+    /// The lease is expired.
+    Expired,
+}
+
+impl Lease {
+    pub fn new(max_lease: Duration) -> Lease {
+        Lease {
+            bound: None,
+            max_lease: max_lease,
+        }
+    }
+
+    /// The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
+    /// And the expired timestamp for that leader lease is `commit_ts + lease`,
+    /// which is `send_ts + max_lease` in short.
+    fn next_expired_time(&self, send_ts: Timespec) -> Timespec {
+        send_ts + self.max_lease
+    }
+
+    /// Renew the lease to the bound.
+    pub fn renew(&mut self, send_ts: Timespec) {
+        let bound = self.next_expired_time(send_ts);
+        match self.bound {
+            // Longer than suspect ts or longer than valid ts.
+            Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts <= bound {
+                self.bound = Some(Either::Right(bound));
+            },
+            // Or an empty lease
+            None => {
+                self.bound = Some(Either::Right(bound));
+            }
+        }
+    }
+
+    /// Suspect the lease to the bound.
+    pub fn suspect(&mut self, send_ts: Timespec) {
+        let bound = self.next_expired_time(send_ts);
+        self.bound = Some(Either::Left(bound));
+    }
+
+    /// Inspect the lease state for the ts or now.
+    pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
+        match self.bound {
+            Some(Either::Left(_)) => LeaseState::Suspect,
+            Some(Either::Right(bound)) => if ts.unwrap_or_else(monotonic_raw_now) < bound {
+                LeaseState::Valid
+            } else {
+                LeaseState::Expired
+            },
+            None => LeaseState::Expired,
+        }
+    }
+
+    pub fn expire(&mut self) {
+        self.bound = None;
+    }
+}
+
+impl fmt::Debug for Lease {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let mut fmter = fmt.debug_struct("Lease");
+        match self.bound {
+            Some(Either::Left(ts)) => fmter.field("suspect", &ts).finish(),
+            Some(Either::Right(ts)) => fmter.field("valid", &ts).finish(),
+            None => fmter.finish(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::process;
+    use std::thread;
 
     use kvproto::metapb;
     use kvproto::raft_serverpb::RaftMessage;
     use kvproto::eraftpb::{ConfChangeType, Message, MessageType};
+    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
+    use tempdir::TempDir;
+    use time::Duration as TimeDuration;
 
-    use super::*;
     use raftstore::store::peer_storage;
     use util::properties::SizePropertiesCollectorFactory;
-
-    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+    use util::time::monotonic_raw_now;
     use storage::{Key, ALL_CFS};
-    use tempdir::TempDir;
+    use super::*;
+
+    #[test]
+    fn test_lease() {
+        let duration = TimeDuration::milliseconds(1500);
+
+        // Empty lease.
+        let mut lease = Lease::new(duration);
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+
+        let now = monotonic_raw_now();
+        let next_expired_time = lease.next_expired_time(now);
+        assert_eq!(next_expired_time, now + duration);
+
+        // Transit to the Valid state.
+        lease.renew(now);
+        assert_eq!(lease.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
+        assert_eq!(lease.inspect(None), LeaseState::Valid);
+
+        // After lease expired time.
+        thread::sleep(duration.to_std().unwrap());
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+        assert_eq!(lease.inspect(None), LeaseState::Expired);
+
+        // Transit to the Suspect state.
+        lease.suspect(monotonic_raw_now());
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Suspect
+        );
+        assert_eq!(lease.inspect(None), LeaseState::Suspect);
+
+        // After lease expired time. Always suspect.
+        thread::sleep(duration.to_std().unwrap());
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Suspect
+        );
+
+        // Clear lease.
+        lease.expire();
+        assert_eq!(
+            lease.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+    }
 
     // Tests the util function `check_key_in_region`.
     #[test]
