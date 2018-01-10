@@ -1820,7 +1820,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             // If size declining is trivial, skip.
             let total_bytes_declined = event.total_input_bytes - event.total_output_bytes;
-            if total_bytes_declined * 10 < event.total_input_bytes {
+            if total_bytes_declined < self.cfg.region_split_check_diff.0 ||
+                total_bytes_declined * 10 < event.total_input_bytes
+            {
                 continue;
             }
 
