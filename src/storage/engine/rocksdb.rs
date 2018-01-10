@@ -29,7 +29,7 @@ use tempdir::TempDir;
 enum Task {
     Write(Vec<Modify>, Callback<()>),
     Snapshot(Callback<Box<Snapshot>>),
-    SnapshotBath(usize, BatchCallback<Box<Snapshot>>),
+    SnapshotBatch(usize, BatchCallback<Box<Snapshot>>),
 }
 
 impl Display for Task {
@@ -37,7 +37,7 @@ impl Display for Task {
         match *self {
             Task::Write(..) => write!(f, "write task"),
             Task::Snapshot(_) => write!(f, "snapshot task"),
-            Task::SnapshotBath(..) => write!(f, "snapshot task batch"),
+            Task::SnapshotBatch(..) => write!(f, "snapshot task batch"),
         }
     }
 }
@@ -52,7 +52,7 @@ impl Runnable<Task> for Runner {
                 CbContext::new(),
                 Ok(box RocksSnapshot::new(self.0.clone())),
             )),
-            Task::SnapshotBath(size, on_finished) => {
+            Task::SnapshotBatch(size, on_finished) => {
                 let mut results = Vec::with_capacity(size);
                 for _ in 0..size {
                     let res = Some((
@@ -189,7 +189,7 @@ impl Engine for EngineRocksdb {
     ) -> Result<()> {
         box_try!(
             self.sched
-                .schedule(Task::SnapshotBath(batch.len(), on_finished))
+                .schedule(Task::SnapshotBatch(batch.len(), on_finished))
         );
         Ok(())
     }
