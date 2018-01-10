@@ -1838,6 +1838,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             {
                 influenced_regions.push(region_id);
             }
+            // Compaction may happens between the gap of two valid regions.
+            if influenced_regions.is_empty() {
+                continue;
+            }
+
             COMPACTION_RELATED_REGION_COUNT
                 .with_label_values(&[&output_level_str])
                 .observe(influenced_regions.len() as f64);

@@ -154,7 +154,7 @@ lazy_static! {
             "compaction_declined_bytes",
             "total bytes declined for each compaction job",
             &["output_level"],
-            exponential_buckets(1.0, 2.0, 20).unwrap()
+            exponential_buckets(1024.0, 2.0, 30).unwrap()
         ).unwrap();
 
     pub static ref SNAPSHOT_CF_KV_COUNT: HistogramVec =
