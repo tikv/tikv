@@ -1847,6 +1847,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 for region_id in influenced_regions.drain(..) {
                     if let Some(peer) = self.region_peers.get_mut(region_id) {
                         peer.approximate_size_unhealth += score;
+                        if peer.should_update_approximate_size() {
+                            UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
+                        }
                     }
                 }
             }
