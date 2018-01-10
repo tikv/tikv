@@ -36,6 +36,7 @@ extern crate test;
 extern crate kvproto;
 extern crate futures;
 extern crate grpcio as grpc;
+extern crate clap;
 
 #[allow(dead_code)]
 #[path = "../../tests/util/mod.rs"]
@@ -58,8 +59,7 @@ mod pd;
 mod transport_simulate;
 
 use test::BenchSamples;
-
-use std::env;
+use clap::{App, Arg, ArgGroup};
 
 /// shortcut to bench a function.
 macro_rules! bench {
@@ -97,38 +97,31 @@ fn main() {
             e
         );
     }
-    // TODO allow user to specify flag to just bench some cases.
 
+    let available_benches = ["raftstore", "mvcc"];
 
-    let mut args: Vec<_> = env::args().skip(1).collect();
+    let matches = App::new("TiKV Benchmark")
+        .args(&available_benches
+            .iter()
+            .map(|name| Arg::with_name(name))
+            .collect::<Vec<_>>())
+        .group(ArgGroup::with_name("benches").args(&available_benches))
+        .get_matches();
 
-    let available_options = vec!["raftstore", "tombstone-scan"];
-
-    if args.is_empty() {
-        args = available_options.iter().map(|&s| String::from(s)).collect();
-    }
-
-    if args[0] == "-h" || args[0] == "--help" {
-        eprintln!(
-            "Usage: bench-tikv [item1] [item2] [item3] ...\n\
-             where item1, item2, item3, ... are bench items.\n\n\
-             Available options are:"
-        );
-        for item in available_options {
-            eprintln!("    {}", item);
-        }
-
-        eprintln!(
-            "\nRun with no args to do all benches.\n\
-             Run with -h or --help to show this help."
-        );
+    let benches: Vec<_> = if let Some(args) = matches.values_of("benches") {
+        args.collect()
     } else {
-        for item in args {
-            match item.as_ref() {
-                "raftstore" => raftstore::bench_raftstore(),
-                "tombstone-scan" => mvcc::bench_engine(),
-                _ => eprintln!("*** Unknown bench item {}", item),
-            }
+        available_benches.to_vec()
+    };
+
+    println!("{:?}", benches);
+
+    for item in benches {
+        match item.as_ref() {
+            "raftstore" => raftstore::bench_raftstore(),
+            "mvcc" => mvcc::bench_engine(),
+            _ => eprintln!("error: Unknown bench item {}", item),
         }
     }
+
 }
