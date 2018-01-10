@@ -16,6 +16,7 @@ use std::time::*;
 use std::thread;
 
 use fail;
+use futures::Future;
 use kvproto::metapb::MergeDirection;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use tikv::util::config::*;
@@ -30,7 +31,6 @@ use raftstore::util::*;
 
 #[test]
 fn test_node_merge_rollback() {
-    ::util::init_log();
     let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
@@ -66,7 +66,7 @@ fn test_node_merge_rollback() {
     pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
     cluster.must_put(b"k4", b"v4");
     util::must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
-    
+
     let region = pd_client.get_region(b"k1").unwrap();
     // After split and pre-merge, version becomes 1 + 2 = 3;
     assert_eq!(region.get_region_epoch().get_version(), 3);
@@ -103,5 +103,84 @@ fn test_node_merge_rollback() {
                 .unwrap();
         assert_eq!(state.get_state(), PeerState::Normal);
         assert_eq!(*state.get_region(), region);
+    }
+}
+
+#[test]
+fn test_node_merge_restart() {
+    let _guard = ::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    cluster.run();
+
+    let pd_client = cluster.pd_client.clone();
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    let pre_merge = util::new_pre_merge(MergeDirection::Forward);
+    let epoch = left.get_region_epoch();
+    let req = util::new_admin_request(left.get_id(), epoch, pre_merge);
+    // The callback will be called when pre-merge is applied.
+    let res = cluster.call_command_on_leader(req, Duration::from_secs(3));
+    let leader = cluster.leader_of_region(left.get_id()).unwrap();
+    assert!(res.is_ok(), "{:?}", res);
+
+    cluster.shutdown();
+    let engine = cluster.get_engine(leader.get_store_id());
+    let state_key = keys::region_state_key(left.get_id());
+    let state: RegionLocalState = engine
+            .get_msg_cf(CF_RAFT, &state_key)
+            .unwrap()
+            .unwrap();
+    assert_eq!(state.get_state(), PeerState::Merging, "{:?}", state);
+    let state_key = keys::region_state_key(right.get_id());
+    let state: RegionLocalState = engine
+            .get_msg_cf(CF_RAFT, &state_key)
+            .unwrap()
+            .unwrap();
+    assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
+    fail::remove(schedule_merge_fp);
+    cluster.start();
+
+    // Wait till merge is finished.
+    let timer = Instant::now();
+    loop {
+        if pd_client.get_region_by_id(left.get_id()).wait().unwrap().is_none() {
+            break;
+        }
+
+        if timer.elapsed() > Duration::from_secs(5) {
+            panic!("region still not merged after 5 secs");
+        }
+        sleep_ms(10);
+    }
+
+    cluster.must_put(b"k4", b"v4");
+
+    for i in 1..4 {
+        let state_key = keys::region_state_key(left.get_id());
+        let state: RegionLocalState = cluster
+                .get_engine(i)
+                .get_msg_cf(CF_RAFT, &state_key)
+                .unwrap()
+                .unwrap();
+        assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
+        let state_key = keys::region_state_key(right.get_id());
+        let state: RegionLocalState = cluster
+                .get_engine(i)
+                .get_msg_cf(CF_RAFT, &state_key)
+                .unwrap()
+                .unwrap();
+        assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
+        assert!(state.get_region().get_start_key().is_empty());
+        assert!(state.get_region().get_end_key().is_empty());
     }
 }
