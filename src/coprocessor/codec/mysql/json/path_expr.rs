@@ -135,7 +135,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
             let mut key = expr[start + 1..end].trim().to_owned();
             if key == PATH_EXPR_ASTERISK {
                 flags |= PATH_EXPRESSION_CONTAINS_ASTERISK;
-            } else if key.chars().next().unwrap() == '"' {
+            } else if key.starts_with('"') {
                 // We need to unquote the origin string.
                 key = unquote_string(&key[1..key.len() - 1])?;
             }
