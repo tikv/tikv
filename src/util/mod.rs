@@ -148,7 +148,7 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
 
 /// A function to escape a byte array to a readable ascii string.
 /// escape rules follow golang/protobuf.
-/// https://github.com/golang/protobuf/blob/master/proto/text.go#L578
+/// <https://github.com/golang/protobuf/blob/master/proto/text.go#L578>
 ///
 /// # Examples
 ///
