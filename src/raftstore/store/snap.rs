@@ -1402,7 +1402,7 @@ impl SnapManagerBuilder {
 }
 
 #[cfg(test)]
-mod test {
+pub mod tests {
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::fs::{self, File, OpenOptions};
     use std::sync::*;

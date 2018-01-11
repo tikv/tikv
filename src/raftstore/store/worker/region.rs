@@ -361,3 +361,105 @@ impl Runnable<Task> for Runner {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{mpsc, Arc};
+    use tempdir::TempDir;
+    use kvproto::metapb::Peer;
+    use kvproto::eraftpb::Entry;
+    use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState};
+    use rocksdb::DB;
+
+    use util::rocksdb;
+    use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use raftstore::store::keys;
+    use raftstore::store::engine::Mutable;
+
+    use super::SnapContext;
+    use raftstore::store::snap::*;
+    use raftstore::store::snap::tests::*;
+
+    fn get_test_snap_context(kv_db: Arc<DB>, raft_db: Arc<DB>, mgr: SnapManager) -> SnapContext {
+        SnapContext {
+            kv_db: kv_db,
+            raft_db: raft_db,
+            mgr: mgr,
+            batch_size: 1,
+            use_delete_range: false,
+        }
+    }
+
+    fn get_test_kv_and_raft_db(
+        kv_path: &TempDir,
+        raft_path: &TempDir,
+        regions: &[u64],
+    ) -> (Arc<DB>, Arc<DB>) {
+        let kv_path_str = kv_path.path().to_str().unwrap();
+        let raft_path_str = raft_path.path().to_str().unwrap();
+        let kv = rocksdb::new_engine(kv_path_str, ALL_CFS, None).unwrap();
+        let raft = rocksdb::new_engine(raft_path_str, &[CF_DEFAULT], None).unwrap();
+
+        for &region_id in regions {
+            // Put a raft log into raft engine.
+            let mut raft_log: Entry = Entry::new();
+            raft_log.set_term(5);
+            raft_log.set_index(10);
+            let handle = rocksdb::get_cf_handle(&raft, CF_DEFAULT).unwrap();
+            raft.put_msg_cf(handle, &keys::raft_log_key(region_id, 10), &raft_log)
+                .unwrap();
+
+            // Put apply state into kv engine.
+            let mut apply_state = RaftApplyState::new();
+            apply_state.set_applied_index(10);
+            apply_state.mut_truncated_state().set_index(9);
+            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT).unwrap();
+            kv.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)
+                .unwrap();
+
+            // Put region info into kv engine.
+            let region = get_test_region(region_id, 1, 1);
+            let mut region_state = RegionLocalState::new();
+            region_state.set_region(region);
+            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT).unwrap();
+            kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)
+                .unwrap();
+
+            // Put some data into kv engine.
+            for (i, cf) in [CF_LOCK, CF_DEFAULT, CF_WRITE].iter().enumerate() {
+                let handle = rocksdb::get_cf_handle(&kv, cf).unwrap();
+                let mut p = Peer::new();
+                p.set_store_id(1);
+                p.set_id((i + 1) as u64);
+                let key = keys::data_key(b"akey");
+                kv.put_msg_cf(handle, &key[..], &p).unwrap();
+            }
+        }
+        (Arc::new(kv), Arc::new(raft))
+    }
+
+    #[test]
+    fn test_snapshot_max_total_size() {
+        let regions: Vec<u64> = (0..20).collect();
+        let kv_path = TempDir::new("test-snapshot-max-total-size-db").unwrap();
+        let raft_path = TempDir::new("test-snapshot-max-total-size-raft").unwrap();
+        let (kv, raft) = get_test_kv_and_raft_db(&kv_path, &raft_path, &regions);
+
+        let snapfiles_path = TempDir::new("test-snapshot-max-total-size-snapshots").unwrap();
+        let snap_mgr = SnapManagerBuilder::default()
+            .max_total_size(10240)
+            .build(snapfiles_path.path().to_str().unwrap(), None);
+
+        let snap_ctx = get_test_snap_context(kv.clone(), raft.clone(), snap_mgr);
+        let (tx, _) = mpsc::sync_channel(20);
+        for (i, region_id) in regions.into_iter().enumerate() {
+            snap_ctx.generate_snap(region_id, tx.clone()).unwrap();
+            if i < 6 {
+                // sizeof(snapshot) == 1918 bytes.
+                assert_eq!(snap_ctx.mgr.get_total_snap_size() as usize, 1918 * (1 + i));
+            } else {
+                assert_eq!(snap_ctx.mgr.get_total_snap_size() as usize, 1918 * 6);
+            }
+        }
+    }
+}
