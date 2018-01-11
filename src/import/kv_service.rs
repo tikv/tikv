@@ -72,6 +72,7 @@ impl ImportKv for ImportKVService {
             bounded_stream
                 .map_err(Error::from)
                 .for_each(move |mut chunk| {
+                    IMPORT_WRITE_STREAM_CHUNK_DURATION.start_coarse_timer();
                     if chunk.has_head() {
                         let head = chunk.get_head();
                         let uuid = Uuid::from_bytes(head.get_uuid())?;
@@ -83,7 +84,8 @@ impl ImportKv for ImportKVService {
                         } else {
                             WriteOptions::new()
                         };
-                        import1.write(token, chunk.take_batch(), options)?;
+                        let size = import1.write(token, chunk.take_batch(), options)?;
+                        IMPORT_WRITE_STREAM_CHUNK_SIZE.observe(size as f64);
                     }
                     Ok(())
                 })

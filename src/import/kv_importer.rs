@@ -105,12 +105,12 @@ impl KVImporter {
         }
     }
 
-    pub fn write(&self, token: Token, batch: WriteBatch, options: WriteOptions) -> Result<()> {
+    pub fn write(&self, token: Token, batch: WriteBatch, options: WriteOptions) -> Result<usize> {
         match self.remove(token) {
             Some(engine) => match engine.write(batch, options) {
-                Ok(_) => {
+                Ok(v) => {
                     self.insert(token, engine);
-                    Ok(())
+                    Ok(v)
                 }
                 Err(e) => {
                     error!("write {}: {:?}", engine, e);
@@ -304,7 +304,7 @@ impl EngineFile {
         })
     }
 
-    fn write(&self, batch: WriteBatch, options: WriteOptions) -> Result<()> {
+    fn write(&self, batch: WriteBatch, options: WriteOptions) -> Result<usize> {
         self.engine.as_ref().unwrap().write(batch, options)
     }
 

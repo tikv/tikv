@@ -58,18 +58,21 @@ impl Engine {
         self.uuid
     }
 
-    pub fn write(&self, batch: WriteBatch, options: WriteOptions) -> Result<()> {
+    pub fn write(&self, batch: WriteBatch, options: WriteOptions) -> Result<usize> {
         let wb = if batch.get_commit_ts() == 0 {
             self.raw_write(batch)
         } else {
             self.txn_write(batch)
         };
+
+        let size = wb.data_size();
         self.write_without_wal(wb)?;
+
         if options.flush {
-            self.flush()
-        } else {
-            Ok(())
+            self.flush()?;
         }
+
+        Ok(size)
     }
 
     fn raw_write(&self, mut batch: WriteBatch) -> RawBatch {

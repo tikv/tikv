@@ -45,13 +45,13 @@ macro_rules! send_rpc_response {
         let duration = duration_to_sec($timer.elapsed());
         let res = match $res {
             Ok(resp) => {
-                IMPORT_RPC_DURATION_VEC
+                IMPORT_RPC_DURATION
                     .with_label_values(&[$label, "ok"])
                     .observe(duration);
                 $sink.success(resp)
             }
             Err(e) => {
-                IMPORT_RPC_DURATION_VEC
+                IMPORT_RPC_DURATION
                     .with_label_values(&[$label, "error"])
                     .observe(duration);
                 $sink.fail(make_rpc_error(e))
