@@ -22,18 +22,17 @@ pub fn make_rpc_error(err: Error) -> RpcStatus {
 
 macro_rules! send_rpc_response {
     ($res:ident, $sink: ident, $label:ident, $timer:ident) => ({
-        let duration = duration_to_sec($timer.elapsed());
         let res = match $res {
             Ok(resp) => {
-                IMPORT_RPC_DURATION_VEC
+                IMPORT_RPC_DURATION
                     .with_label_values(&[$label, "ok"])
-                    .observe(duration);
+                    .observe($timer.elapsed_secs());
                 $sink.success(resp)
             }
             Err(e) => {
-                IMPORT_RPC_DURATION_VEC
+                IMPORT_RPC_DURATION
                     .with_label_values(&[$label, "error"])
-                    .observe(duration);
+                    .observe($timer.elapsed_secs());
                 $sink.fail(make_rpc_error(e))
             }
         };

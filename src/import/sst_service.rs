@@ -22,7 +22,7 @@ use kvproto::importpb::*;
 use kvproto::importpb_grpc::*;
 
 use storage::Storage;
-use util::time::{duration_to_sec, Instant};
+use util::time::Instant;
 
 use super::service::*;
 use super::metrics::*;
@@ -70,12 +70,16 @@ impl ImportSst for ImportSSTService {
             bounded_stream
                 .map_err(Error::from)
                 .for_each(move |chunk| {
+                    let start = Instant::now_coarse();
                     if chunk.has_meta() {
                         import1.create(token, chunk.get_meta())?;
                     }
                     if !chunk.get_data().is_empty() {
-                        import1.append(token, chunk.get_data())?;
+                        let data = chunk.get_data();
+                        import1.append(token, data)?;
+                        IMPORT_UPLOAD_CHUNK_SIZE.observe(data.len() as f64);
                     }
+                    IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
                     Ok(())
                 })
                 .then(move |res| match res {

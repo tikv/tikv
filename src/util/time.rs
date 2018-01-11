@@ -249,6 +249,10 @@ impl Instant {
         }
     }
 
+    pub fn elapsed_secs(&self) -> f64 {
+        duration_to_sec(self.elapsed())
+    }
+
     pub fn duration_since(&self, earlier: Instant) -> Duration {
         match (*self, earlier) {
             (Instant::Monotonic(later), Instant::Monotonic(earlier)) => {

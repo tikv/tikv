@@ -14,11 +14,25 @@
 use prometheus::*;
 
 lazy_static! {
-    pub static ref IMPORT_RPC_DURATION_VEC: HistogramVec =
+    pub static ref IMPORT_RPC_DURATION: HistogramVec =
         register_histogram_vec!(
-            "tikv_import_rpc_duration_seconds",
+            "tikv_import_rpc_duration",
             "Bucketed histogram of import rpc duration",
-            &["req", "result"],
+            &["request", "result"],
             exponential_buckets(0.001, 2.0, 30).unwrap()
+        ).unwrap();
+
+    pub static ref IMPORT_UPLOAD_CHUNK_SIZE: Histogram =
+        register_histogram!(
+            "tikv_import_upload_chunk_size",
+            "Bucketed histogram of import upload chunk size",
+            exponential_buckets(1024.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref IMPORT_UPLOAD_CHUNK_DURATION: Histogram =
+        register_histogram!(
+            "tikv_import_upload_chunk_duration",
+            "Bucketed histogram of import upload chunk duration",
+            exponential_buckets(0.001, 2.0, 20).unwrap()
         ).unwrap();
 }
