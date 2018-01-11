@@ -264,7 +264,7 @@ pub fn new_pd_change_peer(
     peer: metapb::Peer,
 ) -> RegionHeartbeatResponse {
     let mut change_peer = ChangePeer::new();
-    change_peer.set_change_type(change_type.into());
+    change_peer.set_change_type(change_type);
     change_peer.set_peer(peer);
 
     let mut resp = RegionHeartbeatResponse::new();

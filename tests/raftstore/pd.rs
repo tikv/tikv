@@ -315,7 +315,7 @@ impl Cluster {
                     .all(|x| x.get_store_id() != *store_id)
                 {
                     let peer = new_peer(*store_id, self.alloc_id().unwrap());
-                    change_peer.set_change_type(eraftpb::ConfChangeType::AddNode.into());
+                    change_peer.set_change_type(eraftpb::ConfChangeType::AddNode);
                     change_peer.set_peer(peer.clone());
                     resp.set_change_peer(change_peer);
                     break;
@@ -329,7 +329,7 @@ impl Cluster {
                 .position(|x| x.get_store_id() != leader.get_store_id())
                 .unwrap();
 
-            change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode.into());
+            change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode);
             change_peer.set_peer(region.get_peers()[pos].clone());
             resp.set_change_peer(change_peer);
 

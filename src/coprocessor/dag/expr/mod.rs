@@ -143,12 +143,12 @@ quick_error! {
 
 impl From<FromUtf8Error> for Error {
     fn from(err: FromUtf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.utf8_error().into()))
+        Error::Codec(CError::Encoding(err.utf8_error()))
     }
 }
 impl From<Utf8Error> for Error {
     fn from(err: Utf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.into()))
+        Error::Codec(CError::Encoding(err))
     }
 }
 

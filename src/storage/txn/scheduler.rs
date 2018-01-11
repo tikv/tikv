@@ -543,7 +543,7 @@ fn process_read(
                 ctx.get_isolation_level(),
             );
             let res = match reader.seek_ts(start_ts).map_err(StorageError::from) {
-                Err(e) => ProcessResult::Failed { err: e.into() },
+                Err(e) => ProcessResult::Failed { err: e },
                 Ok(opt) => match opt {
                     Some(key) => match find_mvcc_infos_by_key(&mut reader, &key, u64::MAX) {
                         Ok((lock, writes, values)) => ProcessResult::MvccStartTs {
