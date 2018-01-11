@@ -57,7 +57,8 @@ use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Ti
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
+use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState,
+                  REGION_SIZE_UNHEALTHY_THRESHOLD};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::msg::{BatchCallback, Callback};
 use super::cmd_resp::{bind_term, new_error};
@@ -1852,8 +1853,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .observe(influenced_regions.len() as f64);
 
             // Calculate unhealthy score and update it when necessary.
+            //
+            // If a region's declined bytes reach region_split_check_diff,
+            // it is time to update this region's size. The declined bytes
+            // may exceeds region_split_check_diff by a single compaction
+            // job, or it is the accumulation affects of multiple compaction
+            // jobs.
+            // The smallest declined bytes which can score is rely on the value of
+            // REGION_SIZE_UNHEALTHY_THRESHOLD. 10 is a experienced value for
+            // REGION_SIZE_UNHEALTHY_THRESHOLD. The reason why we don't use bytes
+            // as score directly is some compaction jobs may relate to thousands
+            // of regions, but the affect is trivial for each region. We don't want
+            // to update score for thousands times in this situation.
             let region_declined = total_bytes_declined / influenced_regions.len() as u64;
-            let score = region_declined * 4 / self.cfg.region_split_check_diff.0;
+            let score = region_declined * REGION_SIZE_UNHEALTHY_THRESHOLD /
+                self.cfg.region_split_check_diff.0;
             if score > 0 {
                 for region_id in influenced_regions.drain(..) {
                     if let Some(peer) = self.region_peers.get_mut(region_id) {

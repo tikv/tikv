@@ -56,6 +56,7 @@ use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, 
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
+pub const REGION_SIZE_UNHEALTHY_THRESHOLD: u64 = 10;
 
 struct ReadIndexRequest {
     id: u64,
@@ -370,7 +371,7 @@ impl Peer {
     }
 
     pub fn should_update_approximate_size(&self) -> bool {
-        self.approximate_size_unhealth >= 4
+        self.approximate_size_unhealth >= REGION_SIZE_UNHEALTHY_THRESHOLD
     }
 
     pub fn reset_approximate_size_unhealth(&mut self) {
