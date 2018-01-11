@@ -31,6 +31,7 @@
 #![allow(unreadable_literal)]
 #![allow(new_without_default_derive)]
 #![allow(verbose_bit_mask)]
+#![allow(implicit_hasher)]
 
 #[macro_use]
 extern crate log;
