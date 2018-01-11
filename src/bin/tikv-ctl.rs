@@ -242,7 +242,7 @@ trait DebugExecutor {
                         }
                     }
                 }
-                println!("");
+                println!();
                 future::ok::<(), String>(())
             },
         );
