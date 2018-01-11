@@ -337,7 +337,7 @@ fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches)
 fn configure_grpc_poll_strategy() {
     const GRPC_POLL_STRATEGY: &str = "GRPC_POLL_STRATEGY";
     const DEFAULT_ENGINE: &str = "epollsig";
-    if env::var(GRPC_POLL_STRATEGY).is_err() {
+    if cfg!(target_os = "linux") && env::var(GRPC_POLL_STRATEGY).is_err() {
         // Set to epollsig if it is not specified.
         env::set_var(GRPC_POLL_STRATEGY, DEFAULT_ENGINE);
     }
