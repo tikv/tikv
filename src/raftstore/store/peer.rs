@@ -370,7 +370,7 @@ impl Peer {
     }
 
     pub fn should_update_approximate_size(&self) -> bool {
-        self.approximate_size_unhealth >= 2
+        self.approximate_size_unhealth >= 4
     }
 
     pub fn reset_approximate_size_unhealth(&mut self) {

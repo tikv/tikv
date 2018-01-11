@@ -1853,7 +1853,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             // Calculate unhealthy score and update it when necessary.
             let region_declined = total_bytes_declined / influenced_regions.len() as u64;
-            let score = region_declined / self.cfg.region_split_check_diff.0;
+            let score = region_declined * 4 / self.cfg.region_split_check_diff.0;
             if score > 0 {
                 for region_id in influenced_regions.drain(..) {
                     if let Some(peer) = self.region_peers.get_mut(region_id) {
