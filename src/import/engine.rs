@@ -184,6 +184,7 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, Vec<CFOptions>) 
     // NOTE: Consider using a large write buffer.
     cf_opts.set_write_buffer_size(opts.defaultcf.write_buffer_size.0);
     cf_opts.set_target_file_size_base(opts.defaultcf.write_buffer_size.0);
+    cf_opts.set_vector_memtable_factory(opts.defaultcf.write_buffer_size.0);
     cf_opts.set_max_write_buffer_number(opts.defaultcf.max_write_buffer_number);
     // Disable compaction and rate limit.
     cf_opts.set_disable_auto_compactions(true);
