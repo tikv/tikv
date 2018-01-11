@@ -310,7 +310,7 @@ impl PdClient for RpcClient {
                                     Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
                                 }).map(|r| (r, WriteFlags::default())),
                             )
-                            .map(|(mut sender, _)| sender.get_mut().cancel())
+                            .map(|(mut sender, _)| sender.get_mut().cancel()),
                     ) as PdFuture<_>
                 }
                 None => unreachable!(),
