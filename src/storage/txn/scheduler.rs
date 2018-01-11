@@ -31,7 +31,7 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use std::fmt::{self, Debug, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::thread;
@@ -53,8 +53,10 @@ use storage::engine::{self, Callback as EngineCallback, CbContext, Error as Engi
 use raftstore::store::engine::IterOption;
 use util::transport::{Error as TransportError, SyncSendCh};
 use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
+use util::timer::Timer;
 use util::time::SlowTimer;
 use util::collections::HashMap;
+use util::worker::{Runnable, RunnableWithTimer};
 
 use super::Result;
 use super::Error;
@@ -1492,13 +1494,30 @@ impl Scheduler {
             group.push(cid);
         }
     }
+}
 
-    pub fn run(&mut self, receiver: Receiver<Msg>) -> Result<()> {
+/// A Msg Receiver wrapper to impl Display so that Scheduler Runnable can be impl-ed
+pub struct MsgReceiver {
+    pub inner: Receiver<Msg>,
+}
+
+impl Display for MsgReceiver {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "")
+    }
+}
+
+impl Runnable<MsgReceiver> for Scheduler {
+    fn run(&mut self, receiver: MsgReceiver) {
         let mut msgs = Vec::with_capacity(CMD_BATCH_SIZE);
+        let rx = receiver.inner;
         loop {
-            let msg = box_try!(receiver.recv());
+            let msg = match rx.recv() {
+                Ok(m) => m,
+                Err(e) => panic!("scheduler run err:{:?}", e),
+            };
             msgs.push(msg);
-            while let Ok(msg) = receiver.try_recv() {
+            while let Ok(msg) = rx.try_recv() {
                 msgs.push(msg);
                 if msgs.len() >= CMD_BATCH_SIZE {
                     break;
@@ -1507,7 +1526,7 @@ impl Scheduler {
 
             for msg in msgs.drain(..) {
                 match msg {
-                    Msg::Quit => return self.shutdown(),
+                    Msg::Quit => { self.shutdown(); return ; },
                     Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
                     Msg::RetryGetSnapshots(batch) => self.on_retry_get_snapshots(batch),
                     Msg::SnapshotFinished {
@@ -1553,14 +1572,23 @@ impl Scheduler {
         }
     }
 
-    fn shutdown(&mut self) -> Result<()> {
+    fn on_tick(&mut self) {
+        // TODO
+    }
+
+    fn shutdown(&mut self) {
         if let Err(e) = self.worker_pool.stop() {
-            return Err(Error::Other(box_err!("{:?}", e)));
+            panic!("scheduler run err:{:?}", e);
         }
         if let Err(e) = self.high_priority_pool.stop() {
-            return Err(Error::Other(box_err!("{:?}", e)));
+            panic!("scheduler run err:{:?}", e);
         }
-        Ok(())
+    }
+}
+
+impl RunnableWithTimer<MsgReceiver, Msg> for Scheduler {
+    fn on_timeout(&mut self, _: &mut Timer<Msg>, _: Msg) {
+        // TODO
     }
 }
 

@@ -22,6 +22,7 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, LockInfo};
 use kvproto::errorpb;
 use util::collections::HashMap;
+use util::worker::Runnable;
 use self::metrics::*;
 
 pub mod engine;
@@ -37,7 +38,7 @@ pub use self::engine::{new_local_engine, CFStatistics, Cursor, Engine, Error as 
                        StatisticsSummary, TEMP_DIR};
 pub use self::engine::raftkv::RaftKv;
 use self::mvcc::Lock;
-pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
+pub use self::txn::{Msg, MsgReceiver, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
@@ -520,7 +521,7 @@ impl Storage {
 
         let engine = self.engine.clone();
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
-        let rx = handle.receiver.take().unwrap();
+        let rx = MsgReceiver{inner: handle.receiver.take().unwrap()};
         let sched_concurrency = config.scheduler_concurrency;
         let sched_worker_pool_size = config.scheduler_worker_pool_size;
         let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
@@ -533,9 +534,7 @@ impl Storage {
                 sched_worker_pool_size,
                 sched_pending_write_threshold,
             );
-            if let Err(e) = sched.run(rx) {
-                panic!("scheduler run err:{:?}", e);
-            }
+            sched.run(rx);
             info!("scheduler stopped");
         })?;
         handle.handle = Some(h);
