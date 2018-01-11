@@ -87,7 +87,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
     assert!(
         engine
-            .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_some()
     );
@@ -115,7 +115,7 @@ fn test_node_bootstrap_with_prepared_data() {
     assert!(
         engine
             .clone()
-            .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none()
     );

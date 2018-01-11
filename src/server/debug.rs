@@ -349,7 +349,7 @@ impl Debugger {
 
     fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv_engine;
-        db.get_msg::<StoreIdent>(&keys::store_ident_key())
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident.get_store_id()),
@@ -624,9 +624,9 @@ mod tests {
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
         entry.set_data(vec![42]);
-        engine.put_msg(key.as_slice(), &entry).unwrap();
+        engine.put_msg(&key, &entry).unwrap();
         assert_eq!(
-            engine.get_msg::<Entry>(key.as_slice()).unwrap().unwrap(),
+            engine.get_msg::<Entry>(&key).unwrap().unwrap(),
             entry
         );
 
