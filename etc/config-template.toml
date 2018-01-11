@@ -40,19 +40,22 @@
 # max recursion level allowed when decoding dag expression
 # end-point-recursion-limit = 1000
 
+# enable or disable dist-sql cache feature
+# enable-distsql-cache = false
+
+# dist-sql cache size default is 256MB.
+# distsql-cache-size = "256MB"
+
+# dist-sql cache entry max size, if result set is bigger than this, dist-sql
+# cache will not cache it.
+# distsql-cache-entry-max-size = "5MB"
+
 # the max bytes that snapshot can be written to disk in one second,
 # should be set based on your disk performance
 # snap_max_write_bytes_per_sec = "30MB"
 
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
-
-# enable or disable dist-sql cache feature
-# enable-distsql-cache = false
-
-# dist-sql cache size default is 256MB
-# distsql-cache-size = "256MB"
-# distsql-cache-entry-max-size = "5MB"
 
 [storage]
 # set the path to rocksdb directory.

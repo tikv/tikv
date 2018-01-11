@@ -183,11 +183,11 @@ impl DistSQLCache {
     fn evict_region_with_exist_region(&mut self, region_id: u64) {
         self.regions
             .get_mut(&region_id)
-            .map_or(None, |region| {
+            .and_then(|region| {
                 region.version += 1;
                 Some(region.cached_items.clone())
             })
-            .map_or(None, |cached_items| {
+            .and_then(|cached_items| {
                 for (key, _) in (&cached_items).iter() {
                     self.remove(key);
                 }
