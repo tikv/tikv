@@ -133,7 +133,7 @@ pub enum Command {
     ScanLock {
         ctx: Context,
         max_ts: u64,
-        limit: Option<usize>,
+        limit: usize,
     },
     ResolveLock {
         ctx: Context,
@@ -766,7 +766,7 @@ impl Storage {
         &self,
         ctx: Context,
         max_ts: u64,
-        limit: Option<usize>,
+        limit: usize,
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
         let cmd = Command::ScanLock {

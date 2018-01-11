@@ -406,15 +406,15 @@ impl MvccReader {
         }
     }
 
-    // for scan lock request, we must return all locks even if they are generated 
+    // for scan lock request, we must return all locks even if they are generated
     // by the same transaction. because gc worker need to make sure all locks to be
-    // cleaned. 
+    // cleaned.
     #[allow(type_complexity)]
     pub fn scan_lock<F>(
         &mut self,
         start: Option<Key>,
         filter: F,
-        limit: Option<usize>,
+        limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
     where
         F: Fn(&Lock) -> bool,
@@ -434,10 +434,8 @@ impl MvccReader {
             let lock = Lock::parse(cursor.value())?;
             if filter(&lock) {
                 locks.push((key.clone(), lock));
-                if let Some(limit) = limit {
-                    if limit > 0 && locks.len() >= limit {
-                        return Ok((locks, Some(key)));
-                    }
+                if limit > 0 && locks.len() >= limit {
+                    return Ok((locks, Some(key)));
                 }
             }
             cursor.next(&mut self.statistics.lock);

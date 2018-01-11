@@ -442,7 +442,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let res = self.storage.async_scan_lock(
             req.take_context(),
             req.get_max_version(),
-            Some(req.get_limit() as usize),
+            req.get_limit() as usize,
             cb,
         );
         if let Err(e) = res {

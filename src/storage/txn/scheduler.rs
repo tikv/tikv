@@ -620,7 +620,7 @@ fn process_read(
                 .scan_lock(
                     scan_key.take(),
                     |lock| txn_status.contains_key(&lock.ts),
-                    Some(RESOLVE_LOCK_BATCH_SIZE),
+                    RESOLVE_LOCK_BATCH_SIZE,
                 )
                 .map_err(Error::from)
                 .and_then(|(v, next_scan_key)| {
@@ -1625,7 +1625,7 @@ mod tests {
             Command::ScanLock {
                 ctx: Context::new(),
                 max_ts: 5,
-                limit: Some(0),
+                limit: 0,
             },
             Command::ResolveLock {
                 ctx: Context::new(),
