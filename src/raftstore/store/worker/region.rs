@@ -121,13 +121,14 @@ impl SnapContext {
                         Ok(snap) => snap,
                         Err(_) => continue,
                     };
-                    if !snap.meta().is_ok() {
+                    if !snap.meta().and_then(|m| m.modified()).is_ok() {
                         continue;
                     }
                     key_and_snaps.push((key, snap));
                 }
-                key_and_snaps
-                    .sort_by_key(|item| Reverse(item.1.meta().unwrap().modified().unwrap()));
+                // Because we have filtered invalid `meta` and meta.modified`,
+                // we can unwrap safely here.
+                key_and_snaps.sort_by_key(|t| Reverse(t.1.meta().unwrap().modified().unwrap()));
                 old_snaps = Some(key_and_snaps);
             }
             match old_snaps.as_mut().unwrap().pop() {
