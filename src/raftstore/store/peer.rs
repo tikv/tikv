@@ -754,7 +754,7 @@ impl Peer {
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
                 // to panic here.
-                panic!("{} failed to handle raft ready: {:?}", self.tag, e);
+                panic!("{} failed to handle raft ready: {:?}", self.tag, e)
             }
         };
 
