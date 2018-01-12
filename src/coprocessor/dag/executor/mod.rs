@@ -44,7 +44,7 @@ pub use self::index_scan::IndexScanExecutor;
 pub use self::selection::SelectionExecutor;
 pub use self::topn::TopNExecutor;
 pub use self::limit::LimitExecutor;
-pub use self::aggregation::AggregationExecutor;
+pub use self::aggregation::HashAggExecutor;
 pub use self::scanner::{ScanOn, Scanner};
 
 pub struct ExprColumnRefVisitor {
@@ -174,7 +174,7 @@ pub fn build_exec(
             )?),
             ExecType::TypeAggregation => {
                 has_aggr = true;
-                Box::new(AggregationExecutor::new(
+                Box::new(HashAggExecutor::new(
                     exec.take_aggregation(),
                     ctx.clone(),
                     columns.clone(),
