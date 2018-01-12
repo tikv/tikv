@@ -185,7 +185,7 @@ where
     fn check_store(&self, engines: &Engines) -> Result<u64> {
         let res = engines
             .kv_engine
-            .get_msg::<StoreIdent>(&keys::store_ident_key())?;
+            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -249,7 +249,7 @@ where
     fn check_prepare_bootstrap_cluster(&self, engines: &Engines) -> Result<()> {
         let res = engines
             .kv_engine
-            .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())?;
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)?;
         if res.is_none() {
             return Ok(());
         }

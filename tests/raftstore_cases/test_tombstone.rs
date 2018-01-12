@@ -74,7 +74,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     // only tombstone key and store ident key exist.
     assert_eq!(existing_kvs.len(), 2);
     existing_kvs.sort();
-    assert_eq!(existing_kvs[0].0, keys::store_ident_key());
+    assert_eq!(existing_kvs[0].0.as_slice(), keys::STORE_IDENT_KEY);
     assert_eq!(existing_kvs[1].0, keys::region_state_key(r1));
 
     let mut ident = StoreIdent::new();
