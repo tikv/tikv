@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
+pub mod tests;
+
 mod config;
 mod errors;
 mod metrics;

@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use import::tests::*;
+
 fn new_cluster() -> (Cluster<ServerCluster>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
@@ -32,8 +34,8 @@ fn new_cluster_and_import_client() -> (Cluster<ServerCluster>, ImportClient) {
 
     let env = Arc::new(Environment::new(1));
     let addr = cluster.sim.rl().get_addr(ctx.get_peer().get_store_id());
-    let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
-    let import = ImportClient::new(channel);
+    let ch = ChannelBuilder::new(env).connect(&format!("{}", addr));
+    let import = ImportClient::new(ch);
 
     (cluster, import)
 }
@@ -43,9 +45,7 @@ fn test_upload_sst() {
     let (_, import) = must_new_cluster_and_import_client();
 
     let data = vec![1; 1024];
-    let mut hash = crc32::Digest::new(crc32::IEEE);
-    hash.write(&data);
-    let crc32 = hash.sum32();
+    let crc32 = get_data_crc32(&data);
 
     let mut upload = UploadSSTRequest::new();
     upload.set_data(data.clone());
@@ -68,23 +68,11 @@ fn test_upload_sst() {
     assert!(send_upload_sst(&import, upload.clone()).is_err());
 }
 
-fn make_sst_meta(len: usize, crc32: u32) -> SSTMeta {
+fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
     let mut m = SSTMeta::new();
-    m.set_len(len as u64);
     m.set_crc32(crc32);
-    m.set_handle(make_sst_handle());
+    m.set_length(length);
     m
-}
-
-fn make_sst_handle() -> SSTHandle {
-    let mut h = SSTHandle::new();
-    let uuid = Uuid::new_v4();
-    h.set_uuid(uuid.as_bytes().to_vec());
-    h.set_cf_name("default".to_owned());
-    h.set_region_id(1);
-    h.mut_region_epoch().set_conf_ver(2);
-    h.mut_region_epoch().set_version(3);
-    h
 }
 
 fn send_upload_sst(client: &ImportClient, m: UploadSSTRequest) -> Result<UploadSSTResponse> {

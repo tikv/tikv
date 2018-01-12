@@ -294,9 +294,9 @@ fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use import::tests::*;
     use std::io::Read;
     use tempdir::TempDir;
-    use rocksdb::{CFHandle, EnvOptions, SstFileWriter};
     use util::rocksdb::new_engine;
 
     #[test]
@@ -305,34 +305,17 @@ mod tests {
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
         let db_path = temp_dir.path().join("db");
-        let cf_name = "default";
-        let db = new_engine(db_path.to_str().unwrap(), &[cf_name], None).unwrap();
-        let cf = db.cf_handle(cf_name).unwrap();
+        let db = new_engine(db_path.to_str().unwrap(), &["default"], None).unwrap();
 
-        let cases = vec![
-            [("k1", "v1"), ("k2", "v2"), ("k3", "v3")],
-            [("k3", "v3"), ("k4", "v4"), ("k5", "v5")],
-        ];
+        let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
-        for (i, case) in cases.iter().enumerate() {
-            let sst_path = temp_dir.path().join(format!("{}.sst", i));
+        for (i, &(start, end)) in cases.iter().enumerate() {
+            let path = temp_dir.path().join(format!("{}.sst", i));
 
             // Generate a valid SST file.
-            gen_sst_with_kvs(&db, cf, sst_path.to_str().unwrap(), case);
+            let meta = gen_sst_file(&path, start, end);
             let mut data = Vec::new();
-            File::open(&sst_path)
-                .unwrap()
-                .read_to_end(&mut data)
-                .unwrap();
-            let crc32 = get_data_crc32(&data);
-
-            // Make a valid SSTMeta.
-            let mut meta = SSTMeta::new();
-            let uuid = Uuid::new_v4();
-            meta.set_uuid(uuid.as_bytes().to_vec());
-            meta.set_crc32(crc32);
-            meta.set_length(data.len() as u64);
-            meta.set_cf_name(cf_name.to_owned());
+            File::open(&path).unwrap().read_to_end(&mut data).unwrap();
 
             // Write the SST file to the dir.
             let mut f = dir.create(&meta).unwrap();
@@ -340,7 +323,7 @@ mod tests {
             f.finish().unwrap();
 
             dir.ingest(&meta, &db).unwrap();
-            check_db_with_kvs(&db, cf, case);
+            check_db_range(&db, start, end);
         }
     }
 
@@ -402,27 +385,5 @@ mod tests {
         let path = sst_meta_to_path(&meta).unwrap();
         let expected_path = format!("{}_1_2_3.sst", uuid);
         assert_eq!(path.to_str().unwrap(), &expected_path);
-    }
-
-    fn get_data_crc32(data: &[u8]) -> u32 {
-        let mut digest = crc32::Digest::new(crc32::IEEE);
-        digest.write(data);
-        digest.sum32()
-    }
-
-    fn gen_sst_with_kvs(db: &DB, cf: &CFHandle, path: &str, kvs: &[(&str, &str)]) {
-        let opts = db.get_options_cf(cf).clone();
-        let mut writer = SstFileWriter::new(EnvOptions::new(), opts);
-        writer.open(path).unwrap();
-        for &(k, v) in kvs {
-            writer.put(k.as_bytes(), v.as_bytes()).unwrap();
-        }
-        writer.finish().unwrap();
-    }
-
-    fn check_db_with_kvs(db: &DB, cf: &CFHandle, kvs: &[(&str, &str)]) {
-        for &(k, v) in kvs {
-            assert_eq!(db.get_cf(cf, k.as_bytes()).unwrap().unwrap(), v.as_bytes());
-        }
     }
 }
