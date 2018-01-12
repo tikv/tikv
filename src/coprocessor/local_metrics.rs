@@ -215,8 +215,8 @@ impl ExecLocalMetrics {
     }
 }
 
-/// `ComLocalMetrics` is for the common metrics for coprocessor requests.
-pub struct ComLocalMetrics {
+/// `BasicLocalMetrics` is for the basic metrics for coprocessor requests.
+pub struct BasicLocalMetrics {
     pub req_time: LocalHistogramVec,
     pub outdate_time: LocalHistogramVec,
     pub handle_time: LocalHistogramVec,
@@ -226,9 +226,9 @@ pub struct ComLocalMetrics {
     pub scan_keys: LocalHistogramVec,
 }
 
-impl Default for ComLocalMetrics {
-    fn default() -> ComLocalMetrics {
-        ComLocalMetrics {
+impl Default for BasicLocalMetrics {
+    fn default() -> BasicLocalMetrics {
+        BasicLocalMetrics {
             req_time: COPR_REQ_HISTOGRAM_VEC.local(),
             outdate_time: OUTDATED_REQ_WAIT_TIME.local(),
             handle_time: COPR_REQ_HANDLE_TIME.local(),
@@ -240,7 +240,7 @@ impl Default for ComLocalMetrics {
     }
 }
 
-impl ComLocalMetrics {
+impl BasicLocalMetrics {
     pub fn flush(&mut self) {
         self.req_time.flush();
         self.outdate_time.flush();
@@ -275,7 +275,7 @@ impl ComLocalMetrics {
     }
 }
 
-impl Drop for ComLocalMetrics {
+impl Drop for BasicLocalMetrics {
     fn drop(&mut self) {
         self.flush();
     }
