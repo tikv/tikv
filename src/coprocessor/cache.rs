@@ -54,7 +54,13 @@ impl DistSQLCacheEntry {
 // That can make evict_region operation more faster than scan whole
 // cache items and get the remove item list.
 pub struct RegionDistSQLCacheEntry {
+    // version will trace current region's write times. If region's write
+    // finished, the version will increase. And when DistSQLCache.get called,
+    // it will flush entrys which version is not match current version.
     version: u64,
+    // If enable is false mean's current region is in written. So before
+    // enable change to true we should not cache anything or get any result
+    // from DistSQLCache related to this region.
     enable: bool,
     // cached_items track cached DistSQL keys. So we can iterate keys
     // for evict a region. And if we delete a cache entry we can use
@@ -121,6 +127,7 @@ impl DistSQLCache {
     }
 
     fn check_evict_key(&mut self, region_id: u64, k: &str) {
+        // remove expired cache entries.
         self.map
             .get(k)
             .and_then(|entry| {
@@ -260,10 +267,7 @@ impl DistSQLCache {
     }
 
     pub fn enable_region_cache(&mut self, region_id: u64) {
-        self.regions.get_mut(&region_id).and_then(|e| {
-            e.enable = true;
-            Some(())
-        });
+        self.regions.get_mut(&region_id).map(|e| e.enable = true);
     }
 
     fn is_region_cache_enabled(&self, region_id: u64) -> bool {
