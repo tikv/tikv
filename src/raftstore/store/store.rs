@@ -57,8 +57,7 @@ use super::{util, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Ti
 use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState,
-                  REGION_SIZE_UNHEALTHY_THRESHOLD};
+use super::peer::{self, ConsistencyState, Peer, ReadyContext, StaleState};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::msg::{BatchCallback, Callback};
 use super::cmd_resp::{bind_term, new_error};
@@ -1838,43 +1837,45 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             // Calculate influenced regions.
             let mut influenced_regions = vec![];
-            for (_, region_id) in self.region_ranges
+            for (end_key, region_id) in self.region_ranges
                 .range((Included(event.start_key), Included(event.end_key)))
             {
-                influenced_regions.push(region_id);
+                influenced_regions.push((region_id, end_key.clone()));
             }
             // Compaction may happens between the gap of two valid regions.
             if influenced_regions.is_empty() {
                 continue;
             }
 
+            let mut region_declined_bytes = vec![];
+            let mut last_end_key = data_key(b"");
+            for (region_id, end_key) in influenced_regions.drain(..) {
+                let mut old_size = 0;
+                for prop in &event.input_props {
+                    old_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+                }
+                let mut new_size = 0;
+                for prop in &event.output_props {
+                    new_size += prop.get_approximate_size_in_range(&last_end_key, &end_key);
+                }
+                last_end_key = end_key.clone();
+
+                if old_size > new_size &&
+                    old_size - new_size > self.cfg.region_split_check_diff.0 / 16
+                {
+                    region_declined_bytes.push((region_id, old_size - new_size));
+                }
+            }
+
             COMPACTION_RELATED_REGION_COUNT
                 .with_label_values(&[&output_level_str])
-                .observe(influenced_regions.len() as f64);
+                .observe(region_declined_bytes.len() as f64);
 
-            // Calculate unhealthy score and update it when necessary.
-            //
-            // If a region's declined bytes reach region_split_check_diff,
-            // it is time to update this region's size. The declined bytes
-            // may exceeds region_split_check_diff by a single compaction
-            // job, or it is the accumulation affects of multiple compaction
-            // jobs.
-            // The smallest declined bytes which can score is rely on the value of
-            // REGION_SIZE_UNHEALTHY_THRESHOLD. 10 is a experienced value for
-            // REGION_SIZE_UNHEALTHY_THRESHOLD. The reason why we don't use bytes
-            // as score directly is some compaction jobs may relate to thousands
-            // of regions, but the affect is trivial for each region. We don't want
-            // to update score for thousands times in this situation.
-            let region_declined = total_bytes_declined / influenced_regions.len() as u64;
-            let score = region_declined * REGION_SIZE_UNHEALTHY_THRESHOLD /
-                self.cfg.region_split_check_diff.0;
-            if score > 0 {
-                for region_id in influenced_regions.drain(..) {
-                    if let Some(peer) = self.region_peers.get_mut(region_id) {
-                        peer.approximate_size_unhealth += score;
-                        if peer.should_update_approximate_size() {
-                            UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
-                        }
+            for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
+                if let Some(peer) = self.region_peers.get_mut(region_id) {
+                    peer.compaction_declined_bytes += declined_bytes;
+                    if peer.compaction_declined_bytes >= self.cfg.region_split_check_diff.0 {
+                        UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
                     }
                 }
             }
@@ -1902,7 +1903,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // work even if we change the region max size.
             // If peer says should update approximate size, update region
             // size and check whether the region should split.
-            if peer.approximate_size.is_some() && !peer.should_update_approximate_size() &&
+            if peer.approximate_size.is_some() &&
+                peer.compaction_declined_bytes < self.cfg.region_split_check_diff.0 &&
                 peer.size_diff_hint < self.cfg.region_split_check_diff.0
             {
                 continue;
@@ -1912,7 +1914,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
             peer.size_diff_hint = 0;
-            peer.reset_approximate_size_unhealth();
+            peer.compaction_declined_bytes = 0;
         }
 
         self.register_split_region_check_tick(event_loop);

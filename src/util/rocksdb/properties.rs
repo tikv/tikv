@@ -327,9 +327,6 @@ impl SizeProperties {
     }
 
     pub fn smallest_key(&self) -> Option<Vec<u8>> {
-        if self.index_handles.0.is_empty() {
-            return None;
-        }
         self.index_handles
             .0
             .iter()
@@ -338,13 +335,10 @@ impl SizeProperties {
     }
 
     pub fn largest_key(&self) -> Option<Vec<u8>> {
-        if self.index_handles.0.is_empty() {
-            return None;
-        }
         self.index_handles
             .0
             .iter()
-            .next_back()
+            .last()
             .map(|(key, _)| key.clone())
     }
 }

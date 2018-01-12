@@ -17,6 +17,7 @@ use std::sync::Mutex;
 
 use rocksdb::{self, CompactionJobInfo, FlushJobInfo, IngestionInfo};
 use util::rocksdb::engine_metrics::*;
+use util::collections::HashSet;
 
 use super::properties::SizeProperties;
 
@@ -61,29 +62,32 @@ impl rocksdb::EventListener for EventListener {
 
 pub struct CompactedEvent {
     pub cf: String,
-    pub start_key: Vec<u8>,
-    pub end_key: Vec<u8>,
+    pub output_level: i32,
     pub total_input_bytes: u64,
     pub total_output_bytes: u64,
-    pub output_level: i32,
+    pub start_key: Vec<u8>,
+    pub end_key: Vec<u8>,
+    pub input_props: Vec<SizeProperties>,
+    pub output_props: Vec<SizeProperties>,
 }
 
 impl CompactedEvent {
     pub fn new(
-        cf: String,
+        info: &CompactionJobInfo,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-        total_input_bytes: u64,
-        total_output_bytes: u64,
-        output_level: i32,
+        input_props: Vec<SizeProperties>,
+        output_props: Vec<SizeProperties>,
     ) -> CompactedEvent {
         CompactedEvent {
-            cf: cf,
+            cf: info.cf_name().to_owned(),
+            output_level: info.output_level(),
+            total_input_bytes: info.total_input_bytes(),
+            total_output_bytes: info.total_output_bytes(),
             start_key: start_key,
             end_key: end_key,
-            total_input_bytes: total_input_bytes,
-            total_output_bytes: total_output_bytes,
-            output_level: output_level,
+            input_props: input_props,
+            output_props: output_props,
         }
     }
 }
@@ -102,48 +106,73 @@ impl CompactionListener {
 
 impl rocksdb::EventListener for CompactionListener {
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
-        let cf = info.cf_name().to_owned();
-        let output_level = info.output_level();
-        let total_input_bytes = info.total_input_bytes();
-        let total_output_bytes = info.total_output_bytes();
+        //        if self.filter.is_some() && self.filter(info) {
+        //            return;
+        //        }
 
-        let mut smallest_key = None;
-        let mut largest_key = None;
+        let mut input_files = HashSet::default();
+        let mut output_files = HashSet::default();
+        for i in 0..info.input_file_count() {
+            info.input_file_at(i)
+                .to_str()
+                .map(|x| input_files.insert(x.to_owned()));
+        }
+        for i in 0..info.output_file_count() {
+            info.output_file_at(i)
+                .to_str()
+                .map(|x| output_files.insert(x.to_owned()));
+        }
+        let mut input_props = Vec::with_capacity(info.input_file_count());
+        let mut output_props = Vec::with_capacity(info.output_file_count());
         let iter = info.table_properties().into_iter();
-        for (_, properties) in iter {
-            if let Ok(props) = SizeProperties::decode(properties.user_collected_properties()) {
-                if let Some(smallest) = props.smallest_key() {
-                    if let Some(s) = smallest_key {
-                        smallest_key = Some(cmp::min(s, smallest));
-                    } else {
-                        smallest_key = Some(smallest);
-                    }
-                }
-                if let Some(largest) = props.largest_key() {
-                    if let Some(l) = largest_key {
-                        largest_key = Some(cmp::max(l, largest));
-                    } else {
-                        largest_key = Some(largest);
-                    }
+        for (file, properties) in iter {
+            if let Ok(prop) = SizeProperties::decode(properties.user_collected_properties()) {
+                if input_files.contains(file) {
+                    input_props.push(prop);
+                } else if output_files.contains(file) {
+                    output_props.push(prop);
                 }
             } else {
                 return;
             }
         }
 
+        if input_props.is_empty() && output_props.is_empty() {
+            return;
+        }
+
+        let mut smallest_key = None;
+        let mut largest_key = None;
+        for prop in &input_props {
+            if let Some(smallest) = prop.smallest_key() {
+                if let Some(s) = smallest_key {
+                    smallest_key = Some(cmp::min(s, smallest));
+                } else {
+                    smallest_key = Some(smallest);
+                }
+            }
+            if let Some(largest) = prop.largest_key() {
+                if let Some(l) = largest_key {
+                    largest_key = Some(cmp::max(l, largest));
+                } else {
+                    largest_key = Some(largest);
+                }
+            }
+        }
+
         if smallest_key.is_none() || largest_key.is_none() {
             return;
         }
+
         self.notifier
             .lock()
             .unwrap()
             .send(CompactedEvent::new(
-                cf,
+                info,
                 smallest_key.unwrap(),
                 largest_key.unwrap(),
-                total_input_bytes,
-                total_output_bytes,
-                output_level,
+                input_props,
+                output_props,
             ))
             .unwrap();
     }
