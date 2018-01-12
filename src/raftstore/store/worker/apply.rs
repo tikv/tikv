@@ -1267,12 +1267,6 @@ pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Res
     Ok(resp)
 }
 
-pub fn do_snap(region: Region) -> Result<Response> {
-    let mut resp = Response::new();
-    resp.mut_snap().set_region(region);
-    Ok(resp)
-}
-
 // Consistency Check
 impl ApplyDelegate {
     fn exec_compute_hash(

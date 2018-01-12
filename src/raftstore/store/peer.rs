@@ -24,8 +24,8 @@ use rocksdb::rocksdb_options::WriteOptions;
 use protobuf::{self, Message, MessageStatic};
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse,
-                          TransferLeaderRequest, TransferLeaderResponse};
+use kvproto::raft_cmdpb::{self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest,
+                          RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage};
 use kvproto::pdpb::PeerStats;
 
@@ -1645,7 +1645,7 @@ impl Peer {
                 CmdType::Get => apply::do_get(&self.tag, self.region(), &snapshot, req)?,
                 CmdType::Snap => {
                     need_snapshot = true;
-                    apply::do_snap(self.region().to_owned())?
+                    raft_cmdpb::Response::new()
                 }
                 CmdType::Prewrite |
                 CmdType::Put |
