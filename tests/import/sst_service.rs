@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-fn must_new_cluster() -> (Cluster<ServerCluster>, Context) {
+fn new_cluster() -> (Cluster<ServerCluster>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
@@ -27,20 +27,20 @@ fn must_new_cluster() -> (Cluster<ServerCluster>, Context) {
     (cluster, ctx)
 }
 
-fn must_new_cluster_and_import_client() -> (Cluster<ServerCluster>, ImportClient, Context) {
+fn new_cluster_and_import_client() -> (Cluster<ServerCluster>, ImportClient) {
     let (cluster, ctx) = must_new_cluster();
 
     let env = Arc::new(Environment::new(1));
     let addr = cluster.sim.rl().get_addr(ctx.get_peer().get_store_id());
     let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
-    let client = ImportClient::new(channel);
+    let import = ImportClient::new(channel);
 
-    (cluster, client, ctx)
+    (cluster, import)
 }
 
 #[test]
 fn test_upload_sst() {
-    let (_, client, _) = must_new_cluster_and_import_client();
+    let (_, import) = must_new_cluster_and_import_client();
 
     let data = vec![1; 1024];
     let mut hash = crc32::Digest::new(crc32::IEEE);
@@ -53,19 +53,19 @@ fn test_upload_sst() {
     // Mismatch length
     let meta = make_sst_meta(0, crc32);
     upload.set_meta(meta);
-    assert!(send_upload_sst(&client, upload.clone()).is_err());
+    assert!(send_upload_sst(&import, upload.clone()).is_err());
 
     // Mismatch checksum
     let meta = make_sst_meta(data.len(), 0);
     upload.set_meta(meta);
-    assert!(send_upload_sst(&client, upload.clone()).is_err());
+    assert!(send_upload_sst(&import, upload.clone()).is_err());
 
     let meta = make_sst_meta(data.len(), crc32);
     upload.set_meta(meta);
-    send_upload_sst(&client, upload.clone()).unwrap();
+    send_upload_sst(&import, upload.clone()).unwrap();
 
     // Can't upload the same uuid file again.
-    assert!(send_upload_sst(&client, upload.clone()).is_err());
+    assert!(send_upload_sst(&import, upload.clone()).is_err());
 }
 
 fn make_sst_meta(len: usize, crc32: u32) -> SSTMeta {
