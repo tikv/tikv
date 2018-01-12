@@ -625,10 +625,7 @@ mod tests {
         entry.set_entry_type(EntryType::EntryNormal);
         entry.set_data(vec![42]);
         engine.put_msg(&key, &entry).unwrap();
-        assert_eq!(
-            engine.get_msg::<Entry>(&key).unwrap().unwrap(),
-            entry
-        );
+        assert_eq!(engine.get_msg::<Entry>(&key).unwrap().unwrap(), entry);
 
         assert_eq!(debugger.raft_log(region_id, log_index).unwrap(), entry);
         match debugger.raft_log(region_id + 1, log_index + 1) {

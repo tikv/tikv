@@ -566,10 +566,7 @@ fn test_debug_raft_log() {
     entry.set_data(vec![42]);
     engine.put_msg(&key, &entry).unwrap();
     assert_eq!(
-        engine
-            .get_msg::<eraftpb::Entry>(&key)
-            .unwrap()
-            .unwrap(),
+        engine.get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
         entry
     );
 
