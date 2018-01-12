@@ -67,12 +67,14 @@ impl Stream for HeartbeatReceiver {
                 }
             }
 
+            warn!("heartbeat receiver is stale, refreshing..");
             self.receiver.take();
 
             let mut inner = self.inner.wl();
             let mut receiver = None;
             if let Either::Left(ref mut recv) = inner.hb_receiver {
                 receiver = recv.take();
+                info!("heartbeat receiver is refreshed.");
             }
             if receiver.is_some() {
                 self.receiver = receiver;
