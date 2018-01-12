@@ -130,7 +130,7 @@ impl<T: Simulator> Cluster<T> {
         for item in &self.paths {
             let mut kv_db_opt = self.cfg.rocksdb.build_opt();
             let (compaction_tx, compaction_rx) = mpsc::channel();
-            kv_db_opt.add_event_listener(CompactionListener::new(compaction_tx));
+            kv_db_opt.add_event_listener(CompactionListener::new(compaction_tx, None));
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
                 rocksdb::new_engine_opt(item.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)

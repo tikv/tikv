@@ -29,7 +29,8 @@ mod metrics;
 mod local_metrics;
 
 pub use self::msg::{BatchCallback, Callback, Msg, SignificantMsg, Tick};
-pub use self::store::{create_event_loop, Engines, Store, StoreChannel, StoreStat};
+pub use self::store::{create_event_loop, size_change_filter, Engines, Store, StoreChannel,
+                      StoreStat};
 pub use self::config::Config;
 pub use self::transport::Transport;
 pub use self::peer::{Peer, PeerStat};

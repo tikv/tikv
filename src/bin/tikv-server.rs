@@ -69,7 +69,7 @@ use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::resolve;
-use tikv::raftstore::store::{self, Engines, SnapManager};
+use tikv::raftstore::store::{self, size_change_filter, Engines, SnapManager};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::pd::{PdClient, RpcClient};
 use tikv::util::time::Monitor;
@@ -174,7 +174,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     let (compaction_tx, compaction_rx) = mpsc::channel();
-    kv_db_opts.add_event_listener(CompactionListener::new(compaction_tx));
+    kv_db_opts.add_event_listener(CompactionListener::new(
+        compaction_tx,
+        Some(size_change_filter),
+    ));
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
     let kv_engine = Arc::new(
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)

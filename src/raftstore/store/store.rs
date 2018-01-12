@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{WriteBatch, DB};
+use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -1809,15 +1809,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         for event in events.drain(..) {
-            // When calculating region size, we only consider write and default
-            // column families.
-            if event.cf != CF_WRITE && event.cf != CF_DEFAULT {
-                continue;
-            }
-            // Compactions in level 0 and level 1 are very frequently.
-            if event.output_level < 2 {
-                continue;
-            }
             // If size declining is trivial, skip.
             let total_bytes_declined = if event.total_input_bytes > event.total_output_bytes {
                 event.total_input_bytes - event.total_output_bytes
@@ -2695,4 +2686,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         Ok(resp)
     }
+}
+
+pub fn size_change_filter(info: &CompactionJobInfo) -> bool {
+    // When calculating region size, we only consider write and default
+    // column families.
+    let cf = info.cf_name();
+    if cf != CF_WRITE && cf != CF_DEFAULT {
+        return false;
+    }
+    // Compactions in level 0 and level 1 are very frequently.
+    if info.output_level() < 2 {
+        return false;
+    }
+
+    true
 }

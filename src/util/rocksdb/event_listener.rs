@@ -92,23 +92,26 @@ impl CompactedEvent {
     }
 }
 
-pub struct CompactionListener {
+pub struct CompactionListener<F> {
     notifier: Mutex<Sender<CompactedEvent>>,
+    filter: Option<F>,
 }
 
-impl CompactionListener {
-    pub fn new(notifier: Sender<CompactedEvent>) -> CompactionListener {
+impl<F> CompactionListener<F> {
+    pub fn new(notifier: Sender<CompactedEvent>, filter: Option<F>) -> CompactionListener<F> {
         CompactionListener {
             notifier: Mutex::new(notifier),
+            filter: filter,
         }
     }
 }
 
-impl rocksdb::EventListener for CompactionListener {
+impl<F: Fn(&CompactionJobInfo) -> bool + Sync + Send> rocksdb::EventListener
+    for CompactionListener<F> {
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
-        //        if self.filter.is_some() && self.filter(info) {
-        //            return;
-        //        }
+        if self.filter.is_some() && !self.filter.as_ref().unwrap()(info) {
+            return;
+        }
 
         let mut input_files = HashSet::default();
         let mut output_files = HashSet::default();
