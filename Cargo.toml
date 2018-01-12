@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "1.0.1"
+version = "1.1.0-dev"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
@@ -107,5 +107,6 @@ codegen-units = 2
 
 # The release profile, used for `cargo build --release`
 [profile.release]
+lto = true
 opt-level = 3
 debug = true
