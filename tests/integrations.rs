@@ -41,6 +41,7 @@ extern crate test;
 extern crate tikv;
 extern crate tipb;
 extern crate toml;
+extern crate uuid;
 
 mod raft;
 mod raftstore;

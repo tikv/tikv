@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(test)]
-pub mod tests;
-
 mod config;
 mod errors;
 mod metrics;
@@ -21,6 +18,8 @@ mod metrics;
 mod service;
 mod sst_service;
 mod sst_importer;
+
+pub mod tests;
 
 pub use self::errors::{Error, Result};
 pub use self::config::Config;
