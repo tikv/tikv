@@ -77,9 +77,8 @@ impl Conn {
                 .select(
                     sink.sink_map_err(Error::from)
                         .send_all(
-                            rx.map(|msgs: Vec<(RaftMessage, WriteFlags)>| {
-                                stream::iter_ok(msgs)
-                            }).flatten()
+                            rx.map(stream::iter_ok)
+                                .flatten()
                                 .map_err(|()| Error::Sink),
                         )
                         .then(move |r| {
